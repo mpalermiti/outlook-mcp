@@ -222,12 +222,13 @@ async def search_mail(
 
     if folder:
         folder = validate_folder_name(folder)
-        from msgraph.generated.users.item.mail_folders.item.messages.messages_request_builder import (
-            MessagesRequestBuilder as FolderMessagesRequestBuilder,
+        from msgraph.generated.users.item.mail_folders.item.messages import (
+            messages_request_builder as folder_mrb,
         )
 
         req_config = build_request_config(
-            FolderMessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters, query_params
+            folder_mrb.MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters,
+            query_params,
         )
         response = await graph_client.me.mail_folders.by_mail_folder_id(folder).messages.get(
             request_configuration=req_config
