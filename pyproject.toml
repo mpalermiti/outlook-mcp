@@ -1,6 +1,6 @@
 [project]
 name = "outlook-mcp"
-version = "0.2.0"
+version = "1.0.0"
 description = "MCP server for Microsoft Outlook via Microsoft Graph API"
 readme = "README.md"
 license = "MIT"
