@@ -2,7 +2,9 @@
 
 MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 
-> **Disclaimer:** This is an independent open-source project. Not affiliated with, endorsed by, or supported by Microsoft Corporation. "Outlook" and "Microsoft Graph" are trademarks of Microsoft.
+> **Personal Microsoft accounts only** — `@outlook.com`, `@hotmail.com`, `@live.com`. Work/school accounts (Entra ID) are not supported in v1.
+
+> **Disclaimer:** Independent open-source project. Not affiliated with, endorsed by, or supported by Microsoft Corporation. "Outlook" and "Microsoft Graph" are trademarks of Microsoft.
 
 ---
 
@@ -91,11 +93,11 @@ Create `~/.outlook-mcp/config.json`:
   "client_id": "YOUR_APPLICATION_CLIENT_ID",
   "tenant_id": "consumers",
   "timezone": "America/Los_Angeles",
-  "read_only": false
+  "read_only": true
 }
 ```
 
-The only required field is `client_id`. Everything else has sensible defaults.
+The only required field is `client_id`. Everything else has sensible defaults. Start with `read_only: true` — flip to `false` when you're comfortable.
 
 ### Register with your MCP client
 
@@ -304,20 +306,13 @@ uv run outlook-mcp
 
 ## Roadmap
 
-### Shipped
-
-- **Tier 1 (21 tools)** -- Auth, Mail (read/write/triage), Calendar (read/write)
-- **Tier 2 (32 tools)** -- Contacts, To Do, Drafts, Attachments, Folders, Threading, Batch, User/Admin, Cursor Pagination, Categories
-
-### Tier 3: Differentiators
-
 - **Focused Inbox** -- list Focused/Other tab, override classification
 - **Out-of-Office** -- get/set automatic replies
 - **Inbox Rules** -- list, create, delete rules
 - **Advanced mail** -- raw MIME export, internet message headers
 - **Calendar** -- cancel event (with attendee notification)
 - **Checklists** -- checklist items on To Do tasks
-- **Notifications** -- poll-based change notifications for mail and calendar
+- **Enterprise (Entra ID)** -- work/school account support
 
 ---
 

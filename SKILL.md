@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: MCP server for Microsoft Outlook via Microsoft Graph API. Mail, calendar, contacts, and tasks.
+description: MCP server for Microsoft Outlook personal accounts. 51 tools — mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -8,16 +8,11 @@ metadata:
     requires:
       python: ">=3.10"
     install:
-      - id: pip
-        kind: pip
-        package: outlook-mcp
-        bins: ["outlook-mcp"]
-        label: "Install outlook-mcp (pip)"
       - id: uv
         kind: shell
-        command: "uv tool install outlook-mcp"
+        command: "git clone https://github.com/mpalermiti/outlook-mcp.git && cd outlook-mcp && uv sync"
         bins: ["outlook-mcp"]
-        label: "Install outlook-mcp (uv)"
+        label: "Clone and install (uv)"
 ---
 
 # outlook-mcp
@@ -25,41 +20,50 @@ metadata:
 MCP server for Microsoft Outlook personal accounts (Outlook.com, Hotmail, Live).
 Provides AI agents with full access to mail, calendar, contacts, and tasks via Microsoft Graph API.
 
-> This is an independent open-source project. Not affiliated with, endorsed by, or supported by Microsoft Corporation.
+> Independent open-source project. Not affiliated with Microsoft.
+
+## Important
+
+- **Personal Microsoft accounts only** (`@outlook.com`, `@hotmail.com`, `@live.com`). Work/school accounts (Entra ID) are not supported in v1.
+- **Requires Azure AD app registration** — free, takes ~5 minutes, but you need a free Azure account first. See README.
+- **Auth is CLI-based** — run `outlook-mcp auth` on the host before the agent can use it. No interactive auth through MCP tools.
 
 ## Setup
 
-1. **Register an Azure AD app** (one-time, see README for step-by-step)
-2. **Configure:** Create `~/.outlook-mcp/config.json`:
+1. **Create a free Azure account** at [azure.microsoft.com/free](https://azure.microsoft.com/free) (sign up with your `@outlook.com` address)
+2. **Register an Azure AD app** (see README for step-by-step)
+3. **Configure:** Create `~/.outlook-mcp/config.json`:
    ```json
    {
      "client_id": "YOUR-APP-CLIENT-ID",
      "tenant_id": "consumers",
-     "timezone": "America/Los_Angeles"
+     "timezone": "America/Los_Angeles",
+     "read_only": true
    }
    ```
-3. **Install:** `uv tool install outlook-mcp` or `pip install outlook-mcp`
-4. **Register in MCP config:**
+4. **Register in OpenClaw config:**
    ```json
    {
      "mcp": {
        "servers": {
          "outlook": {
-           "command": "outlook-mcp",
-           "args": []
+           "command": "uv",
+           "args": ["--directory", "/path/to/outlook-mcp", "run", "outlook-mcp"]
          }
        }
      }
    }
    ```
-5. **Authenticate:** use the `outlook_login` tool.
+5. **Authenticate on the host:**
+   ```bash
+   cd /path/to/outlook-mcp && uv run outlook-mcp auth
+   ```
+6. **Restart the gateway:** `openclaw gateway restart`
 
-## Tools
+## Tools (51)
 
 ### Auth
-- `outlook_login` — Start device-code OAuth2 flow
-- `outlook_logout` — Remove stored credentials
-- `outlook_auth_status` — Check authentication status
+- `outlook_auth_status` — Check authentication status and read-only mode
 
 ### Mail — Read
 - `outlook_list_inbox` — List messages with filters (folder, unread, sender, date)
@@ -74,13 +78,13 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
 
 ### Mail — Triage
 - `outlook_move_message` — Move to a folder
-- `outlook_delete_message` — Delete (moves to Deleted Items; use permanent=true for hard delete)
+- `outlook_delete_message` — Delete (soft by default, permanent optional)
 - `outlook_flag_message` — Set follow-up flag
 - `outlook_categorize_message` — Set categories
 - `outlook_mark_read` — Mark read or unread
 
 ### Calendar
-- `outlook_list_events` — List events in date range
+- `outlook_list_events` — List events in date range (expands recurring)
 - `outlook_get_event` — Get event details
 - `outlook_create_event` — Create event with attendees, recurrence, online meeting
 - `outlook_update_event` — Update event fields
@@ -88,60 +92,59 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
 - `outlook_rsvp` — Accept, decline, or tentatively accept
 
 ### Contacts
-- `outlook_list_contacts` — List contacts with cursor pagination
-- `outlook_search_contacts` — Search contacts by name or email
-- `outlook_get_contact` — Get full contact details by ID
-- `outlook_create_contact` — Create a new contact
-- `outlook_update_contact` — Update contact fields
-- `outlook_delete_contact` — Delete a contact
+- `outlook_list_contacts` — List with cursor pagination
+- `outlook_search_contacts` — Search by name or email
+- `outlook_get_contact` — Get full details
+- `outlook_create_contact` — Create
+- `outlook_update_contact` — Update
+- `outlook_delete_contact` — Delete
 
 ### To Do
 - `outlook_list_task_lists` — List To Do lists
 - `outlook_list_tasks` — List tasks with status filter and pagination
-- `outlook_create_task` — Create task with due date, importance, recurrence
-- `outlook_update_task` — Update task fields
-- `outlook_complete_task` — Mark task as completed
-- `outlook_delete_task` — Delete a task
+- `outlook_create_task` — Create with due date, importance, recurrence
+- `outlook_update_task` — Update
+- `outlook_complete_task` — Mark completed
+- `outlook_delete_task` — Delete
 
 ### Drafts
-- `outlook_list_drafts` — List draft messages with pagination
-- `outlook_create_draft` — Create a draft for later review and sending
-- `outlook_update_draft` — Update draft fields
-- `outlook_send_draft` — Send an existing draft
-- `outlook_delete_draft` — Delete a draft
+- `outlook_list_drafts` — List with pagination
+- `outlook_create_draft` — Create for later review
+- `outlook_update_draft` — Update
+- `outlook_send_draft` — Send
+- `outlook_delete_draft` — Delete
 
 ### Attachments
-- `outlook_list_attachments` — List attachments on a message
-- `outlook_download_attachment` — Download attachment (base64 or save to file)
-- `outlook_send_with_attachments` — Send message with file attachments
+- `outlook_list_attachments` — List on a message
+- `outlook_download_attachment` — Download (base64 or save to file)
+- `outlook_send_with_attachments` — Send with files (auto upload session for >3MB)
 
 ### Folder Management
-- `outlook_create_folder` — Create mail folder (top-level or nested)
-- `outlook_rename_folder` — Rename a mail folder
-- `outlook_delete_folder` — Delete a mail folder
+- `outlook_create_folder` — Create (top-level or nested)
+- `outlook_rename_folder` — Rename
+- `outlook_delete_folder` — Delete (refuses well-known folders)
 
 ### Threading and Batch
-- `outlook_list_thread` — Get all messages in a conversation thread
-- `outlook_copy_message` — Copy a message to another folder
-- `outlook_batch_triage` — Batch move/flag/categorize/mark_read (max 20 per call)
+- `outlook_list_thread` — Get all messages in a conversation
+- `outlook_copy_message` — Copy to another folder
+- `outlook_batch_triage` — Batch move/flag/categorize/mark_read (max 20)
 
 ### User and Admin
-- `outlook_whoami` — Get current user profile
-- `outlook_list_calendars` — List available calendars
-- `outlook_list_categories` — List category definitions with colors
+- `outlook_whoami` — Current user profile
+- `outlook_list_calendars` — Available calendars
+- `outlook_list_categories` — Category definitions with colors
 - `outlook_get_mail_tips` — Pre-send check (OOF, delivery restrictions)
-- `outlook_list_accounts` — List configured accounts
+- `outlook_list_accounts` — Configured accounts
 - `outlook_switch_account` — Switch active account
 
 ## Privacy
-- Zero telemetry
-- Zero local caching of email/calendar data
-- Only connects to login.microsoftonline.com and graph.microsoft.com
-- Tokens stored in OS keyring (macOS Keychain, etc.)
+- Zero telemetry, zero local caching
+- Only connects to `login.microsoftonline.com` and `graph.microsoft.com`
+- Tokens stored in OS keyring (macOS Keychain, Windows Credential Store)
+- BYOID: you register your own Azure AD app — no shared client ID
 
 ## Notes
-- BYOID: you register your own Azure AD app (see README)
 - IDs are opaque Graph strings — get them from list/search tools, never guess
-- Dates are ISO 8601, always UTC in responses
+- Dates are ISO 8601, UTC in responses, config timezone for input interpretation
 - Mail search uses KQL syntax
-- Personal accounts only in V1. Enterprise (Entra ID) planned for future.
+- Start with `read_only: true`, flip when comfortable
