@@ -31,16 +31,59 @@ EXPECTED_TOOLS = [
     "outlook_update_event",
     "outlook_delete_event",
     "outlook_rsvp",
+    # ── Tier 2 ──────────────────────────────────────────
+    # Contacts (6)
+    "outlook_list_contacts",
+    "outlook_search_contacts",
+    "outlook_get_contact",
+    "outlook_create_contact",
+    "outlook_update_contact",
+    "outlook_delete_contact",
+    # To Do (6)
+    "outlook_list_task_lists",
+    "outlook_list_tasks",
+    "outlook_create_task",
+    "outlook_update_task",
+    "outlook_complete_task",
+    "outlook_delete_task",
+    # Mail drafts (5)
+    "outlook_list_drafts",
+    "outlook_create_draft",
+    "outlook_update_draft",
+    "outlook_send_draft",
+    "outlook_delete_draft",
+    # Mail attachments (3)
+    "outlook_list_attachments",
+    "outlook_download_attachment",
+    "outlook_send_with_attachments",
+    # Mail folders (3)
+    "outlook_create_folder",
+    "outlook_rename_folder",
+    "outlook_delete_folder",
+    # Mail thread (2)
+    "outlook_list_thread",
+    "outlook_copy_message",
+    # Batch (1)
+    "outlook_batch_triage",
+    # User (2)
+    "outlook_whoami",
+    "outlook_list_calendars",
+    # Admin (2)
+    "outlook_list_categories",
+    "outlook_get_mail_tips",
+    # Multi-account (2)
+    "outlook_list_accounts",
+    "outlook_switch_account",
 ]
 
 
-def test_tier1_tool_count():
-    """Exactly 21 Tier 1 tools are registered."""
+def test_tool_count():
+    """All 53 tools are registered (21 Tier 1 + 32 Tier 2)."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 21
+    assert len(registered) == 53
 
 
-def test_all_tier1_tools_registered():
+def test_all_tools_registered():
     """Every expected tool name is registered on the server."""
     registered = set(mcp._tool_manager._tools.keys())
     for name in EXPECTED_TOOLS:
@@ -48,7 +91,7 @@ def test_all_tier1_tools_registered():
 
 
 def test_no_unexpected_tools():
-    """No extra tools beyond the expected 21."""
+    """No extra tools beyond the expected set."""
     registered = set(mcp._tool_manager._tools.keys())
     expected = set(EXPECTED_TOOLS)
     extra = registered - expected
