@@ -5,8 +5,6 @@ from outlook_mcp.server import mcp  # noqa: I001 - single import
 
 EXPECTED_TOOLS = [
     # Auth (3)
-    "outlook_login",
-    "outlook_logout",
     "outlook_auth_status",
     # Mail read (4)
     "outlook_list_inbox",
@@ -78,9 +76,9 @@ EXPECTED_TOOLS = [
 
 
 def test_tool_count():
-    """All 53 tools are registered (21 Tier 1 + 32 Tier 2)."""
+    """All 51 tools are registered (auth is CLI-only now)."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 53
+    assert len(registered) == 51
 
 
 def test_all_tools_registered():

@@ -29,9 +29,12 @@ from outlook_mcp.tools import (
 
 @asynccontextmanager
 async def lifespan(server):
-    """Initialize server state: config and auth manager."""
+    """Initialize server state: config, auth, and cached token."""
     config = load_config()
     auth = AuthManager(config)
+    # Try to load cached token silently — if this fails, tools will
+    # return an error telling the user to run `outlook-mcp auth`.
+    auth.try_cached_token(auth.get_scopes())
     yield {"config": config, "auth": auth}
 
 
@@ -65,29 +68,18 @@ def _get_graph_client(ctx: Context) -> GraphClient:
 
 
 @mcp.tool()
-async def outlook_login(ctx: Context, read_only: bool = False) -> dict:
-    """Start device-code OAuth2 flow. Opens browser for Microsoft sign-in."""
-    auth = _get_auth(ctx)
-    if read_only:
-        auth.config.read_only = read_only
-    return auth.login()
-
-
-@mcp.tool()
-async def outlook_logout(ctx: Context) -> dict:
-    """Remove stored credentials."""
-    auth = _get_auth(ctx)
-    return auth.logout()
-
-
-@mcp.tool()
 async def outlook_auth_status(ctx: Context) -> dict:
-    """Check authentication status."""
+    """Check authentication status. Run `outlook-mcp auth` on the host if needed."""
     auth = _get_auth(ctx)
-    return {
+    result = {
         "authenticated": auth.is_authenticated(),
         "read_only": auth.config.read_only,
     }
+    if not auth.is_authenticated():
+        result["action_required"] = (
+            "Run `outlook-mcp auth` on the host to authenticate."
+        )
+    return result
 
 
 # ── Mail Read Tools ─────────────────────────────────────

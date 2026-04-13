@@ -54,9 +54,16 @@ def test_auth_get_credential_raises_when_not_authenticated():
         auth.get_credential()
 
 
-def test_auth_requires_client_id():
-    """Login raises if client_id is not configured."""
+def test_login_interactive_requires_client_id():
+    """login_interactive raises if client_id is not configured."""
     config = Config()  # No client_id
     auth = AuthManager(config)
     with pytest.raises(ValueError, match="client_id"):
-        auth.login()
+        auth.login_interactive(auth.get_scopes())
+
+
+def test_try_cached_token_returns_false_without_client_id():
+    """try_cached_token returns False if client_id is not set."""
+    config = Config()
+    auth = AuthManager(config)
+    assert auth.try_cached_token(auth.get_scopes()) is False
