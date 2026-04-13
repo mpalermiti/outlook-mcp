@@ -155,11 +155,11 @@ class TestListTasks:
         result = await list_tasks(client, status="completed")
 
         assert result["count"] == 1
-        # Verify filter was passed via query_params
+        # Verify filter was passed via request_configuration
         call_kwargs = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.get.call_args
-        query_params = call_kwargs.kwargs.get("query_params", {})
-        assert "$filter" in query_params
-        assert "completed" in query_params["$filter"]
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert qp.filter is not None
+        assert "completed" in qp.filter
 
     async def test_list_tasks_pagination(self):
         """list_tasks returns next_cursor when odata_next_link present."""

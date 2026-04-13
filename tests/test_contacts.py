@@ -81,10 +81,10 @@ class TestListContacts:
         result = await list_contacts(mock_client, cursor=cursor)
         assert result["count"] == 0
 
-        # Verify $skip was passed via query_params
+        # Verify skip was passed via request_configuration
         call_kwargs = mock_client.me.contacts.get.call_args
-        query_params = call_kwargs.kwargs.get("query_params", {})
-        assert query_params.get("$skip") == 25
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert qp.skip == 25
 
     async def test_list_has_more_with_next_link(self):
         """has_more is True and cursor returned when odata_next_link present."""
@@ -111,11 +111,11 @@ class TestSearchContacts:
         result = await search_contacts(mock_client, query='John" OR (hack)')
         assert result["count"] == 0
 
-        # Verify the $search param was sanitized (quotes/parens stripped)
+        # Verify the search param was sanitized (quotes/parens stripped)
         call_kwargs = mock_client.me.contacts.get.call_args
-        query_params = call_kwargs.kwargs.get("query_params", {})
-        assert '"' not in query_params["$search"].strip('"')
-        assert "(" not in query_params["$search"].strip('"')
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert '"' not in qp.search.strip('"')
+        assert "(" not in qp.search.strip('"')
 
     async def test_search_returns_contacts(self):
         """search_contacts returns matching contacts."""

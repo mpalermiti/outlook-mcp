@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from outlook_mcp.pagination import apply_pagination, wrap_nextlink
+from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
 
 
@@ -155,7 +155,14 @@ async def list_events(
         "organizer,responseStatus,isOnlineMeeting,categories"
     )
 
-    response = await graph_client.me.calendar_view.get(query_params=query_params)
+    from msgraph.generated.users.item.calendar_view.calendar_view_request_builder import (
+        CalendarViewRequestBuilder,
+    )
+
+    req_config = build_request_config(
+        CalendarViewRequestBuilder.CalendarViewRequestBuilderGetQueryParameters, query_params
+    )
+    response = await graph_client.me.calendar_view.get(request_configuration=req_config)
 
     events = [_format_event_summary(e) for e in (response.value or [])]
 

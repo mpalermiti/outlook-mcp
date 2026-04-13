@@ -45,13 +45,13 @@ class TestListInboxPagination:
         mock_client = _make_folder_mock([])
         result = await list_inbox(mock_client, cursor=cursor)
         assert result["cursor"] is None
-        # Verify $skip was set from cursor
+        # Verify skip was set from cursor
         call_kwargs = (
             mock_client.me.mail_folders.by_mail_folder_id
             .return_value.messages.get.call_args
         )
-        query_params = call_kwargs.kwargs.get("query_params") or call_kwargs[1].get("query_params")
-        assert query_params["$skip"] == 50
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert qp.skip == 50
 
     @pytest.mark.asyncio
     async def test_returns_cursor_when_has_more(self):
@@ -81,9 +81,9 @@ class TestListInboxPagination:
             mock_client.me.mail_folders.by_mail_folder_id
             .return_value.messages.get.call_args
         )
-        query_params = call_kwargs.kwargs.get("query_params") or call_kwargs[1].get("query_params")
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
         # Cursor's skip (75) should be used, not the manual skip (10)
-        assert query_params["$skip"] == 75
+        assert qp.skip == 75
 
 
 class TestSearchMailPagination:
@@ -113,8 +113,8 @@ class TestSearchMailPagination:
         mock_client = _make_search_mock([])
         await search_mail(mock_client, query="test", cursor=cursor)
         call_kwargs = mock_client.me.messages.get.call_args
-        query_params = call_kwargs.kwargs.get("query_params") or call_kwargs[1].get("query_params")
-        assert query_params["$skip"] == 50
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert qp.skip == 50
 
     @pytest.mark.asyncio
     async def test_search_invalid_cursor_raises(self):
@@ -187,8 +187,8 @@ class TestListEventsPagination:
         )
         await list_events(mock_client, timezone="UTC", cursor=cursor)
         call_kwargs = mock_client.me.calendar_view.get.call_args
-        query_params = call_kwargs.kwargs.get("query_params") or call_kwargs[1].get("query_params")
-        assert query_params["$skip"] == 100
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert qp.skip == 100
 
     @pytest.mark.asyncio
     async def test_events_invalid_cursor_raises(self):

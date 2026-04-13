@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from outlook_mcp.errors import ReadOnlyError
-from outlook_mcp.pagination import apply_pagination, wrap_nextlink
+from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.validation import (
     sanitize_kql,
     sanitize_output,
@@ -92,7 +92,14 @@ async def list_contacts(
     }
     query_params = apply_pagination(query_params, count, cursor)
 
-    response = await graph_client.me.contacts.get(query_params=query_params)
+    from msgraph.generated.users.item.contacts.contacts_request_builder import (
+        ContactsRequestBuilder,
+    )
+
+    req_config = build_request_config(
+        ContactsRequestBuilder.ContactsRequestBuilderGetQueryParameters, query_params
+    )
+    response = await graph_client.me.contacts.get(request_configuration=req_config)
 
     contacts = [_format_contact_summary(c) for c in (response.value or [])]
     next_cursor = wrap_nextlink(response.odata_next_link)
@@ -120,7 +127,14 @@ async def search_contacts(
         "$select": ("id,displayName,givenName,surname,emailAddresses,phones,companyName,title"),
     }
 
-    response = await graph_client.me.contacts.get(query_params=query_params)
+    from msgraph.generated.users.item.contacts.contacts_request_builder import (
+        ContactsRequestBuilder,
+    )
+
+    req_config = build_request_config(
+        ContactsRequestBuilder.ContactsRequestBuilderGetQueryParameters, query_params
+    )
+    response = await graph_client.me.contacts.get(request_configuration=req_config)
 
     contacts = [_format_contact_summary(c) for c in (response.value or [])]
 

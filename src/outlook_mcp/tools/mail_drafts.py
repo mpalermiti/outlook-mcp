@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from outlook_mcp.errors import ReadOnlyError
-from outlook_mcp.pagination import apply_pagination, wrap_nextlink
+from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.tools.mail_read import _format_message_summary
 from outlook_mcp.validation import validate_email, validate_graph_id
 
@@ -35,8 +35,15 @@ async def list_drafts(
     }
     query_params = apply_pagination(query_params, count, cursor)
 
+    from msgraph.generated.users.item.mail_folders.item.messages.messages_request_builder import (
+        MessagesRequestBuilder,
+    )
+
+    req_config = build_request_config(
+        MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters, query_params
+    )
     response = await graph_client.me.mail_folders.by_mail_folder_id("drafts").messages.get(
-        query_params=query_params
+        request_configuration=req_config
     )
 
     messages = [_format_message_summary(m) for m in (response.value or [])]

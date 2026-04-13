@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.pagination import build_request_config
 from outlook_mcp.tools.mail_read import _format_message_summary
 from outlook_mcp.validation import validate_folder_name, validate_graph_id
 
@@ -37,7 +38,14 @@ async def list_thread(
         ),
     }
 
-    response = await graph_client.me.messages.get(query_params=query_params)
+    from msgraph.generated.users.item.messages.messages_request_builder import (
+        MessagesRequestBuilder,
+    )
+
+    req_config = build_request_config(
+        MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters, query_params
+    )
+    response = await graph_client.me.messages.get(request_configuration=req_config)
 
     messages = [_format_message_summary(m) for m in (response.value or [])]
 

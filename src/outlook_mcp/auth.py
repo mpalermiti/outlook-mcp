@@ -66,9 +66,11 @@ class AuthManager:
 
         cache_options = TokenCachePersistenceOptions(name="outlook-mcp")
 
-        # azure-identity prompt_callback receives a single dict argument
-        def _on_device_code(device_code_info: dict) -> None:
-            self._device_code_message = device_code_info.get("message", "")
+        # azure-identity prompt_callback receives (verification_uri, user_code, expires_on)
+        def _on_device_code(verification_uri: str, user_code: str, expires_on: object) -> None:
+            self._device_code_message = (
+                f"To sign in, visit {verification_uri} and enter code: {user_code}"
+            )
 
         self.credential = DeviceCodeCredential(
             client_id=self.config.client_id,

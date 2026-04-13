@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from outlook_mcp.errors import ReadOnlyError
-from outlook_mcp.pagination import apply_pagination, wrap_nextlink
+from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
 
 
@@ -155,8 +155,15 @@ async def list_tasks(
     # Pagination
     query_params = apply_pagination(query_params, count, cursor)
 
+    from msgraph.generated.users.item.todo.lists.item.tasks.tasks_request_builder import (
+        TasksRequestBuilder,
+    )
+
+    req_config = build_request_config(
+        TasksRequestBuilder.TasksRequestBuilderGetQueryParameters, query_params
+    )
     response = await graph_client.me.todo.lists.by_todo_task_list_id(resolved_id).tasks.get(
-        query_params=query_params
+        request_configuration=req_config
     )
 
     tasks = [_format_task(t) for t in (response.value or [])]

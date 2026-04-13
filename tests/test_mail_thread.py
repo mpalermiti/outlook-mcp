@@ -69,10 +69,10 @@ class TestListThread:
         await list_thread(mock_client, conversation_id="conv123", count=10)
 
         call_kwargs = mock_client.me.messages.get.call_args
-        query_params = call_kwargs.kwargs["query_params"]
-        assert "conversationId eq 'conv123'" in query_params["$filter"]
-        assert query_params["$orderby"] == "receivedDateTime asc"
-        assert query_params["$top"] == 10
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert "conversationId eq 'conv123'" in qp.filter
+        assert qp.orderby == ["receivedDateTime asc"]
+        assert qp.top == 10
 
 
 class TestCopyMessage:

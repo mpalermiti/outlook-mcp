@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from outlook_mcp.pagination import apply_pagination, wrap_nextlink
+from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.validation import (
     sanitize_kql,
     sanitize_output,
@@ -104,8 +104,15 @@ async def list_inbox(
     if filters:
         query_params["$filter"] = " and ".join(filters)
 
+    from msgraph.generated.users.item.mail_folders.item.messages.messages_request_builder import (
+        MessagesRequestBuilder,
+    )
+
+    req_config = build_request_config(
+        MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters, query_params
+    )
     response = await graph_client.me.mail_folders.by_mail_folder_id(folder).messages.get(
-        query_params=query_params
+        request_configuration=req_config
     )
 
     messages = [_format_message_summary(m) for m in (response.value or [])]
@@ -215,11 +222,25 @@ async def search_mail(
 
     if folder:
         folder = validate_folder_name(folder)
+        from msgraph.generated.users.item.mail_folders.item.messages.messages_request_builder import (
+            MessagesRequestBuilder as FolderMessagesRequestBuilder,
+        )
+
+        req_config = build_request_config(
+            FolderMessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters, query_params
+        )
         response = await graph_client.me.mail_folders.by_mail_folder_id(folder).messages.get(
-            query_params=query_params
+            request_configuration=req_config
         )
     else:
-        response = await graph_client.me.messages.get(query_params=query_params)
+        from msgraph.generated.users.item.messages.messages_request_builder import (
+            MessagesRequestBuilder as MeMessagesRequestBuilder,
+        )
+
+        req_config = build_request_config(
+            MeMessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters, query_params
+        )
+        response = await graph_client.me.messages.get(request_configuration=req_config)
 
     messages = [_format_message_summary(m) for m in (response.value or [])]
 
@@ -238,7 +259,14 @@ async def list_folders(
     """List all mail folders."""
     query_params = apply_pagination({}, count=50, cursor=cursor)
 
-    response = await graph_client.me.mail_folders.get(query_params=query_params)
+    from msgraph.generated.users.item.mail_folders.mail_folders_request_builder import (
+        MailFoldersRequestBuilder,
+    )
+
+    req_config = build_request_config(
+        MailFoldersRequestBuilder.MailFoldersRequestBuilderGetQueryParameters, query_params
+    )
+    response = await graph_client.me.mail_folders.get(request_configuration=req_config)
 
     folders = []
     for f in response.value or []:

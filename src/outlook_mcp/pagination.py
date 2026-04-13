@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import base64
 import json
+from typing import Any
 from urllib.parse import parse_qs, urlparse
+
+from kiota_abstractions.base_request_configuration import RequestConfiguration
 
 
 def encode_cursor(skip: int) -> str:
@@ -88,3 +91,44 @@ def apply_pagination(
             raise ValueError("Invalid pagination cursor") from e
 
     return query_params
+
+
+# OData key → QueryParameters attribute name
+_PARAM_MAP = {
+    "$top": "top",
+    "$skip": "skip",
+    "$filter": "filter",
+    "$search": "search",
+    "$orderby": "orderby",
+    "$select": "select",
+    "$skiptoken": "skiptoken",
+    "$expand": "expand",
+    "start_date_time": "start_date_time",
+    "end_date_time": "end_date_time",
+}
+
+# Attributes that take list[str] rather than a scalar
+_LIST_ATTRS = {"orderby", "select", "expand"}
+
+
+def build_request_config(
+    query_params_class: type,
+    params: dict[str, Any],
+) -> RequestConfiguration:
+    """Build a typed RequestConfiguration from an OData params dict.
+
+    Converts the dict-based query_params used throughout the codebase
+    into the typed RequestConfiguration that msgraph-sdk v1.55+ requires.
+    """
+    qp = query_params_class()
+
+    for key, value in params.items():
+        attr = _PARAM_MAP.get(key, key)
+        if not hasattr(qp, attr):
+            continue
+        # Convert comma-separated strings to lists for list-typed attrs
+        if attr in _LIST_ATTRS and isinstance(value, str):
+            value = [v.strip() for v in value.split(",")]
+        setattr(qp, attr, value)
+
+    return RequestConfiguration(query_parameters=qp)
