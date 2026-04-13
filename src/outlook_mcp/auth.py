@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
-from azure.identity import DeviceCodeCredential, TokenCachePersistenceOptions
+from azure.identity import (
+    AuthenticationRecord,
+    DeviceCodeCredential,
+    TokenCachePersistenceOptions,
+)
 
-from outlook_mcp.config import Config
+from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config
 from outlook_mcp.errors import AuthRequiredError
 
 logger = logging.getLogger(__name__)
@@ -29,6 +34,31 @@ SCOPES_READONLY = [
 ]
 
 CACHE_NAME = "outlook-mcp"
+AUTH_RECORD_FILE = "auth_record.json"
+
+
+def _auth_record_path() -> Path:
+    return Path(DEFAULT_CONFIG_DIR) / AUTH_RECORD_FILE
+
+
+def _save_auth_record(record: AuthenticationRecord) -> None:
+    """Persist AuthenticationRecord to disk."""
+    path = _auth_record_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(record.serialize())
+    path.chmod(0o600)
+
+
+def _load_auth_record() -> AuthenticationRecord | None:
+    """Load AuthenticationRecord from disk, or None if not found."""
+    path = _auth_record_path()
+    if not path.exists():
+        return None
+    try:
+        return AuthenticationRecord.deserialize(path.read_text())
+    except Exception:
+        logger.warning("Failed to load auth record from %s", path)
+        return None
 
 
 class AuthManager:
@@ -49,21 +79,28 @@ class AuthManager:
         return self.credential is not None
 
     def _make_credential(
-        self, prompt_callback=None
+        self,
+        prompt_callback=None,
+        auth_record: AuthenticationRecord | None = None,
     ) -> DeviceCodeCredential:
         """Create a DeviceCodeCredential with persistent cache."""
         cache_options = TokenCachePersistenceOptions(name=CACHE_NAME)
-        return DeviceCodeCredential(
-            client_id=self.config.client_id,
-            tenant_id=self.config.tenant_id,
-            cache_persistence_options=cache_options,
-            prompt_callback=prompt_callback,
-        )
+        kwargs = {
+            "client_id": self.config.client_id,
+            "tenant_id": self.config.tenant_id,
+            "cache_persistence_options": cache_options,
+        }
+        if prompt_callback:
+            kwargs["prompt_callback"] = prompt_callback
+        if auth_record:
+            kwargs["authentication_record"] = auth_record
+        return DeviceCodeCredential(**kwargs)
 
     def login_interactive(self, scopes: list[str]) -> None:
         """Run the device code flow interactively in the terminal.
 
-        Blocks until the user completes browser sign-in.
+        Blocks until the user completes browser sign-in. Saves the
+        AuthenticationRecord for silent token refresh by the MCP server.
         Intended for CLI use (`outlook-mcp auth`), not MCP tools.
         """
         if not self.config.client_id:
@@ -81,26 +118,32 @@ class AuthManager:
             print("Waiting for you to complete sign-in in your browser...")
 
         cred = self._make_credential(prompt_callback=_on_device_code)
-        # Blocks until auth completes or fails
-        cred.get_token(*scopes)
+        # authenticate() returns an AuthenticationRecord we can persist
+        record = cred.authenticate(scopes=scopes)
+        _save_auth_record(record)
         self.credential = cred
         print("Authenticated successfully.")
 
     def try_cached_token(self, scopes: list[str]) -> bool:
-        """Try to get a token from cache without user interaction.
+        """Try to get a token silently using a saved AuthenticationRecord.
 
-        Returns True if a valid cached token was found.
+        Returns True if a valid token was obtained without user interaction.
         Used by the MCP server on startup and by `outlook-mcp status`.
         """
         if not self.config.client_id:
             return False
 
+        record = _load_auth_record()
+        if record is None:
+            return False
+
         try:
-            cred = self._make_credential()
+            cred = self._make_credential(auth_record=record)
             cred.get_token(*scopes)
             self.credential = cred
             return True
         except Exception:
+            logger.warning("Cached token refresh failed — re-run `outlook-mcp auth`.")
             return False
 
     def get_credential(self) -> DeviceCodeCredential:
@@ -147,6 +190,9 @@ class AuthManager:
         raise ValueError(f"Account '{name}' not found in config")
 
     def logout(self) -> dict[str, str]:
-        """Clear in-memory credentials."""
+        """Clear in-memory credentials and auth record."""
         self.credential = None
+        path = _auth_record_path()
+        if path.exists():
+            path.unlink()
         return {"status": "logged_out", "message": "Credentials cleared."}

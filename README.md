@@ -8,9 +8,9 @@ MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 
 ## Features
 
-**53 tools** across 13 categories:
+**51 tools** across 13 categories:
 
-- **Auth (3)** -- device-code OAuth2 login, logout, status check
+- **Auth (1)** -- auth status check (login is via CLI)
 - **Mail Read (4)** -- list inbox, read message, search (KQL), list folders
 - **Mail Write (3)** -- send, reply/reply-all, forward
 - **Mail Triage (5)** -- move, delete (soft by default), flag, categorize, mark read/unread
@@ -38,42 +38,32 @@ MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 
 ## Azure AD App Registration
 
-You need to register a free Azure AD app to get a client ID. This takes about 2 minutes.
+You need to register a free Azure AD app to get a client ID.
 
-### Steps
+### Prerequisites (Personal Microsoft Accounts)
 
-1. Go to [portal.azure.com](https://portal.azure.com) and sign in with your personal Microsoft account (Outlook.com, Hotmail, Live).
+Microsoft has deprecated app registration for personal accounts without an Azure AD tenant. You need to create a free Azure account first:
 
-2. Search for **"App registrations"** in the top search bar. Click it.
+1. Go to [azure.microsoft.com/free](https://azure.microsoft.com/free) and sign up with your personal `@outlook.com` account. Requires a credit card for identity verification but **won't charge you**. This creates a proper Azure AD tenant.
 
-3. Click **"New registration"**.
+### Register the App
 
-4. Fill in:
-   - **Name:** anything you want (e.g. `my-outlook-mcp`)
+1. Go to [App Registrations](https://go.microsoft.com/fwlink/?linkid=2083908) and sign in with your `@outlook.com` account.
+
+2. Click **"+ New registration"** and fill in:
+   - **Name:** anything except Microsoft-branded terms (e.g. `mp-outlook-mcp` — names like "Outlook MCP" will be rejected)
    - **Supported account types:** select **"Personal Microsoft accounts only"**
    - **Redirect URI:** leave blank
 
-5. Click **Register**.
+3. Click **Register**. Copy the **Application (client) ID** from the overview page.
 
-6. Under **Authentication** (left sidebar):
-   - Scroll to **"Allow public client flows"**
-   - Set to **Yes**
-   - Click **Save**
+4. Go to **Authentication (Preview)** → **Settings** tab → toggle **"Allow public client flows"** to **Yes** → **Save**.
 
-7. Under **API permissions** (left sidebar):
-   - Click **"Add a permission"**
-   - Select **"Microsoft Graph"**
-   - Select **"Delegated permissions"**
-   - Add these permissions:
-     - `Mail.ReadWrite`
-     - `Mail.Send`
-     - `Calendars.ReadWrite`
-     - `Contacts.ReadWrite`
-     - `Tasks.ReadWrite`
-     - `User.Read`
-     - `offline_access`
-
-8. Go back to **Overview**. Copy the **Application (client) ID**. You will need this for the config file.
+5. Go to **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated permissions** → add:
+   - `Mail.ReadWrite`, `Mail.Send`
+   - `Calendars.ReadWrite`
+   - `Contacts.ReadWrite`, `Tasks.ReadWrite`
+   - `User.Read`, `offline_access`
 
 No client secret is needed. The device code flow uses public client auth.
 
@@ -124,7 +114,21 @@ Add to your MCP client config (e.g. Claude Code `settings.json`, OpenClaw, Curso
 
 ### Authenticate
 
-Once the server is running, call the `outlook_login` tool. It will start a device-code flow -- you will be given a URL and a code to enter in your browser. After sign-in, tokens are cached in your OS keyring.
+Run this once on the machine where the MCP server will run:
+
+```bash
+uv run outlook-mcp auth
+```
+
+You'll get a URL and a code. Open the URL in any browser, enter the code, and sign in with your Microsoft account. Tokens are cached in the OS keyring — the MCP server picks them up automatically.
+
+Other CLI commands:
+
+```bash
+uv run outlook-mcp status   # Check auth status
+uv run outlook-mcp logout   # Clear credentials
+uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude)
+```
 
 ---
 
@@ -134,9 +138,9 @@ Once the server is running, call the `outlook_login` tool. It will start a devic
 
 | Tool | Description |
 |------|-------------|
-| `outlook_login` | Start device-code OAuth2 flow. Optionally set `read_only: true`. |
-| `outlook_logout` | Remove stored credentials. |
 | `outlook_auth_status` | Check if authenticated and whether read-only mode is active. |
+
+> **Note:** Authentication is handled via the CLI (`outlook-mcp auth`), not through MCP tools. See [Authenticate](#authenticate) above.
 
 ### Mail Read
 
