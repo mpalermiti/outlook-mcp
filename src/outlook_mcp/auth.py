@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 from azure.identity import DeviceCodeCredential, TokenCachePersistenceOptions
 
@@ -52,8 +53,13 @@ class AuthManager:
     def login(self) -> dict[str, str]:
         """Start device code auth flow.
 
+        Creates the credential, triggers token acquisition in a background
+        thread, and waits for the device code callback to fire so we can
+        return the verification URL and user code to the caller.
+
         Returns:
-            Dict with 'status' and 'message' for the agent to display.
+            Dict with 'status' and 'message' containing the device code URL
+            and code for the user to complete sign-in.
 
         Raises:
             ValueError: If client_id is not configured.
@@ -65,12 +71,15 @@ class AuthManager:
             )
 
         cache_options = TokenCachePersistenceOptions(name="outlook-mcp")
+        device_code_ready = threading.Event()
+        self._device_code_message = ""
 
         # azure-identity prompt_callback receives (verification_uri, user_code, expires_on)
         def _on_device_code(verification_uri: str, user_code: str, expires_on: object) -> None:
             self._device_code_message = (
                 f"To sign in, visit {verification_uri} and enter code: {user_code}"
             )
+            device_code_ready.set()
 
         self.credential = DeviceCodeCredential(
             client_id=self.config.client_id,
@@ -79,9 +88,32 @@ class AuthManager:
             prompt_callback=_on_device_code,
         )
 
+        scopes = self.get_scopes()
+
+        def _acquire_token():
+            try:
+                self.credential.get_token(*scopes)
+                logger.info("Device code auth completed successfully.")
+            except Exception:
+                logger.exception("Device code auth failed.")
+
+        # Start token acquisition in background — it blocks until user
+        # completes browser sign-in, but the callback fires immediately
+        # with the device code info.
+        auth_thread = threading.Thread(target=_acquire_token, daemon=True)
+        auth_thread.start()
+
+        # Wait for the callback to fire (or timeout if token was cached)
+        if device_code_ready.wait(timeout=15):
+            return {
+                "status": "login_started",
+                "message": self._device_code_message,
+            }
+
+        # If we get here without the callback, the token was likely cached
         return {
-            "status": "login_started",
-            "message": "Device code authentication initiated. Complete the sign-in when prompted.",
+            "status": "authenticated",
+            "message": "Already authenticated (cached token).",
         }
 
     def get_credential(self) -> DeviceCodeCredential:
