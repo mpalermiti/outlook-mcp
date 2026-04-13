@@ -53,12 +53,21 @@ class SendMessageInput(BaseModel):
     bcc: list[str] | None = None
     is_html: bool = False
     importance: str = "normal"
+    sensitivity: str = "normal"
+    request_read_receipt: bool = False
 
     @field_validator("importance")
     @classmethod
     def validate_importance(cls, v: str) -> str:
         if v not in ("low", "normal", "high"):
             raise ValueError(f"importance must be low, normal, or high; got {v}")
+        return v
+
+    @field_validator("sensitivity")
+    @classmethod
+    def validate_sensitivity(cls, v: str) -> str:
+        if v not in ("normal", "personal", "private", "confidential"):
+            raise ValueError(f"sensitivity must be normal/personal/private/confidential; got {v}")
         return v
 
 
