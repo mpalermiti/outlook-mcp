@@ -1,3 +1,5 @@
+<!-- mcp-name: io.github.mpalermiti/outlook-mcp -->
+
 # outlook-mcp
 
 MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.

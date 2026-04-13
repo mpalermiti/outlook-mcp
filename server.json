@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.mpalermiti/outlook-mcp",
+  "title": "Outlook MCP",
+  "description": "MCP server for Microsoft Outlook personal accounts. 51 tools for mail, calendar, contacts, to-do, drafts.",
+  "version": "1.0.0",
+  "websiteUrl": "https://github.com/mpalermiti/outlook-mcp",
+  "repository": {
+    "url": "https://github.com/mpalermiti/outlook-mcp",
+    "source": "github",
+    "id": "mpalermiti/outlook-mcp"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "outlook-graph-mcp",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

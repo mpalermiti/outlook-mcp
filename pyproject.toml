@@ -1,5 +1,5 @@
 [project]
-name = "outlook-mcp"
+name = "outlook-graph-mcp"
 version = "1.0.0"
 description = "MCP server for Microsoft Outlook via Microsoft Graph API"
 readme = "README.md"
@@ -10,9 +10,15 @@ authors = [
 ]
 keywords = ["mcp", "outlook", "microsoft-graph", "email", "calendar", "openclaw"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Communications :: Email",
+    "Topic :: Office/Business",
 ]
 dependencies = [
     "mcp[cli]>=1.27",
@@ -20,6 +26,11 @@ dependencies = [
     "azure-identity>=1.25",
     "pydantic>=2.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mpalermiti/outlook-mcp"
+Repository = "https://github.com/mpalermiti/outlook-mcp"
+Issues = "https://github.com/mpalermiti/outlook-mcp/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -35,6 +46,17 @@ outlook-mcp = "outlook_mcp.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/outlook_mcp"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/outlook_mcp",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
 
 [tool.ruff]
 target-version = "py310"
