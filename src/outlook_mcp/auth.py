@@ -38,6 +38,8 @@ class AuthManager:
         self.config = config
         self.credential: DeviceCodeCredential | None = None
         self._account_email: str | None = None
+        self._credentials: dict[str, DeviceCodeCredential] = {}  # name -> credential
+        self._active_account: str | None = config.default_account
 
     def get_scopes(self) -> list[str]:
         """Return the appropriate scopes based on config."""
@@ -77,8 +79,7 @@ class AuthManager:
 
         return {
             "status": "login_started",
-            "message": "Device code authentication initiated. "
-            "Complete the sign-in when prompted.",
+            "message": "Device code authentication initiated. Complete the sign-in when prompted.",
         }
 
     def get_credential(self) -> DeviceCodeCredential:
@@ -86,6 +87,44 @@ class AuthManager:
         if self.credential is None:
             raise AuthRequiredError()
         return self.credential
+
+    def list_accounts(self) -> list[dict]:
+        """List configured accounts with auth status."""
+        accounts = []
+        for acc in self.config.accounts:
+            accounts.append(
+                {
+                    "name": acc.name,
+                    "client_id": acc.client_id[:8] + "...",
+                    "tenant_id": acc.tenant_id,
+                    "authenticated": acc.name in self._credentials,
+                    "active": acc.name == self._active_account,
+                }
+            )
+        # Also include the default single-account config if present
+        if self.config.client_id and not self.config.accounts:
+            accounts.append(
+                {
+                    "name": "default",
+                    "client_id": self.config.client_id[:8] + "...",
+                    "tenant_id": self.config.tenant_id,
+                    "authenticated": self.credential is not None,
+                    "active": True,
+                }
+            )
+        return accounts
+
+    def switch_account(self, name: str) -> dict:
+        """Switch active account."""
+        for acc in self.config.accounts:
+            if acc.name == name:
+                self._active_account = name
+                if name in self._credentials:
+                    self.credential = self._credentials[name]
+                else:
+                    self.credential = None
+                return {"status": "switched", "account": name}
+        raise ValueError(f"Account '{name}' not found in config")
 
     def logout(self) -> dict[str, str]:
         """Clear stored credentials."""

@@ -11,6 +11,14 @@ DEFAULT_TENANT_ID = "consumers"
 DEFAULT_CONFIG_DIR = os.path.expanduser("~/.outlook-mcp")
 
 
+class AccountConfig(BaseModel):
+    """Configuration for a single account."""
+
+    name: str
+    client_id: str
+    tenant_id: str = DEFAULT_TENANT_ID
+
+
 class Config(BaseModel):
     """Outlook MCP server configuration."""
 
@@ -18,6 +26,8 @@ class Config(BaseModel):
     tenant_id: str = Field(default=DEFAULT_TENANT_ID)
     read_only: bool = Field(default=False)
     timezone: str = Field(default="UTC", description="IANA timezone for relative date computations")
+    accounts: list[AccountConfig] = Field(default_factory=list)
+    default_account: str | None = Field(default=None)
 
 
 def _ensure_dir(dir_path: str) -> Path:
