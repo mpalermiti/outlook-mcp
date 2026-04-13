@@ -79,3 +79,36 @@ async def test_list_folders_smoke(real_graph_client):
     assert isinstance(result["folders"], list)
     # Every Outlook account has at least inbox
     assert result["count"] > 0
+
+
+@pytest.mark.asyncio
+async def test_list_contacts_smoke(real_graph_client):
+    """List contacts returns valid response shape."""
+    from outlook_mcp.tools.contacts import list_contacts
+
+    result = await list_contacts(real_graph_client.sdk_client)
+    assert "contacts" in result
+    assert "count" in result
+    assert isinstance(result["contacts"], list)
+
+
+@pytest.mark.asyncio
+async def test_list_task_lists_smoke(real_graph_client):
+    """List task lists returns valid response shape."""
+    from outlook_mcp.tools.todo import list_task_lists
+
+    result = await list_task_lists(real_graph_client.sdk_client)
+    assert "task_lists" in result
+    assert "count" in result
+    assert isinstance(result["task_lists"], list)
+
+
+@pytest.mark.asyncio
+async def test_list_drafts_smoke(real_graph_client):
+    """List drafts returns valid response shape."""
+    from outlook_mcp.tools.mail_drafts import list_drafts
+
+    result = await list_drafts(real_graph_client.sdk_client)
+    assert "drafts" in result
+    assert "count" in result
+    assert isinstance(result["drafts"], list)

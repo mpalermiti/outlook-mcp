@@ -87,6 +87,52 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
 - `outlook_delete_event` — Delete event
 - `outlook_rsvp` — Accept, decline, or tentatively accept
 
+### Contacts
+- `outlook_list_contacts` — List contacts with cursor pagination
+- `outlook_search_contacts` — Search contacts by name or email
+- `outlook_get_contact` — Get full contact details by ID
+- `outlook_create_contact` — Create a new contact
+- `outlook_update_contact` — Update contact fields
+- `outlook_delete_contact` — Delete a contact
+
+### To Do
+- `outlook_list_task_lists` — List To Do lists
+- `outlook_list_tasks` — List tasks with status filter and pagination
+- `outlook_create_task` — Create task with due date, importance, recurrence
+- `outlook_update_task` — Update task fields
+- `outlook_complete_task` — Mark task as completed
+- `outlook_delete_task` — Delete a task
+
+### Drafts
+- `outlook_list_drafts` — List draft messages with pagination
+- `outlook_create_draft` — Create a draft for later review and sending
+- `outlook_update_draft` — Update draft fields
+- `outlook_send_draft` — Send an existing draft
+- `outlook_delete_draft` — Delete a draft
+
+### Attachments
+- `outlook_list_attachments` — List attachments on a message
+- `outlook_download_attachment` — Download attachment (base64 or save to file)
+- `outlook_send_with_attachments` — Send message with file attachments
+
+### Folder Management
+- `outlook_create_folder` — Create mail folder (top-level or nested)
+- `outlook_rename_folder` — Rename a mail folder
+- `outlook_delete_folder` — Delete a mail folder
+
+### Threading and Batch
+- `outlook_list_thread` — Get all messages in a conversation thread
+- `outlook_copy_message` — Copy a message to another folder
+- `outlook_batch_triage` — Batch move/flag/categorize/mark_read (max 20 per call)
+
+### User and Admin
+- `outlook_whoami` — Get current user profile
+- `outlook_list_calendars` — List available calendars
+- `outlook_list_categories` — List category definitions with colors
+- `outlook_get_mail_tips` — Pre-send check (OOF, delivery restrictions)
+- `outlook_list_accounts` — List configured accounts
+- `outlook_switch_account` — Switch active account
+
 ## Privacy
 - Zero telemetry
 - Zero local caching of email/calendar data

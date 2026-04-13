@@ -22,7 +22,19 @@ Published to ClawHub.ai for the OpenClaw community.
 - `src/outlook_mcp/config.py` — Config file management (~/.outlook-mcp/)
 - `src/outlook_mcp/validation.py` — Input validation (OData, KQL, IDs, datetimes)
 - `src/outlook_mcp/errors.py` — Exception hierarchy
-- `src/outlook_mcp/tools/` — One file per tool group
+- `src/outlook_mcp/pagination.py` — Cursor-based pagination
+- `src/outlook_mcp/tools/` — One file per tool group:
+  - `auth_tools.py`, `mail_read.py`, `mail_write.py`, `mail_triage.py` — Tier 1
+  - `calendar_read.py`, `calendar_write.py` — Tier 1
+  - `contacts.py` — Contact CRUD
+  - `todo.py` — To Do task management
+  - `mail_drafts.py` — Draft management
+  - `mail_attachments.py` — Attachment handling
+  - `mail_folders.py` — Folder management
+  - `mail_thread.py` — Threading and copy
+  - `batch.py` — Batch operations
+  - `user.py` — User profile, calendars
+  - `admin.py` — Categories, mail tips
 - `src/outlook_mcp/models/` — Pydantic models for I/O
 
 ## Conventions

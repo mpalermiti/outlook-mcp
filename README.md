@@ -8,7 +8,7 @@ MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 
 ## Features
 
-**21 tools** across 6 categories:
+**53 tools** across 13 categories:
 
 - **Auth (3)** -- device-code OAuth2 login, logout, status check
 - **Mail Read (4)** -- list inbox, read message, search (KQL), list folders
@@ -16,6 +16,13 @@ MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 - **Mail Triage (5)** -- move, delete (soft by default), flag, categorize, mark read/unread
 - **Calendar Read (2)** -- list events (with recurring expansion), get event details
 - **Calendar Write (4)** -- create, update, delete, RSVP (accept/decline/tentative)
+- **Contacts (6)** -- list, search, get, create, update, delete
+- **To Do (6)** -- list task lists, list/create/update/complete/delete tasks
+- **Drafts (5)** -- list, create, update, send, delete
+- **Attachments (3)** -- list, download, send-with-attachments
+- **Folder Management (3)** -- create, rename, delete mail folders
+- **Threading and Batch (3)** -- list thread, copy message, batch triage
+- **User and Admin (6)** -- whoami, list calendars, list categories, mail tips, accounts
 
 **Design principles:**
 
@@ -174,6 +181,73 @@ Once the server is running, call the `outlook_login` tool. It will start a devic
 | `outlook_delete_event` | Delete a calendar event. |
 | `outlook_rsvp` | RSVP to an event: `accept`, `decline`, or `tentative`. Optionally include a message. |
 
+### Contacts
+
+| Tool | Description |
+|------|-------------|
+| `outlook_list_contacts` | List contacts with cursor pagination. |
+| `outlook_search_contacts` | Search contacts by name or email. |
+| `outlook_get_contact` | Get full contact details by ID. |
+| `outlook_create_contact` | Create a new contact. |
+| `outlook_update_contact` | Update contact fields. |
+| `outlook_delete_contact` | Delete a contact. |
+
+### To Do
+
+| Tool | Description |
+|------|-------------|
+| `outlook_list_task_lists` | List To Do lists. |
+| `outlook_list_tasks` | List tasks with status filter and pagination. |
+| `outlook_create_task` | Create task with due date, importance, recurrence. |
+| `outlook_update_task` | Update task fields. |
+| `outlook_complete_task` | Mark task as completed. |
+| `outlook_delete_task` | Delete a task. |
+
+### Drafts
+
+| Tool | Description |
+|------|-------------|
+| `outlook_list_drafts` | List draft messages with pagination. |
+| `outlook_create_draft` | Create a draft for later review and sending. |
+| `outlook_update_draft` | Update draft fields. |
+| `outlook_send_draft` | Send an existing draft. |
+| `outlook_delete_draft` | Delete a draft. |
+
+### Attachments
+
+| Tool | Description |
+|------|-------------|
+| `outlook_list_attachments` | List attachments on a message. |
+| `outlook_download_attachment` | Download attachment (base64 or save to file). |
+| `outlook_send_with_attachments` | Send message with file attachments (auto upload session for >3MB). |
+
+### Folder Management
+
+| Tool | Description |
+|------|-------------|
+| `outlook_create_folder` | Create mail folder (top-level or nested). |
+| `outlook_rename_folder` | Rename a mail folder. |
+| `outlook_delete_folder` | Delete a mail folder (refuses well-known folders). |
+
+### Threading and Batch
+
+| Tool | Description |
+|------|-------------|
+| `outlook_list_thread` | Get all messages in a conversation thread. |
+| `outlook_copy_message` | Copy a message to another folder. |
+| `outlook_batch_triage` | Batch move/flag/categorize/mark_read (max 20 per call). |
+
+### User and Admin
+
+| Tool | Description |
+|------|-------------|
+| `outlook_whoami` | Get current user profile. |
+| `outlook_list_calendars` | List available calendars. |
+| `outlook_list_categories` | List category definitions with colors. |
+| `outlook_get_mail_tips` | Pre-send check (OOF, delivery restrictions). |
+| `outlook_list_accounts` | List configured accounts. |
+| `outlook_switch_account` | Switch active account. |
+
 ---
 
 ## Configuration
@@ -226,18 +300,10 @@ uv run outlook-mcp
 
 ## Roadmap
 
-### Tier 2: Power Features
+### Shipped
 
-- **Contacts** -- list, search, get, create, update, delete
-- **To Do** -- task lists, tasks (create, update, complete, delete)
-- **Drafts** -- list, create, update, send, delete
-- **Attachments** -- list, download, send-with-attachments (upload session for large files)
-- **Threading** -- list all messages in a conversation
-- **Folders** -- create, rename, delete mail folders
-- **Batch** -- batch triage operations (move/flag/categorize up to 20 per call)
-- **Pagination** -- cursor-based pagination on all list tools
-- **Categories** -- list category definitions with colors
-- **User profile** -- `whoami` tool
+- **Tier 1 (21 tools)** -- Auth, Mail (read/write/triage), Calendar (read/write)
+- **Tier 2 (32 tools)** -- Contacts, To Do, Drafts, Attachments, Folders, Threading, Batch, User/Admin, Cursor Pagination, Categories
 
 ### Tier 3: Differentiators
 
@@ -245,7 +311,7 @@ uv run outlook-mcp
 - **Out-of-Office** -- get/set automatic replies
 - **Inbox Rules** -- list, create, delete rules
 - **Advanced mail** -- raw MIME export, internet message headers
-- **Calendar** -- cancel event (with attendee notification), list calendars
+- **Calendar** -- cancel event (with attendee notification)
 - **Checklists** -- checklist items on To Do tasks
 - **Notifications** -- poll-based change notifications for mail and calendar
 
