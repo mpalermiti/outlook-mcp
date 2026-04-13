@@ -2,7 +2,7 @@
 
 ## What This Is
 MCP server for Microsoft Outlook personal accounts (Outlook.com/Hotmail) via Microsoft Graph API.
-Published to ClawHub.ai for the OpenClaw community.
+Works with any MCP client (OpenClaw, Claude Code, Cursor).
 
 ## Tech Stack
 - Python 3.10+, FastMCP, msgraph-sdk, azure-identity, Pydantic v2
