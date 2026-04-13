@@ -19,7 +19,6 @@ SCOPES_READWRITE = [
     "Contacts.ReadWrite",
     "Tasks.ReadWrite",
     "User.Read",
-    "offline_access",
 ]
 
 SCOPES_READONLY = [
@@ -28,7 +27,6 @@ SCOPES_READONLY = [
     "Contacts.Read",
     "Tasks.Read",
     "User.Read",
-    "offline_access",
 ]
 
 
@@ -89,13 +87,16 @@ class AuthManager:
         )
 
         scopes = self.get_scopes()
+        self._auth_error: str | None = None
 
         def _acquire_token():
             try:
                 self.credential.get_token(*scopes)
                 logger.info("Device code auth completed successfully.")
-            except Exception:
+            except Exception as e:
+                self._auth_error = str(e)
                 logger.exception("Device code auth failed.")
+                device_code_ready.set()  # Unblock the wait
 
         # Start token acquisition in background — it blocks until user
         # completes browser sign-in, but the callback fires immediately
@@ -105,12 +106,25 @@ class AuthManager:
 
         # Wait for the callback to fire (or timeout if token was cached)
         if device_code_ready.wait(timeout=15):
+            if self._auth_error:
+                return {
+                    "status": "error",
+                    "message": f"Authentication failed: {self._auth_error}",
+                }
             return {
                 "status": "login_started",
                 "message": self._device_code_message,
             }
 
         # If we get here without the callback, the token was likely cached
+        # — verify by checking if the thread completed without error
+        auth_thread.join(timeout=5)
+        if self._auth_error:
+            return {
+                "status": "error",
+                "message": f"Authentication failed: {self._auth_error}",
+            }
+
         return {
             "status": "authenticated",
             "message": "Already authenticated (cached token).",

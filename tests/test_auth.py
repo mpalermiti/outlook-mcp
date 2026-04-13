@@ -23,7 +23,8 @@ def test_auth_scopes_default():
     assert "Mail.ReadWrite" in scopes
     assert "Mail.Send" in scopes
     assert "Calendars.ReadWrite" in scopes
-    assert "offline_access" in scopes
+    # offline_access is reserved — MSAL adds it automatically
+    assert "offline_access" not in scopes
 
 
 def test_auth_scopes_read_only():
