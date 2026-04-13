@@ -34,7 +34,7 @@ async def lifespan(server):
     auth = AuthManager(config)
     # Try to load cached token silently — if this fails, tools will
     # return an error telling the user to run `outlook-mcp auth`.
-    auth.try_cached_token(auth.get_scopes())
+    auth.try_cached_token(auth.get_token_scopes())
     yield {"config": config, "auth": auth}
 
 
@@ -61,7 +61,7 @@ def _get_config(ctx: Context):
 def _get_graph_client(ctx: Context) -> GraphClient:
     """Create Graph client from auth context."""
     auth = _get_auth(ctx)
-    return GraphClient(auth.get_credential(), scopes=auth.get_scopes())
+    return GraphClient(auth.get_credential())
 
 
 # ── Auth Tools ──────────────────────────────────────────

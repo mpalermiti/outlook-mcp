@@ -36,6 +36,11 @@ SCOPES_READONLY = [
 CACHE_NAME = "outlook-mcp"
 AUTH_RECORD_FILE = "auth_record.json"
 
+# The Graph SDK always requests .default scope internally, so we must
+# acquire and cache tokens with the same scope to avoid cache misses
+# that trigger interactive auth in the background.
+GRAPH_DEFAULT_SCOPE = "https://graph.microsoft.com/.default"
+
 
 def _auth_record_path() -> Path:
     return Path(DEFAULT_CONFIG_DIR) / AUTH_RECORD_FILE
@@ -71,8 +76,12 @@ class AuthManager:
         self._active_account: str | None = config.default_account
 
     def get_scopes(self) -> list[str]:
-        """Return the appropriate scopes based on config."""
+        """Return individual scopes for display/consent purposes."""
         return SCOPES_READONLY if self.config.read_only else SCOPES_READWRITE
+
+    def get_token_scopes(self) -> list[str]:
+        """Return scopes for token acquisition — must match what the SDK requests."""
+        return [GRAPH_DEFAULT_SCOPE]
 
     def is_authenticated(self) -> bool:
         """Check if we have an active credential."""
@@ -121,8 +130,9 @@ class AuthManager:
             print("Waiting for you to complete sign-in in your browser...")
 
         cred = self._make_credential(prompt_callback=_on_device_code)
-        # get_token() uses cache first, falls back to interactive
-        cred.get_token(*scopes)
+        # get_token() uses cache first, falls back to interactive.
+        # Must use .default scope to match what the Graph SDK requests.
+        cred.get_token(*self.get_token_scopes())
 
         # Save the auth record for silent refresh by the MCP server
         record = getattr(cred, "_auth_record", None)
@@ -147,7 +157,7 @@ class AuthManager:
 
         try:
             cred = self._make_credential(auth_record=record)
-            cred.get_token(*scopes)
+            cred.get_token(*self.get_token_scopes())
             self.credential = cred
             return True
         except Exception:
