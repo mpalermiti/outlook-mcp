@@ -58,7 +58,7 @@ def _get_config(ctx: Context):
 def _get_graph_client(ctx: Context) -> GraphClient:
     """Create Graph client from auth context."""
     auth = _get_auth(ctx)
-    return GraphClient(auth.get_credential())
+    return GraphClient(auth.get_credential(), scopes=auth.get_scopes())
 
 
 # ── Auth Tools ──────────────────────────────────────────

@@ -12,7 +12,9 @@ from outlook_mcp.errors import AuthRequiredError
 class GraphClient:
     """Wrapper around the Microsoft Graph SDK client."""
 
-    def __init__(self, credential: Any) -> None:
+    def __init__(self, credential: Any, scopes: list[str] | None = None) -> None:
         if credential is None:
             raise AuthRequiredError()
-        self.sdk_client = GraphServiceClient(credentials=credential)
+        self.sdk_client = GraphServiceClient(
+            credentials=credential, scopes=scopes
+        )

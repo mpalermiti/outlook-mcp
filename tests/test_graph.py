@@ -20,4 +20,4 @@ def test_graph_client_init(mock_gsc_cls):
     mock_credential = MagicMock()
     client = GraphClient(credential=mock_credential)
     assert client.sdk_client is not None
-    mock_gsc_cls.assert_called_once_with(credentials=mock_credential)
+    mock_gsc_cls.assert_called_once_with(credentials=mock_credential, scopes=None)
