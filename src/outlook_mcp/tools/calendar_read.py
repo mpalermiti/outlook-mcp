@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from outlook_mcp.pagination import apply_pagination, wrap_nextlink
 from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
 
 
@@ -134,6 +135,7 @@ async def list_events(
     before: str | None = None,
     count: int = 50,
     timezone: str = "UTC",
+    cursor: str | None = None,
 ) -> dict:
     """List calendar events using calendarView.
 
@@ -144,16 +146,14 @@ async def list_events(
     count = _clamp(count, 1, 100)
     start_utc, end_utc = _compute_calendar_range(days, after, before, timezone)
 
-    query_params = {
-        "start_date_time": start_utc,
-        "end_date_time": end_utc,
-        "$top": count,
-        "$orderby": "start/dateTime",
-        "$select": (
-            "id,subject,start,end,location,isAllDay,"
-            "organizer,responseStatus,isOnlineMeeting,categories"
-        ),
-    }
+    query_params = apply_pagination({}, count, cursor)
+    query_params["start_date_time"] = start_utc
+    query_params["end_date_time"] = end_utc
+    query_params["$orderby"] = "start/dateTime"
+    query_params["$select"] = (
+        "id,subject,start,end,location,isAllDay,"
+        "organizer,responseStatus,isOnlineMeeting,categories"
+    )
 
     response = await graph_client.me.calendar_view.get(query_params=query_params)
 
@@ -163,6 +163,7 @@ async def list_events(
         "events": events,
         "count": len(events),
         "has_more": response.odata_next_link is not None,
+        "cursor": wrap_nextlink(response.odata_next_link),
     }
 
 

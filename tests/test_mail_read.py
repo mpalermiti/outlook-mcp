@@ -199,7 +199,7 @@ class TestListFolders:
 
         mock_client = MagicMock()
         mock_client.me.mail_folders.get = AsyncMock(
-            return_value=MagicMock(value=[mock_folder])
+            return_value=MagicMock(value=[mock_folder], odata_next_link=None)
         )
 
         result = await list_folders(mock_client)

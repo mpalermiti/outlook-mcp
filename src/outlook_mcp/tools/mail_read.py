@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from outlook_mcp.pagination import apply_pagination, wrap_nextlink
 from outlook_mcp.validation import (
     sanitize_kql,
     sanitize_output,
@@ -68,20 +69,22 @@ async def list_inbox(
     after: str | None = None,
     before: str | None = None,
     skip: int = 0,
+    cursor: str | None = None,
 ) -> dict:
     """List messages in a folder."""
     count = _clamp(count, 1, 100)
     folder = validate_folder_name(folder)
 
-    query_params = {
-        "$top": count,
-        "$skip": skip,
-        "$orderby": "receivedDateTime desc",
-        "$select": (
-            "id,subject,from,receivedDateTime,isRead,importance,"
-            "bodyPreview,hasAttachments,categories,flag,conversationId"
-        ),
-    }
+    query_params = apply_pagination({}, count, cursor)
+    query_params["$orderby"] = "receivedDateTime desc"
+    query_params["$select"] = (
+        "id,subject,from,receivedDateTime,isRead,importance,"
+        "bodyPreview,hasAttachments,categories,flag,conversationId"
+    )
+
+    # If cursor provided, it already set $skip — ignore the manual skip param
+    if not cursor and skip:
+        query_params["$skip"] = skip
 
     # Build filter with validated inputs
     filters = []
@@ -111,6 +114,7 @@ async def list_inbox(
         "messages": messages,
         "count": len(messages),
         "has_more": response.odata_next_link is not None,
+        "cursor": wrap_nextlink(response.odata_next_link),
     }
 
 
@@ -196,19 +200,18 @@ async def search_mail(
     query: str,
     count: int = 25,
     folder: str | None = None,
+    cursor: str | None = None,
 ) -> dict:
     """Search mail using KQL."""
     count = _clamp(count, 1, 100)
     safe_query = sanitize_kql(query)
 
-    query_params = {
-        "$top": count,
-        "$search": safe_query,
-        "$select": (
-            "id,subject,from,receivedDateTime,isRead,importance,"
-            "bodyPreview,hasAttachments,categories,flag,conversationId"
-        ),
-    }
+    query_params = apply_pagination({}, count, cursor)
+    query_params["$search"] = safe_query
+    query_params["$select"] = (
+        "id,subject,from,receivedDateTime,isRead,importance,"
+        "bodyPreview,hasAttachments,categories,flag,conversationId"
+    )
 
     if folder:
         folder = validate_folder_name(folder)
@@ -224,12 +227,18 @@ async def search_mail(
         "messages": messages,
         "count": len(messages),
         "has_more": response.odata_next_link is not None,
+        "cursor": wrap_nextlink(response.odata_next_link),
     }
 
 
-async def list_folders(graph_client: Any) -> dict:
+async def list_folders(
+    graph_client: Any,
+    cursor: str | None = None,
+) -> dict:
     """List all mail folders."""
-    response = await graph_client.me.mail_folders.get()
+    query_params = apply_pagination({}, count=50, cursor=cursor)
+
+    response = await graph_client.me.mail_folders.get(query_params=query_params)
 
     folders = []
     for f in response.value or []:
@@ -243,4 +252,6 @@ async def list_folders(graph_client: Any) -> dict:
     return {
         "folders": folders,
         "count": len(folders),
+        "has_more": response.odata_next_link is not None,
+        "cursor": wrap_nextlink(response.odata_next_link),
     }
