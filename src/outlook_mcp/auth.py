@@ -99,8 +99,11 @@ class AuthManager:
     def login_interactive(self, scopes: list[str]) -> None:
         """Run the device code flow interactively in the terminal.
 
-        Blocks until the user completes browser sign-in. Saves the
-        AuthenticationRecord for silent token refresh by the MCP server.
+        Uses get_token() which respects the token cache — if a valid
+        cached token exists, completes silently. Otherwise triggers the
+        device code flow. Saves the AuthenticationRecord for silent
+        token refresh by the MCP server.
+
         Intended for CLI use (`outlook-mcp auth`), not MCP tools.
         """
         if not self.config.client_id:
@@ -118,9 +121,14 @@ class AuthManager:
             print("Waiting for you to complete sign-in in your browser...")
 
         cred = self._make_credential(prompt_callback=_on_device_code)
-        # authenticate() returns an AuthenticationRecord we can persist
-        record = cred.authenticate(scopes=scopes)
-        _save_auth_record(record)
+        # get_token() uses cache first, falls back to interactive
+        cred.get_token(*scopes)
+
+        # Save the auth record for silent refresh by the MCP server
+        record = getattr(cred, "_auth_record", None)
+        if record:
+            _save_auth_record(record)
+
         self.credential = cred
         print("Authenticated successfully.")
 
