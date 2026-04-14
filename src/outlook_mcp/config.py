@@ -5,7 +5,9 @@ import stat
 import tempfile
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from outlook_mcp.permissions import VALID_CATEGORIES
 
 DEFAULT_TENANT_ID = "consumers"
 DEFAULT_CONFIG_DIR = os.path.expanduser("~/.outlook-mcp")
@@ -25,9 +27,29 @@ class Config(BaseModel):
     client_id: str | None = Field(default=None, description="Azure AD app client ID (BYOID)")
     tenant_id: str = Field(default=DEFAULT_TENANT_ID)
     read_only: bool = Field(default=False)
+    allow_categories: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional whitelist of write-tool categories. Empty list = fully open "
+            "(all writes allowed when read_only=False). Non-empty = only the listed "
+            "categories are permitted."
+        ),
+    )
     timezone: str = Field(default="UTC", description="IANA timezone for relative date computations")
     accounts: list[AccountConfig] = Field(default_factory=list)
     default_account: str | None = Field(default=None)
+
+    @field_validator("allow_categories")
+    @classmethod
+    def _validate_allow_categories(cls, value: list[str]) -> list[str]:
+        """Reject unknown category names at config load time."""
+        unknown = [c for c in value if c not in VALID_CATEGORIES]
+        if unknown:
+            valid_list = ", ".join(sorted(VALID_CATEGORIES))
+            raise ValueError(
+                f"Unknown permission categories: {unknown}. Valid categories: {valid_list}"
+            )
+        return value
 
 
 def _ensure_dir(dir_path: str) -> Path:
