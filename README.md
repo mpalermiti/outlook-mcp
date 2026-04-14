@@ -322,7 +322,7 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions).
 
 ### Granular Write Permissions (optional)
 
-By default, `read_only: false` unlocks **all** write tools. For finer control, set `allow_categories` to restrict write access to specific categories.
+By default, `read_only: false` unlocks **all** write tools. For finer control, set `allow_categories` to restrict write access to specific categories. Read tools (list, search, get) are always allowed — `allow_categories` only narrows the write surface.
 
 **Available categories:**
 
@@ -362,7 +362,7 @@ By default, `read_only: false` unlocks **all** write tools. For finer control, s
 { "read_only": true }
 ```
 
-When `allow_categories` is set, any tool in a non-allowed category raises `PermissionDeniedError`. When `allow_categories` is empty (or unset) and `read_only` is false, all write tools are permitted.
+When `allow_categories` is set, any tool in a non-allowed category returns a permission-denied error (`PermissionDeniedError`) naming the blocked category. When `allow_categories` is empty (or unset) and `read_only` is false, all write tools are permitted. `read_only: true` always takes precedence — if set, all writes are blocked regardless of `allow_categories`. Unknown category names are rejected at config load time with a validation error; only the seven names above are accepted.
 
 ---
 
