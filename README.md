@@ -4,9 +4,38 @@
 
 MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 
+[![PyPI](https://img.shields.io/pypi/v/outlook-graph-mcp.svg)](https://pypi.org/project/outlook-graph-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/outlook-graph-mcp.svg)](https://pypi.org/project/outlook-graph-mcp/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-green)](https://registry.modelcontextprotocol.io/v0/servers?search=mpalermiti)
+
 > **Personal Microsoft accounts only** — `@outlook.com`, `@hotmail.com`, `@live.com`. Work/school accounts (Entra ID) are not supported in v1.
 
 > **Disclaimer:** Independent open-source project. Not affiliated with, endorsed by, or supported by Microsoft Corporation. "Outlook" and "Microsoft Graph" are trademarks of Microsoft.
+
+---
+
+## What This Enables
+
+Give your AI agent full Outlook access. Example prompts that just work:
+
+- *"Summarize my unread email from the past 24 hours and flag anything urgent."*
+- *"Draft a reply to Sarah's message from yesterday saying I'll review the deck Friday."*
+- *"What's on my calendar Thursday? Reschedule my 2pm with Mark to 3pm."*
+- *"Find all emails from the legal team about the compliance review and list action items."*
+- *"Create a To Do task for each unread message from my manager, due end of week."*
+- *"Move all emails from newsletter@* to my 'Newsletters' folder. Batch 20 at a time."*
+
+The server exposes 51 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+
+## Works With
+
+- **[OpenClaw](https://openclaw.ai)** — native MCP support, available via [ClawHub](https://clawhub.ai/skills?q=outlook-mcp)
+- **[Claude Code](https://claude.com/claude-code)** — add to `~/.claude/settings.json` under `mcpServers`
+- **[Cursor](https://cursor.com)** — MCP-compatible
+- **Any MCP client** — it's a standard stdio MCP server
+
+Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=mpalermiti) as `io.github.mpalermiti/outlook-mcp`.
 
 ---
 
@@ -77,12 +106,19 @@ No client secret is needed. The device code flow uses public client auth.
 
 ### Install
 
+**Option A — from PyPI (recommended):**
+
 ```bash
-# Clone
+uv tool install outlook-graph-mcp
+# or: pipx install outlook-graph-mcp
+# or: pip install outlook-graph-mcp
+```
+
+**Option B — from source:**
+
+```bash
 git clone https://github.com/mpalermiti/outlook-mcp.git
 cd outlook-mcp
-
-# Install with uv
 uv sync
 ```
 
@@ -103,7 +139,19 @@ The only required field is `client_id`. Everything else has sensible defaults. S
 
 ### Register with your MCP client
 
-Add to your MCP client config (e.g. Claude Code `settings.json`, OpenClaw, Cursor):
+**If installed from PyPI:**
+
+```json
+{
+  "mcpServers": {
+    "outlook": {
+      "command": "outlook-mcp"
+    }
+  }
+}
+```
+
+**If installed from source:**
 
 ```json
 {
@@ -115,6 +163,8 @@ Add to your MCP client config (e.g. Claude Code `settings.json`, OpenClaw, Curso
   }
 }
 ```
+
+For **OpenClaw**, register under `mcp.servers` in `~/.openclaw/openclaw.json` and restart the gateway.
 
 ### Authenticate
 
