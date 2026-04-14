@@ -1281,8 +1281,8 @@ wheels = [
 ]
 
 [[package]]
-name = "outlook-mcp"
-version = "1.0.0"
+name = "outlook-graph-mcp"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "azure-identity" },
