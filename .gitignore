@@ -34,3 +34,6 @@ Thumbs.db
 
 # Project
 *.log
+
+# MCP Registry publisher tokens — NEVER commit
+.mcpregistry_*
