@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
+from outlook_mcp.permissions import CATEGORY_CONTACTS_WRITE, check_permission
 from outlook_mcp.validation import (
     sanitize_kql,
     sanitize_output,
@@ -17,12 +18,6 @@ from outlook_mcp.validation import (
 
 def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
-
-
-def _check_read_only(read_only: bool, tool_name: str) -> None:
-    """Raise ReadOnlyError if server is in read-only mode."""
-    if read_only:
-        raise ReadOnlyError(tool_name)
 
 
 def _format_contact_summary(contact: Any) -> dict:
@@ -166,10 +161,11 @@ async def create_contact(
     phone: str | None = None,
     company: str | None = None,
     title: str | None = None,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Create a new contact."""
-    _check_read_only(read_only, "outlook_create_contact")
+    check_permission(config, CATEGORY_CONTACTS_WRITE, "outlook_create_contact")
 
     if email:
         validate_email(email)
@@ -213,10 +209,11 @@ async def update_contact(
     last_name: str | None = None,
     email: str | None = None,
     phone: str | None = None,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Update an existing contact (partial patch)."""
-    _check_read_only(read_only, "outlook_update_contact")
+    check_permission(config, CATEGORY_CONTACTS_WRITE, "outlook_update_contact")
     contact_id = validate_graph_id(contact_id)
 
     if email:
@@ -250,10 +247,11 @@ async def update_contact(
 async def delete_contact(
     graph_client: Any,
     contact_id: str,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Delete a contact by ID."""
-    _check_read_only(read_only, "outlook_delete_contact")
+    check_permission(config, CATEGORY_CONTACTS_WRITE, "outlook_delete_contact")
     contact_id = validate_graph_id(contact_id)
 
     await graph_client.me.contacts.by_contact_id(contact_id).delete()

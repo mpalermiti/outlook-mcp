@@ -19,12 +19,12 @@ MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 
 Give your AI agent full Outlook access. Example prompts that just work:
 
-- *"Summarize my unread email from the past 24 hours and flag anything urgent."*
-- *"Draft a reply to Sarah's message from yesterday saying I'll review the deck Friday."*
-- *"What's on my calendar Thursday? Reschedule my 2pm with Mark to 3pm."*
-- *"Find all emails from the legal team about the compliance review and list action items."*
-- *"Create a To Do task for each unread message from my manager, due end of week."*
-- *"Move all emails from newsletter@* to my 'Newsletters' folder. Batch 20 at a time."*
+- *"Summarize my unread email from the past 24 hours and flag anything time-sensitive."*
+- *"Any shipping updates in my inbox? Track what I'm waiting on and when it's supposed to arrive."*
+- *"Scan my email for upcoming subscription renewals — what's about to auto-charge in the next two weeks?"*
+- *"I've got a trip to Seattle next week — check my calendar for the itinerary and create a To Do task with a packing checklist."*
+- *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
+- *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
 The server exposes 51 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
@@ -318,6 +318,51 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions).
 | `tenant_id` | `string` | `"consumers"` | Azure AD tenant. Use `"consumers"` for personal Microsoft accounts. |
 | `timezone` | `string` | `"UTC"` | IANA timezone (e.g. `"America/New_York"`). Used for relative date computations in calendar tools. |
 | `read_only` | `bool` | `false` | When `true`, all write tools (send, reply, move, delete, create, update, RSVP) return an error. |
+| `allow_categories` | `list[string]` | `[]` | Optional. Restrict write tools to specific categories (see below). Empty list = all writes allowed when `read_only: false`. |
+
+### Granular Write Permissions (optional)
+
+By default, `read_only: false` unlocks **all** write tools. For finer control, set `allow_categories` to restrict write access to specific categories. Read tools (list, search, get) are always allowed — `allow_categories` only narrows the write surface.
+
+**Available categories:**
+
+| Category | Tools | Risk |
+|---|---|---|
+| `mail_drafts` | create/update/delete draft | Safe — drafts only, no send |
+| `mail_triage` | move, delete (soft), flag, categorize, mark read, copy, batch | Moderate — reversible except hard delete |
+| `mail_folders` | create/rename/delete folder | Moderate |
+| `mail_send` | send, reply, forward, send_draft, send_with_attachments | **Dangerous** — sends email on your behalf |
+| `calendar_write` | create/update/delete event, RSVP | Moderate — creates calendar entries |
+| `contacts_write` | create/update/delete contact | Moderate |
+| `todo_write` | create/update/complete/delete task | Safe — your own task list |
+
+**Example policies:**
+
+**Draft-only assistant** (agent can compose drafts, you review and send):
+
+```json
+{ "read_only": false, "allow_categories": ["mail_drafts", "mail_triage", "todo_write"] }
+```
+
+**Calendar-only** (agent can manage your schedule, nothing else):
+
+```json
+{ "read_only": false, "allow_categories": ["calendar_write"] }
+```
+
+**Full write access** (agent can do everything):
+
+```json
+{ "read_only": false }
+```
+
+**Read-only** (safest default, no writes):
+
+```json
+{ "read_only": true }
+```
+
+When `allow_categories` is set, any tool in a non-allowed category returns a permission-denied error (`PermissionDeniedError`) naming the blocked category. When `allow_categories` is empty (or unset) and `read_only` is false, all write tools are permitted. `read_only: true` always takes precedence — if set, all writes are blocked regardless of `allow_categories`. Unknown category names are rejected at config load time with a validation error; only the seven names above are accepted.
 
 ---
 

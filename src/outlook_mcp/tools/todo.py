@@ -5,15 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
+from outlook_mcp.permissions import CATEGORY_TODO_WRITE, check_permission
 from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
-
-
-def _check_read_only(read_only: bool, tool_name: str) -> None:
-    """Raise ReadOnlyError if server is in read-only mode."""
-    if read_only:
-        raise ReadOnlyError(tool_name)
 
 
 async def _resolve_list_id(graph_client: Any, list_id: str | None) -> str:
@@ -186,14 +181,15 @@ async def create_task(
     body: str | None = None,
     reminder: bool | None = None,
     recurrence: dict | None = None,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Create a task in a To Do list.
 
     POST /me/todo/lists/{id}/tasks
     Validates due date if provided.
     """
-    _check_read_only(read_only, "outlook_create_task")
+    check_permission(config, CATEGORY_TODO_WRITE, "outlook_create_task")
 
     resolved_id = await _resolve_list_id(graph_client, list_id)
 
@@ -247,14 +243,15 @@ async def update_task(
     due: str | None = None,
     body: str | None = None,
     importance: str | None = None,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Update a task in a To Do list.
 
     PATCH /me/todo/lists/{id}/tasks/{taskId}
     Only patches provided fields.
     """
-    _check_read_only(read_only, "outlook_update_task")
+    check_permission(config, CATEGORY_TODO_WRITE, "outlook_update_task")
     task_id = validate_graph_id(task_id)
 
     resolved_id = await _resolve_list_id(graph_client, list_id)
@@ -301,13 +298,14 @@ async def complete_task(
     graph_client: Any,
     task_id: str,
     list_id: str | None = None,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Mark a task as completed.
 
     PATCH with status="completed" and completedDateTime set to now (UTC).
     """
-    _check_read_only(read_only, "outlook_complete_task")
+    check_permission(config, CATEGORY_TODO_WRITE, "outlook_complete_task")
     task_id = validate_graph_id(task_id)
 
     resolved_id = await _resolve_list_id(graph_client, list_id)
@@ -338,13 +336,14 @@ async def delete_task(
     graph_client: Any,
     task_id: str,
     list_id: str | None = None,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Delete a task from a To Do list.
 
     DELETE /me/todo/lists/{id}/tasks/{taskId}
     """
-    _check_read_only(read_only, "outlook_delete_task")
+    check_permission(config, CATEGORY_TODO_WRITE, "outlook_delete_task")
     task_id = validate_graph_id(task_id)
 
     resolved_id = await _resolve_list_id(graph_client, list_id)

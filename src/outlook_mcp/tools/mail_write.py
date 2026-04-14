@@ -4,14 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.config import Config
+from outlook_mcp.permissions import CATEGORY_MAIL_SEND, check_permission
 from outlook_mcp.validation import validate_email, validate_graph_id
-
-
-def _check_read_only(read_only: bool, tool_name: str) -> None:
-    """Raise ReadOnlyError if server is in read-only mode."""
-    if read_only:
-        raise ReadOnlyError(tool_name)
 
 
 async def send_message(
@@ -25,14 +20,15 @@ async def send_message(
     importance: str = "normal",
     sensitivity: str = "normal",
     request_read_receipt: bool = False,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Send an email message.
 
     Validates all recipient addresses, builds a Graph Message object,
     and posts via graph_client.me.send_mail.post().
     """
-    _check_read_only(read_only, "outlook_send_message")
+    check_permission(config, CATEGORY_MAIL_SEND, "outlook_send_message")
 
     # Validate all email addresses
     validated_to = [validate_email(e) for e in to]
@@ -98,13 +94,14 @@ async def reply(
     body: str,
     reply_all: bool = False,
     is_html: bool = False,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Reply to a message.
 
     Uses reply.post() or reply_all.post() based on the reply_all flag.
     """
-    _check_read_only(read_only, "outlook_reply")
+    check_permission(config, CATEGORY_MAIL_SEND, "outlook_reply")
     message_id = validate_graph_id(message_id)
 
     from msgraph.generated.users.item.messages.item.reply.reply_post_request_body import (
@@ -133,10 +130,11 @@ async def forward(
     message_id: str,
     to: list[str],
     comment: str | None = None,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Forward a message to one or more recipients."""
-    _check_read_only(read_only, "outlook_forward")
+    check_permission(config, CATEGORY_MAIL_SEND, "outlook_forward")
     message_id = validate_graph_id(message_id)
     validated_to = [validate_email(e) for e in to]
 

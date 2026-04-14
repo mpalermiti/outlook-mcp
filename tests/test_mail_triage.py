@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.mail_triage import (
     categorize_message,
@@ -12,6 +13,9 @@ from outlook_mcp.tools.mail_triage import (
     mark_read,
     move_message,
 )
+
+_CFG = Config(client_id="test")
+_CFG_RO = Config(client_id="test", read_only=True)
 
 
 class TestMoveMessage:
@@ -22,7 +26,9 @@ class TestMoveMessage:
         msg_builder.move.post = AsyncMock()
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
-        result = await move_message(mock_client, message_id="AAMkAG123=", folder="inbox")
+        result = await move_message(
+            mock_client, message_id="AAMkAG123=", folder="inbox", config=_CFG,
+        )
         assert result["status"] == "moved"
         assert result["folder"] == "inbox"
         msg_builder.move.post.assert_called_once()
@@ -31,14 +37,19 @@ class TestMoveMessage:
         """move_message rejects message IDs with invalid characters."""
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="invalid characters"):
-            await move_message(mock_client, message_id="<script>alert(1)</script>", folder="inbox")
+            await move_message(
+                mock_client,
+                message_id="<script>alert(1)</script>",
+                folder="inbox",
+                config=_CFG,
+            )
 
     async def test_move_raises_read_only(self):
         """move_message raises ReadOnlyError when read_only=True."""
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await move_message(
-                mock_client, message_id="AAMkAG123=", folder="inbox", read_only=True
+                mock_client, message_id="AAMkAG123=", folder="inbox", config=_CFG_RO,
             )
 
 
@@ -50,7 +61,9 @@ class TestDeleteMessage:
         msg_builder.move.post = AsyncMock()
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
-        result = await delete_message(mock_client, message_id="AAMkAG123=", permanent=False)
+        result = await delete_message(
+            mock_client, message_id="AAMkAG123=", permanent=False, config=_CFG,
+        )
         assert result["status"] == "moved"
         assert result["folder"] == "deleteditems"
         msg_builder.move.post.assert_called_once()
@@ -62,7 +75,9 @@ class TestDeleteMessage:
         msg_builder.delete = AsyncMock()
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
-        result = await delete_message(mock_client, message_id="AAMkAG123=", permanent=True)
+        result = await delete_message(
+            mock_client, message_id="AAMkAG123=", permanent=True, config=_CFG,
+        )
         assert result["status"] == "permanently_deleted"
         msg_builder.delete.assert_called_once()
 
@@ -70,7 +85,7 @@ class TestDeleteMessage:
         """delete_message raises ReadOnlyError when read_only=True."""
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
-            await delete_message(mock_client, message_id="AAMkAG123=", read_only=True)
+            await delete_message(mock_client, message_id="AAMkAG123=", config=_CFG_RO)
 
 
 class TestFlagMessage:
@@ -81,7 +96,9 @@ class TestFlagMessage:
         msg_builder.patch = AsyncMock()
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
-        result = await flag_message(mock_client, message_id="AAMkAG123=", status="flagged")
+        result = await flag_message(
+            mock_client, message_id="AAMkAG123=", status="flagged", config=_CFG,
+        )
         assert result["status"] == "flagged"
         assert result["flag_status"] == "flagged"
         msg_builder.patch.assert_called_once()
@@ -90,14 +107,16 @@ class TestFlagMessage:
         """flag_message rejects status values not in the allowed enum."""
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="flag status must be one of"):
-            await flag_message(mock_client, message_id="AAMkAG123=", status="invalid")
+            await flag_message(
+                mock_client, message_id="AAMkAG123=", status="invalid", config=_CFG,
+            )
 
     async def test_flag_raises_read_only(self):
         """flag_message raises ReadOnlyError when read_only=True."""
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await flag_message(
-                mock_client, message_id="AAMkAG123=", status="flagged", read_only=True
+                mock_client, message_id="AAMkAG123=", status="flagged", config=_CFG_RO,
             )
 
 
@@ -111,7 +130,7 @@ class TestCategorizeMessage:
 
         categories = ["Red Category", "Blue Category"]
         result = await categorize_message(
-            mock_client, message_id="AAMkAG123=", categories=categories
+            mock_client, message_id="AAMkAG123=", categories=categories, config=_CFG,
         )
         assert result["status"] == "categorized"
         assert result["categories"] == categories
@@ -122,7 +141,10 @@ class TestCategorizeMessage:
         mock_client = MagicMock()
         with pytest.raises(ValueError):
             await categorize_message(
-                mock_client, message_id="bad id with spaces!", categories=["Red"]
+                mock_client,
+                message_id="bad id with spaces!",
+                categories=["Red"],
+                config=_CFG,
             )
 
 
@@ -134,7 +156,9 @@ class TestMarkRead:
         msg_builder.patch = AsyncMock()
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
-        result = await mark_read(mock_client, message_id="AAMkAG123=", is_read=True)
+        result = await mark_read(
+            mock_client, message_id="AAMkAG123=", is_read=True, config=_CFG,
+        )
         assert result["status"] == "updated"
         assert result["is_read"] is True
         msg_builder.patch.assert_called_once()
@@ -146,7 +170,9 @@ class TestMarkRead:
         msg_builder.patch = AsyncMock()
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
-        result = await mark_read(mock_client, message_id="AAMkAG123=", is_read=False)
+        result = await mark_read(
+            mock_client, message_id="AAMkAG123=", is_read=False, config=_CFG,
+        )
         assert result["status"] == "updated"
         assert result["is_read"] is False
 
@@ -155,5 +181,5 @@ class TestMarkRead:
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await mark_read(
-                mock_client, message_id="AAMkAG123=", is_read=True, read_only=True
+                mock_client, message_id="AAMkAG123=", is_read=True, config=_CFG_RO,
             )

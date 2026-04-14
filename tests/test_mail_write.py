@@ -4,8 +4,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.mail_write import forward, reply, send_message
+
+_CFG = Config(client_id="test")
+_CFG_RO = Config(client_id="test", read_only=True)
 
 
 class TestSendMessage:
@@ -14,7 +18,8 @@ class TestSendMessage:
         mock_client = AsyncMock()
         mock_client.me.send_mail.post = AsyncMock()
         result = await send_message(
-            mock_client, to=["valid@test.com"], subject="Test", body="Hello"
+            mock_client, to=["valid@test.com"], subject="Test", body="Hello",
+            config=_CFG,
         )
         assert result["status"] == "sent"
         mock_client.me.send_mail.post.assert_called_once()
@@ -24,7 +29,8 @@ class TestSendMessage:
         mock_client = AsyncMock()
         with pytest.raises(ValueError):
             await send_message(
-                mock_client, to=["not-an-email"], subject="Test", body="Hello"
+                mock_client, to=["not-an-email"], subject="Test", body="Hello",
+                config=_CFG,
             )
 
     async def test_send_raises_read_only(self):
@@ -32,7 +38,8 @@ class TestSendMessage:
         mock_client = AsyncMock()
         with pytest.raises(ReadOnlyError):
             await send_message(
-                mock_client, to=["a@b.com"], subject="Test", body="Hello", read_only=True
+                mock_client, to=["a@b.com"], subject="Test", body="Hello",
+                config=_CFG_RO,
             )
 
     async def test_send_with_cc_bcc(self):
@@ -46,6 +53,7 @@ class TestSendMessage:
             body="Hello",
             cc=["cc@test.com"],
             bcc=["bcc@test.com"],
+            config=_CFG,
         )
         assert result["status"] == "sent"
         mock_client.me.send_mail.post.assert_called_once()
@@ -58,7 +66,7 @@ class TestReply:
         msg_builder = MagicMock()
         msg_builder.reply.post = AsyncMock()
         mock_client.me.messages.by_message_id.return_value = msg_builder
-        result = await reply(mock_client, message_id="AAMkAG123=", body="Thanks!")
+        result = await reply(mock_client, message_id="AAMkAG123=", body="Thanks!", config=_CFG)
         assert result["status"] == "replied"
         assert result["reply_all"] is False
         msg_builder.reply.post.assert_called_once()
@@ -70,7 +78,8 @@ class TestReply:
         msg_builder.reply_all.post = AsyncMock()
         mock_client.me.messages.by_message_id.return_value = msg_builder
         result = await reply(
-            mock_client, message_id="AAMkAG123=", body="Thanks!", reply_all=True
+            mock_client, message_id="AAMkAG123=", body="Thanks!", reply_all=True,
+            config=_CFG,
         )
         assert result["reply_all"] is True
         msg_builder.reply_all.post.assert_called_once()
@@ -79,7 +88,7 @@ class TestReply:
         """reply raises ReadOnlyError in read-only mode."""
         mock_client = AsyncMock()
         with pytest.raises(ReadOnlyError):
-            await reply(mock_client, message_id="AAMkAG123=", body="Thanks!", read_only=True)
+            await reply(mock_client, message_id="AAMkAG123=", body="Thanks!", config=_CFG_RO)
 
 
 class TestForward:
@@ -89,7 +98,9 @@ class TestForward:
         msg_builder = MagicMock()
         msg_builder.forward.post = AsyncMock()
         mock_client.me.messages.by_message_id.return_value = msg_builder
-        result = await forward(mock_client, message_id="AAMkAG123=", to=["a@b.com"])
+        result = await forward(
+            mock_client, message_id="AAMkAG123=", to=["a@b.com"], config=_CFG,
+        )
         assert result["status"] == "forwarded"
         msg_builder.forward.post.assert_called_once()
 
@@ -98,5 +109,5 @@ class TestForward:
         mock_client = AsyncMock()
         with pytest.raises(ReadOnlyError):
             await forward(
-                mock_client, message_id="AAMkAG123=", to=["a@b.com"], read_only=True
+                mock_client, message_id="AAMkAG123=", to=["a@b.com"], config=_CFG_RO,
             )

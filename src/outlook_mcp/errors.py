@@ -33,6 +33,20 @@ class ReadOnlyError(OutlookMCPError):
         )
 
 
+class PermissionDeniedError(OutlookMCPError):
+    """Raised when a write tool is not in the user's allow_categories."""
+
+    def __init__(self, tool_name: str, category: str):
+        super().__init__(
+            "permission_denied",
+            f"Cannot use {tool_name} — category '{category}' is not in allow_categories.",
+            (
+                f"Add '{category}' to allow_categories in ~/.outlook-mcp/config.json, "
+                "or unset allow_categories for full write access."
+            ),
+        )
+
+
 class NotFoundError(OutlookMCPError):
     """Raised when a requested resource doesn't exist."""
 

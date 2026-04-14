@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.todo import (
     complete_task,
@@ -13,6 +14,9 @@ from outlook_mcp.tools.todo import (
     list_tasks,
     update_task,
 )
+
+_CFG = Config(client_id="test")
+_CFG_RO = Config(client_id="test", read_only=True)
 
 
 def _mock_task_list(
@@ -181,7 +185,7 @@ class TestCreateTask:
         """create_task creates a task with title on default list."""
         client = _build_mock_client()
 
-        result = await create_task(client, title="Buy milk")
+        result = await create_task(client, title="Buy milk", config=_CFG)
 
         assert result["status"] == "created"
         assert result["task_id"] == "task1"
@@ -191,7 +195,7 @@ class TestCreateTask:
         """create_task validates and sets due date."""
         client = _build_mock_client()
 
-        result = await create_task(client, title="Report", due="2026-04-15")
+        result = await create_task(client, title="Report", due="2026-04-15", config=_CFG)
 
         assert result["status"] == "created"
 
@@ -200,14 +204,14 @@ class TestCreateTask:
         client = _build_mock_client()
 
         with pytest.raises(ValueError):
-            await create_task(client, title="Bad date", due="not-a-date")
+            await create_task(client, title="Bad date", due="not-a-date", config=_CFG)
 
     async def test_create_task_read_only(self):
         """create_task raises ReadOnlyError in read-only mode."""
         client = _build_mock_client()
 
         with pytest.raises(ReadOnlyError):
-            await create_task(client, title="Blocked", read_only=True)
+            await create_task(client, title="Blocked", config=_CFG_RO)
 
 
 # --- update_task ---
@@ -218,7 +222,9 @@ class TestUpdateTask:
         """update_task patches task with new title."""
         client = _build_mock_client()
 
-        result = await update_task(client, task_id="task1", title="Updated title")
+        result = await update_task(
+            client, task_id="task1", title="Updated title", config=_CFG,
+        )
 
         assert result["status"] == "updated"
         mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
@@ -230,14 +236,14 @@ class TestUpdateTask:
         client = _build_mock_client()
 
         with pytest.raises(ReadOnlyError):
-            await update_task(client, task_id="task1", title="Nope", read_only=True)
+            await update_task(client, task_id="task1", title="Nope", config=_CFG_RO)
 
     async def test_update_task_validates_id(self):
         """update_task validates the task_id."""
         client = _build_mock_client()
 
         with pytest.raises(ValueError):
-            await update_task(client, task_id="", title="Bad")
+            await update_task(client, task_id="", title="Bad", config=_CFG)
 
 
 # --- complete_task ---
@@ -248,7 +254,7 @@ class TestCompleteTask:
         """complete_task patches task with completed status."""
         client = _build_mock_client()
 
-        result = await complete_task(client, task_id="task1")
+        result = await complete_task(client, task_id="task1", config=_CFG)
 
         assert result["status"] == "completed"
         mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
@@ -260,7 +266,7 @@ class TestCompleteTask:
         client = _build_mock_client()
 
         with pytest.raises(ReadOnlyError):
-            await complete_task(client, task_id="task1", read_only=True)
+            await complete_task(client, task_id="task1", config=_CFG_RO)
 
 
 # --- delete_task ---
@@ -271,7 +277,7 @@ class TestDeleteTask:
         """delete_task calls DELETE on the task."""
         client = _build_mock_client()
 
-        result = await delete_task(client, task_id="task1")
+        result = await delete_task(client, task_id="task1", config=_CFG)
 
         assert result["status"] == "deleted"
         mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
@@ -283,4 +289,4 @@ class TestDeleteTask:
         client = _build_mock_client()
 
         with pytest.raises(ReadOnlyError):
-            await delete_task(client, task_id="task1", read_only=True)
+            await delete_task(client, task_id="task1", config=_CFG_RO)

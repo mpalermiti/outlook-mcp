@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.pagination import encode_cursor
 from outlook_mcp.tools.contacts import (
@@ -14,6 +15,9 @@ from outlook_mcp.tools.contacts import (
     search_contacts,
     update_contact,
 )
+
+_CFG = Config(client_id="test")
+_CFG_RO = Config(client_id="test", read_only=True)
 
 
 def _make_mock_contact(**overrides):
@@ -166,6 +170,7 @@ class TestCreateContact:
             phone="+1234567890",
             company="Acme",
             title="Engineer",
+            config=_CFG,
         )
         assert result["status"] == "created"
         assert result["id"] == "contact123"
@@ -175,19 +180,23 @@ class TestCreateContact:
         """create_contact rejects invalid email."""
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="Invalid email"):
-            await create_contact(mock_client, first_name="John", email="not-an-email")
+            await create_contact(
+                mock_client, first_name="John", email="not-an-email", config=_CFG,
+            )
 
     async def test_create_validates_phone(self):
         """create_contact rejects invalid phone number."""
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="Invalid phone"):
-            await create_contact(mock_client, first_name="John", phone="not a phone!!!")
+            await create_contact(
+                mock_client, first_name="John", phone="not a phone!!!", config=_CFG,
+            )
 
     async def test_create_raises_read_only(self):
         """create_contact raises ReadOnlyError in read-only mode."""
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
-            await create_contact(mock_client, first_name="John", read_only=True)
+            await create_contact(mock_client, first_name="John", config=_CFG_RO)
 
 
 class TestUpdateContact:
@@ -195,7 +204,9 @@ class TestUpdateContact:
         """update_contact patches only provided fields."""
         mock_client = _make_contact_by_id_mock(_make_mock_contact())
 
-        result = await update_contact(mock_client, contact_id="contact123", first_name="Jane")
+        result = await update_contact(
+            mock_client, contact_id="contact123", first_name="Jane", config=_CFG,
+        )
         assert result["status"] == "updated"
 
         # Verify patch was called
@@ -206,14 +217,16 @@ class TestUpdateContact:
         """update_contact rejects invalid contact IDs."""
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="invalid characters"):
-            await update_contact(mock_client, contact_id="bad id!", first_name="Jane")
+            await update_contact(
+                mock_client, contact_id="bad id!", first_name="Jane", config=_CFG,
+            )
 
     async def test_update_raises_read_only(self):
         """update_contact raises ReadOnlyError in read-only mode."""
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await update_contact(
-                mock_client, contact_id="contact123", first_name="Jane", read_only=True
+                mock_client, contact_id="contact123", first_name="Jane", config=_CFG_RO,
             )
 
 
@@ -222,7 +235,7 @@ class TestDeleteContact:
         """delete_contact calls delete on Graph."""
         mock_client = _make_contact_by_id_mock(_make_mock_contact())
 
-        result = await delete_contact(mock_client, "contact123")
+        result = await delete_contact(mock_client, "contact123", config=_CFG)
         assert result["status"] == "deleted"
 
         contact_obj = mock_client.me.contacts.by_contact_id.return_value
@@ -232,4 +245,4 @@ class TestDeleteContact:
         """delete_contact raises ReadOnlyError in read-only mode."""
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
-            await delete_contact(mock_client, "contact123", read_only=True)
+            await delete_contact(mock_client, "contact123", config=_CFG_RO)

@@ -148,3 +148,4 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
 - Dates are ISO 8601, UTC in responses, config timezone for input interpretation
 - Mail search uses KQL syntax
 - Start with `read_only: true`, flip when comfortable
+- **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 7 categories and example policies.
