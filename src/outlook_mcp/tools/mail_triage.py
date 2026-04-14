@@ -4,23 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.config import Config
+from outlook_mcp.permissions import CATEGORY_MAIL_TRIAGE, check_permission
 from outlook_mcp.validation import validate_folder_name, validate_graph_id
-
-
-def _check_read_only(read_only: bool, tool_name: str) -> None:
-    if read_only:
-        raise ReadOnlyError(tool_name)
 
 
 async def move_message(
     graph_client: Any,
     message_id: str,
     folder: str,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Move a message to a folder."""
-    _check_read_only(read_only, "outlook_move_message")
+    check_permission(config, CATEGORY_MAIL_TRIAGE, "outlook_move_message")
     message_id = validate_graph_id(message_id)
     folder = validate_folder_name(folder)
 
@@ -39,27 +36,29 @@ async def delete_message(
     graph_client: Any,
     message_id: str,
     permanent: bool = False,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Delete a message. Soft delete (move to Deleted Items) by default."""
-    _check_read_only(read_only, "outlook_delete_message")
+    check_permission(config, CATEGORY_MAIL_TRIAGE, "outlook_delete_message")
     message_id = validate_graph_id(message_id)
 
     if permanent:
         await graph_client.me.messages.by_message_id(message_id).delete()
         return {"status": "permanently_deleted"}
     else:
-        return await move_message(graph_client, message_id, "deleteditems")
+        return await move_message(graph_client, message_id, "deleteditems", config=config)
 
 
 async def flag_message(
     graph_client: Any,
     message_id: str,
     status: str,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Set follow-up flag on a message."""
-    _check_read_only(read_only, "outlook_flag_message")
+    check_permission(config, CATEGORY_MAIL_TRIAGE, "outlook_flag_message")
     message_id = validate_graph_id(message_id)
 
     valid_statuses = ("flagged", "complete", "notFlagged")
@@ -88,10 +87,11 @@ async def categorize_message(
     graph_client: Any,
     message_id: str,
     categories: list[str],
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Set categories on a message."""
-    _check_read_only(read_only, "outlook_categorize_message")
+    check_permission(config, CATEGORY_MAIL_TRIAGE, "outlook_categorize_message")
     message_id = validate_graph_id(message_id)
 
     from msgraph.generated.models.message import Message
@@ -107,10 +107,11 @@ async def mark_read(
     graph_client: Any,
     message_id: str,
     is_read: bool,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Mark a message as read or unread."""
-    _check_read_only(read_only, "outlook_mark_read")
+    check_permission(config, CATEGORY_MAIL_TRIAGE, "outlook_mark_read")
     message_id = validate_graph_id(message_id)
 
     from msgraph.generated.models.message import Message

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.calendar_write import (
     create_event,
@@ -11,6 +12,9 @@ from outlook_mcp.tools.calendar_write import (
     rsvp,
     update_event,
 )
+
+_CFG = Config(client_id="test")
+_CFG_RO = Config(client_id="test", read_only=True)
 
 
 def _make_event_builder():
@@ -44,6 +48,7 @@ class TestCreateEvent:
             subject="Lunch",
             start="2026-04-15T12:00:00Z",
             end="2026-04-15T13:00:00Z",
+            config=_CFG,
         )
         assert result["status"] == "created"
         assert result["event_id"] == "AAMkAGnew="
@@ -58,7 +63,7 @@ class TestCreateEvent:
                 subject="Lunch",
                 start="2026-04-15T12:00:00Z",
                 end="2026-04-15T13:00:00Z",
-                read_only=True,
+                config=_CFG_RO,
             )
 
     async def test_create_event_with_attendees(self):
@@ -76,6 +81,7 @@ class TestCreateEvent:
             end="2026-04-15T15:00:00Z",
             attendees=["alice@test.com", "bob@test.com"],
             is_online=True,
+            config=_CFG,
         )
         assert result["status"] == "created"
         mock_client.me.events.post.assert_called_once()
@@ -98,6 +104,7 @@ class TestUpdateEvent:
             event_id="AAMkAG123=",
             subject="Updated Meeting",
             location="Room 202",
+            config=_CFG,
         )
         assert result["status"] == "updated"
         assert result["event_id"] == "AAMkAG123="
@@ -111,7 +118,7 @@ class TestUpdateEvent:
                 mock_client,
                 event_id="AAMkAG123=",
                 subject="Nope",
-                read_only=True,
+                config=_CFG_RO,
             )
 
 
@@ -122,7 +129,7 @@ class TestDeleteEvent:
         mock_client = MagicMock()
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
-        result = await delete_event(mock_client, event_id="AAMkAG123=")
+        result = await delete_event(mock_client, event_id="AAMkAG123=", config=_CFG)
         assert result["status"] == "deleted"
         builder.delete.assert_called_once()
 
@@ -130,7 +137,7 @@ class TestDeleteEvent:
         """delete_event raises ReadOnlyError in read-only mode."""
         mock_client = AsyncMock()
         with pytest.raises(ReadOnlyError):
-            await delete_event(mock_client, event_id="AAMkAG123=", read_only=True)
+            await delete_event(mock_client, event_id="AAMkAG123=", config=_CFG_RO)
 
 
 class TestRsvp:
@@ -140,7 +147,9 @@ class TestRsvp:
         mock_client = MagicMock()
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
-        result = await rsvp(mock_client, event_id="AAMkAG123=", response="accept")
+        result = await rsvp(
+            mock_client, event_id="AAMkAG123=", response="accept", config=_CFG,
+        )
         assert result["status"] == "accepted"
         builder.accept.post.assert_called_once()
 
@@ -150,7 +159,9 @@ class TestRsvp:
         mock_client = MagicMock()
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
-        result = await rsvp(mock_client, event_id="AAMkAG123=", response="decline")
+        result = await rsvp(
+            mock_client, event_id="AAMkAG123=", response="decline", config=_CFG,
+        )
         assert result["status"] == "declined"
         builder.decline.post.assert_called_once()
 
@@ -160,7 +171,9 @@ class TestRsvp:
         mock_client = MagicMock()
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
-        result = await rsvp(mock_client, event_id="AAMkAG123=", response="tentative")
+        result = await rsvp(
+            mock_client, event_id="AAMkAG123=", response="tentative", config=_CFG,
+        )
         assert result["status"] == "tentativelyAccepted"
         builder.tentatively_accept.post.assert_called_once()
 
@@ -172,5 +185,5 @@ class TestRsvp:
                 mock_client,
                 event_id="AAMkAG123=",
                 response="accept",
-                read_only=True,
+                config=_CFG_RO,
             )

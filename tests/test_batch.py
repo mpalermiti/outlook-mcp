@@ -4,8 +4,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.batch import batch_triage
+
+_CFG = Config(client_id="test")
+_CFG_RO = Config(client_id="test", read_only=True)
 
 
 class TestBatchTriageValidation:
@@ -18,7 +22,7 @@ class TestBatchTriageValidation:
                 message_ids=["AAMkAG123="],
                 action="move",
                 value="inbox",
-                read_only=True,
+                config=_CFG_RO,
             )
 
     async def test_max_20_messages(self):
@@ -26,7 +30,9 @@ class TestBatchTriageValidation:
         mock_client = MagicMock()
         ids = [f"AAMkAG{i}=" for i in range(21)]
         with pytest.raises(ValueError, match="Maximum 20"):
-            await batch_triage(mock_client, message_ids=ids, action="move", value="inbox")
+            await batch_triage(
+                mock_client, message_ids=ids, action="move", value="inbox", config=_CFG,
+            )
 
     async def test_exactly_20_messages_allowed(self):
         """batch_triage accepts exactly 20 message IDs."""
@@ -36,7 +42,9 @@ class TestBatchTriageValidation:
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
         ids = [f"AAMkAG{i}=" for i in range(20)]
-        result = await batch_triage(mock_client, message_ids=ids, action="move", value="inbox")
+        result = await batch_triage(
+            mock_client, message_ids=ids, action="move", value="inbox", config=_CFG,
+        )
         assert result["success_count"] == 20
 
     async def test_invalid_action_raises(self):
@@ -48,6 +56,7 @@ class TestBatchTriageValidation:
                 message_ids=["AAMkAG123="],
                 action="delete",
                 value="inbox",
+                config=_CFG,
             )
 
     async def test_invalid_message_id_raises(self):
@@ -59,6 +68,7 @@ class TestBatchTriageValidation:
                 message_ids=["<script>alert(1)</script>"],
                 action="move",
                 value="inbox",
+                config=_CFG,
             )
 
     async def test_move_validates_folder_name(self):
@@ -70,6 +80,7 @@ class TestBatchTriageValidation:
                 message_ids=["AAMkAG123="],
                 action="move",
                 value="<bad folder>",
+                config=_CFG,
             )
 
 
@@ -86,6 +97,7 @@ class TestBatchTriageMove:
             message_ids=["AAMkAG1=", "AAMkAG2="],
             action="move",
             value="archive",
+            config=_CFG,
         )
         assert result["success_count"] == 2
         assert result["failure_count"] == 0
@@ -106,6 +118,7 @@ class TestBatchTriageFlag:
             message_ids=["AAMkAG1=", "AAMkAG2="],
             action="flag",
             value="flagged",
+            config=_CFG,
         )
         assert result["success_count"] == 2
         assert result["failure_count"] == 0
@@ -128,8 +141,11 @@ class TestBatchTriageCategorize:
                 message_ids=["AAMkAG1="],
                 action="categorize",
                 value="Red, Blue",
+                config=_CFG,
             )
-            mock_cat.assert_called_once_with(mock_client, "AAMkAG1=", ["Red", "Blue"])
+            mock_cat.assert_called_once_with(
+                mock_client, "AAMkAG1=", ["Red", "Blue"], config=_CFG
+            )
             assert result["success_count"] == 1
 
 
@@ -148,8 +164,9 @@ class TestBatchTriageMarkRead:
                 message_ids=["AAMkAG1="],
                 action="mark_read",
                 value="true",
+                config=_CFG,
             )
-            mock_mr.assert_called_once_with(mock_client, "AAMkAG1=", True)
+            mock_mr.assert_called_once_with(mock_client, "AAMkAG1=", True, config=_CFG)
             assert result["success_count"] == 1
 
     async def test_mark_read_false(self):
@@ -166,8 +183,9 @@ class TestBatchTriageMarkRead:
                 message_ids=["AAMkAG1="],
                 action="mark_read",
                 value="false",
+                config=_CFG,
             )
-            mock_mr.assert_called_once_with(mock_client, "AAMkAG1=", False)
+            mock_mr.assert_called_once_with(mock_client, "AAMkAG1=", False, config=_CFG)
 
 
 class TestBatchTriageErrorHandling:
@@ -184,6 +202,7 @@ class TestBatchTriageErrorHandling:
             message_ids=["AAMkAG1=", "AAMkAG2="],
             action="move",
             value="inbox",
+            config=_CFG,
         )
         assert result["success_count"] == 1
         assert result["failure_count"] == 1
@@ -203,6 +222,7 @@ class TestBatchTriageErrorHandling:
             message_ids=["AAMkAG1=", "AAMkAG2=", "AAMkAG3="],
             action="move",
             value="inbox",
+            config=_CFG,
         )
         assert result["success_count"] == 0
         assert result["failure_count"] == 3

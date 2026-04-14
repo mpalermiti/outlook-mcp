@@ -4,8 +4,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.mail_thread import copy_message, list_thread
+
+_CFG = Config(client_id="test")
+_CFG_RO = Config(client_id="test", read_only=True)
 
 
 def _make_mock_message(**overrides):
@@ -80,26 +84,32 @@ class TestCopyMessage:
         """copy_message rejects invalid message IDs."""
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="invalid characters"):
-            await copy_message(mock_client, message_id="<bad>", folder="inbox")
+            await copy_message(mock_client, message_id="<bad>", folder="inbox", config=_CFG)
 
     async def test_copy_validates_folder(self):
         """copy_message rejects invalid folder names."""
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="invalid characters"):
-            await copy_message(mock_client, message_id="AAMkAG123=", folder="bad folder!")
+            await copy_message(
+                mock_client, message_id="AAMkAG123=", folder="bad folder!", config=_CFG,
+            )
 
     async def test_copy_raises_read_only(self):
         """copy_message raises ReadOnlyError when read_only=True."""
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
-            await copy_message(mock_client, message_id="AAMkAG123=", folder="inbox", read_only=True)
+            await copy_message(
+                mock_client, message_id="AAMkAG123=", folder="inbox", config=_CFG_RO,
+            )
 
     async def test_copy_calls_post_and_returns_status(self):
         """copy_message calls copy.post() and returns success dict."""
         mock_client = MagicMock()
         mock_client.me.messages.by_message_id.return_value.copy.post = AsyncMock()
 
-        result = await copy_message(mock_client, message_id="AAMkAG123=", folder="archive")
+        result = await copy_message(
+            mock_client, message_id="AAMkAG123=", folder="archive", config=_CFG,
+        )
         assert result["status"] == "copied"
         assert result["folder"] == "archive"
         mock_client.me.messages.by_message_id.return_value.copy.post.assert_called_once()

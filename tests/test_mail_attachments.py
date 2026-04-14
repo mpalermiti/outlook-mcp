@@ -6,12 +6,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.mail_attachments import (
     download_attachment,
     list_attachments,
     send_with_attachments,
 )
+
+_CFG = Config(client_id="test")
+_CFG_RO = Config(client_id="test", read_only=True)
 
 
 class TestListAttachments:
@@ -168,6 +172,7 @@ class TestSendWithAttachments:
             subject="Test",
             body="See attached",
             attachment_paths=[str(test_file)],
+            config=_CFG,
         )
         assert result["status"] == "sent"
         assert result["attachment_count"] == 1
@@ -186,7 +191,7 @@ class TestSendWithAttachments:
                 subject="Test",
                 body="Hi",
                 attachment_paths=[str(test_file)],
-                read_only=True,
+                config=_CFG_RO,
             )
 
     async def test_send_rejects_invalid_email(self, tmp_path):
@@ -202,6 +207,7 @@ class TestSendWithAttachments:
                 subject="Test",
                 body="Hi",
                 attachment_paths=[str(test_file)],
+                config=_CFG,
             )
 
     async def test_send_rejects_missing_file(self):
@@ -214,6 +220,7 @@ class TestSendWithAttachments:
                 subject="Test",
                 body="Hi",
                 attachment_paths=["/nonexistent/file.txt"],
+                config=_CFG,
             )
 
     async def test_send_large_file_uses_upload_session(self, tmp_path):
@@ -245,6 +252,7 @@ class TestSendWithAttachments:
                 subject="Large file",
                 body="See attached",
                 attachment_paths=[str(large_file)],
+                config=_CFG,
             )
         assert result["status"] == "sent"
         assert result["attachment_count"] == 1
@@ -265,6 +273,7 @@ class TestSendWithAttachments:
             attachment_paths=[str(test_file)],
             cc=["cc@test.com"],
             bcc=["bcc@test.com"],
+            config=_CFG,
         )
         assert result["status"] == "sent"
         mock_client.me.send_mail.post.assert_called_once()

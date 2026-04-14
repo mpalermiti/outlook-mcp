@@ -4,16 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
+from outlook_mcp.permissions import CATEGORY_MAIL_DRAFTS, CATEGORY_MAIL_SEND, check_permission
 from outlook_mcp.tools.mail_read import _format_message_summary
 from outlook_mcp.validation import validate_email, validate_graph_id
-
-
-def _check_read_only(read_only: bool, tool_name: str) -> None:
-    """Raise ReadOnlyError if server is in read-only mode."""
-    if read_only:
-        raise ReadOnlyError(tool_name)
 
 
 async def list_drafts(
@@ -65,14 +60,15 @@ async def create_draft(
     bcc: list[str] | None = None,
     is_html: bool = False,
     importance: str = "normal",
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Create a draft message in the Drafts folder.
 
     Validates all email addresses, builds a Message object,
     and POSTs to /me/messages (which creates in Drafts).
     """
-    _check_read_only(read_only, "outlook_create_draft")
+    check_permission(config, CATEGORY_MAIL_DRAFTS, "outlook_create_draft")
 
     # Validate all email addresses
     validated_to = [validate_email(e) for e in to]
@@ -126,14 +122,15 @@ async def update_draft(
     body: str | None = None,
     to: list[str] | None = None,
     cc: list[str] | None = None,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Update an existing draft message.
 
     Sends a PATCH with only the provided fields.
     Validates draft_id and any email addresses.
     """
-    _check_read_only(read_only, "outlook_update_draft")
+    check_permission(config, CATEGORY_MAIL_DRAFTS, "outlook_update_draft")
     draft_id = validate_graph_id(draft_id)
 
     from msgraph.generated.models.message import Message
@@ -190,13 +187,14 @@ async def update_draft(
 async def send_draft(
     graph_client: Any,
     draft_id: str,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Send an existing draft message.
 
     POSTs to /me/messages/{id}/send.
     """
-    _check_read_only(read_only, "outlook_send_draft")
+    check_permission(config, CATEGORY_MAIL_SEND, "outlook_send_draft")
     draft_id = validate_graph_id(draft_id)
 
     await graph_client.me.messages.by_message_id(draft_id).send.post()
@@ -210,14 +208,15 @@ async def send_draft(
 async def delete_draft(
     graph_client: Any,
     draft_id: str,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Delete a draft message.
 
     DELETEs /me/messages/{id}. Permanent delete since drafts
     don't need soft-delete semantics.
     """
-    _check_read_only(read_only, "outlook_delete_draft")
+    check_permission(config, CATEGORY_MAIL_DRAFTS, "outlook_delete_draft")
     draft_id = validate_graph_id(draft_id)
 
     await graph_client.me.messages.by_message_id(draft_id).delete()

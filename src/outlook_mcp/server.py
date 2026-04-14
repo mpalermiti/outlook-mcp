@@ -158,7 +158,7 @@ async def outlook_send_message(
     return await mail_write.send_message(
         client.sdk_client, to, subject, body, cc, bcc, is_html, importance,
         sensitivity=sensitivity, request_read_receipt=request_read_receipt,
-        read_only=config.read_only,
+        config=config,
     )
 
 
@@ -174,7 +174,7 @@ async def outlook_reply(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_write.reply(
-        client.sdk_client, message_id, body, reply_all, is_html, config.read_only
+        client.sdk_client, message_id, body, reply_all, is_html, config=config
     )
 
 
@@ -189,7 +189,7 @@ async def outlook_forward(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_write.forward(
-        client.sdk_client, message_id, to, comment, config.read_only
+        client.sdk_client, message_id, to, comment, config=config
     )
 
 
@@ -206,7 +206,7 @@ async def outlook_move_message(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_triage.move_message(
-        client.sdk_client, message_id, folder, config.read_only
+        client.sdk_client, message_id, folder, config=config
     )
 
 
@@ -220,7 +220,7 @@ async def outlook_delete_message(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_triage.delete_message(
-        client.sdk_client, message_id, permanent, config.read_only
+        client.sdk_client, message_id, permanent, config=config
     )
 
 
@@ -234,7 +234,7 @@ async def outlook_flag_message(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_triage.flag_message(
-        client.sdk_client, message_id, status, config.read_only
+        client.sdk_client, message_id, status, config=config
     )
 
 
@@ -248,7 +248,7 @@ async def outlook_categorize_message(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_triage.categorize_message(
-        client.sdk_client, message_id, categories, config.read_only
+        client.sdk_client, message_id, categories, config=config
     )
 
 
@@ -262,7 +262,7 @@ async def outlook_mark_read(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_triage.mark_read(
-        client.sdk_client, message_id, is_read, config.read_only
+        client.sdk_client, message_id, is_read, config=config
     )
 
 
@@ -326,7 +326,7 @@ async def outlook_create_event(
         is_all_day,
         is_online,
         recurrence,
-        config.read_only,
+        config=config,
     )
 
 
@@ -344,7 +344,7 @@ async def outlook_update_event(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await calendar_write.update_event(
-        client.sdk_client, event_id, subject, start, end, location, body, config.read_only
+        client.sdk_client, event_id, subject, start, end, location, body, config=config
     )
 
 
@@ -356,7 +356,7 @@ async def outlook_delete_event(
     """Delete a calendar event."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
-    return await calendar_write.delete_event(client.sdk_client, event_id, config.read_only)
+    return await calendar_write.delete_event(client.sdk_client, event_id, config=config)
 
 
 @mcp.tool()
@@ -370,7 +370,7 @@ async def outlook_rsvp(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await calendar_write.rsvp(
-        client.sdk_client, event_id, response, message, config.read_only
+        client.sdk_client, event_id, response, message, config=config
     )
 
 
@@ -421,7 +421,7 @@ async def outlook_create_contact(
     config = _get_config(ctx)
     return await contacts.create_contact(
         client.sdk_client, first_name, last_name, email, phone, company, title,
-        read_only=config.read_only,
+        config=config,
     )
 
 
@@ -439,7 +439,7 @@ async def outlook_update_contact(
     config = _get_config(ctx)
     return await contacts.update_contact(
         client.sdk_client, contact_id, first_name, last_name, email, phone,
-        read_only=config.read_only,
+        config=config,
     )
 
 
@@ -448,7 +448,7 @@ async def outlook_delete_contact(ctx: Context, contact_id: str) -> dict:
     """Delete a contact by ID."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
-    return await contacts.delete_contact(client.sdk_client, contact_id, read_only=config.read_only)
+    return await contacts.delete_contact(client.sdk_client, contact_id, config=config)
 
 
 # ── To Do Tools ────────────────────────────────────────
@@ -490,7 +490,7 @@ async def outlook_create_task(
     config = _get_config(ctx)
     return await todo.create_task(
         client.sdk_client, title, list_id, due, importance, body, reminder, recurrence,
-        read_only=config.read_only,
+        config=config,
     )
 
 
@@ -509,7 +509,7 @@ async def outlook_update_task(
     config = _get_config(ctx)
     return await todo.update_task(
         client.sdk_client, task_id, list_id, title, due, body, importance,
-        read_only=config.read_only,
+        config=config,
     )
 
 
@@ -523,7 +523,7 @@ async def outlook_complete_task(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await todo.complete_task(
-        client.sdk_client, task_id, list_id, read_only=config.read_only,
+        client.sdk_client, task_id, list_id, config=config,
     )
 
 
@@ -537,7 +537,7 @@ async def outlook_delete_task(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await todo.delete_task(
-        client.sdk_client, task_id, list_id, read_only=config.read_only,
+        client.sdk_client, task_id, list_id, config=config,
     )
 
 
@@ -571,7 +571,7 @@ async def outlook_create_draft(
     config = _get_config(ctx)
     return await mail_drafts.create_draft(
         client.sdk_client, to, subject, body, cc, bcc, is_html, importance,
-        read_only=config.read_only,
+        config=config,
     )
 
 
@@ -588,7 +588,7 @@ async def outlook_update_draft(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_drafts.update_draft(
-        client.sdk_client, draft_id, subject, body, to, cc, read_only=config.read_only,
+        client.sdk_client, draft_id, subject, body, to, cc, config=config,
     )
 
 
@@ -597,7 +597,7 @@ async def outlook_send_draft(ctx: Context, draft_id: str) -> dict:
     """Send an existing draft message."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
-    return await mail_drafts.send_draft(client.sdk_client, draft_id, read_only=config.read_only)
+    return await mail_drafts.send_draft(client.sdk_client, draft_id, config=config)
 
 
 @mcp.tool()
@@ -605,7 +605,7 @@ async def outlook_delete_draft(ctx: Context, draft_id: str) -> dict:
     """Delete a draft message."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
-    return await mail_drafts.delete_draft(client.sdk_client, draft_id, read_only=config.read_only)
+    return await mail_drafts.delete_draft(client.sdk_client, draft_id, config=config)
 
 
 # ── Mail Attachment Tools ─────────────────────────────
@@ -649,7 +649,7 @@ async def outlook_send_with_attachments(
     config = _get_config(ctx)
     return await mail_attachments.send_with_attachments(
         client.sdk_client, to, subject, body, attachment_paths, cc, bcc, is_html, importance,
-        read_only=config.read_only,
+        config=config,
     )
 
 
@@ -666,7 +666,7 @@ async def outlook_create_folder(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_folders.create_folder(
-        client.sdk_client, name, parent_folder, read_only=config.read_only,
+        client.sdk_client, name, parent_folder, config=config,
     )
 
 
@@ -680,7 +680,7 @@ async def outlook_rename_folder(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_folders.rename_folder(
-        client.sdk_client, folder_id, name, read_only=config.read_only,
+        client.sdk_client, folder_id, name, config=config,
     )
 
 
@@ -690,7 +690,7 @@ async def outlook_delete_folder(ctx: Context, folder_id: str) -> dict:
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_folders.delete_folder(
-        client.sdk_client, folder_id, read_only=config.read_only,
+        client.sdk_client, folder_id, config=config,
     )
 
 
@@ -718,7 +718,7 @@ async def outlook_copy_message(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_thread.copy_message(
-        client.sdk_client, message_id, folder, read_only=config.read_only,
+        client.sdk_client, message_id, folder, config=config,
     )
 
 
@@ -736,7 +736,7 @@ async def outlook_batch_triage(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await batch.batch_triage(
-        client.sdk_client, message_ids, action, value, read_only=config.read_only,
+        client.sdk_client, message_ids, action, value, config=config,
     )
 
 

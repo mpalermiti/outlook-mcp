@@ -4,19 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.config import Config
 from outlook_mcp.pagination import build_request_config
+from outlook_mcp.permissions import CATEGORY_MAIL_TRIAGE, check_permission
 from outlook_mcp.tools.mail_read import _format_message_summary
 from outlook_mcp.validation import validate_folder_name, validate_graph_id
 
 
 def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
-
-
-def _check_read_only(read_only: bool, tool_name: str) -> None:
-    if read_only:
-        raise ReadOnlyError(tool_name)
 
 
 async def list_thread(
@@ -59,10 +55,11 @@ async def copy_message(
     graph_client: Any,
     message_id: str,
     folder: str,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Copy a message to a folder."""
-    _check_read_only(read_only, "outlook_copy_message")
+    check_permission(config, CATEGORY_MAIL_TRIAGE, "outlook_copy_message")
     message_id = validate_graph_id(message_id)
     folder = validate_folder_name(folder)
 

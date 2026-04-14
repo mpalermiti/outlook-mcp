@@ -4,14 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.config import Config
+from outlook_mcp.permissions import CATEGORY_CALENDAR_WRITE, check_permission
 from outlook_mcp.validation import validate_datetime, validate_email, validate_graph_id
-
-
-def _check_read_only(read_only: bool, tool_name: str) -> None:
-    """Raise ReadOnlyError if server is in read-only mode."""
-    if read_only:
-        raise ReadOnlyError(tool_name)
 
 
 async def create_event(
@@ -25,14 +20,15 @@ async def create_event(
     is_all_day: bool = False,
     is_online: bool = False,
     recurrence: str | None = None,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Create a calendar event.
 
     Validates inputs, builds a Graph Event object, and posts via
     graph_client.me.events.post().
     """
-    _check_read_only(read_only, "outlook_create_event")
+    check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_create_event")
 
     # Validate datetime inputs
     validate_datetime(start)
@@ -99,13 +95,14 @@ async def update_event(
     end: str | None = None,
     location: str | None = None,
     body: str | None = None,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Update an existing calendar event.
 
     Only patches changed fields.
     """
-    _check_read_only(read_only, "outlook_update_event")
+    check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_update_event")
     event_id = validate_graph_id(event_id)
 
     from msgraph.generated.models.body_type import BodyType
@@ -151,10 +148,11 @@ async def update_event(
 async def delete_event(
     graph_client: Any,
     event_id: str,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Delete a calendar event."""
-    _check_read_only(read_only, "outlook_delete_event")
+    check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_delete_event")
     event_id = validate_graph_id(event_id)
 
     await graph_client.me.events.by_event_id(event_id).delete()
@@ -167,13 +165,14 @@ async def rsvp(
     event_id: str,
     response: str,
     message: str | None = None,
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """RSVP to a calendar event.
 
     response must be one of: accept, decline, tentative.
     """
-    _check_read_only(read_only, "outlook_rsvp")
+    check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_rsvp")
     event_id = validate_graph_id(event_id)
 
     event_builder = graph_client.me.events.by_event_id(event_id)

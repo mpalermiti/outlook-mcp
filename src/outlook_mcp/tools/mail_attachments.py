@@ -7,19 +7,14 @@ import mimetypes
 import os
 from typing import Any
 
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.config import Config
+from outlook_mcp.permissions import CATEGORY_MAIL_SEND, check_permission
 from outlook_mcp.validation import validate_email, validate_graph_id
 
 # 3MB threshold — files above this use upload sessions
 _LARGE_FILE_THRESHOLD = 3 * 1024 * 1024
 # Chunk size for upload sessions (320 KiB aligned, as required by Graph)
 _UPLOAD_CHUNK_SIZE = 320 * 1024 * 10  # 3.2 MB chunks
-
-
-def _check_read_only(read_only: bool, tool_name: str) -> None:
-    """Raise ReadOnlyError if server is in read-only mode."""
-    if read_only:
-        raise ReadOnlyError(tool_name)
 
 
 def _validate_save_path(save_path: str) -> str:
@@ -135,14 +130,15 @@ async def send_with_attachments(
     bcc: list[str] | None = None,
     is_html: bool = False,
     importance: str = "normal",
-    read_only: bool = False,
+    *,
+    config: Config,
 ) -> dict:
     """Send a message with file attachments.
 
     For files under 3MB: inline as base64 FileAttachment.
     For files over 3MB: create draft, use createUploadSession + chunked upload, then send.
     """
-    _check_read_only(read_only, "outlook_send_with_attachments")
+    check_permission(config, CATEGORY_MAIL_SEND, "outlook_send_with_attachments")
 
     # Validate emails
     validated_to = [validate_email(e) for e in to]

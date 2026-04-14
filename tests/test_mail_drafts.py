@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.mail_drafts import (
     create_draft,
@@ -12,6 +13,9 @@ from outlook_mcp.tools.mail_drafts import (
     send_draft,
     update_draft,
 )
+
+_CFG = Config(client_id="test")
+_CFG_RO = Config(client_id="test", read_only=True)
 
 
 def _make_mock_message(**overrides):
@@ -107,6 +111,7 @@ class TestCreateDraft:
             to=["recipient@test.com"],
             subject="Test Draft",
             body="Hello",
+            config=_CFG,
         )
 
         assert result["status"] == "created"
@@ -122,6 +127,7 @@ class TestCreateDraft:
                 to=["not-an-email"],
                 subject="Test",
                 body="Hello",
+                config=_CFG,
             )
 
     async def test_create_draft_with_cc_bcc(self):
@@ -139,6 +145,7 @@ class TestCreateDraft:
             body="Hello",
             cc=["cc@test.com"],
             bcc=["bcc@test.com"],
+            config=_CFG,
         )
 
         assert result["status"] == "created"
@@ -153,7 +160,7 @@ class TestCreateDraft:
                 to=["a@b.com"],
                 subject="Test",
                 body="Hello",
-                read_only=True,
+                config=_CFG_RO,
             )
 
 
@@ -170,6 +177,7 @@ class TestUpdateDraft:
             client,
             draft_id="AAMkAG123=",
             subject="Updated Subject",
+            config=_CFG,
         )
 
         assert result["status"] == "updated"
@@ -184,6 +192,7 @@ class TestUpdateDraft:
                 client,
                 draft_id="bad id with spaces!",
                 subject="Test",
+                config=_CFG,
             )
 
     async def test_update_draft_raises_read_only(self):
@@ -194,7 +203,7 @@ class TestUpdateDraft:
                 client,
                 draft_id="AAMkAG123=",
                 subject="Test",
-                read_only=True,
+                config=_CFG_RO,
             )
 
 
@@ -207,7 +216,7 @@ class TestSendDraft:
         client = MagicMock()
         client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
 
-        result = await send_draft(client, draft_id="AAMkAG123=")
+        result = await send_draft(client, draft_id="AAMkAG123=", config=_CFG)
 
         assert result["status"] == "sent"
         assert result["draft_id"] == "AAMkAG123="
@@ -217,13 +226,13 @@ class TestSendDraft:
         """send_draft rejects invalid draft IDs."""
         client = MagicMock()
         with pytest.raises(ValueError, match="invalid characters"):
-            await send_draft(client, draft_id="bad id!!!")
+            await send_draft(client, draft_id="bad id!!!", config=_CFG)
 
     async def test_send_draft_raises_read_only(self):
         """send_draft raises ReadOnlyError in read-only mode."""
         client = MagicMock()
         with pytest.raises(ReadOnlyError):
-            await send_draft(client, draft_id="AAMkAG123=", read_only=True)
+            await send_draft(client, draft_id="AAMkAG123=", config=_CFG_RO)
 
 
 class TestDeleteDraft:
@@ -235,7 +244,7 @@ class TestDeleteDraft:
         client = MagicMock()
         client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
 
-        result = await delete_draft(client, draft_id="AAMkAG123=")
+        result = await delete_draft(client, draft_id="AAMkAG123=", config=_CFG)
 
         assert result["status"] == "deleted"
         assert result["draft_id"] == "AAMkAG123="
@@ -245,10 +254,10 @@ class TestDeleteDraft:
         """delete_draft rejects invalid draft IDs."""
         client = MagicMock()
         with pytest.raises(ValueError, match="invalid characters"):
-            await delete_draft(client, draft_id="bad id!!!")
+            await delete_draft(client, draft_id="bad id!!!", config=_CFG)
 
     async def test_delete_draft_raises_read_only(self):
         """delete_draft raises ReadOnlyError in read-only mode."""
         client = MagicMock()
         with pytest.raises(ReadOnlyError):
-            await delete_draft(client, draft_id="AAMkAG123=", read_only=True)
+            await delete_draft(client, draft_id="AAMkAG123=", config=_CFG_RO)
