@@ -96,12 +96,13 @@ async def outlook_list_inbox(
     before: str | None = None,
     skip: int = 0,
     cursor: str | None = None,
+    classification: str | None = None,
 ) -> dict:
-    """List messages in a folder with filtering by read status, sender, and date range."""
+    """List messages. Filters: read status, sender, date, Focused Inbox classification."""
     client = _get_graph_client(ctx)
     return await mail_read.list_inbox(
         client.sdk_client, folder, count, unread_only, from_address, after, before, skip,
-        cursor=cursor,
+        cursor=cursor, classification=classification,
     )
 
 
@@ -263,6 +264,20 @@ async def outlook_mark_read(
     config = _get_config(ctx)
     return await mail_triage.mark_read(
         client.sdk_client, message_id, is_read, config=config
+    )
+
+
+@mcp.tool()
+async def outlook_reclassify_message(
+    ctx: Context,
+    message_id: str,
+    classification: str,
+) -> dict:
+    """Reclassify a message's Focused Inbox placement. classification: "focused" or "other"."""
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await mail_triage.reclassify_message(
+        client.sdk_client, message_id, classification, config=config
     )
 
 

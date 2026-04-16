@@ -12,6 +12,7 @@ from outlook_mcp.tools.mail_triage import (
     flag_message,
     mark_read,
     move_message,
+    reclassify_message,
 )
 
 _CFG = Config(client_id="test")
@@ -182,4 +183,59 @@ class TestMarkRead:
         with pytest.raises(ReadOnlyError):
             await mark_read(
                 mock_client, message_id="AAMkAG123=", is_read=True, config=_CFG_RO,
+            )
+
+
+class TestReclassifyMessage:
+    async def test_reclassify_to_focused(self):
+        """reclassify_message patches inference_classification to focused."""
+        mock_client = MagicMock()
+        msg_builder = MagicMock()
+        msg_builder.patch = AsyncMock()
+        mock_client.me.messages.by_message_id.return_value = msg_builder
+
+        result = await reclassify_message(
+            mock_client, message_id="AAMkAG123=", classification="focused", config=_CFG,
+        )
+        assert result["status"] == "reclassified"
+        assert result["classification"] == "focused"
+        msg_builder.patch.assert_called_once()
+
+    async def test_reclassify_to_other(self):
+        """reclassify_message patches inference_classification to other."""
+        mock_client = MagicMock()
+        msg_builder = MagicMock()
+        msg_builder.patch = AsyncMock()
+        mock_client.me.messages.by_message_id.return_value = msg_builder
+
+        result = await reclassify_message(
+            mock_client, message_id="AAMkAG123=", classification="other", config=_CFG,
+        )
+        assert result["classification"] == "other"
+
+    async def test_reclassify_rejects_invalid_classification(self):
+        """reclassify_message rejects classifications other than focused/other."""
+        mock_client = MagicMock()
+        with pytest.raises(ValueError, match="classification"):
+            await reclassify_message(
+                mock_client, message_id="AAMkAG123=", classification="bogus", config=_CFG,
+            )
+
+    async def test_reclassify_rejects_invalid_message_id(self):
+        """reclassify_message validates the message ID."""
+        mock_client = MagicMock()
+        with pytest.raises(ValueError, match="invalid characters"):
+            await reclassify_message(
+                mock_client, message_id="<bad>", classification="focused", config=_CFG,
+            )
+
+    async def test_reclassify_raises_read_only(self):
+        """reclassify_message raises ReadOnlyError in read-only mode."""
+        mock_client = MagicMock()
+        with pytest.raises(ReadOnlyError):
+            await reclassify_message(
+                mock_client,
+                message_id="AAMkAG123=",
+                classification="focused",
+                config=_CFG_RO,
             )

@@ -44,6 +44,11 @@ def _format_message_summary(msg: Any) -> dict:
             msg.importance.value if hasattr(msg.importance, "value") else str(msg.importance)
         )
 
+    classification = ""
+    ic = getattr(msg, "inference_classification", None)
+    if ic:
+        classification = ic.value if hasattr(ic, "value") else str(ic)
+
     return {
         "id": msg.id,
         "subject": sanitize_output(msg.subject or "(no subject)"),
@@ -57,7 +62,11 @@ def _format_message_summary(msg: Any) -> dict:
         "categories": list(msg.categories or []),
         "flag": flag_status,
         "conversation_id": msg.conversation_id or "",
+        "classification": classification,
     }
+
+
+VALID_CLASSIFICATIONS = {"focused", "other"}
 
 
 async def list_inbox(
@@ -70,8 +79,13 @@ async def list_inbox(
     before: str | None = None,
     skip: int = 0,
     cursor: str | None = None,
+    classification: str | None = None,
 ) -> dict:
-    """List messages in a folder."""
+    """List messages in a folder.
+
+    classification: filter by Focused Inbox classification — "focused" or "other".
+    None means no filter (both).
+    """
     count = _clamp(count, 1, 100)
     folder = validate_folder_name(folder)
 
@@ -79,7 +93,7 @@ async def list_inbox(
     query_params["$orderby"] = "receivedDateTime desc"
     query_params["$select"] = (
         "id,subject,from,receivedDateTime,isRead,importance,"
-        "bodyPreview,hasAttachments,categories,flag,conversationId"
+        "bodyPreview,hasAttachments,categories,flag,conversationId,inferenceClassification"
     )
 
     # If cursor provided, it already set $skip — ignore the manual skip param
@@ -100,6 +114,13 @@ async def list_inbox(
     if before:
         safe_before = validate_datetime(before)
         filters.append(f"receivedDateTime le {safe_before}")
+    if classification is not None:
+        if classification not in VALID_CLASSIFICATIONS:
+            raise ValueError(
+                f"Invalid classification '{classification}'. "
+                f"Must be one of: {sorted(VALID_CLASSIFICATIONS)}"
+            )
+        filters.append(f"inferenceClassification eq '{classification}'")
 
     if filters:
         query_params["$filter"] = " and ".join(filters)

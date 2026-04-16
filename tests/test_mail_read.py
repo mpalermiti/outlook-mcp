@@ -31,6 +31,9 @@ def _make_mock_message(**overrides):
     msg.flag = MagicMock()
     msg.flag.flag_status = MagicMock(value=overrides.get("flag", "notFlagged"))
     msg.conversation_id = overrides.get("conversation_id", "conv123")
+    msg.inference_classification = MagicMock(
+        value=overrides.get("classification", "focused")
+    )
     # Body for read_message
     msg.body = MagicMock()
     msg.body.content = overrides.get("body_content", "<p>Hello</p>")
@@ -141,6 +144,55 @@ class TestListInbox:
         )
         result = await list_inbox(mock_client, count=1)
         assert result["has_more"] is True
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_classification_filter_adds_odata(self):
+        """classification="focused" adds inferenceClassification filter to query."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(mock_client, classification="focused")
+
+        call_kwargs = (
+            mock_client.me.mail_folders.by_mail_folder_id.return_value
+            .messages.get.call_args
+        )
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert qp.filter is not None
+        assert "inferenceClassification eq 'focused'" in qp.filter
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_classification_other(self):
+        """classification="other" is allowed."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(mock_client, classification="other")
+
+        call_kwargs = (
+            mock_client.me.mail_folders.by_mail_folder_id.return_value
+            .messages.get.call_args
+        )
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert "inferenceClassification eq 'other'" in qp.filter
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_classification_invalid(self):
+        """Invalid classification raises ValueError."""
+        mock_client = _make_folder_mock([])
+        with pytest.raises(ValueError, match="classification"):
+            await list_inbox(mock_client, classification="bogus")
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_classification_combines_with_other_filters(self):
+        """classification filter combines with unread_only via 'and'."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(mock_client, unread_only=True, classification="focused")
+
+        call_kwargs = (
+            mock_client.me.mail_folders.by_mail_folder_id.return_value
+            .messages.get.call_args
+        )
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert "isRead eq false" in qp.filter
+        assert "inferenceClassification eq 'focused'" in qp.filter
+        assert " and " in qp.filter
 
 
 class TestReadMessage:
