@@ -20,6 +20,7 @@ MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 Give your AI agent full Outlook access. Example prompts that just work:
 
 - *"Summarize my unread email from the past 24 hours and flag anything time-sensitive."*
+- *"What's in my Focused Inbox right now? Anything in Other that looks like it belongs up top?"*
 - *"Any shipping updates in my inbox? Track what I'm waiting on and when it's supposed to arrive."*
 - *"Scan my email for upcoming subscription renewals — what's about to auto-charge in the next two weeks?"*
 - *"I've got a trip to Seattle next week — check my calendar for the itinerary and create a To Do task with a packing checklist."*
