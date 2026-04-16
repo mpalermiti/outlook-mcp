@@ -121,3 +121,38 @@ async def mark_read(
 
     await graph_client.me.messages.by_message_id(message_id).patch(msg)
     return {"status": "updated", "is_read": is_read}
+
+
+async def reclassify_message(
+    graph_client: Any,
+    message_id: str,
+    classification: str,
+    *,
+    config: Config,
+) -> dict:
+    """Reclassify a message's Focused Inbox classification.
+
+    classification: "focused" or "other"
+    """
+    check_permission(config, CATEGORY_MAIL_TRIAGE, "outlook_reclassify_message")
+    message_id = validate_graph_id(message_id)
+
+    valid = ("focused", "other")
+    if classification not in valid:
+        raise ValueError(f"classification must be one of {valid}; got {classification}")
+
+    from msgraph.generated.models.inference_classification_type import (
+        InferenceClassificationType,
+    )
+    from msgraph.generated.models.message import Message
+
+    type_map = {
+        "focused": InferenceClassificationType.Focused,
+        "other": InferenceClassificationType.Other,
+    }
+
+    msg = Message()
+    msg.inference_classification = type_map[classification]
+
+    await graph_client.me.messages.by_message_id(message_id).patch(msg)
+    return {"status": "reclassified", "classification": classification}
