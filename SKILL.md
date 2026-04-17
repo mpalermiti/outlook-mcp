@@ -41,18 +41,10 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
      "read_only": true
    }
    ```
-4. **Register in OpenClaw config:**
-   ```json
-   {
-     "mcp": {
-       "servers": {
-         "outlook": {
-           "command": "uv",
-           "args": ["--directory", "/path/to/outlook-mcp", "run", "outlook-mcp"]
-         }
-       }
-     }
-   }
+4. **Register with OpenClaw** (writes to `mcp.servers` in `~/.openclaw/openclaw.json`):
+   ```bash
+   openclaw mcp set outlook '{"command":"uv","args":["--directory","/path/to/outlook-mcp","run","outlook-mcp"]}'
+   openclaw mcp list   # verify
    ```
 5. **Authenticate on the host:**
    ```bash

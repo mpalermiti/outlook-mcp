@@ -165,7 +165,21 @@ The only required field is `client_id`. Everything else has sensible defaults. S
 }
 ```
 
-For **OpenClaw**, register under `mcp.servers` in `~/.openclaw/openclaw.json` and restart the gateway.
+**For OpenClaw**, use the `openclaw mcp` CLI — it writes to `mcp.servers` in `~/.openclaw/openclaw.json` for you:
+
+```bash
+# If installed from PyPI:
+openclaw mcp set outlook '{"command":"outlook-mcp"}'
+
+# If installed from source:
+openclaw mcp set outlook '{"command":"uv","args":["--directory","/path/to/outlook-mcp","run","outlook-mcp"]}'
+
+# Verify:
+openclaw mcp list
+openclaw mcp show outlook --json
+```
+
+Restart the OpenClaw gateway after registering. See the [OpenClaw MCP docs](https://docs.openclaw.ai/cli/mcp) for SSE/HTTP transport variants.
 
 ### Authenticate
 
