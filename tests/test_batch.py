@@ -72,9 +72,12 @@ class TestBatchTriageValidation:
             )
 
     async def test_move_validates_folder_name(self):
-        """batch_triage with action=move validates the folder name."""
+        """batch_triage with action=move rejects unresolvable folder references."""
         mock_client = MagicMock()
-        with pytest.raises(ValueError, match="invalid characters"):
+        empty_response = MagicMock()
+        empty_response.value = []
+        mock_client.me.mail_folders.get = AsyncMock(return_value=empty_response)
+        with pytest.raises(ValueError, match="not found"):
             await batch_triage(
                 mock_client,
                 message_ids=["AAMkAG123="],

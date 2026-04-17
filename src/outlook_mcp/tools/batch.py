@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from outlook_mcp.config import Config
+from outlook_mcp.folder_resolver import resolve_folder_id
 from outlook_mcp.permissions import CATEGORY_MAIL_TRIAGE, check_permission
 from outlook_mcp.tools.mail_triage import (
     categorize_message,
@@ -12,7 +13,7 @@ from outlook_mcp.tools.mail_triage import (
     mark_read,
     move_message,
 )
-from outlook_mcp.validation import validate_folder_name, validate_graph_id
+from outlook_mcp.validation import validate_graph_id
 
 _VALID_ACTIONS = ("move", "flag", "categorize", "mark_read")
 
@@ -41,9 +42,10 @@ async def batch_triage(
     for mid in message_ids:
         validate_graph_id(mid)
 
-    # Validate folder name upfront for move action
+    # Resolve folder upfront for move action — converts display names to IDs
+    # once, so move_message's internal resolution short-circuits on each call.
     if action == "move":
-        validate_folder_name(value)
+        value = await resolve_folder_id(graph_client, value)
 
     results: list[dict] = []
     for mid in message_ids:

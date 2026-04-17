@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from outlook_mcp.config import Config
+from outlook_mcp.folder_resolver import resolve_folder_id
 from outlook_mcp.permissions import CATEGORY_MAIL_TRIAGE, check_permission
-from outlook_mcp.validation import validate_folder_name, validate_graph_id
+from outlook_mcp.validation import validate_graph_id
 
 
 async def move_message(
@@ -19,7 +20,7 @@ async def move_message(
     """Move a message to a folder."""
     check_permission(config, CATEGORY_MAIL_TRIAGE, "outlook_move_message")
     message_id = validate_graph_id(message_id)
-    folder = validate_folder_name(folder)
+    folder = await resolve_folder_id(graph_client, folder)
 
     from msgraph.generated.users.item.messages.item.move.move_post_request_body import (
         MovePostRequestBody,

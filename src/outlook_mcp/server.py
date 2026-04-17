@@ -98,7 +98,12 @@ async def outlook_list_inbox(
     cursor: str | None = None,
     classification: str | None = None,
 ) -> dict:
-    """List messages. Filters: read status, sender, date, Focused Inbox classification."""
+    """List messages. Filters: read status, sender, date, Focused Inbox classification.
+
+    `folder` accepts display names ("Junk Email", "Sent Items", "TLDR"), well-known
+    names ("inbox", "junkemail", "sentitems"), or Graph IDs. Prefer names — do not
+    cache or transcribe Graph IDs across turns.
+    """
     client = _get_graph_client(ctx)
     return await mail_read.list_inbox(
         client.sdk_client, folder, count, unread_only, from_address, after, before, skip,
@@ -125,7 +130,11 @@ async def outlook_search_mail(
     folder: str | None = None,
     cursor: str | None = None,
 ) -> dict:
-    """Search mail using KQL query. Query is automatically sanitized."""
+    """Search mail using KQL query. Query is automatically sanitized.
+
+    `folder` accepts display names ("Junk Email", "TLDR"), well-known names,
+    or Graph IDs. Prefer names — do not cache or transcribe Graph IDs across turns.
+    """
     client = _get_graph_client(ctx)
     return await mail_read.search_mail(client.sdk_client, query, count, folder, cursor=cursor)
 
@@ -203,7 +212,11 @@ async def outlook_move_message(
     message_id: str,
     folder: str,
 ) -> dict:
-    """Move a message to a folder."""
+    """Move a message to a folder.
+
+    `folder` accepts display names ("Junk Email", "Archive", "TLDR"), well-known
+    names ("inbox", "deleteditems"), or Graph IDs. Prefer names.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_triage.move_message(
@@ -729,7 +742,10 @@ async def outlook_copy_message(
     message_id: str,
     folder: str,
 ) -> dict:
-    """Copy a message to a folder."""
+    """Copy a message to a folder.
+
+    `folder` accepts display names, well-known names, or Graph IDs. Prefer names.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_thread.copy_message(

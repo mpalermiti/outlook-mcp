@@ -87,9 +87,12 @@ class TestCopyMessage:
             await copy_message(mock_client, message_id="<bad>", folder="inbox", config=_CFG)
 
     async def test_copy_validates_folder(self):
-        """copy_message rejects invalid folder names."""
+        """copy_message rejects unresolvable folder references."""
         mock_client = MagicMock()
-        with pytest.raises(ValueError, match="invalid characters"):
+        empty_response = MagicMock()
+        empty_response.value = []
+        mock_client.me.mail_folders.get = AsyncMock(return_value=empty_response)
+        with pytest.raises(ValueError, match="not found"):
             await copy_message(
                 mock_client, message_id="AAMkAG123=", folder="bad folder!", config=_CFG,
             )

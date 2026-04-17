@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from outlook_mcp.folder_resolver import resolve_folder_id
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.validation import (
     sanitize_kql,
     sanitize_output,
     validate_datetime,
     validate_email,
-    validate_folder_name,
     validate_graph_id,
 )
 
@@ -87,7 +87,7 @@ async def list_inbox(
     None means no filter (both).
     """
     count = _clamp(count, 1, 100)
-    folder = validate_folder_name(folder)
+    folder = await resolve_folder_id(graph_client, folder)
 
     query_params = apply_pagination({}, count, cursor)
     query_params["$orderby"] = "receivedDateTime desc"
@@ -242,7 +242,7 @@ async def search_mail(
     )
 
     if folder:
-        folder = validate_folder_name(folder)
+        folder = await resolve_folder_id(graph_client, folder)
         from msgraph.generated.users.item.mail_folders.item.messages import (
             messages_request_builder as folder_mrb,
         )
