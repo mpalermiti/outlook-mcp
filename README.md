@@ -215,9 +215,9 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 
 | Tool | Description |
 |------|-------------|
-| `outlook_list_inbox` | List messages in a folder. Filter by read status, sender, date range, Focused Inbox classification. Pagination via `skip`. |
+| `outlook_list_inbox` | List messages in a folder. `folder` accepts display names, well-known names, or Graph IDs. Filter by read status, sender, date range, Focused Inbox classification. Pagination via `skip`. |
 | `outlook_read_message` | Get full message by ID. Format: `text`, `html`, or `full` (both). |
-| `outlook_search_mail` | Search mail using KQL query. Optionally scope to a folder. |
+| `outlook_search_mail` | Search mail using KQL query. Optionally scope to a folder by name or ID. |
 | `outlook_list_folders` | List all mail folders with total and unread counts. |
 
 ### Mail Write
@@ -309,7 +309,7 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 |------|-------------|
 | `outlook_list_thread` | Get all messages in a conversation thread. |
 | `outlook_copy_message` | Copy a message to another folder. |
-| `outlook_batch_triage` | Batch move/flag/categorize/mark_read (max 20 per call). |
+| `outlook_batch_triage` | Batch move/flag/categorize/mark_read (max 20 per call). Single Graph `/$batch` round-trip — 10-20× faster than per-message calls for large triage. |
 
 ### User and Admin
 
