@@ -110,6 +110,7 @@ class TestBatchTriageValidation:
         mock_client = MagicMock()
         empty_response = MagicMock()
         empty_response.value = []
+        empty_response.odata_next_link = None
         mock_client.me.mail_folders.get = AsyncMock(return_value=empty_response)
         with pytest.raises(ValueError, match="not found"):
             await batch_triage(
@@ -225,6 +226,7 @@ class TestBatchTriageActions:
         folder_entity.display_name = "TLDR"
         folders_response = MagicMock()
         folders_response.value = [folder_entity]
+        folders_response.odata_next_link = None
 
         mock_client = _mock_client_with_batch_response(_make_batch_response([201]))
         mock_client.me.mail_folders.get = AsyncMock(return_value=folders_response)

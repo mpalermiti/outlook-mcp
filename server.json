@@ -3,7 +3,7 @@
   "name": "io.github.mpalermiti/outlook-mcp",
   "title": "Outlook MCP",
   "description": "Microsoft Outlook personal accounts: mail, calendar, contacts, to-do, drafts (52 tools).",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "websiteUrl": "https://github.com/mpalermiti/outlook-mcp",
   "repository": {
     "url": "https://github.com/mpalermiti/outlook-mcp",
@@ -14,7 +14,7 @@
     {
       "registryType": "pypi",
       "identifier": "outlook-graph-mcp",
-      "version": "1.4.0",
+      "version": "1.4.1",
       "transport": {
         "type": "stdio"
       }

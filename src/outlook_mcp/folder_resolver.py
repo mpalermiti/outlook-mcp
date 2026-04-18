@@ -10,7 +10,49 @@ from __future__ import annotations
 
 from typing import Any
 
+from outlook_mcp.pagination import build_request_config
 from outlook_mcp.validation import WELL_KNOWN_FOLDERS, validate_graph_id
+
+
+async def fetch_all_top_level_folders(graph_client: Any, top: int = 100) -> list[Any]:
+    """Fetch every top-level mail folder, following `@odata.nextLink` pagination."""
+    from msgraph.generated.users.item.mail_folders.mail_folders_request_builder import (
+        MailFoldersRequestBuilder,
+    )
+
+    config = build_request_config(
+        MailFoldersRequestBuilder.MailFoldersRequestBuilderGetQueryParameters,
+        {"$top": top},
+    )
+    response = await graph_client.me.mail_folders.get(request_configuration=config)
+    collected = list(response.value) if response and response.value else []
+    while getattr(response, "odata_next_link", None):
+        response = await graph_client.me.mail_folders.with_url(
+            response.odata_next_link
+        ).get()
+        collected.extend(list(response.value) if response and response.value else [])
+    return collected
+
+
+async def fetch_all_child_folders(
+    graph_client: Any, parent_id: str, top: int = 100
+) -> list[Any]:
+    """Fetch every child folder of `parent_id`, following pagination."""
+    from msgraph.generated.users.item.mail_folders.item.child_folders import (
+        child_folders_request_builder as cf,
+    )
+
+    builder = graph_client.me.mail_folders.by_mail_folder_id(parent_id).child_folders
+    config = build_request_config(
+        cf.ChildFoldersRequestBuilder.ChildFoldersRequestBuilderGetQueryParameters,
+        {"$top": top},
+    )
+    response = await builder.get(request_configuration=config)
+    collected = list(response.value) if response and response.value else []
+    while getattr(response, "odata_next_link", None):
+        response = await builder.with_url(response.odata_next_link).get()
+        collected.extend(list(response.value) if response and response.value else [])
+    return collected
 
 
 async def resolve_folder_id(graph_client: Any, folder_ref: str) -> str:
@@ -69,8 +111,7 @@ async def _lookup_display_name(graph_client: Any, display_name: str) -> str:
     """
     target = display_name.lower()
 
-    response = await graph_client.me.mail_folders.get()
-    top_level = list(response.value) if response and response.value else []
+    top_level = await fetch_all_top_level_folders(graph_client)
 
     top_matches = [f for f in top_level if f.display_name and f.display_name.lower() == target]
     if len(top_matches) == 1:
@@ -88,10 +129,8 @@ async def _lookup_display_name(graph_client: Any, display_name: str) -> str:
         if f.display_name and f.display_name.lower() == target:
             matches.append(f)
         if (getattr(f, "child_folder_count", 0) or 0) > 0:
-            child_resp = await graph_client.me.mail_folders.by_mail_folder_id(
-                f.id
-            ).child_folders.get()
-            queue.extend(list(child_resp.value) if child_resp and child_resp.value else [])
+            children = await fetch_all_child_folders(graph_client, f.id)
+            queue.extend(children)
 
     if not matches:
         raise ValueError(

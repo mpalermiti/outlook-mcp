@@ -33,6 +33,7 @@ def _setup_child_folders(mock_client: MagicMock, children_by_parent: dict) -> No
 def _mock_list_response(folders: list[MagicMock]) -> MagicMock:
     response = MagicMock()
     response.value = folders
+    response.odata_next_link = None
     return response
 
 

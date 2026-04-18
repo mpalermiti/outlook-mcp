@@ -296,3 +296,33 @@ class TestListFolders:
         assert result["has_more"] is False
         # Only the folder with children triggers a child_folders fetch.
         mock_client.me.mail_folders.by_mail_folder_id.assert_called_once_with("receipts_id")
+
+    @pytest.mark.asyncio
+    async def test_list_folders_recursive_paginates_child_folders(self):
+        """Child-folder listings follow odata_next_link so >10 subfolders are returned."""
+        inbox = _make_folder("inbox_id", "Inbox", parent_id="root", children=15)
+
+        page1 = [_make_folder(f"c{i}", f"Child{i}", parent_id="inbox_id") for i in range(10)]
+        page2 = [_make_folder(f"c{i}", f"Child{i}", parent_id="inbox_id") for i in range(10, 15)]
+
+        mock_client = MagicMock()
+        mock_client.me.mail_folders.get = AsyncMock(
+            return_value=MagicMock(value=[inbox], odata_next_link=None)
+        )
+        child_builder = MagicMock()
+        # First page has nextLink; with_url(...)  returns a builder whose get() returns page2.
+        page1_response = MagicMock(value=page1, odata_next_link="https://next-page")
+        page2_response = MagicMock(value=page2, odata_next_link=None)
+        next_page_builder = MagicMock()
+        next_page_builder.get = AsyncMock(return_value=page2_response)
+        child_builder.child_folders.get = AsyncMock(return_value=page1_response)
+        child_builder.child_folders.with_url = MagicMock(return_value=next_page_builder)
+        mock_client.me.mail_folders.by_mail_folder_id = MagicMock(return_value=child_builder)
+
+        result = await list_folders(mock_client, recursive=True)
+        names = {f["name"] for f in result["folders"]}
+        # Inbox + 15 children
+        assert len(result["folders"]) == 16
+        assert "Inbox" in names
+        assert {f"Child{i}" for i in range(15)}.issubset(names)
+        child_builder.child_folders.with_url.assert_called_once_with("https://next-page")

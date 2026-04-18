@@ -91,6 +91,7 @@ class TestCopyMessage:
         mock_client = MagicMock()
         empty_response = MagicMock()
         empty_response.value = []
+        empty_response.odata_next_link = None
         mock_client.me.mail_folders.get = AsyncMock(return_value=empty_response)
         with pytest.raises(ValueError, match="not found"):
             await copy_message(

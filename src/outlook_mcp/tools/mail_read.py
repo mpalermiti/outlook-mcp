@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from outlook_mcp.folder_resolver import resolve_folder_id
+from outlook_mcp.folder_resolver import (
+    fetch_all_child_folders,
+    fetch_all_top_level_folders,
+    resolve_folder_id,
+)
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.validation import (
     sanitize_kql,
@@ -301,22 +305,14 @@ async def list_folders(
     )
 
     if recursive:
-        top_req = build_request_config(
-            MailFoldersRequestBuilder.MailFoldersRequestBuilderGetQueryParameters,
-            apply_pagination({}, count=100, cursor=None),
-        )
-        top_response = await graph_client.me.mail_folders.get(request_configuration=top_req)
-
         collected: list[dict] = []
-        queue: list[Any] = list(top_response.value or [])
+        queue: list[Any] = await fetch_all_top_level_folders(graph_client)
         while queue:
             f = queue.pop(0)
             collected.append(_folder_to_dict(f))
             if (getattr(f, "child_folder_count", 0) or 0) > 0:
-                child_resp = await graph_client.me.mail_folders.by_mail_folder_id(
-                    f.id
-                ).child_folders.get()
-                queue.extend(child_resp.value or [])
+                children = await fetch_all_child_folders(graph_client, f.id)
+                queue.extend(children)
 
         return {
             "folders": collected,
