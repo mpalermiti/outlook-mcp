@@ -218,7 +218,7 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 | `outlook_list_inbox` | List messages in a folder. `folder` accepts display names, well-known names, or Graph IDs. Filter by read status, sender, date range, Focused Inbox classification. Pagination via `skip`. |
 | `outlook_read_message` | Get full message by ID. Format: `text`, `html`, or `full` (both). |
 | `outlook_search_mail` | Search mail using KQL query. Optionally scope to a folder by name or ID. |
-| `outlook_list_folders` | List all mail folders with total and unread counts. |
+| `outlook_list_folders` | List mail folders with counts, `parent_id`, and `child_count`. Pass `recursive=true` to walk the full folder tree (subfolders included). |
 
 ### Mail Write
 

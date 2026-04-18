@@ -7,11 +7,27 @@ import pytest
 from outlook_mcp.folder_resolver import resolve_folder_id
 
 
-def _mock_folder(folder_id: str, display_name: str) -> MagicMock:
+def _mock_folder(
+    folder_id: str,
+    display_name: str,
+    *,
+    child_count: int = 0,
+) -> MagicMock:
     folder = MagicMock()
     folder.id = folder_id
     folder.display_name = display_name
+    folder.child_folder_count = child_count
     return folder
+
+
+def _setup_child_folders(mock_client: MagicMock, children_by_parent: dict) -> None:
+    """Wire mock_client.me.mail_folders.by_mail_folder_id(pid).child_folders.get()."""
+    def _by_id(parent_id: str):
+        builder = MagicMock()
+        kids = children_by_parent.get(parent_id, [])
+        builder.child_folders.get = AsyncMock(return_value=_mock_list_response(kids))
+        return builder
+    mock_client.me.mail_folders.by_mail_folder_id = MagicMock(side_effect=_by_id)
 
 
 def _mock_list_response(folders: list[MagicMock]) -> MagicMock:
@@ -105,7 +121,7 @@ class TestDisplayNameLookup:
             return_value=_mock_list_response([_mock_folder("id1", "Receipts")])
         )
 
-        with pytest.raises(ValueError, match="not found.*outlook_list_folders"):
+        with pytest.raises(ValueError, match="not found"):
             await resolve_folder_id(mock_client, "NonexistentFolder")
 
     async def test_ambiguous_match_raises(self):
@@ -146,3 +162,85 @@ class TestEdgeCases:
         mock_client = MagicMock()
         result = await resolve_folder_id(mock_client, "  Inbox  ")
         assert result == "inbox"
+
+
+class TestSubfolderLookup:
+    """Subfolder names resolve via BFS walk when no top-level match exists."""
+
+    async def test_single_subfolder_match_resolves(self):
+        receipts = _mock_folder("receipts_id", "Receipts", child_count=1)
+        domains = _mock_folder("domains_id", "Domains")
+        mock_client = MagicMock()
+        mock_client.me.mail_folders.get = AsyncMock(
+            return_value=_mock_list_response([receipts])
+        )
+        _setup_child_folders(mock_client, {"receipts_id": [domains]})
+
+        result = await resolve_folder_id(mock_client, "Domains")
+
+        assert result == "domains_id"
+
+    async def test_nested_subfolder_match_resolves(self):
+        """Folder nested two levels deep still resolves via BFS."""
+        receipts = _mock_folder("receipts_id", "Receipts", child_count=1)
+        services = _mock_folder("services_id", "Services", child_count=1)
+        domains = _mock_folder("domains_id", "Domains")
+        mock_client = MagicMock()
+        mock_client.me.mail_folders.get = AsyncMock(
+            return_value=_mock_list_response([receipts])
+        )
+        _setup_child_folders(
+            mock_client,
+            {"receipts_id": [services], "services_id": [domains]},
+        )
+
+        result = await resolve_folder_id(mock_client, "Domains")
+
+        assert result == "domains_id"
+
+    async def test_top_level_match_wins_over_subfolder(self):
+        """Top-level match short-circuits before walking subfolders."""
+        top_tldr = _mock_folder("top_tldr_id", "TLDR")
+        receipts = _mock_folder("receipts_id", "Receipts", child_count=1)
+        mock_client = MagicMock()
+        mock_client.me.mail_folders.get = AsyncMock(
+            return_value=_mock_list_response([top_tldr, receipts])
+        )
+        _setup_child_folders(mock_client, {"receipts_id": [_mock_folder("nested_tldr", "TLDR")]})
+
+        result = await resolve_folder_id(mock_client, "TLDR")
+
+        assert result == "top_tldr_id"
+        mock_client.me.mail_folders.by_mail_folder_id.assert_not_called()
+
+    async def test_ambiguous_subfolder_matches_raise(self):
+        a = _mock_folder("a_id", "A", child_count=1)
+        b = _mock_folder("b_id", "B", child_count=1)
+        mock_client = MagicMock()
+        mock_client.me.mail_folders.get = AsyncMock(
+            return_value=_mock_list_response([a, b])
+        )
+        _setup_child_folders(
+            mock_client,
+            {
+                "a_id": [_mock_folder("dom_a", "Domains")],
+                "b_id": [_mock_folder("dom_b", "Domains")],
+            },
+        )
+
+        with pytest.raises(ValueError, match="ambiguous.*across tree"):
+            await resolve_folder_id(mock_client, "Domains")
+
+    async def test_not_found_after_full_walk(self):
+        receipts = _mock_folder("receipts_id", "Receipts", child_count=1)
+        mock_client = MagicMock()
+        mock_client.me.mail_folders.get = AsyncMock(
+            return_value=_mock_list_response([receipts])
+        )
+        _setup_child_folders(
+            mock_client,
+            {"receipts_id": [_mock_folder("bills_id", "Bills")]},
+        )
+
+        with pytest.raises(ValueError, match="not found.*recursive=True"):
+            await resolve_folder_id(mock_client, "Domains")

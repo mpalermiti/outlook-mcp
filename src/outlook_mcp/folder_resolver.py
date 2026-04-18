@@ -62,25 +62,48 @@ def _looks_like_graph_id(value: str) -> bool:
 
 
 async def _lookup_display_name(graph_client: Any, display_name: str) -> str:
-    """Look up a top-level folder by its display name (case-insensitive)."""
+    """Look up a folder by display name (case-insensitive), walking subfolders.
+
+    Prefers a top-level match when one exists. Falls back to a BFS walk through
+    subfolders so names like "Domains" nested under "Receipts" still resolve.
+    """
     target = display_name.lower()
 
     response = await graph_client.me.mail_folders.get()
-    folders = list(response.value) if response and response.value else []
+    top_level = list(response.value) if response and response.value else []
 
-    matches = [f for f in folders if f.display_name and f.display_name.lower() == target]
+    top_matches = [f for f in top_level if f.display_name and f.display_name.lower() == target]
+    if len(top_matches) == 1:
+        return top_matches[0].id
+    if len(top_matches) > 1:
+        raise ValueError(
+            f"Folder name '{display_name}' is ambiguous "
+            f"({len(top_matches)} top-level matches). Pass a Graph folder ID instead."
+        )
+
+    matches: list[Any] = []
+    queue: list[Any] = list(top_level)
+    while queue:
+        f = queue.pop(0)
+        if f.display_name and f.display_name.lower() == target:
+            matches.append(f)
+        if (getattr(f, "child_folder_count", 0) or 0) > 0:
+            child_resp = await graph_client.me.mail_folders.by_mail_folder_id(
+                f.id
+            ).child_folders.get()
+            queue.extend(list(child_resp.value) if child_resp and child_resp.value else [])
 
     if not matches:
         raise ValueError(
             f"Folder '{display_name}' not found. "
-            "Use outlook_list_folders to see available folders, "
+            "Use outlook_list_folders(recursive=True) to see the full folder tree, "
             "or pass a Graph folder ID."
         )
 
     if len(matches) > 1:
         raise ValueError(
             f"Folder name '{display_name}' is ambiguous "
-            f"({len(matches)} top-level matches). Pass a Graph folder ID instead."
+            f"({len(matches)} matches across tree). Pass a Graph folder ID instead."
         )
 
     return matches[0].id

@@ -33,6 +33,8 @@ Programmatic management of Outlook inbox rules via `/me/mailFolders/inbox/messag
 
 ## Done
 
+- **1.4.0** — Recursive folder tree listing (`recursive=true`) + subfolder name resolution
+- **1.3.1** — Graph `/$batch` endpoint for `outlook_batch_triage` (10–20× perf)
 - **1.3.0** — Transparent folder name resolution across all folder-accepting tools
 - **1.2.0** — Focused Inbox classification filter
 - **1.1.0** — Granular write permissions via `allow_categories`

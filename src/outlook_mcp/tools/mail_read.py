@@ -274,31 +274,64 @@ async def search_mail(
     }
 
 
+def _folder_to_dict(f: Any) -> dict:
+    return {
+        "id": f.id,
+        "name": sanitize_output(f.display_name or ""),
+        "total": f.total_item_count or 0,
+        "unread": f.unread_item_count or 0,
+        "parent_id": getattr(f, "parent_folder_id", None),
+        "child_count": getattr(f, "child_folder_count", 0) or 0,
+    }
+
+
 async def list_folders(
     graph_client: Any,
     cursor: str | None = None,
+    recursive: bool = False,
 ) -> dict:
-    """List all mail folders."""
-    query_params = apply_pagination({}, count=50, cursor=cursor)
+    """List mail folders.
 
+    Default: top-level folders only, paginated. Set `recursive=True` to return
+    the full folder tree (BFS walk of subfolders) — pagination is disabled in
+    recursive mode; all folders are returned in one response.
+    """
     from msgraph.generated.users.item.mail_folders.mail_folders_request_builder import (
         MailFoldersRequestBuilder,
     )
 
+    if recursive:
+        top_req = build_request_config(
+            MailFoldersRequestBuilder.MailFoldersRequestBuilderGetQueryParameters,
+            apply_pagination({}, count=100, cursor=None),
+        )
+        top_response = await graph_client.me.mail_folders.get(request_configuration=top_req)
+
+        collected: list[dict] = []
+        queue: list[Any] = list(top_response.value or [])
+        while queue:
+            f = queue.pop(0)
+            collected.append(_folder_to_dict(f))
+            if (getattr(f, "child_folder_count", 0) or 0) > 0:
+                child_resp = await graph_client.me.mail_folders.by_mail_folder_id(
+                    f.id
+                ).child_folders.get()
+                queue.extend(child_resp.value or [])
+
+        return {
+            "folders": collected,
+            "count": len(collected),
+            "has_more": False,
+            "cursor": None,
+        }
+
+    query_params = apply_pagination({}, count=50, cursor=cursor)
     req_config = build_request_config(
         MailFoldersRequestBuilder.MailFoldersRequestBuilderGetQueryParameters, query_params
     )
     response = await graph_client.me.mail_folders.get(request_configuration=req_config)
 
-    folders = []
-    for f in response.value or []:
-        folders.append({
-            "id": f.id,
-            "name": sanitize_output(f.display_name or ""),
-            "total": f.total_item_count or 0,
-            "unread": f.unread_item_count or 0,
-        })
-
+    folders = [_folder_to_dict(f) for f in (response.value or [])]
     return {
         "folders": folders,
         "count": len(folders),

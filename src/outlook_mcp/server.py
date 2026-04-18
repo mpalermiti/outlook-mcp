@@ -140,10 +140,22 @@ async def outlook_search_mail(
 
 
 @mcp.tool()
-async def outlook_list_folders(ctx: Context, cursor: str | None = None) -> dict:
-    """List all mail folders with message counts."""
+async def outlook_list_folders(
+    ctx: Context,
+    cursor: str | None = None,
+    recursive: bool = False,
+) -> dict:
+    """List mail folders with message counts, parent ID, and child count.
+
+    Default returns top-level folders only. Pass `recursive=True` to walk the
+    full folder tree — use this when searching for subfolders or mapping the
+    hierarchy. Each folder includes `parent_id` so callers can reconstruct the
+    tree.
+    """
     client = _get_graph_client(ctx)
-    return await mail_read.list_folders(client.sdk_client, cursor=cursor)
+    return await mail_read.list_folders(
+        client.sdk_client, cursor=cursor, recursive=recursive
+    )
 
 
 # ── Mail Write Tools ────────────────────────────────────

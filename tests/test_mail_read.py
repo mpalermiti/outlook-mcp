@@ -239,15 +239,25 @@ class TestSearchMail:
         mock_client.me.mail_folders.by_mail_folder_id.assert_called_with("inbox")
 
 
+def _make_folder(folder_id: str, name: str, *, total=0, unread=0, parent_id=None, children=0):
+    """Build a MagicMock that stands in for a Graph MailFolder entity."""
+    f = MagicMock()
+    f.id = folder_id
+    f.display_name = name
+    f.total_item_count = total
+    f.unread_item_count = unread
+    f.parent_folder_id = parent_id
+    f.child_folder_count = children
+    return f
+
+
 class TestListFolders:
     @pytest.mark.asyncio
     async def test_list_folders_returns_folders(self):
-        """list_folders returns folder list with counts."""
-        mock_folder = MagicMock()
-        mock_folder.id = "folder123"
-        mock_folder.display_name = "Inbox"
-        mock_folder.total_item_count = 42
-        mock_folder.unread_item_count = 5
+        """list_folders returns folder list with counts, parent_id, child_count."""
+        mock_folder = _make_folder(
+            "folder123", "Inbox", total=42, unread=5, parent_id="root", children=2
+        )
 
         mock_client = MagicMock()
         mock_client.me.mail_folders.get = AsyncMock(
@@ -259,3 +269,30 @@ class TestListFolders:
         assert result["folders"][0]["name"] == "Inbox"
         assert result["folders"][0]["total"] == 42
         assert result["folders"][0]["unread"] == 5
+        assert result["folders"][0]["parent_id"] == "root"
+        assert result["folders"][0]["child_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_list_folders_recursive_walks_subfolders(self):
+        """recursive=True returns the full folder tree via BFS walk."""
+        inbox = _make_folder("inbox_id", "Inbox", parent_id="root", children=0)
+        receipts = _make_folder("receipts_id", "Receipts", parent_id="root", children=1)
+        domains = _make_folder("domains_id", "Domains", parent_id="receipts_id", children=0)
+
+        mock_client = MagicMock()
+        mock_client.me.mail_folders.get = AsyncMock(
+            return_value=MagicMock(value=[inbox, receipts], odata_next_link=None)
+        )
+        child_builder = MagicMock()
+        child_builder.child_folders.get = AsyncMock(
+            return_value=MagicMock(value=[domains], odata_next_link=None)
+        )
+        mock_client.me.mail_folders.by_mail_folder_id = MagicMock(return_value=child_builder)
+
+        result = await list_folders(mock_client, recursive=True)
+        names = {f["name"] for f in result["folders"]}
+        assert names == {"Inbox", "Receipts", "Domains"}
+        assert result["count"] == 3
+        assert result["has_more"] is False
+        # Only the folder with children triggers a child_folders fetch.
+        mock_client.me.mail_folders.by_mail_folder_id.assert_called_once_with("receipts_id")
