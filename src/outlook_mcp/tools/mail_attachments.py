@@ -130,6 +130,7 @@ async def send_with_attachments(
     bcc: list[str] | None = None,
     is_html: bool = False,
     importance: str = "normal",
+    reply_to: list[str] | None = None,
     *,
     config: Config,
 ) -> dict:
@@ -144,6 +145,7 @@ async def send_with_attachments(
     validated_to = [validate_email(e) for e in to]
     validated_cc = [validate_email(e) for e in cc] if cc else []
     validated_bcc = [validate_email(e) for e in bcc] if bcc else []
+    validated_reply_to = [validate_email(e) for e in reply_to] if reply_to else []
 
     # Validate all files exist
     for path in attachment_paths:
@@ -185,6 +187,8 @@ async def send_with_attachments(
             msg.cc_recipients = [_make_recipient(e) for e in validated_cc]
         if validated_bcc:
             msg.bcc_recipients = [_make_recipient(e) for e in validated_bcc]
+        if validated_reply_to:
+            msg.reply_to = [_make_recipient(e) for e in validated_reply_to]
         importance_map = {
             "low": Importance.Low,
             "normal": Importance.Normal,

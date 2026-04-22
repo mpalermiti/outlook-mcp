@@ -58,6 +58,50 @@ class TestSendMessage:
         assert result["status"] == "sent"
         mock_client.me.send_mail.post.assert_called_once()
 
+    async def test_send_sets_reply_to(self):
+        """send_message populates Message.reply_to when reply_to is provided."""
+        mock_client = AsyncMock()
+        mock_client.me.send_mail.post = AsyncMock()
+        result = await send_message(
+            mock_client,
+            to=["to@test.com"],
+            subject="Test",
+            body="Hello",
+            reply_to=["alias@test.com", "team@test.com"],
+            config=_CFG,
+        )
+        assert result["status"] == "sent"
+        request_body = mock_client.me.send_mail.post.call_args.args[0]
+        reply_to_list = request_body.message.reply_to
+        assert reply_to_list is not None
+        assert [r.email_address.address for r in reply_to_list] == [
+            "alias@test.com",
+            "team@test.com",
+        ]
+
+    async def test_send_no_reply_to_leaves_field_unset(self):
+        """send_message does not set Message.reply_to when reply_to is omitted."""
+        mock_client = AsyncMock()
+        mock_client.me.send_mail.post = AsyncMock()
+        await send_message(
+            mock_client, to=["to@test.com"], subject="Test", body="Hello", config=_CFG,
+        )
+        request_body = mock_client.me.send_mail.post.call_args.args[0]
+        assert request_body.message.reply_to is None
+
+    async def test_send_rejects_invalid_reply_to(self):
+        """send_message rejects malformed reply_to addresses."""
+        mock_client = AsyncMock()
+        with pytest.raises(ValueError):
+            await send_message(
+                mock_client,
+                to=["to@test.com"],
+                subject="Test",
+                body="Hello",
+                reply_to=["not-an-email"],
+                config=_CFG,
+            )
+
 
 class TestReply:
     async def test_reply_calls_reply_post(self):

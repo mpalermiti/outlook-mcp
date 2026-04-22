@@ -163,6 +163,40 @@ class TestCreateDraft:
                 config=_CFG_RO,
             )
 
+    async def test_create_draft_sets_reply_to(self):
+        """create_draft populates Message.reply_to when reply_to is provided."""
+        created_msg = MagicMock()
+        created_msg.id = "AAMkDraftReplyTo="
+
+        client = MagicMock()
+        client.me.messages.post = AsyncMock(return_value=created_msg)
+
+        await create_draft(
+            client,
+            to=["to@test.com"],
+            subject="Reply-To Test",
+            body="Hello",
+            reply_to=["alias@test.com"],
+            config=_CFG,
+        )
+
+        posted_msg = client.me.messages.post.call_args.args[0]
+        assert posted_msg.reply_to is not None
+        assert [r.email_address.address for r in posted_msg.reply_to] == ["alias@test.com"]
+
+    async def test_create_draft_rejects_invalid_reply_to(self):
+        """create_draft rejects malformed reply_to addresses."""
+        client = MagicMock()
+        with pytest.raises(ValueError):
+            await create_draft(
+                client,
+                to=["to@test.com"],
+                subject="Test",
+                body="Hello",
+                reply_to=["bogus"],
+                config=_CFG,
+            )
+
 
 class TestUpdateDraft:
     async def test_update_draft_patches_partial(self):
@@ -204,6 +238,57 @@ class TestUpdateDraft:
                 draft_id="AAMkAG123=",
                 subject="Test",
                 config=_CFG_RO,
+            )
+
+    async def test_update_draft_patches_reply_to(self):
+        """update_draft sets reply_to on the PATCH payload when provided."""
+        msg_builder = MagicMock()
+        msg_builder.patch = AsyncMock()
+
+        client = MagicMock()
+        client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
+
+        await update_draft(
+            client,
+            draft_id="AAMkAG123=",
+            reply_to=["alias@test.com", "team@test.com"],
+            config=_CFG,
+        )
+
+        patched_msg = msg_builder.patch.call_args.args[0]
+        assert patched_msg.reply_to is not None
+        assert [r.email_address.address for r in patched_msg.reply_to] == [
+            "alias@test.com",
+            "team@test.com",
+        ]
+
+    async def test_update_draft_clears_reply_to_with_empty_list(self):
+        """update_draft with reply_to=[] clears the field on the draft."""
+        msg_builder = MagicMock()
+        msg_builder.patch = AsyncMock()
+
+        client = MagicMock()
+        client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
+
+        await update_draft(
+            client,
+            draft_id="AAMkAG123=",
+            reply_to=[],
+            config=_CFG,
+        )
+
+        patched_msg = msg_builder.patch.call_args.args[0]
+        assert patched_msg.reply_to == []
+
+    async def test_update_draft_rejects_invalid_reply_to(self):
+        """update_draft rejects malformed reply_to addresses."""
+        client = MagicMock()
+        with pytest.raises(ValueError):
+            await update_draft(
+                client,
+                draft_id="AAMkAG123=",
+                reply_to=["bogus"],
+                config=_CFG,
             )
 
 

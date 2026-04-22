@@ -60,6 +60,7 @@ async def create_draft(
     bcc: list[str] | None = None,
     is_html: bool = False,
     importance: str = "normal",
+    reply_to: list[str] | None = None,
     *,
     config: Config,
 ) -> dict:
@@ -74,6 +75,7 @@ async def create_draft(
     validated_to = [validate_email(e) for e in to]
     validated_cc = [validate_email(e) for e in cc] if cc else []
     validated_bcc = [validate_email(e) for e in bcc] if bcc else []
+    validated_reply_to = [validate_email(e) for e in reply_to] if reply_to else []
 
     from msgraph.generated.models.body_type import BodyType
     from msgraph.generated.models.email_address import EmailAddress
@@ -98,6 +100,8 @@ async def create_draft(
         msg.cc_recipients = [_make_recipient(e) for e in validated_cc]
     if validated_bcc:
         msg.bcc_recipients = [_make_recipient(e) for e in validated_bcc]
+    if validated_reply_to:
+        msg.reply_to = [_make_recipient(e) for e in validated_reply_to]
 
     importance_map = {
         "low": Importance.Low,
@@ -122,6 +126,7 @@ async def update_draft(
     body: str | None = None,
     to: list[str] | None = None,
     cc: list[str] | None = None,
+    reply_to: list[str] | None = None,
     *,
     config: Config,
 ) -> dict:
@@ -175,6 +180,20 @@ async def update_draft(
             return r
 
         msg.cc_recipients = [_make_cc_recipient(e) for e in validated_cc]
+
+    if reply_to is not None:
+        from msgraph.generated.models.email_address import EmailAddress
+        from msgraph.generated.models.recipient import Recipient
+
+        validated_reply_to = [validate_email(e) for e in reply_to]
+
+        def _make_reply_to_recipient(email: str) -> Recipient:
+            r = Recipient()
+            r.email_address = EmailAddress()
+            r.email_address.address = email
+            return r
+
+        msg.reply_to = [_make_reply_to_recipient(e) for e in validated_reply_to]
 
     await graph_client.me.messages.by_message_id(draft_id).patch(msg)
 

@@ -173,13 +173,19 @@ async def outlook_send_message(
     importance: str = "normal",
     sensitivity: str = "normal",
     request_read_receipt: bool = False,
+    reply_to: list[str] | None = None,
 ) -> dict:
-    """Send email with recipients, CC, BCC, HTML support, importance, and sensitivity."""
+    """Send email with recipients, CC, BCC, HTML support, importance, and sensitivity.
+
+    Pass ``reply_to`` to have recipient replies routed to addresses other than
+    the authenticated sender (e.g. a shared team alias).
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_write.send_message(
         client.sdk_client, to, subject, body, cc, bcc, is_html, importance,
         sensitivity=sensitivity, request_read_receipt=request_read_receipt,
+        reply_to=reply_to,
         config=config,
     )
 
@@ -605,12 +611,17 @@ async def outlook_create_draft(
     bcc: list[str] | None = None,
     is_html: bool = False,
     importance: str = "normal",
+    reply_to: list[str] | None = None,
 ) -> dict:
-    """Create a draft message in the Drafts folder."""
+    """Create a draft message in the Drafts folder.
+
+    Pass ``reply_to`` to pre-populate the draft's Reply-To addresses.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_drafts.create_draft(
         client.sdk_client, to, subject, body, cc, bcc, is_html, importance,
+        reply_to=reply_to,
         config=config,
     )
 
@@ -623,12 +634,19 @@ async def outlook_update_draft(
     body: str | None = None,
     to: list[str] | None = None,
     cc: list[str] | None = None,
+    reply_to: list[str] | None = None,
 ) -> dict:
-    """Update an existing draft message."""
+    """Update an existing draft message.
+
+    Pass ``reply_to=[...]`` to overwrite the draft's Reply-To addresses;
+    pass ``reply_to=[]`` to clear them.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_drafts.update_draft(
-        client.sdk_client, draft_id, subject, body, to, cc, config=config,
+        client.sdk_client, draft_id, subject, body, to, cc,
+        reply_to=reply_to,
+        config=config,
     )
 
 
@@ -683,12 +701,18 @@ async def outlook_send_with_attachments(
     bcc: list[str] | None = None,
     is_html: bool = False,
     importance: str = "normal",
+    reply_to: list[str] | None = None,
 ) -> dict:
-    """Send a message with file attachments. Handles large files automatically."""
+    """Send a message with file attachments. Handles large files automatically.
+
+    Pass ``reply_to`` to route recipient replies to a different address than
+    the authenticated sender.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_attachments.send_with_attachments(
         client.sdk_client, to, subject, body, attachment_paths, cc, bcc, is_html, importance,
+        reply_to=reply_to,
         config=config,
     )
 
