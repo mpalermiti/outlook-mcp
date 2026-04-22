@@ -27,7 +27,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 52 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 54 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -42,7 +42,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 ## Features
 
-**52 tools** across 13 categories:
+**54 tools** across 13 categories:
 
 - **Auth (1)** -- auth status check (login is via CLI)
 - **Mail Read (4)** -- list inbox (with Focused Inbox filter), read message, search (KQL), list folders
@@ -53,7 +53,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 - **Contacts (6)** -- list, search, get, create, update, delete
 - **To Do (6)** -- list task lists, list/create/update/complete/delete tasks
 - **Drafts (5)** -- list, create, update, send, delete
-- **Attachments (3)** -- list, download, send-with-attachments
+- **Attachments (5)** -- list, download, send-with-attachments, attach-to-draft, remove-draft-attachment
 - **Folder Management (3)** -- create, rename, delete mail folders
 - **Threading and Batch (3)** -- list thread, copy message, batch triage
 - **User and Admin (6)** -- whoami, list calendars, list categories, mail tips, accounts
@@ -294,6 +294,8 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 | `outlook_list_attachments` | List attachments on a message. |
 | `outlook_download_attachment` | Download attachment (base64 or save to file). |
 | `outlook_send_with_attachments` | Send message with file attachments (auto upload session for >3MB). |
+| `outlook_attach_to_draft` | Add attachments to an existing draft (auto upload session for >3MB). |
+| `outlook_remove_draft_attachment` | Remove a single attachment from a draft. |
 
 ### Folder Management
 

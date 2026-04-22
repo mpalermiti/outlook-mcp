@@ -9,8 +9,10 @@ import pytest
 from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.mail_attachments import (
+    attach_to_draft,
     download_attachment,
     list_attachments,
+    remove_draft_attachment,
     send_with_attachments,
 )
 
@@ -277,3 +279,199 @@ class TestSendWithAttachments:
         )
         assert result["status"] == "sent"
         mock_client.me.send_mail.post.assert_called_once()
+
+
+class TestAttachToDraft:
+    async def test_attach_small_file_posts_inline(self, tmp_path):
+        """attach_to_draft POSTs small files as inline FileAttachments."""
+        small_file = tmp_path / "note.txt"
+        small_file.write_bytes(b"hello world")
+
+        created_att = MagicMock()
+        created_att.id = "att_new_1"
+
+        mock_client = MagicMock()
+        mock_builder = mock_client.me.messages.by_message_id.return_value
+        mock_builder.attachments.post = AsyncMock(return_value=created_att)
+
+        result = await attach_to_draft(
+            mock_client,
+            draft_id="AAMkAG123=",
+            attachment_paths=[str(small_file)],
+            config=_CFG,
+        )
+
+        assert result["status"] == "attached"
+        assert result["draft_id"] == "AAMkAG123="
+        assert result["attachment_count"] == 1
+        assert result["attachment_ids"] == ["att_new_1"]
+        mock_client.me.messages.by_message_id.assert_called_with("AAMkAG123=")
+        mock_builder.attachments.post.assert_called_once()
+
+    async def test_attach_large_file_uses_upload_session(self, tmp_path):
+        """attach_to_draft uses createUploadSession for files over 3MB."""
+        large_file = tmp_path / "big.bin"
+        large_file.write_bytes(b"x" * (3 * 1024 * 1024 + 1))
+
+        mock_session = MagicMock()
+        mock_session.upload_url = "https://graph.microsoft.com/upload/session"
+
+        mock_client = MagicMock()
+        mock_builder = mock_client.me.messages.by_message_id.return_value
+        mock_builder.attachments.create_upload_session.post = AsyncMock(
+            return_value=mock_session
+        )
+
+        with patch(
+            "outlook_mcp.tools.mail_attachments._upload_large_file", new_callable=AsyncMock
+        ) as mock_upload:
+            result = await attach_to_draft(
+                mock_client,
+                draft_id="AAMkAG123=",
+                attachment_paths=[str(large_file)],
+                config=_CFG,
+            )
+
+        assert result["status"] == "attached"
+        assert result["attachment_count"] == 1
+        mock_builder.attachments.create_upload_session.post.assert_called_once()
+        mock_upload.assert_called_once()
+
+    async def test_attach_mixed_sizes(self, tmp_path):
+        """attach_to_draft handles a mix of small and large files in one call."""
+        small = tmp_path / "small.txt"
+        small.write_bytes(b"tiny")
+        big = tmp_path / "big.bin"
+        big.write_bytes(b"x" * (3 * 1024 * 1024 + 1))
+
+        created_att = MagicMock()
+        created_att.id = "att_small_1"
+
+        mock_session = MagicMock()
+        mock_session.upload_url = "https://graph.microsoft.com/upload/session"
+
+        mock_client = MagicMock()
+        mock_builder = mock_client.me.messages.by_message_id.return_value
+        mock_builder.attachments.post = AsyncMock(return_value=created_att)
+        mock_builder.attachments.create_upload_session.post = AsyncMock(
+            return_value=mock_session
+        )
+
+        with patch(
+            "outlook_mcp.tools.mail_attachments._upload_large_file", new_callable=AsyncMock
+        ):
+            result = await attach_to_draft(
+                mock_client,
+                draft_id="AAMkAG123=",
+                attachment_paths=[str(small), str(big)],
+                config=_CFG,
+            )
+
+        assert result["attachment_count"] == 2
+        assert result["attachment_ids"] == ["att_small_1"]
+        mock_builder.attachments.post.assert_called_once()
+        mock_builder.attachments.create_upload_session.post.assert_called_once()
+
+    async def test_attach_validates_draft_id(self, tmp_path):
+        """attach_to_draft rejects invalid draft IDs."""
+        f = tmp_path / "x.txt"
+        f.write_bytes(b"x")
+        mock_client = MagicMock()
+        with pytest.raises(ValueError, match="invalid characters"):
+            await attach_to_draft(
+                mock_client,
+                draft_id="bad id with spaces!",
+                attachment_paths=[str(f)],
+                config=_CFG,
+            )
+
+    async def test_attach_raises_on_missing_file(self):
+        """attach_to_draft raises FileNotFoundError when a path does not exist."""
+        mock_client = MagicMock()
+        with pytest.raises(FileNotFoundError):
+            await attach_to_draft(
+                mock_client,
+                draft_id="AAMkAG123=",
+                attachment_paths=["/nonexistent/file.txt"],
+                config=_CFG,
+            )
+
+    async def test_attach_raises_read_only(self, tmp_path):
+        """attach_to_draft raises ReadOnlyError in read-only mode."""
+        f = tmp_path / "x.txt"
+        f.write_bytes(b"x")
+        mock_client = MagicMock()
+        with pytest.raises(ReadOnlyError):
+            await attach_to_draft(
+                mock_client,
+                draft_id="AAMkAG123=",
+                attachment_paths=[str(f)],
+                config=_CFG_RO,
+            )
+
+    async def test_attach_empty_list_is_noop(self):
+        """attach_to_draft with empty attachment_paths makes no API calls."""
+        mock_client = MagicMock()
+
+        result = await attach_to_draft(
+            mock_client,
+            draft_id="AAMkAG123=",
+            attachment_paths=[],
+            config=_CFG,
+        )
+
+        assert result["attachment_count"] == 0
+        assert result["attachment_ids"] == []
+        mock_client.me.messages.by_message_id.return_value.attachments.post.assert_not_called()
+
+
+class TestRemoveDraftAttachment:
+    async def test_remove_calls_delete(self):
+        """remove_draft_attachment DELETEs the attachment by ID."""
+        mock_client = MagicMock()
+        att_builder = MagicMock()
+        att_builder.delete = AsyncMock()
+        mock_client.me.messages.by_message_id.return_value.attachments.by_attachment_id.return_value = (  # noqa: E501
+            att_builder
+        )
+
+        result = await remove_draft_attachment(
+            mock_client,
+            draft_id="AAMkAG123=",
+            attachment_id="ATT456=",
+            config=_CFG,
+        )
+
+        assert result["status"] == "removed"
+        assert result["draft_id"] == "AAMkAG123="
+        assert result["attachment_id"] == "ATT456="
+        att_builder.delete.assert_called_once()
+
+    async def test_remove_validates_ids(self):
+        """remove_draft_attachment rejects invalid draft or attachment IDs."""
+        mock_client = MagicMock()
+        with pytest.raises(ValueError, match="invalid characters"):
+            await remove_draft_attachment(
+                mock_client,
+                draft_id="bad id!",
+                attachment_id="ATT=",
+                config=_CFG,
+            )
+        with pytest.raises(ValueError, match="invalid characters"):
+            await remove_draft_attachment(
+                mock_client,
+                draft_id="AAMkAG123=",
+                attachment_id="bad att!",
+                config=_CFG,
+            )
+
+    async def test_remove_raises_read_only(self):
+        """remove_draft_attachment raises ReadOnlyError in read-only mode."""
+        mock_client = MagicMock()
+        with pytest.raises(ReadOnlyError):
+            await remove_draft_attachment(
+                mock_client,
+                draft_id="AAMkAG123=",
+                attachment_id="ATT=",
+                config=_CFG_RO,
+            )
