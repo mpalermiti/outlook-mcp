@@ -1,4 +1,4 @@
-"""Mail attachment tools: list, download, send with attachments."""
+"""Mail attachment tools: list, download, send / attach to drafts."""
 
 from __future__ import annotations
 
@@ -8,7 +8,11 @@ import os
 from typing import Any
 
 from outlook_mcp.config import Config
-from outlook_mcp.permissions import CATEGORY_MAIL_SEND, check_permission
+from outlook_mcp.permissions import (
+    CATEGORY_MAIL_DRAFTS,
+    CATEGORY_MAIL_SEND,
+    check_permission,
+)
 from outlook_mcp.validation import validate_email, validate_graph_id
 
 # 3MB threshold — files above this use upload sessions
@@ -22,6 +26,20 @@ def _validate_save_path(save_path: str) -> str:
     if ".." in save_path:
         raise ValueError(f"Path traversal not allowed in save_path: {save_path}")
     return save_path
+
+
+def _make_inline_attachment(file_path: str) -> Any:
+    """Build a FileAttachment SDK object from a local file (<=3MB path)."""
+    from msgraph.generated.models.file_attachment import FileAttachment
+
+    att = FileAttachment()
+    att.name = os.path.basename(file_path)
+    with open(file_path, "rb") as f:
+        att.content_bytes = f.read()
+    content_type, _ = mimetypes.guess_type(file_path)
+    att.content_type = content_type or "application/octet-stream"
+    att.odata_type = "#microsoft.graph.fileAttachment"
+    return att
 
 
 async def list_attachments(
@@ -164,7 +182,6 @@ async def send_with_attachments(
 
     from msgraph.generated.models.body_type import BodyType
     from msgraph.generated.models.email_address import EmailAddress
-    from msgraph.generated.models.file_attachment import FileAttachment
     from msgraph.generated.models.importance import Importance
     from msgraph.generated.models.item_body import ItemBody
     from msgraph.generated.models.message import Message
@@ -196,16 +213,6 @@ async def send_with_attachments(
         }
         msg.importance = importance_map.get(importance, Importance.Normal)
         return msg
-
-    def _make_inline_attachment(file_path: str) -> FileAttachment:
-        att = FileAttachment()
-        att.name = os.path.basename(file_path)
-        with open(file_path, "rb") as f:
-            att.content_bytes = f.read()
-        content_type, _ = mimetypes.guess_type(file_path)
-        att.content_type = content_type or "application/octet-stream"
-        att.odata_type = "#microsoft.graph.fileAttachment"
-        return att
 
     if not large_files:
         # All small — send inline via sendMail
@@ -261,4 +268,106 @@ async def send_with_attachments(
     return {
         "status": "sent",
         "attachment_count": len(attachment_paths),
+    }
+
+
+async def attach_to_draft(
+    graph_client: Any,
+    draft_id: str,
+    attachment_paths: list[str],
+    *,
+    config: Config,
+) -> dict:
+    """Add one or more attachments to an existing draft message.
+
+    For files under 3MB: POST a FileAttachment directly.
+    For files over 3MB: createUploadSession + chunked upload.
+
+    Returns the new attachment IDs so callers can reference or
+    remove individual attachments later.
+    """
+    check_permission(config, CATEGORY_MAIL_DRAFTS, "outlook_attach_to_draft")
+    draft_id = validate_graph_id(draft_id)
+
+    # Validate all files exist before any API call
+    for path in attachment_paths:
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Attachment file not found: {path}")
+
+    # Partition files into small (inline) and large (upload session)
+    small_files: list[str] = []
+    large_files: list[tuple[str, int]] = []
+    for path in attachment_paths:
+        file_size = os.path.getsize(path)
+        if file_size > _LARGE_FILE_THRESHOLD:
+            large_files.append((path, file_size))
+        else:
+            small_files.append(path)
+
+    attachment_ids: list[str] = []
+    msg_builder = graph_client.me.messages.by_message_id(draft_id)
+
+    # Small files — POST each as an inline FileAttachment
+    for file_path in small_files:
+        att = _make_inline_attachment(file_path)
+        created = await msg_builder.attachments.post(att)
+        if created is not None and getattr(created, "id", None):
+            attachment_ids.append(created.id)
+
+    # Large files — upload session
+    if large_files:
+        from msgraph.generated.models.attachment_item import AttachmentItem
+        from msgraph.generated.models.attachment_type import AttachmentType
+        from msgraph.generated.users.item.messages.item.attachments.create_upload_session.create_upload_session_post_request_body import (  # noqa: E501
+            CreateUploadSessionPostRequestBody,
+        )
+
+        for file_path, file_size in large_files:
+            content_type, _ = mimetypes.guess_type(file_path)
+            att_item = AttachmentItem()
+            att_item.attachment_type = AttachmentType.File
+            att_item.name = os.path.basename(file_path)
+            att_item.size = file_size
+            att_item.content_type = content_type or "application/octet-stream"
+
+            upload_body = CreateUploadSessionPostRequestBody()
+            upload_body.attachment_item = att_item
+
+            session = await msg_builder.attachments.create_upload_session.post(upload_body)
+            await _upload_large_file(session.upload_url, file_path, file_size)
+
+    return {
+        "status": "attached",
+        "draft_id": draft_id,
+        "attachment_count": len(attachment_paths),
+        "attachment_ids": attachment_ids,
+    }
+
+
+async def remove_draft_attachment(
+    graph_client: Any,
+    draft_id: str,
+    attachment_id: str,
+    *,
+    config: Config,
+) -> dict:
+    """Remove a single attachment from a draft message.
+
+    DELETE /me/messages/{draft_id}/attachments/{attachment_id}.
+    Only useful on drafts — sent messages are immutable.
+    """
+    check_permission(config, CATEGORY_MAIL_DRAFTS, "outlook_remove_draft_attachment")
+    draft_id = validate_graph_id(draft_id)
+    attachment_id = validate_graph_id(attachment_id)
+
+    await (
+        graph_client.me.messages.by_message_id(draft_id)
+        .attachments.by_attachment_id(attachment_id)
+        .delete()
+    )
+
+    return {
+        "status": "removed",
+        "draft_id": draft_id,
+        "attachment_id": attachment_id,
     }

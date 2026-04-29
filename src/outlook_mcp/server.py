@@ -717,6 +717,38 @@ async def outlook_send_with_attachments(
     )
 
 
+@mcp.tool()
+async def outlook_attach_to_draft(
+    ctx: Context,
+    draft_id: str,
+    attachment_paths: list[str],
+) -> dict:
+    """Add attachments to an existing draft. Handles large files automatically.
+
+    Returns the new attachment IDs so the caller can remove individual
+    attachments later via ``outlook_remove_draft_attachment``.
+    """
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await mail_attachments.attach_to_draft(
+        client.sdk_client, draft_id, attachment_paths, config=config,
+    )
+
+
+@mcp.tool()
+async def outlook_remove_draft_attachment(
+    ctx: Context,
+    draft_id: str,
+    attachment_id: str,
+) -> dict:
+    """Remove a single attachment from a draft message."""
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await mail_attachments.remove_draft_attachment(
+        client.sdk_client, draft_id, attachment_id, config=config,
+    )
+
+
 # ── Mail Folder Management Tools ─────────────────────
 
 

@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: MCP server for Microsoft Outlook personal accounts. 52 tools — mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, Focused Inbox.
+description: MCP server for Microsoft Outlook personal accounts. 54 tools — mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, Focused Inbox.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -111,6 +111,8 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
 - `outlook_list_attachments` — List on a message
 - `outlook_download_attachment` — Download (base64 or save to file)
 - `outlook_send_with_attachments` — Send with files (auto upload session for >3MB)
+- `outlook_attach_to_draft` — Add attachments to an existing draft (auto upload session for >3MB)
+- `outlook_remove_draft_attachment` — Remove a single attachment from a draft
 
 ### Folder Management
 - `outlook_create_folder` — Create (top-level or nested)
