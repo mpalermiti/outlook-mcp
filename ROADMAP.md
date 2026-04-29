@@ -33,6 +33,7 @@ Programmatic management of Outlook inbox rules via `/me/mailFolders/inbox/messag
 
 ## Done
 
+- **1.5.0** — `reply_to` parameter on send/draft tools (#3); `outlook_attach_to_draft` + `outlook_remove_draft_attachment` (#4); typed-model fix for `outlook_create_task` / `outlook_update_task` / `outlook_complete_task` plus dict→`PatternedRecurrence` conversion (#2, #5); consumer Graph phone-field migration for all contact tools — `mobilePhone` / `homePhones` / `businessPhones` instead of the unsupported `phones` aggregate (#1, #6). Tool count: 52 → 54.
 - **1.4.1** — Paginate `childFolders` calls so parents with >10 subfolders return the full set
 - **1.4.0** — Recursive folder tree listing (`recursive=true`) + subfolder name resolution
 - **1.3.1** — Graph `/$batch` endpoint for `outlook_batch_triage` (10–20× perf)
