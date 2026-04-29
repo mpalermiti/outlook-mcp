@@ -21,8 +21,16 @@ _CFG_RO = Config(client_id="test", read_only=True)
 
 
 def _make_mock_contact(**overrides):
-    """Factory for mock Graph SDK contact objects."""
-    contact = MagicMock()
+    """Factory for mock Graph SDK contact objects.
+
+    Matches the consumer Outlook contact shape: ``mobile_phone`` (single
+    string), ``home_phones`` (list[str]), ``business_phones`` (list[str]).
+    """
+    contact = MagicMock(spec=[
+        "id", "display_name", "given_name", "surname",
+        "company_name", "title", "department", "birthday",
+        "email_addresses", "mobile_phone", "home_phones", "business_phones",
+    ])
     contact.id = overrides.get("id", "contact123")
     contact.display_name = overrides.get("display_name", "John Doe")
     contact.given_name = overrides.get("given_name", "John")
@@ -37,10 +45,9 @@ def _make_mock_contact(**overrides):
     email.name = overrides.get("email_name", "John")
     contact.email_addresses = overrides.get("email_addresses", [email])
 
-    phone = MagicMock()
-    phone.number = overrides.get("phone_number", "+1234567890")
-    phone.type = overrides.get("phone_type", "mobile")
-    contact.phones = overrides.get("phones", [phone])
+    contact.mobile_phone = overrides.get("mobile_phone", "+1234567890")
+    contact.home_phones = overrides.get("home_phones", [])
+    contact.business_phones = overrides.get("business_phones", [])
 
     return contact
 
@@ -77,6 +84,38 @@ class TestListContacts:
         assert result["contacts"][0]["email"] == "john@test.com"
         assert result["contacts"][0]["phone"] == "+1234567890"
         assert result["contacts"][0]["company"] == "Acme"
+
+    async def test_list_select_uses_consumer_phone_fields(self):
+        """list_contacts $select must use mobilePhone/homePhones/businessPhones,
+        not the unsupported ``phones`` aggregate (Bug #1)."""
+        mock_client = _make_contacts_mock([])
+        await list_contacts(mock_client)
+
+        call_kwargs = mock_client.me.contacts.get.call_args
+        select = call_kwargs.kwargs["request_configuration"].query_parameters.select
+        select_str = ",".join(select) if isinstance(select, list) else select
+        assert "phones" not in select_str.split(",")
+        assert "mobilePhone" in select_str
+        assert "homePhones" in select_str
+        assert "businessPhones" in select_str
+
+    async def test_list_summary_falls_back_to_home_phone(self):
+        """When mobile_phone is empty, summary falls back to first home phone."""
+        contact = _make_mock_contact(mobile_phone="", home_phones=["+15551112222"])
+        mock_client = _make_contacts_mock([contact])
+
+        result = await list_contacts(mock_client)
+        assert result["contacts"][0]["phone"] == "+15551112222"
+
+    async def test_list_summary_falls_back_to_business_phone(self):
+        """When mobile and home are empty, falls back to first business phone."""
+        contact = _make_mock_contact(
+            mobile_phone="", home_phones=[], business_phones=["+15553334444"],
+        )
+        mock_client = _make_contacts_mock([contact])
+
+        result = await list_contacts(mock_client)
+        assert result["contacts"][0]["phone"] == "+15553334444"
 
     async def test_list_with_cursor(self):
         """list_contacts passes cursor to pagination."""
@@ -129,11 +168,27 @@ class TestSearchContacts:
         assert result["count"] == 1
         assert result["contacts"][0]["display_name"] == "John Doe"
 
+    async def test_search_select_uses_consumer_phone_fields(self):
+        """search_contacts $select must use consumer phone fields (Bug #1)."""
+        mock_client = _make_contacts_mock([])
+        await search_contacts(mock_client, query="John")
+
+        call_kwargs = mock_client.me.contacts.get.call_args
+        select = call_kwargs.kwargs["request_configuration"].query_parameters.select
+        select_str = ",".join(select) if isinstance(select, list) else select
+        assert "phones" not in select_str.split(",")
+        assert "mobilePhone" in select_str
+        assert "homePhones" in select_str
+        assert "businessPhones" in select_str
+
 
 class TestGetContact:
     async def test_get_returns_full_detail(self):
-        """get_contact returns full contact detail."""
-        mock_contact = _make_mock_contact()
+        """get_contact returns full contact detail using consumer phone fields."""
+        mock_contact = _make_mock_contact(
+            home_phones=["+15551112222"],
+            business_phones=["+15553334444"],
+        )
         mock_client = _make_contact_by_id_mock(mock_contact)
 
         result = await get_contact(mock_client, "contact123")
@@ -145,8 +200,22 @@ class TestGetContact:
         assert result["title"] == "Engineer"
         assert len(result["email_addresses"]) == 1
         assert result["email_addresses"][0]["address"] == "john@test.com"
-        assert len(result["phones"]) == 1
-        assert result["phones"][0]["number"] == "+1234567890"
+        assert result["mobile_phone"] == "+1234567890"
+        assert result["home_phones"] == ["+15551112222"]
+        assert result["business_phones"] == ["+15553334444"]
+        assert "phones" not in result, "old aggregate 'phones' field must not appear"
+
+    async def test_get_handles_empty_phone_fields(self):
+        """get_contact returns empty defaults when phone fields are missing."""
+        mock_contact = _make_mock_contact(
+            mobile_phone="", home_phones=[], business_phones=[],
+        )
+        mock_client = _make_contact_by_id_mock(mock_contact)
+
+        result = await get_contact(mock_client, "contact123")
+        assert result["mobile_phone"] == ""
+        assert result["home_phones"] == []
+        assert result["business_phones"] == []
 
     async def test_get_validates_id(self):
         """get_contact rejects invalid contact IDs."""
@@ -175,6 +244,21 @@ class TestCreateContact:
         assert result["status"] == "created"
         assert result["id"] == "contact123"
         mock_client.me.contacts.post.assert_called_once()
+
+    async def test_create_contact_writes_mobile_phone_not_phones(self):
+        """create_contact must set mobile_phone (not the unsupported 'phones'
+        collection) on consumer Graph (Bug #1)."""
+        mock_client = MagicMock()
+        mock_client.me.contacts.post = AsyncMock(return_value=_make_mock_contact())
+
+        await create_contact(
+            mock_client, first_name="John", phone="+1234567890", config=_CFG,
+        )
+
+        payload = mock_client.me.contacts.post.call_args.args[0]
+        assert payload.mobile_phone == "+1234567890"
+        # The unsupported 'phones' aggregate must not be set
+        assert getattr(payload, "phones", None) is None
 
     async def test_create_validates_email(self):
         """create_contact rejects invalid email."""
@@ -212,6 +296,18 @@ class TestUpdateContact:
         # Verify patch was called
         contact_obj = mock_client.me.contacts.by_contact_id.return_value
         contact_obj.patch.assert_called_once()
+
+    async def test_update_writes_mobile_phone_not_phones(self):
+        """update_contact must set mobile_phone (not 'phones') on consumer Graph."""
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+
+        await update_contact(
+            mock_client, contact_id="contact123", phone="+19998887777", config=_CFG,
+        )
+        contact_obj = mock_client.me.contacts.by_contact_id.return_value
+        payload = contact_obj.patch.call_args.args[0]
+        assert payload.mobile_phone == "+19998887777"
+        assert getattr(payload, "phones", None) is None
 
     async def test_update_validates_id(self):
         """update_contact rejects invalid contact IDs."""
