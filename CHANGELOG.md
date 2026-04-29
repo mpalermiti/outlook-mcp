@@ -4,6 +4,14 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] — 2026-04-29
+
+### Documentation / positioning
+- Sharpened SKILL.md `description:` (drives the ClawHub search snippet) to lead with positioning ("MCP server, not a CLI wrapper") instead of a generic feature list. Highlights granular permissions, OS-keyring auth, batch optimization, and BYO Azure app — the differentiators against other Outlook skills in the registry.
+- Added a "Who this is for / How it differs from other Outlook tools" section near the top of README.md so users browsing the listing can self-select in 30 seconds.
+
+No code changes from 1.5.1.
+
 ## [1.5.1] — 2026-04-29
 
 ### Documentation

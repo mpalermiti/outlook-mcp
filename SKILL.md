@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: MCP server for Microsoft Outlook personal accounts. 54 tools — mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, Focused Inbox.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 54 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops. Granular permissions, OS-keyring auth, /$batch-optimized triage. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:

@@ -15,6 +15,23 @@ MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 
 ---
 
+## Who this is for
+
+You'll like this if you're:
+
+- An **agent builder** wiring Outlook into your own infra (OpenClaw, Claude Code, Cursor, custom MCP host) and want a typed tool surface — not stdout you have to parse
+- Building on **personal Microsoft accounts** (Outlook.com / Hotmail / Live) and want full control: BYO Azure app, no enterprise consent flow, no shared client ID
+- Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
+- Security-conscious: tokens in the OS keyring (Keychain on macOS), granular `allow_categories`, optional `read_only` mode, zero telemetry
+
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 54 tools — way more than you need for "read my inbox").
+
+### How it differs from other Outlook tools you'll find
+
+This is the only **first-class MCP server** in the personal-Outlook space — most alternatives are bash scripts or skill-shaped CLI wrappers the agent shells out to. That distinction matters: the agent gets typed tool schemas with structured args/returns, not stdout it has to parse. Other things you won't find elsewhere: `/$batch`-optimized triage (10-20× faster on bulk ops), recursive folder ops with name resolution, granular per-category permissions, multi-account support, and full attachment write paths including >3MB upload sessions for drafts.
+
+---
+
 ## What This Enables
 
 Give your AI agent full Outlook access. Example prompts that just work:
