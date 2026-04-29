@@ -20,6 +20,23 @@ def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
 
 
+def _primary_phone(contact: Any) -> str:
+    """Pick the most representative phone from the consumer-Graph contact fields.
+
+    Consumer Outlook accounts expose mobilePhone (single), homePhones (list),
+    and businessPhones (list) — not the unified ``phones`` collection. Prefer
+    mobile, then first home, then first business.
+    """
+    mobile = getattr(contact, "mobile_phone", "") or ""
+    if mobile:
+        return mobile
+    for attr in ("home_phones", "business_phones"):
+        values = getattr(contact, attr, None) or []
+        if values:
+            return values[0]
+    return ""
+
+
 def _format_contact_summary(contact: Any) -> dict:
     """Convert Graph SDK contact to summary dict."""
     email = ""
@@ -27,16 +44,11 @@ def _format_contact_summary(contact: Any) -> dict:
         first_email = contact.email_addresses[0]
         email = getattr(first_email, "address", "") or ""
 
-    phone = ""
-    if contact.phones:
-        first_phone = contact.phones[0]
-        phone = getattr(first_phone, "number", "") or ""
-
     return {
         "id": contact.id,
         "display_name": sanitize_output(contact.display_name or ""),
         "email": email,
-        "phone": phone,
+        "phone": _primary_phone(contact),
         "company": sanitize_output(contact.company_name or ""),
     }
 
@@ -52,22 +64,15 @@ def _format_contact_detail(contact: Any) -> dict:
             }
         )
 
-    phones = []
-    for p in contact.phones or []:
-        phones.append(
-            {
-                "number": getattr(p, "number", "") or "",
-                "type": getattr(p, "type", "") or "",
-            }
-        )
-
     return {
         "id": contact.id,
         "first_name": sanitize_output(contact.given_name or ""),
         "last_name": sanitize_output(contact.surname or ""),
         "display_name": sanitize_output(contact.display_name or ""),
         "email_addresses": email_addresses,
-        "phones": phones,
+        "mobile_phone": getattr(contact, "mobile_phone", "") or "",
+        "home_phones": list(getattr(contact, "home_phones", None) or []),
+        "business_phones": list(getattr(contact, "business_phones", None) or []),
         "company": sanitize_output(contact.company_name or ""),
         "title": sanitize_output(contact.title or ""),
         "department": sanitize_output(getattr(contact, "department", "") or ""),
@@ -83,7 +88,10 @@ async def list_contacts(
     """List contacts with pagination."""
     query_params: dict[str, Any] = {
         "$orderby": "displayName",
-        "$select": ("id,displayName,givenName,surname,emailAddresses,phones,companyName,title"),
+        "$select": (
+            "id,displayName,givenName,surname,emailAddresses,"
+            "mobilePhone,homePhones,businessPhones,companyName,title"
+        ),
     }
     query_params = apply_pagination(query_params, count, cursor)
 
@@ -119,7 +127,10 @@ async def search_contacts(
     query_params: dict[str, Any] = {
         "$top": count,
         "$search": safe_query,
-        "$select": ("id,displayName,givenName,surname,emailAddresses,phones,companyName,title"),
+        "$select": (
+            "id,displayName,givenName,surname,emailAddresses,"
+            "mobilePhone,homePhones,businessPhones,companyName,title"
+        ),
     }
 
     from msgraph.generated.users.item.contacts.contacts_request_builder import (
@@ -174,7 +185,6 @@ async def create_contact(
 
     from msgraph.generated.models.contact import Contact
     from msgraph.generated.models.email_address import EmailAddress
-    from msgraph.generated.models.phone import Phone
 
     new_contact = Contact()
     new_contact.given_name = first_name
@@ -186,9 +196,7 @@ async def create_contact(
         ea.name = first_name
         new_contact.email_addresses = [ea]
     if phone:
-        p = Phone()
-        p.number = phone
-        new_contact.phones = [p]
+        new_contact.mobile_phone = phone
     if company:
         new_contact.company_name = company
     if title:
@@ -223,7 +231,6 @@ async def update_contact(
 
     from msgraph.generated.models.contact import Contact
     from msgraph.generated.models.email_address import EmailAddress
-    from msgraph.generated.models.phone import Phone
 
     patch_body = Contact()
     if first_name is not None:
@@ -235,9 +242,7 @@ async def update_contact(
         ea.address = email
         patch_body.email_addresses = [ea]
     if phone is not None:
-        p = Phone()
-        p.number = phone
-        patch_body.phones = [p]
+        patch_body.mobile_phone = phone
 
     await graph_client.me.contacts.by_contact_id(contact_id).patch(patch_body)
 

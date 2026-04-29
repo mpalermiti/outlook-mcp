@@ -23,7 +23,9 @@ class ContactDetail(BaseModel):
     last_name: str = ""
     display_name: str = ""
     email_addresses: list[dict[str, str]] = Field(default_factory=list)
-    phones: list[dict[str, str]] = Field(default_factory=list)
+    mobile_phone: str = ""
+    home_phones: list[str] = Field(default_factory=list)
+    business_phones: list[str] = Field(default_factory=list)
     company: str = ""
     title: str = ""
     department: str = ""
