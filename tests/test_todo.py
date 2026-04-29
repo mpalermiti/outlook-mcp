@@ -3,10 +3,17 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from msgraph.generated.models.day_of_week import DayOfWeek
+from msgraph.generated.models.importance import Importance
+from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
+from msgraph.generated.models.recurrence_range_type import RecurrenceRangeType
+from msgraph.generated.models.task_status import TaskStatus
+from msgraph.generated.models.todo_task import TodoTask
 
 from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.todo import (
+    _build_recurrence,
     complete_task,
     create_task,
     delete_task,
@@ -191,6 +198,19 @@ class TestCreateTask:
         assert result["task_id"] == "task1"
         client.me.todo.lists.by_todo_task_list_id.return_value.tasks.post.assert_called_once()
 
+    async def test_create_task_passes_typed_todotask(self):
+        """create_task passes a TodoTask SDK model (not a dict) to .post()."""
+        client = _build_mock_client()
+
+        await create_task(client, title="Buy milk", config=_CFG)
+
+        post_mock = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.post
+        payload = post_mock.call_args.args[0]
+        assert isinstance(payload, TodoTask), (
+            f"Graph SDK expects a typed TodoTask, got {type(payload).__name__}"
+        )
+        assert payload.title == "Buy milk"
+
     async def test_create_task_with_due_date(self):
         """create_task validates and sets due date."""
         client = _build_mock_client()
@@ -198,6 +218,64 @@ class TestCreateTask:
         result = await create_task(client, title="Report", due="2026-04-15", config=_CFG)
 
         assert result["status"] == "created"
+
+    async def test_create_task_due_date_uses_typed_model(self):
+        """create_task wraps due date in a DateTimeTimeZone typed model."""
+        from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
+
+        client = _build_mock_client()
+        await create_task(client, title="Report", due="2026-04-15", config=_CFG)
+
+        post_mock = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.post
+        payload = post_mock.call_args.args[0]
+        assert isinstance(payload.due_date_time, DateTimeTimeZone)
+        assert payload.due_date_time.date_time == "2026-04-15"
+        assert payload.due_date_time.time_zone == "UTC"
+
+    async def test_create_task_importance_uses_enum(self):
+        """create_task converts importance string to the SDK Importance enum."""
+        client = _build_mock_client()
+        await create_task(client, title="High pri", importance="high", config=_CFG)
+
+        post_mock = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.post
+        payload = post_mock.call_args.args[0]
+        assert payload.importance is Importance.High
+
+    async def test_create_task_body_uses_itembody(self):
+        """create_task wraps body in an ItemBody typed model."""
+        from msgraph.generated.models.item_body import ItemBody
+
+        client = _build_mock_client()
+        await create_task(client, title="Has body", body="task description", config=_CFG)
+
+        post_mock = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.post
+        payload = post_mock.call_args.args[0]
+        assert isinstance(payload.body, ItemBody)
+        assert payload.body.content == "task description"
+
+    async def test_create_task_with_recurrence(self):
+        """create_task converts a recurrence dict into PatternedRecurrence typed model."""
+        from msgraph.generated.models.patterned_recurrence import PatternedRecurrence
+
+        client = _build_mock_client()
+        recurrence = {
+            "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+            "range": {"type": "noEnd", "startDate": "2026-04-22"},
+        }
+        await create_task(client, title="Weekly", recurrence=recurrence, config=_CFG)
+
+        post_mock = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.post
+        payload = post_mock.call_args.args[0]
+        assert isinstance(payload.recurrence, PatternedRecurrence)
+        assert payload.recurrence.pattern.type is RecurrencePatternType.Weekly
+        assert payload.recurrence.pattern.days_of_week == [DayOfWeek.Monday]
+        assert payload.recurrence.range.type is RecurrenceRangeType.NoEnd
+
+    async def test_create_task_invalid_importance(self):
+        """create_task rejects invalid importance values."""
+        client = _build_mock_client()
+        with pytest.raises(ValueError, match="importance"):
+            await create_task(client, title="x", importance="urgent", config=_CFG)
 
     async def test_create_task_invalid_due_date(self):
         """create_task rejects invalid due date."""
@@ -231,6 +309,57 @@ class TestUpdateTask:
         mock_item.assert_called_with("task1")
         mock_item.return_value.patch.assert_called_once()
 
+    async def test_update_task_passes_typed_todotask(self):
+        """update_task passes a TodoTask SDK model (not a dict) to .patch()."""
+        client = _build_mock_client()
+        await update_task(client, task_id="task1", title="New", config=_CFG)
+
+        mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        payload = mock_item.return_value.patch.call_args.args[0]
+        assert isinstance(payload, TodoTask), (
+            f"Graph SDK expects a typed TodoTask, got {type(payload).__name__}"
+        )
+        assert payload.title == "New"
+
+    async def test_update_task_due_uses_typed_model(self):
+        """update_task wraps due in a DateTimeTimeZone typed model."""
+        from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
+
+        client = _build_mock_client()
+        await update_task(client, task_id="task1", due="2026-05-01", config=_CFG)
+
+        mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        payload = mock_item.return_value.patch.call_args.args[0]
+        assert isinstance(payload.due_date_time, DateTimeTimeZone)
+        assert payload.due_date_time.date_time == "2026-05-01"
+
+    async def test_update_task_body_uses_itembody(self):
+        """update_task wraps body in an ItemBody typed model."""
+        from msgraph.generated.models.item_body import ItemBody
+
+        client = _build_mock_client()
+        await update_task(client, task_id="task1", body="updated", config=_CFG)
+
+        mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        payload = mock_item.return_value.patch.call_args.args[0]
+        assert isinstance(payload.body, ItemBody)
+        assert payload.body.content == "updated"
+
+    async def test_update_task_importance_uses_enum(self):
+        """update_task converts importance string to Importance enum."""
+        client = _build_mock_client()
+        await update_task(client, task_id="task1", importance="low", config=_CFG)
+
+        mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        payload = mock_item.return_value.patch.call_args.args[0]
+        assert payload.importance is Importance.Low
+
+    async def test_update_task_invalid_importance(self):
+        """update_task rejects invalid importance values."""
+        client = _build_mock_client()
+        with pytest.raises(ValueError, match="importance"):
+            await update_task(client, task_id="task1", importance="urgent", config=_CFG)
+
     async def test_update_task_read_only(self):
         """update_task raises ReadOnlyError in read-only mode."""
         client = _build_mock_client()
@@ -261,12 +390,82 @@ class TestCompleteTask:
         mock_item.assert_called_with("task1")
         mock_item.return_value.patch.assert_called_once()
 
+    async def test_complete_task_passes_typed_todotask(self):
+        """complete_task passes a TodoTask SDK model with TaskStatus.Completed enum."""
+        from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
+
+        client = _build_mock_client()
+        await complete_task(client, task_id="task1", config=_CFG)
+
+        mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        payload = mock_item.return_value.patch.call_args.args[0]
+        assert isinstance(payload, TodoTask), (
+            f"Graph SDK expects a typed TodoTask, got {type(payload).__name__}"
+        )
+        assert payload.status is TaskStatus.Completed
+        assert isinstance(payload.completed_date_time, DateTimeTimeZone)
+
     async def test_complete_task_read_only(self):
         """complete_task raises ReadOnlyError in read-only mode."""
         client = _build_mock_client()
 
         with pytest.raises(ReadOnlyError):
             await complete_task(client, task_id="task1", config=_CFG_RO)
+
+
+# --- _build_recurrence helper ---
+
+
+class TestBuildRecurrence:
+    def test_full_weekly_recurrence(self):
+        """_build_recurrence produces a typed PatternedRecurrence with enums and date objects."""
+        from datetime import date
+
+        from msgraph.generated.models.patterned_recurrence import PatternedRecurrence
+
+        pr = _build_recurrence(
+            {
+                "pattern": {
+                    "type": "weekly",
+                    "interval": 2,
+                    "daysOfWeek": ["monday", "wednesday"],
+                    "firstDayOfWeek": "sunday",
+                },
+                "range": {
+                    "type": "endDate",
+                    "startDate": "2026-04-22",
+                    "endDate": "2026-12-31",
+                    "recurrenceTimeZone": "UTC",
+                },
+            }
+        )
+
+        assert isinstance(pr, PatternedRecurrence)
+        assert pr.pattern.type is RecurrencePatternType.Weekly
+        assert pr.pattern.interval == 2
+        assert pr.pattern.days_of_week == [DayOfWeek.Monday, DayOfWeek.Wednesday]
+        assert pr.pattern.first_day_of_week is DayOfWeek.Sunday
+        assert pr.range.type is RecurrenceRangeType.EndDate
+        assert pr.range.start_date == date(2026, 4, 22)
+        assert pr.range.end_date == date(2026, 12, 31)
+        assert pr.range.recurrence_time_zone == "UTC"
+
+    def test_missing_pattern_or_range_rejected(self):
+        with pytest.raises(ValueError, match="pattern.*range"):
+            _build_recurrence({"pattern": {"type": "daily"}})
+
+    def test_invalid_enum_value_rejected(self):
+        with pytest.raises(ValueError, match="pattern.type"):
+            _build_recurrence(
+                {
+                    "pattern": {"type": "biweekly"},
+                    "range": {"type": "noEnd", "startDate": "2026-04-22"},
+                }
+            )
+
+    def test_non_dict_input_rejected(self):
+        with pytest.raises(ValueError):
+            _build_recurrence("weekly")  # type: ignore[arg-type]
 
 
 # --- delete_task ---

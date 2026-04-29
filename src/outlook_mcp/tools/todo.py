@@ -2,13 +2,128 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.permissions import CATEGORY_TODO_WRITE, check_permission
 from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
+
+_VALID_IMPORTANCES = {"low", "normal", "high"}
+
+
+def _importance_enum(value: str) -> Any:
+    """Map a string importance to the SDK Importance enum."""
+    from msgraph.generated.models.importance import Importance
+
+    if value not in _VALID_IMPORTANCES:
+        raise ValueError(
+            f"Invalid importance '{value}'. Must be one of: {sorted(_VALID_IMPORTANCES)}"
+        )
+    return {
+        "low": Importance.Low,
+        "normal": Importance.Normal,
+        "high": Importance.High,
+    }[value]
+
+
+def _build_recurrence(recurrence: dict) -> Any:
+    """Convert a Graph JSON-shape recurrence dict into a typed PatternedRecurrence.
+
+    Expects the documented Microsoft Graph JSON shape with camelCase keys:
+      {"pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"], ...},
+       "range":   {"type": "endDate", "startDate": "2026-04-22", "endDate": "2026-12-31", ...}}
+
+    String enums are mapped to the SDK enum members; ISO dates are parsed.
+    """
+    from msgraph.generated.models.day_of_week import DayOfWeek
+    from msgraph.generated.models.patterned_recurrence import PatternedRecurrence
+    from msgraph.generated.models.recurrence_pattern import RecurrencePattern
+    from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
+    from msgraph.generated.models.recurrence_range import RecurrenceRange
+    from msgraph.generated.models.recurrence_range_type import RecurrenceRangeType
+    from msgraph.generated.models.week_index import WeekIndex
+
+    if not isinstance(recurrence, dict):
+        raise ValueError("recurrence must be a dict with 'pattern' and 'range' keys")
+
+    pattern_in = recurrence.get("pattern") or {}
+    range_in = recurrence.get("range") or {}
+    if not pattern_in or not range_in:
+        raise ValueError("recurrence must include both 'pattern' and 'range'")
+
+    def _enum_lookup(enum_cls: Any, value: str, label: str) -> Any:
+        # SDK enum members are PascalCase; Graph JSON uses camelCase
+        try:
+            return enum_cls(value)
+        except ValueError:
+            target = value[:1].upper() + value[1:]
+            try:
+                return enum_cls[target]
+            except KeyError as e:
+                valid = [m.value for m in enum_cls]
+                raise ValueError(
+                    f"Invalid {label} '{value}'. Must be one of: {valid}"
+                ) from e
+
+    pattern = RecurrencePattern()
+    if "type" in pattern_in:
+        pattern.type = _enum_lookup(RecurrencePatternType, pattern_in["type"], "pattern.type")
+    if "interval" in pattern_in:
+        pattern.interval = int(pattern_in["interval"])
+    if "month" in pattern_in:
+        pattern.month = int(pattern_in["month"])
+    if "dayOfMonth" in pattern_in:
+        pattern.day_of_month = int(pattern_in["dayOfMonth"])
+    if "daysOfWeek" in pattern_in:
+        pattern.days_of_week = [
+            _enum_lookup(DayOfWeek, d, "pattern.daysOfWeek") for d in pattern_in["daysOfWeek"]
+        ]
+    if "firstDayOfWeek" in pattern_in:
+        pattern.first_day_of_week = _enum_lookup(
+            DayOfWeek, pattern_in["firstDayOfWeek"], "pattern.firstDayOfWeek"
+        )
+    if "index" in pattern_in:
+        pattern.index = _enum_lookup(WeekIndex, pattern_in["index"], "pattern.index")
+
+    rng = RecurrenceRange()
+    if "type" in range_in:
+        rng.type = _enum_lookup(RecurrenceRangeType, range_in["type"], "range.type")
+    if "startDate" in range_in:
+        rng.start_date = date.fromisoformat(range_in["startDate"])
+    if "endDate" in range_in:
+        rng.end_date = date.fromisoformat(range_in["endDate"])
+    if "numberOfOccurrences" in range_in:
+        rng.number_of_occurrences = int(range_in["numberOfOccurrences"])
+    if "recurrenceTimeZone" in range_in:
+        rng.recurrence_time_zone = range_in["recurrenceTimeZone"]
+
+    pr = PatternedRecurrence()
+    pr.pattern = pattern
+    pr.range = rng
+    return pr
+
+
+def _datetime_timezone(iso_dt: str, tz: str = "UTC") -> Any:
+    """Wrap an ISO datetime string in a Graph DateTimeTimeZone typed model."""
+    from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
+
+    dtz = DateTimeTimeZone()
+    dtz.date_time = iso_dt
+    dtz.time_zone = tz
+    return dtz
+
+
+def _text_body(content: str) -> Any:
+    """Wrap a text string in a Graph ItemBody typed model."""
+    from msgraph.generated.models.body_type import BodyType
+    from msgraph.generated.models.item_body import ItemBody
+
+    ib = ItemBody()
+    ib.content = content
+    ib.content_type = BodyType.Text
+    return ib
 
 
 async def _resolve_list_id(graph_client: Any, list_id: str | None) -> str:
@@ -193,36 +308,26 @@ async def create_task(
 
     resolved_id = await _resolve_list_id(graph_client, list_id)
 
-    # Build the task body as a dict for the SDK
-    task_body: dict[str, Any] = {"title": title}
+    from msgraph.generated.models.todo_task import TodoTask
+
+    task_body = TodoTask()
+    task_body.title = title
 
     if due:
         validate_datetime(due)
-        # Graph To Do uses DateTimeTimeZone for dueDateTime
-        task_body["dueDateTime"] = {
-            "dateTime": due,
-            "timeZone": "UTC",
-        }
+        task_body.due_date_time = _datetime_timezone(due)
 
     if importance:
-        valid_importances = {"low", "normal", "high"}
-        if importance not in valid_importances:
-            raise ValueError(
-                f"Invalid importance '{importance}'. Must be one of: {valid_importances}"
-            )
-        task_body["importance"] = importance
+        task_body.importance = _importance_enum(importance)
 
     if body:
-        task_body["body"] = {
-            "content": body,
-            "contentType": "text",
-        }
+        task_body.body = _text_body(body)
 
     if reminder is not None:
-        task_body["isReminderOn"] = reminder
+        task_body.is_reminder_on = reminder
 
     if recurrence:
-        task_body["recurrence"] = recurrence
+        task_body.recurrence = _build_recurrence(recurrence)
 
     response = await graph_client.me.todo.lists.by_todo_task_list_id(resolved_id).tasks.post(
         task_body
@@ -256,31 +361,22 @@ async def update_task(
 
     resolved_id = await _resolve_list_id(graph_client, list_id)
 
-    patch_body: dict[str, Any] = {}
+    from msgraph.generated.models.todo_task import TodoTask
+
+    patch_body = TodoTask()
 
     if title is not None:
-        patch_body["title"] = title
+        patch_body.title = title
 
     if due is not None:
         validate_datetime(due)
-        patch_body["dueDateTime"] = {
-            "dateTime": due,
-            "timeZone": "UTC",
-        }
+        patch_body.due_date_time = _datetime_timezone(due)
 
     if body is not None:
-        patch_body["body"] = {
-            "content": body,
-            "contentType": "text",
-        }
+        patch_body.body = _text_body(body)
 
     if importance is not None:
-        valid_importances = {"low", "normal", "high"}
-        if importance not in valid_importances:
-            raise ValueError(
-                f"Invalid importance '{importance}'. Must be one of: {valid_importances}"
-            )
-        patch_body["importance"] = importance
+        patch_body.importance = _importance_enum(importance)
 
     await (
         graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
@@ -312,13 +408,12 @@ async def complete_task(
 
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
 
-    patch_body = {
-        "status": "completed",
-        "completedDateTime": {
-            "dateTime": now_utc,
-            "timeZone": "UTC",
-        },
-    }
+    from msgraph.generated.models.task_status import TaskStatus
+    from msgraph.generated.models.todo_task import TodoTask
+
+    patch_body = TodoTask()
+    patch_body.status = TaskStatus.Completed
+    patch_body.completed_date_time = _datetime_timezone(now_utc)
 
     await (
         graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
