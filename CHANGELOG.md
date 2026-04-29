@@ -4,6 +4,11 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] — 2026-04-29
+
+### Documentation
+- Corrected stale `## Tools (51)` heading in `SKILL.md` to `## Tools (54)`. The frontmatter description was already correct, but the body heading rendered on the ClawHub skill page was missed when PRs #3 and #4 added new tools. Functionally identical to 1.5.0; no code changes.
+
 ## [1.5.0] — 2026-04-29
 
 ### Added
