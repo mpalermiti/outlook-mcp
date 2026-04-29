@@ -178,6 +178,46 @@ class TestSendWithAttachments:
         assert result["attachment_count"] == 1
         mock_client.me.send_mail.post.assert_called_once()
 
+    async def test_send_sets_reply_to(self, tmp_path):
+        """send_with_attachments propagates reply_to into the Message."""
+        test_file = tmp_path / "small.txt"
+        test_file.write_bytes(b"hello world")
+
+        mock_client = MagicMock()
+        mock_client.me.send_mail.post = AsyncMock()
+
+        await send_with_attachments(
+            mock_client,
+            to=["test@example.com"],
+            subject="Test",
+            body="See attached",
+            attachment_paths=[str(test_file)],
+            reply_to=["alias@test.com"],
+            config=_CFG,
+        )
+
+        request_body = mock_client.me.send_mail.post.call_args.args[0]
+        reply_to_list = request_body.message.reply_to
+        assert reply_to_list is not None
+        assert [r.email_address.address for r in reply_to_list] == ["alias@test.com"]
+
+    async def test_send_rejects_invalid_reply_to(self, tmp_path):
+        """send_with_attachments validates reply_to addresses."""
+        test_file = tmp_path / "small.txt"
+        test_file.write_bytes(b"hello")
+
+        mock_client = MagicMock()
+        with pytest.raises(ValueError):
+            await send_with_attachments(
+                mock_client,
+                to=["test@example.com"],
+                subject="Test",
+                body="Hi",
+                attachment_paths=[str(test_file)],
+                reply_to=["not-an-email"],
+                config=_CFG,
+            )
+
     async def test_send_raises_read_only(self, tmp_path):
         """send_with_attachments raises ReadOnlyError in read-only mode."""
         test_file = tmp_path / "small.txt"
