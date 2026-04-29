@@ -52,7 +52,7 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
    ```
 6. **Restart the gateway:** `openclaw gateway restart`
 
-## Tools (51)
+## Tools (54)
 
 ### Auth
 - `outlook_auth_status` — Check authentication status and read-only mode
