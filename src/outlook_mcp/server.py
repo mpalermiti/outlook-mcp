@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 from mcp.server.fastmcp import Context, FastMCP
 
+from outlook_mcp import __version__
 from outlook_mcp.auth import AuthManager
 from outlook_mcp.config import load_config
 from outlook_mcp.graph import GraphClient
@@ -43,6 +44,9 @@ mcp = FastMCP(
     instructions="MCP server for Microsoft Outlook via Microsoft Graph API",
     lifespan=lifespan,
 )
+# FastMCP doesn't expose a `version` kwarg, so set it on the underlying server
+# directly. Otherwise serverInfo.version reports the MCP SDK's version.
+mcp._mcp_server.version = __version__
 
 
 # ── Helpers ─────────────────────────────────────────────
@@ -76,9 +80,7 @@ async def outlook_auth_status(ctx: Context) -> dict:
         "read_only": auth.config.read_only,
     }
     if not auth.is_authenticated():
-        result["action_required"] = (
-            "Run `outlook-mcp auth` on the host to authenticate."
-        )
+        result["action_required"] = "Run `outlook-mcp auth` on the host to authenticate."
     return result
 
 
@@ -106,8 +108,16 @@ async def outlook_list_inbox(
     """
     client = _get_graph_client(ctx)
     return await mail_read.list_inbox(
-        client.sdk_client, folder, count, unread_only, from_address, after, before, skip,
-        cursor=cursor, classification=classification,
+        client.sdk_client,
+        folder,
+        count,
+        unread_only,
+        from_address,
+        after,
+        before,
+        skip,
+        cursor=cursor,
+        classification=classification,
     )
 
 
@@ -153,9 +163,7 @@ async def outlook_list_folders(
     tree.
     """
     client = _get_graph_client(ctx)
-    return await mail_read.list_folders(
-        client.sdk_client, cursor=cursor, recursive=recursive
-    )
+    return await mail_read.list_folders(client.sdk_client, cursor=cursor, recursive=recursive)
 
 
 # ── Mail Write Tools ────────────────────────────────────
@@ -183,8 +191,16 @@ async def outlook_send_message(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_write.send_message(
-        client.sdk_client, to, subject, body, cc, bcc, is_html, importance,
-        sensitivity=sensitivity, request_read_receipt=request_read_receipt,
+        client.sdk_client,
+        to,
+        subject,
+        body,
+        cc,
+        bcc,
+        is_html,
+        importance,
+        sensitivity=sensitivity,
+        request_read_receipt=request_read_receipt,
         reply_to=reply_to,
         config=config,
     )
@@ -216,9 +232,7 @@ async def outlook_forward(
     """Forward a message to recipients."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
-    return await mail_write.forward(
-        client.sdk_client, message_id, to, comment, config=config
-    )
+    return await mail_write.forward(client.sdk_client, message_id, to, comment, config=config)
 
 
 # ── Mail Triage Tools ───────────────────────────────────
@@ -237,9 +251,7 @@ async def outlook_move_message(
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
-    return await mail_triage.move_message(
-        client.sdk_client, message_id, folder, config=config
-    )
+    return await mail_triage.move_message(client.sdk_client, message_id, folder, config=config)
 
 
 @mcp.tool()
@@ -251,9 +263,7 @@ async def outlook_delete_message(
     """Delete a message. Moves to Deleted Items by default. Set permanent=true to hard delete."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
-    return await mail_triage.delete_message(
-        client.sdk_client, message_id, permanent, config=config
-    )
+    return await mail_triage.delete_message(client.sdk_client, message_id, permanent, config=config)
 
 
 @mcp.tool()
@@ -265,9 +275,7 @@ async def outlook_flag_message(
     """Set follow-up flag. Status: flagged, complete, or notFlagged."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
-    return await mail_triage.flag_message(
-        client.sdk_client, message_id, status, config=config
-    )
+    return await mail_triage.flag_message(client.sdk_client, message_id, status, config=config)
 
 
 @mcp.tool()
@@ -293,9 +301,7 @@ async def outlook_mark_read(
     """Mark a message as read or unread."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
-    return await mail_triage.mark_read(
-        client.sdk_client, message_id, is_read, config=config
-    )
+    return await mail_triage.mark_read(client.sdk_client, message_id, is_read, config=config)
 
 
 @mcp.tool()
@@ -328,7 +334,13 @@ async def outlook_list_events(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await calendar_read.list_events(
-        client.sdk_client, days, after, before, count, config.timezone, cursor=cursor,
+        client.sdk_client,
+        days,
+        after,
+        before,
+        count,
+        config.timezone,
+        cursor=cursor,
     )
 
 
@@ -415,9 +427,7 @@ async def outlook_rsvp(
     """RSVP to an event. Response: accept, decline, or tentative."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
-    return await calendar_write.rsvp(
-        client.sdk_client, event_id, response, message, config=config
-    )
+    return await calendar_write.rsvp(client.sdk_client, event_id, response, message, config=config)
 
 
 # ── Contact Tools ──────────────────────────────────────
@@ -466,7 +476,13 @@ async def outlook_create_contact(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await contacts.create_contact(
-        client.sdk_client, first_name, last_name, email, phone, company, title,
+        client.sdk_client,
+        first_name,
+        last_name,
+        email,
+        phone,
+        company,
+        title,
         config=config,
     )
 
@@ -484,7 +500,12 @@ async def outlook_update_contact(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await contacts.update_contact(
-        client.sdk_client, contact_id, first_name, last_name, email, phone,
+        client.sdk_client,
+        contact_id,
+        first_name,
+        last_name,
+        email,
+        phone,
         config=config,
     )
 
@@ -535,7 +556,14 @@ async def outlook_create_task(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await todo.create_task(
-        client.sdk_client, title, list_id, due, importance, body, reminder, recurrence,
+        client.sdk_client,
+        title,
+        list_id,
+        due,
+        importance,
+        body,
+        reminder,
+        recurrence,
         config=config,
     )
 
@@ -554,7 +582,13 @@ async def outlook_update_task(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await todo.update_task(
-        client.sdk_client, task_id, list_id, title, due, body, importance,
+        client.sdk_client,
+        task_id,
+        list_id,
+        title,
+        due,
+        body,
+        importance,
         config=config,
     )
 
@@ -569,7 +603,10 @@ async def outlook_complete_task(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await todo.complete_task(
-        client.sdk_client, task_id, list_id, config=config,
+        client.sdk_client,
+        task_id,
+        list_id,
+        config=config,
     )
 
 
@@ -583,7 +620,10 @@ async def outlook_delete_task(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await todo.delete_task(
-        client.sdk_client, task_id, list_id, config=config,
+        client.sdk_client,
+        task_id,
+        list_id,
+        config=config,
     )
 
 
@@ -620,7 +660,14 @@ async def outlook_create_draft(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_drafts.create_draft(
-        client.sdk_client, to, subject, body, cc, bcc, is_html, importance,
+        client.sdk_client,
+        to,
+        subject,
+        body,
+        cc,
+        bcc,
+        is_html,
+        importance,
         reply_to=reply_to,
         config=config,
     )
@@ -644,7 +691,12 @@ async def outlook_update_draft(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_drafts.update_draft(
-        client.sdk_client, draft_id, subject, body, to, cc,
+        client.sdk_client,
+        draft_id,
+        subject,
+        body,
+        to,
+        cc,
         reply_to=reply_to,
         config=config,
     )
@@ -686,7 +738,10 @@ async def outlook_download_attachment(
     """Download an attachment. Returns base64 content or saves to file."""
     client = _get_graph_client(ctx)
     return await mail_attachments.download_attachment(
-        client.sdk_client, message_id, attachment_id, save_path,
+        client.sdk_client,
+        message_id,
+        attachment_id,
+        save_path,
     )
 
 
@@ -711,7 +766,15 @@ async def outlook_send_with_attachments(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_attachments.send_with_attachments(
-        client.sdk_client, to, subject, body, attachment_paths, cc, bcc, is_html, importance,
+        client.sdk_client,
+        to,
+        subject,
+        body,
+        attachment_paths,
+        cc,
+        bcc,
+        is_html,
+        importance,
         reply_to=reply_to,
         config=config,
     )
@@ -731,7 +794,10 @@ async def outlook_attach_to_draft(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_attachments.attach_to_draft(
-        client.sdk_client, draft_id, attachment_paths, config=config,
+        client.sdk_client,
+        draft_id,
+        attachment_paths,
+        config=config,
     )
 
 
@@ -745,7 +811,10 @@ async def outlook_remove_draft_attachment(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_attachments.remove_draft_attachment(
-        client.sdk_client, draft_id, attachment_id, config=config,
+        client.sdk_client,
+        draft_id,
+        attachment_id,
+        config=config,
     )
 
 
@@ -762,7 +831,10 @@ async def outlook_create_folder(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_folders.create_folder(
-        client.sdk_client, name, parent_folder, config=config,
+        client.sdk_client,
+        name,
+        parent_folder,
+        config=config,
     )
 
 
@@ -776,7 +848,10 @@ async def outlook_rename_folder(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_folders.rename_folder(
-        client.sdk_client, folder_id, name, config=config,
+        client.sdk_client,
+        folder_id,
+        name,
+        config=config,
     )
 
 
@@ -786,7 +861,9 @@ async def outlook_delete_folder(ctx: Context, folder_id: str) -> dict:
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_folders.delete_folder(
-        client.sdk_client, folder_id, config=config,
+        client.sdk_client,
+        folder_id,
+        config=config,
     )
 
 
@@ -817,7 +894,10 @@ async def outlook_copy_message(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_thread.copy_message(
-        client.sdk_client, message_id, folder, config=config,
+        client.sdk_client,
+        message_id,
+        folder,
+        config=config,
     )
 
 
@@ -835,7 +915,11 @@ async def outlook_batch_triage(
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await batch.batch_triage(
-        client.sdk_client, message_ids, action, value, config=config,
+        client.sdk_client,
+        message_ids,
+        action,
+        value,
+        config=config,
     )
 
 
