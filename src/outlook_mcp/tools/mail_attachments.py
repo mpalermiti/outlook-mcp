@@ -74,38 +74,28 @@ async def download_attachment(
     graph_client: Any,
     message_id: str,
     attachment_id: str,
-    save_path: str | None = None,
+    save_path: str,
 ) -> dict:
     """Download an attachment.
 
     GET /me/messages/{id}/attachments/{att_id}
-    If save_path is None, returns base64 content in the response dict.
-    If save_path is provided, writes bytes to file and returns the path.
+    Decodes content, writes bytes to save_path, and returns the path.
     """
     message_id = validate_graph_id(message_id)
     attachment_id = validate_graph_id(attachment_id)
-
-    if save_path is not None:
-        _validate_save_path(save_path)
+    _validate_save_path(save_path)
 
     attachment = (
         await graph_client.me.messages.by_message_id(message_id)
         .attachments.by_attachment_id(attachment_id)
         .get()
     )
+    content = base64.b64decode(attachment.content_bytes.decode("utf-8"), validate=True)
 
-    if save_path is not None:
-        with open(save_path, "wb") as f:
-            f.write(attachment.content_bytes)
-        return {
-            "saved_to": save_path,
-            "name": attachment.name,
-            "size": attachment.size,
-            "content_type": attachment.content_type,
-        }
-
+    with open(save_path, "wb") as f:
+        f.write(content)
     return {
-        "content_base64": base64.b64encode(attachment.content_bytes).decode("utf-8"),
+        "saved_to": save_path,
         "name": attachment.name,
         "size": attachment.size,
         "content_type": attachment.content_type,

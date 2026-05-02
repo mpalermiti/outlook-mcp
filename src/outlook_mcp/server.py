@@ -733,9 +733,9 @@ async def outlook_download_attachment(
     ctx: Context,
     message_id: str,
     attachment_id: str,
-    save_path: str | None = None,
+    save_path: str,
 ) -> dict:
-    """Download an attachment. Returns base64 content or saves to file."""
+    """Download an attachment and save decoded bytes to a file."""
     client = _get_graph_client(ctx)
     return await mail_attachments.download_attachment(
         client.sdk_client,
