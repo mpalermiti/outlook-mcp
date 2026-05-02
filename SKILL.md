@@ -109,7 +109,7 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
 
 ### Attachments
 - `outlook_list_attachments` — List on a message
-- `outlook_download_attachment` — Download (base64 or save to file)
+- `outlook_download_attachment` — Download and save decoded bytes to a file
 - `outlook_send_with_attachments` — Send with files (auto upload session for >3MB)
 - `outlook_attach_to_draft` — Add attachments to an existing draft (auto upload session for >3MB)
 - `outlook_remove_draft_attachment` — Remove a single attachment from a draft
