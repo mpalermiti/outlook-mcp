@@ -4,6 +4,20 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `outlook_create_draft` and `outlook_update_draft` accept a
+  `deferred_send_datetime: str` parameter (ISO 8601). The value is set as
+  the legacy MAPI `PR_DEFERRED_SEND_TIME` extended property (`SystemTime
+  0x3FEF`); once the draft is sent (e.g. via `outlook_send_draft`),
+  Exchange holds the message server-side until the given UTC instant.
+  This is the same mechanism Outlook desktop uses for "Delay Delivery"
+  and runs server-side, so the client doesn't need to be online at the
+  scheduled time. On `update_draft`, passing an empty string clears the
+  property. Inputs are validated and normalized to UTC ISO 8601 (`Z`
+  form).
+
 ## [1.5.2] — 2026-04-29
 
 ### Documentation / positioning
