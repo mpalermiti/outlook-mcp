@@ -278,6 +278,51 @@ class TestUpdateDraft:
         assert result["draft_id"] == "AAMkAG123="
         msg_builder.patch.assert_called_once()
 
+    async def test_update_draft_body_defaults_to_text(self):
+        """update_draft sends body as Text by default."""
+        msg_builder = MagicMock()
+        msg_builder.patch = AsyncMock()
+
+        client = MagicMock()
+        client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
+
+        await update_draft(
+            client,
+            draft_id="AAMkAG123=",
+            body="plain text",
+            config=_CFG,
+        )
+
+        sent_msg = msg_builder.patch.call_args[0][0]
+        from msgraph.generated.models.body_type import BodyType
+
+        assert sent_msg.body.content == "plain text"
+        assert sent_msg.body.content_type == BodyType.Text
+
+    async def test_update_draft_body_html_when_is_html(self):
+        """update_draft sends body as Html when is_html=True (required for
+        drafts originally composed as HTML in the Outlook UI — Text PATCH on
+        an HTML draft triggers MapiSetProperties / ErrorAccessDenied)."""
+        msg_builder = MagicMock()
+        msg_builder.patch = AsyncMock()
+
+        client = MagicMock()
+        client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
+
+        await update_draft(
+            client,
+            draft_id="AAMkAG123=",
+            body="<p>hello</p>",
+            is_html=True,
+            config=_CFG,
+        )
+
+        sent_msg = msg_builder.patch.call_args[0][0]
+        from msgraph.generated.models.body_type import BodyType
+
+        assert sent_msg.body.content == "<p>hello</p>"
+        assert sent_msg.body.content_type == BodyType.Html
+
     async def test_update_draft_validates_graph_id(self):
         """update_draft rejects invalid draft IDs."""
         client = MagicMock()

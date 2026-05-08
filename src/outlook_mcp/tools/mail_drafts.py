@@ -169,6 +169,7 @@ async def update_draft(
     to: list[str] | None = None,
     cc: list[str] | None = None,
     reply_to: list[str] | None = None,
+    is_html: bool = False,
     deferred_send_datetime: str | None = None,
     *,
     config: Config,
@@ -177,6 +178,11 @@ async def update_draft(
 
     Sends a PATCH with only the provided fields.
     Validates draft_id and any email addresses.
+
+    Pass ``is_html=True`` when ``body`` is HTML. Required when overwriting a
+    draft that was originally created as HTML (e.g. composed in the Outlook
+    web/desktop UI) — PATCHing such a draft with a Text body is rejected by
+    the consumer-Outlook MAPI store with ErrorAccessDenied / MapiSetProperties.
 
     Pass ``deferred_send_datetime`` (ISO 8601) to set or replace the
     PR_DEFERRED_SEND_TIME extended property on the draft, scheduling it
@@ -199,7 +205,7 @@ async def update_draft(
 
         msg.body = ItemBody()
         msg.body.content = body
-        msg.body.content_type = BodyType.Text
+        msg.body.content_type = BodyType.Html if is_html else BodyType.Text
 
     if to is not None:
         from msgraph.generated.models.email_address import EmailAddress

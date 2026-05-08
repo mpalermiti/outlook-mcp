@@ -126,10 +126,19 @@ async def outlook_read_message(
     ctx: Context,
     message_id: str,
     format: str = "text",
+    include_deferred_send: bool = False,
 ) -> dict:
-    """Get full message by ID. Format: text, html, or full (both)."""
+    """Get full message by ID. Format: text, html, or full (both).
+
+    Pass ``include_deferred_send=True`` to surface the
+    PR_DEFERRED_SEND_TIME extended property as ``deferred_send_datetime``
+    in the response. Useful when you need to recreate a scheduled draft
+    (e.g. delete + create-fresh) and want to preserve its scheduled time.
+    """
     client = _get_graph_client(ctx)
-    return await mail_read.read_message(client.sdk_client, message_id, format)
+    return await mail_read.read_message(
+        client.sdk_client, message_id, format, include_deferred_send
+    )
 
 
 @mcp.tool()
@@ -692,12 +701,18 @@ async def outlook_update_draft(
     to: list[str] | None = None,
     cc: list[str] | None = None,
     reply_to: list[str] | None = None,
+    is_html: bool = False,
     deferred_send_datetime: str | None = None,
 ) -> dict:
     """Update an existing draft message.
 
     Pass ``reply_to=[...]`` to overwrite the draft's Reply-To addresses;
     pass ``reply_to=[]`` to clear them.
+
+    Pass ``is_html=True`` when ``body`` is HTML. Required when overwriting a
+    draft that was originally composed as HTML in the Outlook web/desktop UI
+    — PATCHing such a draft with a Text body is rejected by the
+    consumer-Outlook MAPI store with ErrorAccessDenied / MapiSetProperties.
 
     Pass ``deferred_send_datetime`` (ISO 8601) to set or replace the
     draft's PR_DEFERRED_SEND_TIME extended property — the value Exchange
@@ -714,6 +729,7 @@ async def outlook_update_draft(
         to,
         cc,
         reply_to=reply_to,
+        is_html=is_html,
         deferred_send_datetime=deferred_send_datetime,
         config=config,
     )

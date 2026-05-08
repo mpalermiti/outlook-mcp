@@ -154,11 +154,74 @@ async def read_message(
     graph_client: Any,
     message_id: str,
     format: str = "text",
+    include_deferred_send: bool = False,
 ) -> dict:
-    """Read a single message by ID."""
+    """Read a single message by ID.
+
+    Pass ``include_deferred_send=True`` to surface the
+    PR_DEFERRED_SEND_TIME extended property (the value Exchange reads to
+    schedule deferred delivery) as ``deferred_send_datetime`` in the
+    response. ``null`` if the property isn't set on the message.
+    """
     message_id = validate_graph_id(message_id)
 
-    msg = await graph_client.me.messages.by_message_id(message_id).get()
+    deferred_value: str | None = None
+
+    if include_deferred_send:
+        # PR_DEFERRED_SEND_TIME extended property fetch.
+        #
+        # Kiota's typed query-parameter encoder drops the inner
+        # `$filter` from `$expand=singleValueExtendedProperties($filter=...)`
+        # during URL building, so we build a raw URL via the
+        # RAW_URL_KEY path-parameter slot and let the adapter execute it
+        # through the normal auth + retry pipeline.
+        from urllib.parse import quote
+        from kiota_abstractions.method import Method
+        from kiota_abstractions.request_information import RequestInformation
+        from msgraph.generated.models.message import Message
+        from msgraph.generated.models.o_data_errors.o_data_error import ODataError
+
+        from outlook_mcp.tools.mail_drafts import _PR_DEFERRED_SEND_TIME_ID
+
+        adapter = graph_client.me.messages.by_message_id(
+            message_id
+        ).request_adapter
+        filter_expr = f"id eq '{_PR_DEFERRED_SEND_TIME_ID}'"
+        # Keep `=`, space, and single quotes literal — Graph requires
+        # them in the $filter clause and they're safe inside a query
+        # parameter value. Hex/special chars in the property tag still
+        # get percent-encoded.
+        encoded_filter = quote(filter_expr, safe="= '")
+        raw_url = (
+            f"{adapter.base_url}/me/messages/{quote(message_id, safe='')}"
+            f"?$expand=singleValueExtendedProperties("
+            f"$filter={encoded_filter})"
+        )
+
+        info = RequestInformation()
+        info.http_method = Method.GET
+        info.path_parameters = {RequestInformation.RAW_URL_KEY: raw_url}
+        info.url_template = "{+baseurl}"
+        info.headers.try_add("Accept", "application/json")
+        msg = await adapter.send_async(
+            info,
+            Message,
+            {
+                "4XX": ODataError,
+                "5XX": ODataError,
+            },
+        )
+
+        # Graph normalizes the property tag's hex segment to lowercase
+        # in the response (`SystemTime 0x3fef`), even when we POST/PATCH
+        # it as uppercase. Case-insensitive match.
+        target = _PR_DEFERRED_SEND_TIME_ID.lower()
+        for prop in msg.single_value_extended_properties or []:
+            if (prop.id or "").lower() == target:
+                deferred_value = prop.value
+                break
+    else:
+        msg = await graph_client.me.messages.by_message_id(message_id).get()
 
     from_addr = ""
     from_name = ""
@@ -207,7 +270,7 @@ async def read_message(
     if msg.flag and msg.flag.flag_status and hasattr(msg.flag.flag_status, "value"):
         flag_status = msg.flag.flag_status.value
 
-    return {
+    result = {
         "id": msg.id,
         "subject": sanitize_output(msg.subject or "(no subject)"),
         "from_email": from_addr,
@@ -225,6 +288,11 @@ async def read_message(
         "flag": flag_status,
         "conversation_id": msg.conversation_id or "",
     }
+
+    if include_deferred_send:
+        result["deferred_send_datetime"] = deferred_value
+
+    return result
 
 
 async def search_mail(
