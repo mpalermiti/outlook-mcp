@@ -176,6 +176,7 @@ async def read_message(
         # RAW_URL_KEY path-parameter slot and let the adapter execute it
         # through the normal auth + retry pipeline.
         from urllib.parse import quote
+
         from kiota_abstractions.method import Method
         from kiota_abstractions.request_information import RequestInformation
         from msgraph.generated.models.message import Message
