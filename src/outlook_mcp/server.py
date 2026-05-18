@@ -126,10 +126,19 @@ async def outlook_read_message(
     ctx: Context,
     message_id: str,
     format: str = "text",
+    include_deferred_send: bool = False,
 ) -> dict:
-    """Get full message by ID. Format: text, html, or full (both)."""
+    """Get full message by ID. Format: text, html, or full (both).
+
+    Pass ``include_deferred_send=True`` to surface the
+    PR_DEFERRED_SEND_TIME extended property as ``deferred_send_datetime``
+    in the response. Useful when you need to recreate a scheduled draft
+    (e.g. delete + create-fresh) and want to preserve its scheduled time.
+    """
     client = _get_graph_client(ctx)
-    return await mail_read.read_message(client.sdk_client, message_id, format)
+    return await mail_read.read_message(
+        client.sdk_client, message_id, format, include_deferred_send
+    )
 
 
 @mcp.tool()
@@ -652,10 +661,19 @@ async def outlook_create_draft(
     is_html: bool = False,
     importance: str = "normal",
     reply_to: list[str] | None = None,
+    deferred_send_datetime: str | None = None,
 ) -> dict:
     """Create a draft message in the Drafts folder.
 
     Pass ``reply_to`` to pre-populate the draft's Reply-To addresses.
+
+    Pass ``deferred_send_datetime`` (ISO 8601, e.g.
+    ``"2026-05-06T08:00:00Z"``) to schedule the draft for delayed
+    delivery via the PR_DEFERRED_SEND_TIME extended property. Once the
+    draft is sent (e.g. with ``outlook_send_draft``), Exchange holds the
+    message server-side until that instant — the client doesn't need to
+    be online at the scheduled time. Match Outlook desktop's "Delay
+    Delivery" feature.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -669,6 +687,7 @@ async def outlook_create_draft(
         is_html,
         importance,
         reply_to=reply_to,
+        deferred_send_datetime=deferred_send_datetime,
         config=config,
     )
 
@@ -682,11 +701,23 @@ async def outlook_update_draft(
     to: list[str] | None = None,
     cc: list[str] | None = None,
     reply_to: list[str] | None = None,
+    is_html: bool = False,
+    deferred_send_datetime: str | None = None,
 ) -> dict:
     """Update an existing draft message.
 
     Pass ``reply_to=[...]`` to overwrite the draft's Reply-To addresses;
     pass ``reply_to=[]`` to clear them.
+
+    Pass ``is_html=True`` when ``body`` is HTML. Required when overwriting a
+    draft that was originally composed as HTML in the Outlook web/desktop UI
+    — PATCHing such a draft with a Text body is rejected by the
+    consumer-Outlook MAPI store with ErrorAccessDenied / MapiSetProperties.
+
+    Pass ``deferred_send_datetime`` (ISO 8601) to set or replace the
+    draft's PR_DEFERRED_SEND_TIME extended property — the value Exchange
+    reads to schedule delayed delivery once the draft is sent. Pass an
+    empty string to clear a previously-set deferred send time.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -698,6 +729,8 @@ async def outlook_update_draft(
         to,
         cc,
         reply_to=reply_to,
+        is_html=is_html,
+        deferred_send_datetime=deferred_send_datetime,
         config=config,
     )
 

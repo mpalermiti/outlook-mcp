@@ -197,6 +197,66 @@ class TestCreateDraft:
                 config=_CFG,
             )
 
+    async def test_create_draft_sets_deferred_send_property(self):
+        """create_draft attaches PR_DEFERRED_SEND_TIME extended property."""
+        created_msg = MagicMock()
+        created_msg.id = "AAMkDeferred="
+
+        client = MagicMock()
+        client.me.messages.post = AsyncMock(return_value=created_msg)
+
+        result = await create_draft(
+            client,
+            to=["to@test.com"],
+            subject="Scheduled",
+            body="Hello",
+            deferred_send_datetime="2026-05-06T08:00:00Z",
+            config=_CFG,
+        )
+
+        posted_msg = client.me.messages.post.call_args.args[0]
+        assert posted_msg.single_value_extended_properties is not None
+        assert len(posted_msg.single_value_extended_properties) == 1
+        prop = posted_msg.single_value_extended_properties[0]
+        assert prop.id == "SystemTime 0x3FEF"
+        assert prop.value == "2026-05-06T08:00:00Z"
+        assert result["deferred_send_datetime"] == "2026-05-06T08:00:00Z"
+
+    async def test_create_draft_normalizes_timezone_offset(self):
+        """create_draft normalizes a TZ-offset datetime to UTC Z form."""
+        created_msg = MagicMock()
+        created_msg.id = "AAMkDeferredTZ="
+
+        client = MagicMock()
+        client.me.messages.post = AsyncMock(return_value=created_msg)
+
+        # 10:00 in Helsinki (DST, +03:00) -> 07:00 UTC
+        result = await create_draft(
+            client,
+            to=["to@test.com"],
+            subject="Scheduled",
+            body="Hello",
+            deferred_send_datetime="2026-05-06T10:00:00+03:00",
+            config=_CFG,
+        )
+
+        assert result["deferred_send_datetime"] == "2026-05-06T07:00:00Z"
+        prop = client.me.messages.post.call_args.args[0].single_value_extended_properties[0]
+        assert prop.value == "2026-05-06T07:00:00Z"
+
+    async def test_create_draft_rejects_malformed_deferred_send(self):
+        """create_draft rejects non-ISO deferred_send_datetime values."""
+        client = MagicMock()
+        with pytest.raises(ValueError):
+            await create_draft(
+                client,
+                to=["to@test.com"],
+                subject="Test",
+                body="Hello",
+                deferred_send_datetime="tomorrow at 8",
+                config=_CFG,
+            )
+
 
 class TestUpdateDraft:
     async def test_update_draft_patches_partial(self):
@@ -217,6 +277,51 @@ class TestUpdateDraft:
         assert result["status"] == "updated"
         assert result["draft_id"] == "AAMkAG123="
         msg_builder.patch.assert_called_once()
+
+    async def test_update_draft_body_defaults_to_text(self):
+        """update_draft sends body as Text by default."""
+        msg_builder = MagicMock()
+        msg_builder.patch = AsyncMock()
+
+        client = MagicMock()
+        client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
+
+        await update_draft(
+            client,
+            draft_id="AAMkAG123=",
+            body="plain text",
+            config=_CFG,
+        )
+
+        sent_msg = msg_builder.patch.call_args[0][0]
+        from msgraph.generated.models.body_type import BodyType
+
+        assert sent_msg.body.content == "plain text"
+        assert sent_msg.body.content_type == BodyType.Text
+
+    async def test_update_draft_body_html_when_is_html(self):
+        """update_draft sends body as Html when is_html=True (required for
+        drafts originally composed as HTML in the Outlook UI — Text PATCH on
+        an HTML draft triggers MapiSetProperties / ErrorAccessDenied)."""
+        msg_builder = MagicMock()
+        msg_builder.patch = AsyncMock()
+
+        client = MagicMock()
+        client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
+
+        await update_draft(
+            client,
+            draft_id="AAMkAG123=",
+            body="<p>hello</p>",
+            is_html=True,
+            config=_CFG,
+        )
+
+        sent_msg = msg_builder.patch.call_args[0][0]
+        from msgraph.generated.models.body_type import BodyType
+
+        assert sent_msg.body.content == "<p>hello</p>"
+        assert sent_msg.body.content_type == BodyType.Html
 
     async def test_update_draft_validates_graph_id(self):
         """update_draft rejects invalid draft IDs."""
@@ -288,6 +393,61 @@ class TestUpdateDraft:
                 client,
                 draft_id="AAMkAG123=",
                 reply_to=["bogus"],
+                config=_CFG,
+            )
+
+    async def test_update_draft_sets_deferred_send_property(self):
+        """update_draft attaches PR_DEFERRED_SEND_TIME on the PATCH payload."""
+        msg_builder = MagicMock()
+        msg_builder.patch = AsyncMock()
+
+        client = MagicMock()
+        client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
+
+        result = await update_draft(
+            client,
+            draft_id="AAMkAG123=",
+            deferred_send_datetime="2026-05-06T08:00:00Z",
+            config=_CFG,
+        )
+
+        patched_msg = msg_builder.patch.call_args.args[0]
+        props = patched_msg.single_value_extended_properties
+        assert props is not None and len(props) == 1
+        assert props[0].id == "SystemTime 0x3FEF"
+        assert props[0].value == "2026-05-06T08:00:00Z"
+        assert result["deferred_send_datetime"] == "2026-05-06T08:00:00Z"
+
+    async def test_update_draft_clears_deferred_send_with_empty_string(self):
+        """update_draft with deferred_send_datetime='' clears the property."""
+        msg_builder = MagicMock()
+        msg_builder.patch = AsyncMock()
+
+        client = MagicMock()
+        client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
+
+        result = await update_draft(
+            client,
+            draft_id="AAMkAG123=",
+            deferred_send_datetime="",
+            config=_CFG,
+        )
+
+        patched_msg = msg_builder.patch.call_args.args[0]
+        props = patched_msg.single_value_extended_properties
+        assert props is not None and len(props) == 1
+        assert props[0].id == "SystemTime 0x3FEF"
+        assert props[0].value == ""
+        assert result["deferred_send_datetime"] == ""
+
+    async def test_update_draft_rejects_malformed_deferred_send(self):
+        """update_draft rejects non-ISO deferred_send_datetime values."""
+        client = MagicMock()
+        with pytest.raises(ValueError):
+            await update_draft(
+                client,
+                draft_id="AAMkAG123=",
+                deferred_send_datetime="not-a-date",
                 config=_CFG,
             )
 
