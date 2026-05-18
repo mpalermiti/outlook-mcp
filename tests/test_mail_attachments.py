@@ -85,37 +85,15 @@ class TestListAttachments:
 
 
 class TestDownloadAttachment:
-    async def test_download_returns_base64(self):
-        """download_attachment returns base64 content when no save_path."""
+    async def test_download_writes_decoded_content_to_path(self, tmp_path):
+        """download_attachment decodes Graph contentBytes to file."""
+        raw_content = b"%PDF-1.7\nfile content bytes"
         mock_att = MagicMock()
         mock_att.id = "att1"
         mock_att.name = "report.pdf"
-        mock_att.size = 1024
+        mock_att.size = len(raw_content)
         mock_att.content_type = "application/pdf"
-        mock_att.content_bytes = b"file content bytes"
-
-        mock_client = MagicMock()
-        mock_client.me.messages.by_message_id.return_value.attachments.by_attachment_id.return_value.get = AsyncMock(  # noqa: E501
-            return_value=mock_att
-        )
-
-        result = await download_attachment(
-            mock_client, message_id="AAMkAG123=", attachment_id="att1"
-        )
-        expected_b64 = base64.b64encode(b"file content bytes").decode("utf-8")
-        assert result["content_base64"] == expected_b64
-        assert result["name"] == "report.pdf"
-        assert result["content_type"] == "application/pdf"
-        assert result["size"] == 1024
-
-    async def test_download_writes_to_path(self, tmp_path):
-        """download_attachment writes bytes to file when save_path given."""
-        mock_att = MagicMock()
-        mock_att.id = "att1"
-        mock_att.name = "report.pdf"
-        mock_att.size = 18
-        mock_att.content_type = "application/pdf"
-        mock_att.content_bytes = b"file content bytes"
+        mock_att.content_bytes = base64.b64encode(raw_content)
 
         mock_client = MagicMock()
         mock_client.me.messages.by_message_id.return_value.attachments.by_attachment_id.return_value.get = AsyncMock(  # noqa: E501
@@ -132,19 +110,29 @@ class TestDownloadAttachment:
         assert result["saved_to"] == save_path
         assert os.path.isfile(save_path)
         with open(save_path, "rb") as f:
-            assert f.read() == b"file content bytes"
+            assert f.read() == raw_content
 
     async def test_download_validates_message_id(self):
         """download_attachment rejects invalid message ID."""
         mock_client = MagicMock()
         with pytest.raises(ValueError):
-            await download_attachment(mock_client, message_id="", attachment_id="att1")
+            await download_attachment(
+                mock_client,
+                message_id="",
+                attachment_id="att1",
+                save_path="/tmp/report.pdf",
+            )
 
     async def test_download_validates_attachment_id(self):
         """download_attachment rejects invalid attachment ID."""
         mock_client = MagicMock()
         with pytest.raises(ValueError):
-            await download_attachment(mock_client, message_id="AAMkAG123=", attachment_id="")
+            await download_attachment(
+                mock_client,
+                message_id="AAMkAG123=",
+                attachment_id="",
+                save_path="/tmp/report.pdf",
+            )
 
     async def test_download_rejects_path_traversal(self):
         """download_attachment rejects save_path with .. traversal."""

@@ -309,7 +309,7 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 | Tool | Description |
 |------|-------------|
 | `outlook_list_attachments` | List attachments on a message. |
-| `outlook_download_attachment` | Download attachment (base64 or save to file). |
+| `outlook_download_attachment` | Download attachment and save decoded bytes to a file. |
 | `outlook_send_with_attachments` | Send message with file attachments (auto upload session for >3MB). |
 | `outlook_attach_to_draft` | Add attachments to an existing draft (auto upload session for >3MB). |
 | `outlook_remove_draft_attachment` | Remove a single attachment from a draft. |
