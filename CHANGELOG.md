@@ -16,7 +16,37 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and runs server-side, so the client doesn't need to be online at the
   scheduled time. On `update_draft`, passing an empty string clears the
   property. Inputs are validated and normalized to UTC ISO 8601 (`Z`
-  form).
+  form). ([#10])
+- `outlook_update_draft` accepts `is_html: bool = False`. Required when
+  overwriting a draft originally composed as HTML in the Outlook
+  web/desktop UI — PATCHing such a draft with a Text body is rejected
+  by the consumer-Outlook MAPI store with `ErrorAccessDenied` /
+  `MapiSetProperties`. Default stays Text for back-compat. ([#10])
+- `outlook_read_message` accepts `include_deferred_send: bool = False`.
+  When `True`, surfaces the `PR_DEFERRED_SEND_TIME` extended property as
+  `deferred_send_datetime` in the response (`null` if not set). Enables
+  read-then-recreate workflows that preserve a draft's scheduled send
+  time. ([#10])
+
+### Fixed
+- `outlook_download_attachment` was writing Microsoft Graph's
+  base64-encoded `contentBytes` straight to disk, producing a base64
+  text file instead of the actual binary. The tool now decodes the
+  content before writing. Reported and fixed by @andylokandy. ([#9])
+
+### Changed (breaking)
+- `outlook_download_attachment` no longer accepts `save_path=None` and no
+  longer returns `content_base64` in the response. `save_path` is now
+  required and the tool always writes decoded bytes to that path,
+  returning `{saved_to, name, size, content_type}`. The in-memory base64
+  return path was the wrong paradigm for attachments — large binaries
+  through the MCP message channel burn LLM context tokens — and the
+  on-disk path was the buggy one (see Fixed). If you were relying on
+  `content_base64`, switch to passing `save_path` and reading the file.
+  ([#9])
+
+[#9]: https://github.com/mpalermiti/outlook-mcp/pull/9
+[#10]: https://github.com/mpalermiti/outlook-mcp/pull/10
 
 ## [1.5.2] — 2026-04-29
 
