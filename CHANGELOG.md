@@ -6,6 +6,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-05-17
+
+Documentation-only release. Functionally identical to 1.6.0; no code changes. Cut to refresh the README that ships on the PyPI project page.
+
+### Documentation
+- Privacy & Security section corrected to describe the actual platform-by-platform token storage behavior after 1.6.0's libsecret-fallback fix (#8, #12). The previous unconditional "no tokens are written to disk in plaintext" claim is accurate on macOS Keychain, Windows DPAPI, and Linux with libsecret — but not on Linux without (e.g. `uv tool install` on Ubuntu, the failure mode reported in #7). The new text spells out each path and the one-time warning behavior.
+- Tool Reference tables in README updated to document the parameters added in 1.6.0: `deferred_send_datetime` on create/update draft, `is_html` on update draft, and `include_deferred_send` on read message.
+
 ## [1.6.0] — 2026-05-17
 
 ### Added
