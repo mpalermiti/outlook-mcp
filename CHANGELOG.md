@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-05-17
+
 ### Added
 - `outlook_create_draft` and `outlook_update_draft` accept a
   `deferred_send_datetime: str` parameter (ISO 8601). The value is set as
