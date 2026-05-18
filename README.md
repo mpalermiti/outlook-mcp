@@ -233,7 +233,7 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 | Tool | Description |
 |------|-------------|
 | `outlook_list_inbox` | List messages in a folder. `folder` accepts display names, well-known names, or Graph IDs. Filter by read status, sender, date range, Focused Inbox classification. Pagination via `skip`. |
-| `outlook_read_message` | Get full message by ID. Format: `text`, `html`, or `full` (both). |
+| `outlook_read_message` | Get full message by ID. Format: `text`, `html`, or `full` (both). Pass `include_deferred_send=True` to also surface the draft's scheduled delivery time. |
 | `outlook_search_mail` | Search mail using KQL query. Optionally scope to a folder by name or ID. |
 | `outlook_list_folders` | List mail folders with counts, `parent_id`, and `child_count`. Pass `recursive=true` to walk the full folder tree (subfolders included). |
 
@@ -299,8 +299,8 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 | Tool | Description |
 |------|-------------|
 | `outlook_list_drafts` | List draft messages with pagination. |
-| `outlook_create_draft` | Create a draft for later review and sending. |
-| `outlook_update_draft` | Update draft fields. |
+| `outlook_create_draft` | Create a draft. Supports scheduled delivery via `deferred_send_datetime` (server-side, Outlook-desktop-compatible "Delay Delivery"). |
+| `outlook_update_draft` | Update draft fields. Accepts `is_html=True` for HTML bodies and `deferred_send_datetime` to set or clear the scheduled delivery time. |
 | `outlook_send_draft` | Send an existing draft. |
 | `outlook_delete_draft` | Delete a draft. |
 
@@ -406,7 +406,7 @@ When `allow_categories` is set, any tool in a non-allowed category returns a per
 - **Zero telemetry.** No analytics, no tracking, no usage data collected.
 - **Zero local caching.** Every call goes directly to Microsoft Graph. No local email/calendar storage.
 - **Zero third-party calls.** The server only talks to `graph.microsoft.com` and `login.microsoftonline.com`.
-- **Token storage.** OAuth tokens are stored in your OS keyring via `azure-identity` (`TokenCachePersistenceOptions`). On macOS this is Keychain. No tokens are written to disk in plaintext.
+- **Token storage.** OAuth tokens are persisted via `azure-identity`'s `TokenCachePersistenceOptions`. On macOS the OS Keychain is used; on Windows, DPAPI; on Linux with PyGObject/libsecret available, gnome-keyring. On Linux *without* libsecret (e.g. the isolated venv created by `uv tool install`), tokens fall back to a `0600` plaintext file at `~/.IdentityService/` and the MCP logs a one-time warning at startup. For encrypted storage on Linux, install `python3-gi gnome-keyring libsecret-1-0` and re-create the venv with `--system-site-packages`.
 - **No logging of sensitive data.** Message bodies, recipient addresses, and tokens are never logged.
 - **Config permissions.** Config directory is `0700`, config file is `0600`. Symlinked configs are rejected.
 - **Input validation.** All user inputs (email addresses, Graph IDs, OData filters, KQL queries, datetimes) are validated and sanitized before reaching the Graph API.
