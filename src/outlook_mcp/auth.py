@@ -93,7 +93,10 @@ class AuthManager:
         auth_record: AuthenticationRecord | None = None,
     ) -> DeviceCodeCredential:
         """Create a DeviceCodeCredential with persistent cache."""
-        cache_options = TokenCachePersistenceOptions(name=CACHE_NAME)
+        cache_options = TokenCachePersistenceOptions(
+            name=CACHE_NAME,
+            allow_unencrypted_storage=True,
+        )
         kwargs = {
             "client_id": self.config.client_id,
             "tenant_id": self.config.tenant_id,
