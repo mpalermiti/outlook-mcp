@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import logging
+import sys
 from pathlib import Path
 
 from azure.identity import (
@@ -15,6 +17,11 @@ from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config
 from outlook_mcp.errors import AuthRequiredError
 
 logger = logging.getLogger(__name__)
+
+# Process-local latch so the unencrypted-fallback warning fires at most
+# once per run — _make_credential is called from both login_interactive
+# and try_cached_token, often multiple times during startup.
+_warned_unencrypted_fallback = False
 
 SCOPES_READWRITE = [
     "Mail.ReadWrite",
@@ -35,6 +42,21 @@ SCOPES_READONLY = [
 
 CACHE_NAME = "outlook-mcp"
 AUTH_RECORD_FILE = "auth_record.json"
+
+
+def _unencrypted_fallback_will_be_used() -> bool:
+    """Return True if msal_extensions will fall back to plaintext caching.
+
+    Mirrors msal_extensions' libsecret-availability check: macOS uses
+    Keychain and Windows uses DPAPI, both always encrypted, so only
+    Linux is at risk — and only when PyGObject/libsecret isn't
+    importable in the current Python environment (the failure mode
+    reported in #7 for `uv tool install`).
+    """
+    if sys.platform != "linux":
+        return False
+    return importlib.util.find_spec("gi") is None
+
 
 # The Graph SDK always requests .default scope internally, so we must
 # acquire and cache tokens with the same scope to avoid cache misses
@@ -93,10 +115,24 @@ class AuthManager:
         auth_record: AuthenticationRecord | None = None,
     ) -> DeviceCodeCredential:
         """Create a DeviceCodeCredential with persistent cache."""
+        global _warned_unencrypted_fallback
         cache_options = TokenCachePersistenceOptions(
             name=CACHE_NAME,
             allow_unencrypted_storage=True,
         )
+        if not _warned_unencrypted_fallback and _unencrypted_fallback_will_be_used():
+            logger.warning(
+                "Token cache will be stored unencrypted on disk because "
+                "PyGObject/libsecret is not importable in this Python "
+                "environment (common with `uv tool install` on Linux — "
+                "the tool's isolated venv can't see system PyGObject). "
+                "To enable encrypted caching via libsecret/gnome-keyring, "
+                "install the system packages "
+                "(apt: `gnome-keyring libsecret-1-0 python3-gi`) and "
+                "re-create the venv with `--system-site-packages`. See "
+                "https://github.com/mpalermiti/outlook-mcp/issues/7."
+            )
+            _warned_unencrypted_fallback = True
         kwargs = {
             "client_id": self.config.client_id,
             "tenant_id": self.config.tenant_id,
@@ -124,9 +160,7 @@ class AuthManager:
                 "client_id in ~/.outlook-mcp/config.json."
             )
 
-        def _on_device_code(
-            verification_uri: str, user_code: str, expires_on: object
-        ) -> None:
+        def _on_device_code(verification_uri: str, user_code: str, expires_on: object) -> None:
             print(f"Visit:  {verification_uri}")
             print(f"Code:   {user_code}")
             print()

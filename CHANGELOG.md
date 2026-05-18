@@ -45,6 +45,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `content_base64`, switch to passing `save_path` and reading the file.
   ([#9])
 
+### Changed
+- The unencrypted token-cache fallback enabled in #8 now emits a
+  one-time `logger.warning(...)` on the first credential build when
+  PyGObject/libsecret isn't importable. macOS Keychain and Windows
+  DPAPI still cache encrypted as before; only Linux installs without
+  PyGObject (e.g. `uv tool install` on Ubuntu — issue #7) take the
+  plaintext path, and now surface that fact to operators instead of
+  silently writing tokens to disk.
+
 [#9]: https://github.com/mpalermiti/outlook-mcp/pull/9
 [#10]: https://github.com/mpalermiti/outlook-mcp/pull/10
 
