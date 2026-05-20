@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from outlook_mcp.config import Config
 from outlook_mcp.permissions import CATEGORY_MAILBOX_SETTINGS, check_permission
-from outlook_mcp.validation import sanitize_output
 
 
 async def get_timezone(graph_client: Any) -> dict:
@@ -39,9 +39,11 @@ async def set_timezone(
     check_permission(config, CATEGORY_MAILBOX_SETTINGS, "outlook_set_timezone")
 
     if not timezone or not timezone.strip():
-        raise ValueError("timezone must not be empty or whitespace")
-
-    timezone = sanitize_output(timezone).strip()
+        raise ValueError("timezone must not be empty")
+    if re.search(r"[\x00-\x1f\x7f]", timezone):
+        raise ValueError("timezone contains control characters")
+    timezone = timezone.strip()
+    # (do NOT call sanitize_output — Graph will reject unknown zones)
 
     from msgraph.generated.models.mailbox_settings import MailboxSettings
 

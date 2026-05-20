@@ -75,6 +75,13 @@ class TestSetTimezone:
         with pytest.raises(ValueError):
             await set_timezone(mock_client, timezone="   ", config=_CFG)
 
+    @pytest.mark.asyncio
+    async def test_rejects_control_characters(self):
+        client = MagicMock()
+        client.me.mailbox_settings.patch = AsyncMock()
+        with pytest.raises(ValueError, match="control"):
+            await set_timezone(client, "America/\x00Los_Angeles", config=_CFG)
+
     async def test_raises_read_only(self):
         """set_timezone raises ReadOnlyError when config.read_only=True."""
         mock_client = MagicMock()
