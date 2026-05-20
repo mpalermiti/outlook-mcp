@@ -23,10 +23,7 @@ logger = logging.getLogger(__name__)
 # and try_cached_token, often multiple times during startup.
 _warned_unencrypted_fallback = False
 
-# These lists are only surfaced for consent display via `get_scopes()`;
-# actual token acquisition still uses `.default` (see GRAPH_DEFAULT_SCOPE
-# below), so changes here are a documentation/UX change. Re-running
-# `outlook-mcp auth` will request the updated consent set.
+# Display-only; token acquisition uses .default (GRAPH_DEFAULT_SCOPE below).
 SCOPES_READWRITE = [
     "Mail.ReadWrite",
     "Mail.Send",
