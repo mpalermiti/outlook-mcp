@@ -23,6 +23,7 @@ from outlook_mcp.tools import (
     mail_thread,
     mail_triage,
     mail_write,
+    mailbox_settings,
     todo,
     user,
 )
@@ -971,6 +972,35 @@ async def outlook_list_calendars(ctx: Context) -> dict:
     """List all calendars for the current user."""
     client = _get_graph_client(ctx)
     return await user.list_calendars(client.sdk_client)
+
+
+# ── Mailbox Settings ──────────────────────────────────
+
+
+@mcp.tool()
+async def outlook_get_timezone(ctx: Context) -> dict:
+    """Get the server-side mailbox timezone (from Microsoft Graph /me/mailboxSettings).
+
+    This is the timezone Exchange uses for calendar items and auto-reply
+    scheduling — distinct from the local ``config.timezone`` used by this
+    server for relative-date math on user input. Returns an empty string when
+    the mailbox has no timezone configured.
+    """
+    client = _get_graph_client(ctx)
+    return await mailbox_settings.get_timezone(client.sdk_client)
+
+
+@mcp.tool()
+async def outlook_set_timezone(ctx: Context, timezone: str) -> dict:
+    """Set the server-side mailbox timezone via /me/mailboxSettings.
+
+    Accepts IANA names ("America/Los_Angeles") or Windows display names
+    ("Pacific Standard Time"). Microsoft Graph validates the value — unknown
+    zones are rejected upstream.
+    """
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await mailbox_settings.set_timezone(client.sdk_client, timezone, config=config)
 
 
 # ── Admin Tools ────────────────────────────────────────
