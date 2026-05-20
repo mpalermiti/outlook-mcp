@@ -155,6 +155,7 @@ class TestSetInboxOverride:
         item_builder.patch.assert_called_once()
         body = item_builder.patch.call_args[0][0]
         assert body.classify_as == InferenceClassificationType.Focused
+        overrides_builder.post.assert_not_called()
 
         assert result == {
             "status": "updated",

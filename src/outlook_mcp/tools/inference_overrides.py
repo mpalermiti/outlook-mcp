@@ -69,6 +69,9 @@ async def set_inbox_override(
     Graph rejects a POST when an override for that sender already exists, so
     this lists existing overrides first and PATCHes when a case-insensitive
     sender match is found.
+
+    Race: a concurrent delete between list and PATCH surfaces as a 404 from
+    Graph; caller can retry.
     """
     check_permission(config, CATEGORY_MAIL_TRIAGE, "outlook_set_inbox_override")
 
@@ -90,6 +93,7 @@ async def set_inbox_override(
     needle = sender_email.lower()
 
     existing = None
+    # Graph contract: at most one override per sender; first match wins.
     for ov in existing_values:
         email = getattr(ov, "sender_email_address", None)
         address = getattr(email, "address", None) if email else None
