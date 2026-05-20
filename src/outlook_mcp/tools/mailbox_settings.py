@@ -66,26 +66,185 @@ async def set_timezone(
 # ── Auto-reply (OOF) ─────────────────────────────────
 
 
-_STATUS_ENUM_TO_STR = {
-    "Disabled": "disabled",
-    "AlwaysEnabled": "always",
-    "Scheduled": "scheduled",
-}
+def _status_pairs():
+    """Single source of truth for (string, enum) status pairs.
 
-_AUDIENCE_ENUM_TO_STR = {
-    "None_": "none",
-    "ContactsOnly": "contacts_only",
-    "All": "all",
+    Lazy import keeps `msgraph` out of the module-import path so the rest of
+    the file (and its tests) stay fast to import.
+    """
+    from msgraph.generated.models.automatic_replies_status import AutomaticRepliesStatus
+
+    return (
+        ("disabled", AutomaticRepliesStatus.Disabled),
+        ("always", AutomaticRepliesStatus.AlwaysEnabled),
+        ("scheduled", AutomaticRepliesStatus.Scheduled),
+    )
+
+
+def _audience_pairs():
+    """Single source of truth for (string, enum) audience pairs."""
+    from msgraph.generated.models.external_audience_scope import ExternalAudienceScope
+
+    return (
+        ("none", ExternalAudienceScope.None_),
+        ("contacts_only", ExternalAudienceScope.ContactsOnly),
+        ("all", ExternalAudienceScope.All),
+    )
+
+
+# CLDR windowsZones canonical mapping (subset). Outlook.com mailboxes
+# default to Windows display names; zoneinfo only ships IANA, so we
+# translate the common ones before falling back.
+_WINDOWS_TO_IANA = {
+    "Dateline Standard Time": "Etc/GMT+12",
+    "UTC-11": "Etc/GMT+11",
+    "Aleutian Standard Time": "America/Adak",
+    "Hawaiian Standard Time": "Pacific/Honolulu",
+    "Marquesas Standard Time": "Pacific/Marquesas",
+    "Alaskan Standard Time": "America/Anchorage",
+    "UTC-09": "Etc/GMT+9",
+    "Pacific Standard Time (Mexico)": "America/Tijuana",
+    "UTC-08": "Etc/GMT+8",
+    "Pacific Standard Time": "America/Los_Angeles",
+    "US Mountain Standard Time": "America/Phoenix",
+    "Mountain Standard Time (Mexico)": "America/Chihuahua",
+    "Mountain Standard Time": "America/Denver",
+    "Central America Standard Time": "America/Guatemala",
+    "Central Standard Time": "America/Chicago",
+    "Easter Island Standard Time": "Pacific/Easter",
+    "Central Standard Time (Mexico)": "America/Mexico_City",
+    "Canada Central Standard Time": "America/Regina",
+    "SA Pacific Standard Time": "America/Bogota",
+    "Eastern Standard Time (Mexico)": "America/Cancun",
+    "Eastern Standard Time": "America/New_York",
+    "Haiti Standard Time": "America/Port-au-Prince",
+    "Cuba Standard Time": "America/Havana",
+    "US Eastern Standard Time": "America/Indianapolis",
+    "Turks And Caicos Standard Time": "America/Grand_Turk",
+    "Paraguay Standard Time": "America/Asuncion",
+    "Atlantic Standard Time": "America/Halifax",
+    "Venezuela Standard Time": "America/Caracas",
+    "Central Brazilian Standard Time": "America/Cuiaba",
+    "SA Western Standard Time": "America/La_Paz",
+    "Pacific SA Standard Time": "America/Santiago",
+    "Newfoundland Standard Time": "America/St_Johns",
+    "Tocantins Standard Time": "America/Araguaina",
+    "E. South America Standard Time": "America/Sao_Paulo",
+    "SA Eastern Standard Time": "America/Cayenne",
+    "Argentina Standard Time": "America/Buenos_Aires",
+    "Greenland Standard Time": "America/Godthab",
+    "Montevideo Standard Time": "America/Montevideo",
+    "Magallanes Standard Time": "America/Punta_Arenas",
+    "Saint Pierre Standard Time": "America/Miquelon",
+    "Bahia Standard Time": "America/Bahia",
+    "UTC-02": "Etc/GMT+2",
+    "Azores Standard Time": "Atlantic/Azores",
+    "Cape Verde Standard Time": "Atlantic/Cape_Verde",
+    "UTC": "Etc/UTC",
+    "GMT Standard Time": "Europe/London",
+    "Greenwich Standard Time": "Atlantic/Reykjavik",
+    "W. Europe Standard Time": "Europe/Berlin",
+    "Central Europe Standard Time": "Europe/Budapest",
+    "Romance Standard Time": "Europe/Paris",
+    "Morocco Standard Time": "Africa/Casablanca",
+    "Sao Tome Standard Time": "Africa/Sao_Tome",
+    "Central European Standard Time": "Europe/Warsaw",
+    "W. Central Africa Standard Time": "Africa/Lagos",
+    "Jordan Standard Time": "Asia/Amman",
+    "GTB Standard Time": "Europe/Bucharest",
+    "Middle East Standard Time": "Asia/Beirut",
+    "Egypt Standard Time": "Africa/Cairo",
+    "E. Europe Standard Time": "Europe/Chisinau",
+    "Syria Standard Time": "Asia/Damascus",
+    "West Bank Standard Time": "Asia/Hebron",
+    "South Africa Standard Time": "Africa/Johannesburg",
+    "FLE Standard Time": "Europe/Kiev",
+    "Israel Standard Time": "Asia/Jerusalem",
+    "South Sudan Standard Time": "Africa/Juba",
+    "Kaliningrad Standard Time": "Europe/Kaliningrad",
+    "Sudan Standard Time": "Africa/Khartoum",
+    "Libya Standard Time": "Africa/Tripoli",
+    "Namibia Standard Time": "Africa/Windhoek",
+    "Arabic Standard Time": "Asia/Baghdad",
+    "Turkey Standard Time": "Europe/Istanbul",
+    "Arab Standard Time": "Asia/Riyadh",
+    "Belarus Standard Time": "Europe/Minsk",
+    "Russian Standard Time": "Europe/Moscow",
+    "E. Africa Standard Time": "Africa/Nairobi",
+    "Iran Standard Time": "Asia/Tehran",
+    "Arabian Standard Time": "Asia/Dubai",
+    "Astrakhan Standard Time": "Europe/Astrakhan",
+    "Azerbaijan Standard Time": "Asia/Baku",
+    "Russia Time Zone 3": "Europe/Samara",
+    "Mauritius Standard Time": "Indian/Mauritius",
+    "Saratov Standard Time": "Europe/Saratov",
+    "Georgian Standard Time": "Asia/Tbilisi",
+    "Volgograd Standard Time": "Europe/Volgograd",
+    "Caucasus Standard Time": "Asia/Yerevan",
+    "Afghanistan Standard Time": "Asia/Kabul",
+    "West Asia Standard Time": "Asia/Tashkent",
+    "Ekaterinburg Standard Time": "Asia/Yekaterinburg",
+    "Pakistan Standard Time": "Asia/Karachi",
+    "Qyzylorda Standard Time": "Asia/Qyzylorda",
+    "India Standard Time": "Asia/Calcutta",
+    "Sri Lanka Standard Time": "Asia/Colombo",
+    "Nepal Standard Time": "Asia/Katmandu",
+    "Central Asia Standard Time": "Asia/Almaty",
+    "Bangladesh Standard Time": "Asia/Dhaka",
+    "Omsk Standard Time": "Asia/Omsk",
+    "Myanmar Standard Time": "Asia/Rangoon",
+    "SE Asia Standard Time": "Asia/Bangkok",
+    "Altai Standard Time": "Asia/Barnaul",
+    "W. Mongolia Standard Time": "Asia/Hovd",
+    "North Asia Standard Time": "Asia/Krasnoyarsk",
+    "N. Central Asia Standard Time": "Asia/Novosibirsk",
+    "Tomsk Standard Time": "Asia/Tomsk",
+    "China Standard Time": "Asia/Shanghai",
+    "North Asia East Standard Time": "Asia/Irkutsk",
+    "Singapore Standard Time": "Asia/Singapore",
+    "W. Australia Standard Time": "Australia/Perth",
+    "Taipei Standard Time": "Asia/Taipei",
+    "Ulaanbaatar Standard Time": "Asia/Ulaanbaatar",
+    "Aus Central W. Standard Time": "Australia/Eucla",
+    "Transbaikal Standard Time": "Asia/Chita",
+    "Tokyo Standard Time": "Asia/Tokyo",
+    "North Korea Standard Time": "Asia/Pyongyang",
+    "Korea Standard Time": "Asia/Seoul",
+    "Yakutsk Standard Time": "Asia/Yakutsk",
+    "Cen. Australia Standard Time": "Australia/Adelaide",
+    "AUS Central Standard Time": "Australia/Darwin",
+    "E. Australia Standard Time": "Australia/Brisbane",
+    "AUS Eastern Standard Time": "Australia/Sydney",
+    "West Pacific Standard Time": "Pacific/Port_Moresby",
+    "Tasmania Standard Time": "Australia/Hobart",
+    "Vladivostok Standard Time": "Asia/Vladivostok",
+    "Lord Howe Standard Time": "Australia/Lord_Howe",
+    "Bougainville Standard Time": "Pacific/Bougainville",
+    "Russia Time Zone 10": "Asia/Srednekolymsk",
+    "Magadan Standard Time": "Asia/Magadan",
+    "Norfolk Standard Time": "Pacific/Norfolk",
+    "Sakhalin Standard Time": "Asia/Sakhalin",
+    "Central Pacific Standard Time": "Pacific/Guadalcanal",
+    "Russia Time Zone 11": "Asia/Kamchatka",
+    "New Zealand Standard Time": "Pacific/Auckland",
+    "UTC+12": "Etc/GMT-12",
+    "Fiji Standard Time": "Pacific/Fiji",
+    "Kamchatka Standard Time": "Asia/Kamchatka",
+    "Chatham Islands Standard Time": "Pacific/Chatham",
+    "UTC+13": "Etc/GMT-13",
+    "Tonga Standard Time": "Pacific/Tongatapu",
+    "Samoa Standard Time": "Pacific/Apia",
+    "Line Islands Standard Time": "Pacific/Kiritimati",
 }
 
 
 def _dttz_to_utc_iso(dttz: Any) -> str:
     """Convert a Graph DateTimeTimeZone object to a UTC ISO 8601 string.
 
-    Tries `zoneinfo.ZoneInfo` for the named zone. If the name is unknown
-    (e.g. a Windows display name like "Pacific Standard Time" that the
-    runtime doesn't map), falls back to emitting the raw timestamp with a
-    "+00:00" suffix — callers should treat that as best-effort UTC-ish.
+    Translates Windows display names (e.g. "Pacific Standard Time") to IANA
+    via `_WINDOWS_TO_IANA` before consulting `zoneinfo.ZoneInfo`. Raises
+    `ValueError` if neither the raw name nor its translation is recognized —
+    we never silently emit a string that looks like UTC but isn't.
     """
     if dttz is None:
         return ""
@@ -94,38 +253,48 @@ def _dttz_to_utc_iso(dttz: Any) -> str:
     if not date_time:
         return ""
 
-    # Graph emits 7-digit fractional seconds (e.g. .0000000). Python's
-    # fromisoformat (3.11+) accepts arbitrary fractional precision but
-    # strip just in case by truncating to 6 digits.
-    s = date_time
-    if "." in s:
-        head, _, tail = s.partition(".")
-        digits = ""
-        rest = tail
-        for ch in tail:
-            if ch.isdigit():
-                digits += ch
-            else:
-                rest = tail[len(digits) :]
-                break
-        else:
-            rest = ""
-        digits = digits[:6]
-        s = f"{head}.{digits}{rest}" if digits else f"{head}{rest}"
+    # Python 3.10's fromisoformat rejects >6 fractional digits; Graph emits 7.
+    s = re.sub(r"\.(\d{1,6})\d*", r".\1", date_time)
 
     try:
         naive = datetime.fromisoformat(s)
-    except ValueError:
-        return f"{date_time}+00:00"
+    except ValueError as exc:
+        raise ValueError(
+            f"Cannot parse datetime {date_time!r} from Microsoft Graph response."
+        ) from exc
 
+    iana = _WINDOWS_TO_IANA.get(time_zone, time_zone)
     try:
-        tz = ZoneInfo(time_zone)
-    except (ZoneInfoNotFoundError, ValueError):
-        return f"{date_time}+00:00"
+        tz = ZoneInfo(iana)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise ValueError(
+            f"Cannot parse timezone {time_zone!r} from Microsoft Graph response. "
+            "Neither the raw name nor its Windows-to-IANA translation is recognized "
+            "by the local zoneinfo database."
+        ) from exc
 
     aware = naive.replace(tzinfo=tz)
     utc_zone = ZoneInfo("UTC")
     return aware.astimezone(utc_zone).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _dttz_to_iso_or_local_marker(dttz: Any) -> str:
+    """Read-path wrapper around `_dttz_to_utc_iso`.
+
+    If conversion fails (unknown tz / unparseable datetime), emit an
+    explicit non-UTC marker `LOCAL:<datetime> <tz>` so callers can never
+    confuse it with a real UTC ISO string.
+    """
+    if dttz is None:
+        return ""
+    try:
+        return _dttz_to_utc_iso(dttz)
+    except ValueError:
+        date_time = getattr(dttz, "date_time", None) or ""
+        time_zone = getattr(dttz, "time_zone", None) or "UTC"
+        if not date_time:
+            return ""
+        return f"LOCAL:{date_time} {time_zone}"
 
 
 async def get_auto_reply(graph_client: Any) -> dict:
@@ -135,6 +304,15 @@ async def get_auto_reply(graph_client: Any) -> dict:
     automaticRepliesSetting into stable string values. Reply-message bodies
     are passed through `sanitize_output(multiline=True)` to scrub control
     chars/ANSI while preserving newlines.
+
+    Response schema:
+        status: "disabled" | "always" | "scheduled"
+        internal_message: str
+        external_message: str
+        external_audience: "none" | "contacts_only" | "all"
+        scheduled_start: UTC ISO 8601 string, or "LOCAL:<datetime> <tz>" when
+            the timezone can't be translated to UTC.
+        scheduled_end: same shape as scheduled_start.
     """
     settings = await graph_client.me.mailbox_settings.get()
     ar = getattr(settings, "automatic_replies_setting", None) if settings else None
@@ -149,13 +327,16 @@ async def get_auto_reply(graph_client: Any) -> dict:
             "scheduled_end": "",
         }
 
+    status_str_by_enum = {enum.name: s for s, enum in _status_pairs()}
+    audience_str_by_enum = {enum.name: s for s, enum in _audience_pairs()}
+
     status_enum = getattr(ar, "status", None)
     status_name = getattr(status_enum, "name", None)
-    status = _STATUS_ENUM_TO_STR.get(status_name, "disabled") if status_name else "disabled"
+    status = status_str_by_enum.get(status_name, "disabled") if status_name else "disabled"
 
     audience_enum = getattr(ar, "external_audience", None)
     audience_name = getattr(audience_enum, "name", None)
-    audience = _AUDIENCE_ENUM_TO_STR.get(audience_name, "all") if audience_name else "all"
+    audience = audience_str_by_enum.get(audience_name, "all") if audience_name else "all"
 
     internal = getattr(ar, "internal_reply_message", None) or ""
     external = getattr(ar, "external_reply_message", None) or ""
@@ -165,8 +346,10 @@ async def get_auto_reply(graph_client: Any) -> dict:
         "internal_message": sanitize_output(internal, multiline=True),
         "external_message": sanitize_output(external, multiline=True),
         "external_audience": audience,
-        "scheduled_start": _dttz_to_utc_iso(getattr(ar, "scheduled_start_date_time", None)),
-        "scheduled_end": _dttz_to_utc_iso(getattr(ar, "scheduled_end_date_time", None)),
+        "scheduled_start": _dttz_to_iso_or_local_marker(
+            getattr(ar, "scheduled_start_date_time", None)
+        ),
+        "scheduled_end": _dttz_to_iso_or_local_marker(getattr(ar, "scheduled_end_date_time", None)),
     }
 
 
@@ -227,21 +410,11 @@ async def set_auto_reply(
         external_message = internal_message
 
     from msgraph.generated.models.automatic_replies_setting import AutomaticRepliesSetting
-    from msgraph.generated.models.automatic_replies_status import AutomaticRepliesStatus
     from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
-    from msgraph.generated.models.external_audience_scope import ExternalAudienceScope
     from msgraph.generated.models.mailbox_settings import MailboxSettings
 
-    status_map = {
-        "disabled": AutomaticRepliesStatus.Disabled,
-        "always": AutomaticRepliesStatus.AlwaysEnabled,
-        "scheduled": AutomaticRepliesStatus.Scheduled,
-    }
-    audience_map = {
-        "none": ExternalAudienceScope.None_,
-        "contacts_only": ExternalAudienceScope.ContactsOnly,
-        "all": ExternalAudienceScope.All,
-    }
+    status_map = dict(_status_pairs())
+    audience_map = dict(_audience_pairs())
 
     ar = AutomaticRepliesSetting()
     ar.status = status_map[status]

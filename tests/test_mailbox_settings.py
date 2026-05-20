@@ -9,6 +9,7 @@ from msgraph.generated.models.external_audience_scope import ExternalAudienceSco
 from outlook_mcp.config import Config
 from outlook_mcp.errors import PermissionDeniedError, ReadOnlyError
 from outlook_mcp.tools.mailbox_settings import (
+    _dttz_to_utc_iso,
     get_auto_reply,
     get_timezone,
     set_auto_reply,
@@ -178,16 +179,15 @@ class TestGetAutoReply:
         assert result["scheduled_start"] == ""
         assert result["scheduled_end"] == ""
 
-    async def test_parses_scheduled_with_windows_tz_to_utc(self):
-        """scheduled status converts DateTimeTimeZone to UTC ISO 8601 string."""
+    async def test_parses_scheduled_with_windows_tz_via_mapping(self):
+        """Windows display name "Pacific Standard Time" resolves via the
+        CLDR mapping to America/Los_Angeles, then converts to UTC."""
         ar = MagicMock()
         ar.status = AutomaticRepliesStatus.Scheduled
         ar.external_audience = ExternalAudienceScope.All
         ar.internal_reply_message = "Away"
         ar.external_reply_message = "Away ext"
-        # 2026-06-01 08:00 in Pacific = 15:00 UTC (PDT, UTC-7 in summer)
-        # However "Pacific Standard Time" is a Windows zone name; we expect the
-        # fallback path (unrecognized name) to emit "<date_time>+00:00".
+        # 2026-06-01 08:00 in Pacific = 15:00 UTC (PDT, UTC-7 in summer).
         ar.scheduled_start_date_time = _mk_dttz(
             "2026-06-01T08:00:00.0000000", "Pacific Standard Time"
         )
@@ -204,12 +204,44 @@ class TestGetAutoReply:
         result = await get_auto_reply(client)
         assert result["status"] == "scheduled"
         assert result["external_audience"] == "all"
-        # Unrecognized Windows zone → fallback uses raw string interpreted as UTC.
-        assert result["scheduled_start"].startswith("2026-06-01T08:00:00")
-        assert result["scheduled_start"].endswith("Z") or result["scheduled_start"].endswith(
-            "+00:00"
+        assert result["scheduled_start"] == "2026-06-01T15:00:00Z"
+        assert result["scheduled_end"] == "2026-06-06T00:00:00Z"
+
+    async def test_parses_scheduled_with_unknown_tz_emits_local_marker(self):
+        """Unrecognized zone falls back to an explicit LOCAL: marker that
+        cannot be mistaken for a UTC string."""
+        ar = MagicMock()
+        ar.status = AutomaticRepliesStatus.Scheduled
+        ar.external_audience = ExternalAudienceScope.All
+        ar.internal_reply_message = "Away"
+        ar.external_reply_message = "Away ext"
+        ar.scheduled_start_date_time = _mk_dttz(
+            "2026-06-01T08:00:00.0000000", "Atlantis Standard Time"
         )
-        assert result["scheduled_end"].startswith("2026-06-05T17:00:00")
+        ar.scheduled_end_date_time = _mk_dttz(
+            "2026-06-05T17:00:00.0000000", "Atlantis Standard Time"
+        )
+
+        settings = MagicMock()
+        settings.automatic_replies_setting = ar
+
+        client = MagicMock()
+        client.me.mailbox_settings.get = AsyncMock(return_value=settings)
+
+        result = await get_auto_reply(client)
+        assert result["scheduled_start"].startswith("LOCAL:")
+        assert "Atlantis Standard Time" in result["scheduled_start"]
+        assert "2026-06-01T08:00:00.0000000" in result["scheduled_start"]
+        assert result["scheduled_end"].startswith("LOCAL:")
+        assert "Atlantis Standard Time" in result["scheduled_end"]
+
+    def test_dttz_helper_raises_on_unknown_tz(self):
+        """Direct unit: _dttz_to_utc_iso raises ValueError for an unknown tz."""
+        dttz = MagicMock()
+        dttz.date_time = "2026-06-01T08:00:00.0000000"
+        dttz.time_zone = "Atlantis Standard Time"
+        with pytest.raises(ValueError, match="timezone"):
+            _dttz_to_utc_iso(dttz)
 
     async def test_parses_scheduled_with_iana_tz_converts_to_utc(self):
         """IANA TZ name is recognized via zoneinfo and converted to UTC."""
