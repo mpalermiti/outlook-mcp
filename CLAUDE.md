@@ -35,6 +35,8 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
   - `batch.py` — Batch operations
   - `user.py` — User profile, calendars
   - `admin.py` — Categories, mail tips
+  - `mailbox_settings.py` — Timezone and auto-reply (OOO) get/set
+  - `inference_overrides.py` — Focused Inbox per-sender override CRUD
 - `src/outlook_mcp/models/` — Pydantic models for I/O
 
 ## Conventions
