@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 54 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops. Granular permissions, OS-keyring auth, /$batch-optimized triage. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 61 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, mailbox settings. Granular permissions, OS-keyring auth, /$batch-optimized triage. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -52,7 +52,7 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
    ```
 6. **Restart the gateway:** `openclaw gateway restart`
 
-## Tools (54)
+## Tools (61)
 
 ### Auth
 - `outlook_auth_status` — Check authentication status and read-only mode
@@ -75,6 +75,9 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
 - `outlook_categorize_message` — Set categories
 - `outlook_mark_read` — Mark read or unread
 - `outlook_reclassify_message` — Move between Focused Inbox and Other
+- `outlook_list_inbox_overrides` — List Focused Inbox per-sender override rules
+- `outlook_set_inbox_override` — Upsert a per-sender override (focused/other)
+- `outlook_delete_inbox_override` — Delete an override by ID
 
 ### Calendar
 - `outlook_list_events` — List events in date range (expands recurring)
@@ -132,6 +135,12 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
 - `outlook_list_accounts` — Configured accounts
 - `outlook_switch_account` — Switch active account
 
+### Mailbox Settings
+- `outlook_get_timezone` — Read the server-side mailbox timezone
+- `outlook_set_timezone` — Write the server-side mailbox timezone (IANA or Windows zone names)
+- `outlook_get_auto_reply` — Read auto-reply / out-of-office configuration
+- `outlook_set_auto_reply` — Configure auto-reply (disabled/always/scheduled, internal/external messages, audience scope)
+
 ## Privacy
 - Zero telemetry, zero local caching
 - Only connects to `login.microsoftonline.com` and `graph.microsoft.com`
@@ -143,4 +152,4 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
 - Dates are ISO 8601, UTC in responses, config timezone for input interpretation
 - Mail search uses KQL syntax
 - Start with `read_only: true`, flip when comfortable
-- **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 7 categories and example policies.
+- **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 8 categories and example policies.
