@@ -4,7 +4,27 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.7.0] — 2026-05-19
+
+### Added — Mail Triage / Inference Overrides (3 tools)
+- `outlook_list_inbox_overrides` — List Focused Inbox per-sender override rules.
+- `outlook_set_inbox_override` — Upsert a per-sender override (`focused`/`other`). Case-insensitive sender matching; PATCH-if-exists, else POST. Gated by the existing `mail_triage` permission category.
+- `outlook_delete_inbox_override` — Delete an override by ID.
+
+These are the rule-level parallel of `outlook_reclassify_message`, which only fixes a single message in place.
+
+### Added — Mailbox Settings (4 tools, new category)
+- `outlook_get_timezone` / `outlook_set_timezone` — read/write `/me/mailboxSettings/timeZone`. Accepts IANA (`America/Los_Angeles`) or Windows (`Pacific Standard Time`) zone names; Graph validates.
+- `outlook_get_auto_reply` / `outlook_set_auto_reply` — read/write the out-of-office / auto-reply configuration via `/me/mailboxSettings/automaticRepliesSetting`. Supports `disabled` / `always` / `scheduled` status, internal + external messages (with mirror-from-internal default), `none` / `contacts_only` / `all` external-audience scopes, and scheduled start/end datetimes.
+
+All four are gated by a new `mailbox_settings` permission category.
+
+### Auth scopes
+- `MailboxSettings.Read` (read-only mode) and `MailboxSettings.ReadWrite` (full mode) added to the consent scope lists. **Existing users must re-run `outlook-mcp auth`** so the cached token picks up the new scopes — otherwise the four mailbox-settings tools will fail with an auth error.
+
+### Notes
+- `outlook_get_auto_reply` returns scheduled datetimes as UTC ISO 8601 (`YYYY-MM-DDTHH:MM:SSZ`) after translating common Windows zone names via a built-in CLDR mapping. When a zone can't be translated (rare, e.g. an obscure Windows display name not in the mapping), the value is emitted as `LOCAL:<datetime> <tz>` — explicitly non-UTC so callers don't silently treat local time as UTC.
+- Tool count: **54 → 61**.
 
 ## [1.6.1] — 2026-05-17
 

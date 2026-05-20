@@ -33,6 +33,9 @@ Programmatic management of Outlook inbox rules via `/me/mailFolders/inbox/messag
 
 ## Done
 
+- **1.7.0** — Mailbox settings: timezone get/set + auto-reply (OOO) get/set; Focused Inbox per-sender override CRUD (upsert by sender, with case-insensitive match). New `MailboxSettings.{Read,ReadWrite}` Graph scopes (re-auth required on upgrade); new `mailbox_settings` permission category. Tool count: 54 → 61.
+- **1.6.1** — Documentation-only refresh; corrected the Linux token-storage claim and updated tool-reference tables.
+- **1.6.0** — Schedule-send / deferred-delivery via the `PR_DEFERRED_SEND_TIME` extended property: `outlook_create_draft` and `outlook_update_draft` accept `deferred_send_datetime`; `outlook_update_draft` accepts `is_html`; `outlook_read_message` accepts `include_deferred_send`. No new tools.
 - **1.5.2** — Docs/positioning-only: sharpened SKILL.md description and added a "Who this is for / How it differs from other Outlook tools" section to README to compete more clearly with the other Outlook skills in the registry
 - **1.5.1** — Docs-only: corrected stale `## Tools (51)` → `## Tools (54)` heading in SKILL.md (the frontmatter was already correct; ClawHub renders the body)
 - **1.5.0** — `reply_to` parameter on send/draft tools (#3); `outlook_attach_to_draft` + `outlook_remove_draft_attachment` (#4); typed-model fix for `outlook_create_task` / `outlook_update_task` / `outlook_complete_task` plus dict→`PatternedRecurrence` conversion (#2, #5); consumer Graph phone-field migration for all contact tools — `mobilePhone` / `homePhones` / `businessPhones` instead of the unsupported `phones` aggregate (#1, #6). Tool count: 52 → 54.
