@@ -1003,6 +1003,51 @@ async def outlook_set_timezone(ctx: Context, timezone: str) -> dict:
     return await mailbox_settings.set_timezone(client.sdk_client, timezone, config=config)
 
 
+@mcp.tool()
+async def outlook_get_auto_reply(ctx: Context) -> dict:
+    """Get the user's auto-reply (out-of-office) configuration.
+
+    Reads /me/mailboxSettings.automaticRepliesSetting and returns a
+    normalized dict with status ('disabled'/'always'/'scheduled'), reply
+    messages, external audience ('none'/'contacts_only'/'all'), and any
+    scheduled start/end as UTC ISO 8601 strings.
+    """
+    client = _get_graph_client(ctx)
+    return await mailbox_settings.get_auto_reply(client.sdk_client)
+
+
+@mcp.tool()
+async def outlook_set_auto_reply(
+    ctx: Context,
+    status: str,
+    internal_message: str = "",
+    external_message: str | None = None,
+    external_audience: str = "all",
+    start: str | None = None,
+    end: str | None = None,
+) -> dict:
+    """Set the user's auto-reply (out-of-office) configuration.
+
+    `status` must be 'disabled', 'always', or 'scheduled'. For 'always' and
+    'scheduled', `internal_message` is required (non-empty after trim). For
+    'scheduled', both `start` and `end` are required as ISO 8601 datetimes;
+    they're normalized to UTC. `external_message` mirrors `internal_message`
+    when omitted. `external_audience` is 'none', 'contacts_only', or 'all'.
+    """
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await mailbox_settings.set_auto_reply(
+        client.sdk_client,
+        status,
+        internal_message,
+        external_message,
+        external_audience,
+        start,
+        end,
+        config=config,
+    )
+
+
 # ── Admin Tools ────────────────────────────────────────
 
 
