@@ -16,6 +16,7 @@ from outlook_mcp.tools import (
     calendar_read,
     calendar_write,
     contacts,
+    inference_overrides,
     mail_attachments,
     mail_drafts,
     mail_folders,
@@ -325,6 +326,50 @@ async def outlook_reclassify_message(
     config = _get_config(ctx)
     return await mail_triage.reclassify_message(
         client.sdk_client, message_id, classification, config=config
+    )
+
+
+@mcp.tool()
+async def outlook_list_inbox_overrides(ctx: Context) -> dict:
+    """List Focused Inbox per-sender override rules.
+
+    Returns the user's `inferenceClassification/overrides` — the rule-level
+    parallel of ``outlook_reclassify_message``. Each override forces mail from
+    a given sender into Focused or Other regardless of Graph's inference.
+    """
+    client = _get_graph_client(ctx)
+    return await inference_overrides.list_inbox_overrides(client.sdk_client)
+
+
+@mcp.tool()
+async def outlook_set_inbox_override(
+    ctx: Context,
+    sender_email: str,
+    classify_as: str,
+) -> dict:
+    """Upsert a Focused Inbox override for a sender. classify_as: "focused" or "other".
+
+    If an override already exists for ``sender_email`` (case-insensitive),
+    it's PATCHed; otherwise a new one is POSTed. Returns ``status: "created"``
+    or ``status: "updated"`` so callers can distinguish.
+    """
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await inference_overrides.set_inbox_override(
+        client.sdk_client, sender_email, classify_as, config=config
+    )
+
+
+@mcp.tool()
+async def outlook_delete_inbox_override(
+    ctx: Context,
+    override_id: str,
+) -> dict:
+    """Delete a Focused Inbox override by ID."""
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await inference_overrides.delete_inbox_override(
+        client.sdk_client, override_id, config=config
     )
 
 

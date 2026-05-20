@@ -15,13 +15,16 @@ EXPECTED_TOOLS = [
     "outlook_send_message",
     "outlook_reply",
     "outlook_forward",
-    # Mail triage (6)
+    # Mail triage (9)
     "outlook_move_message",
     "outlook_delete_message",
     "outlook_flag_message",
     "outlook_categorize_message",
     "outlook_mark_read",
     "outlook_reclassify_message",
+    "outlook_list_inbox_overrides",
+    "outlook_set_inbox_override",
+    "outlook_delete_inbox_override",
     # Calendar read (2)
     "outlook_list_events",
     "outlook_get_event",
@@ -84,9 +87,9 @@ EXPECTED_TOOLS = [
 
 
 def test_tool_count():
-    """All 58 tools are registered (auth is CLI-only now)."""
+    """All 61 tools are registered (auth is CLI-only now)."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 58
+    assert len(registered) == 61
 
 
 def test_all_tools_registered():
