@@ -31,9 +31,16 @@ Programmatic management of Outlook inbox rules via `/me/mailFolders/inbox/messag
 
 ---
 
+## Investigated and not viable
+
+- **Mailbox settings (timezone, auto-reply, working hours, etc.)** — `/me/mailboxSettings/*` is documented as "Delegated (personal Microsoft account): Not supported" and verified to return `ErrorAccessDenied` on outlook.com mailboxes regardless of granted scopes. The resource is Exchange Online-only; consumer Outlook.com uses a different backend that Microsoft never bridged to Graph for this endpoint. Re-investigate if Microsoft publishes a consumer-account path for these settings.
+
+---
+
 ## Done
 
-- **1.7.0** — Mailbox settings: timezone get/set + auto-reply (OOO) get/set; Focused Inbox per-sender override CRUD (upsert by sender, with case-insensitive match). New `MailboxSettings.{Read,ReadWrite}` Graph scopes (re-auth required on upgrade); new `mailbox_settings` permission category. Tool count: 54 → 61.
+- **1.7.1** — Yanked the four mailbox-settings tools added in 1.7.0 (see CHANGELOG). Microsoft Graph's `/me/mailboxSettings` resource isn't supported for personal accounts, which is the project's only target. Auth timeout raised from 5 to 15 minutes.
+- **1.7.0** — Focused Inbox per-sender override CRUD (upsert by sender, case-insensitive match): `outlook_list_inbox_overrides`, `outlook_set_inbox_override`, `outlook_delete_inbox_override`. Tool count: 54 → 57.
 - **1.6.1** — Documentation-only refresh; corrected the Linux token-storage claim and updated tool-reference tables.
 - **1.6.0** — Schedule-send / deferred-delivery via the `PR_DEFERRED_SEND_TIME` extended property: `outlook_create_draft` and `outlook_update_draft` accept `deferred_send_datetime`; `outlook_update_draft` accepts `is_html`; `outlook_read_message` accepts `include_deferred_send`. No new tools.
 - **1.5.2** — Docs/positioning-only: sharpened SKILL.md description and added a "Who this is for / How it differs from other Outlook tools" section to README to compete more clearly with the other Outlook skills in the registry
