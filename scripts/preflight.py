@@ -53,6 +53,22 @@ ENDPOINTS: list[tuple[str, str]] = [
 ]
 
 
+def classify(status_code: int) -> str:
+    """Map an HTTP status from Graph to a preflight verdict.
+
+    - ``"OK"`` (200, 204) — endpoint is supported and the request succeeded.
+    - ``"FAIL"`` (403, 501) — the v1.7.0-class signal: endpoint not supported
+      for this account type, or scopes are wrong. Release blocker.
+    - ``"SKIP"`` (anything else) — 4xx query-shape, 401 transient auth, 429
+      rate-limit, 5xx transient. Surface to a human but don't block release.
+    """
+    if status_code in (200, 204):
+        return "OK"
+    if status_code in (403, 501):
+        return "FAIL"
+    return "SKIP"
+
+
 def fetch_token() -> str:
     config = load_config()
     am = AuthManager(config)
@@ -82,15 +98,10 @@ def run() -> int:
             failures.append(label)
             continue
 
-        # 200/204: endpoint is supported and the request succeeded.
-        # 403/501: the failures we exist to catch — endpoint isn't
-        #   supported for this account type, or scopes are wrong.
-        # 4xx other: usually a query-shape issue (we're not testing
-        #   request correctness here); treat as non-blocking and
-        #   surface the status so a human can sanity-check.
-        if r.status_code in (200, 204):
+        verdict = classify(r.status_code)
+        if verdict == "OK":
             print(f"OK    {label:30s} {path}  {r.status_code}")
-        elif r.status_code in (403, 501):
+        elif verdict == "FAIL":
             code = ""
             try:
                 code = r.json().get("error", {}).get("code", "")
