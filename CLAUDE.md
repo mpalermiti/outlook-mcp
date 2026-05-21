@@ -14,6 +14,7 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
 - `uv run ruff check src/ tests/` — lint
 - `uv run ruff format src/ tests/` — format
 - `uv run outlook-mcp` — start server (stdio)
+- `uv run python scripts/preflight.py` — pre-release Graph smoke test (must pass before tagging; see `RELEASING.md`)
 
 ## Architecture
 - `src/outlook_mcp/server.py` — FastMCP entry point, lifespan context
