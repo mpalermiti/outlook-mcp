@@ -72,11 +72,6 @@ EXPECTED_TOOLS = [
     # User (2)
     "outlook_whoami",
     "outlook_list_calendars",
-    # Mailbox settings (4)
-    "outlook_get_timezone",
-    "outlook_set_timezone",
-    "outlook_get_auto_reply",
-    "outlook_set_auto_reply",
     # Admin (2)
     "outlook_list_categories",
     "outlook_get_mail_tips",
@@ -87,9 +82,9 @@ EXPECTED_TOOLS = [
 
 
 def test_tool_count():
-    """All 61 tools are registered (auth is CLI-only now)."""
+    """All 57 tools are registered (auth is CLI-only now)."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 61
+    assert len(registered) == 57
 
 
 def test_all_tools_registered():
