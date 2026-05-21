@@ -140,6 +140,7 @@ class AuthManager:
             "client_id": self.config.client_id,
             "tenant_id": self.config.tenant_id,
             "cache_persistence_options": cache_options,
+            "timeout": 900,
         }
         if prompt_callback:
             kwargs["prompt_callback"] = prompt_callback
