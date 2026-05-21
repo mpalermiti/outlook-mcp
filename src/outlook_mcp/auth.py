@@ -30,7 +30,6 @@ SCOPES_READWRITE = [
     "Calendars.ReadWrite",
     "Contacts.ReadWrite",
     "Tasks.ReadWrite",
-    "MailboxSettings.ReadWrite",
     "User.Read",
 ]
 
@@ -39,7 +38,6 @@ SCOPES_READONLY = [
     "Calendars.Read",
     "Contacts.Read",
     "Tasks.Read",
-    "MailboxSettings.Read",
     "User.Read",
 ]
 
