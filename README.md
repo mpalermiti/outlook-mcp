@@ -24,7 +24,7 @@ You'll like this if you're:
 - Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
 - Security-conscious: tokens in the OS keyring (Keychain on macOS), granular `allow_categories`, optional `read_only` mode, zero telemetry
 
-This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 61 tools — way more than you need for "read my inbox").
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 57 tools — way more than you need for "read my inbox").
 
 ### How it differs from other Outlook tools you'll find
 
@@ -44,7 +44,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 61 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 57 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -59,7 +59,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 ## Features
 
-**61 tools** across 14 categories:
+**57 tools** across 13 categories:
 
 - **Auth (1)** -- auth status check (login is via CLI)
 - **Mail Read (4)** -- list inbox (with Focused Inbox filter), read message, search (KQL), list folders
@@ -74,7 +74,6 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 - **Folder Management (3)** -- create, rename, delete mail folders
 - **Threading and Batch (3)** -- list thread, copy message, batch triage
 - **User and Admin (6)** -- whoami, list calendars, list categories, mail tips, accounts
-- **Mailbox Settings (4)** -- get/set timezone, get/set auto-reply (out-of-office)
 
 **Design principles:**
 
@@ -122,8 +121,6 @@ No client secret is needed. The device code flow uses public client auth.
 ---
 
 ## Quick Start
-
-> **Upgrading from 1.6.x:** v1.7.0 introduces four mailbox-settings tools (`outlook_get_timezone`, `outlook_set_timezone`, `outlook_get_auto_reply`, `outlook_set_auto_reply`) that require the `MailboxSettings.Read` / `MailboxSettings.ReadWrite` Graph scopes. After upgrading, re-run `outlook-mcp auth` so your cached token picks up the new scopes — otherwise the four mailbox-settings tools will fail with an auth error.
 
 ### Install
 
@@ -347,15 +344,6 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 | `outlook_list_accounts` | List configured accounts. |
 | `outlook_switch_account` | Switch active account. |
 
-### Mailbox Settings
-
-| Tool | Description |
-|------|-------------|
-| `outlook_get_timezone` | Read the server-side mailbox timezone (`/me/mailboxSettings/timeZone`). |
-| `outlook_set_timezone` | Write the server-side mailbox timezone. Accepts IANA (`America/Los_Angeles`) or Windows (`Pacific Standard Time`) zone names; Graph validates. |
-| `outlook_get_auto_reply` | Read out-of-office / auto-reply configuration. Scheduled datetimes are normalized to UTC ISO 8601 where possible. |
-| `outlook_set_auto_reply` | Configure auto-reply. Supports `disabled` / `always` / `scheduled` status, internal + external messages, `none` / `contacts_only` / `all` external-audience scopes, and scheduled start/end datetimes. |
-
 ---
 
 ## Configuration
@@ -385,7 +373,6 @@ By default, `read_only: false` unlocks **all** write tools. For finer control, s
 | `calendar_write` | create/update/delete event, RSVP | Moderate — creates calendar entries |
 | `contacts_write` | create/update/delete contact | Moderate |
 | `todo_write` | create/update/complete/delete task | Safe — your own task list |
-| `mailbox_settings` | get/set timezone, get/set auto-reply (OOO) | Moderate — server-side mailbox state, visible to all senders |
 
 **Example policies:**
 
@@ -413,7 +400,7 @@ By default, `read_only: false` unlocks **all** write tools. For finer control, s
 { "read_only": true }
 ```
 
-When `allow_categories` is set, any tool in a non-allowed category returns a permission-denied error (`PermissionDeniedError`) naming the blocked category. When `allow_categories` is empty (or unset) and `read_only` is false, all write tools are permitted. `read_only: true` always takes precedence — if set, all writes are blocked regardless of `allow_categories`. Unknown category names are rejected at config load time with a validation error; only the eight names above are accepted.
+When `allow_categories` is set, any tool in a non-allowed category returns a permission-denied error (`PermissionDeniedError`) naming the blocked category. When `allow_categories` is empty (or unset) and `read_only` is false, all write tools are permitted. `read_only: true` always takes precedence — if set, all writes are blocked regardless of `allow_categories`. Unknown category names are rejected at config load time with a validation error; only the seven names above are accepted.
 
 ---
 

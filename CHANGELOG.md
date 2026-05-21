@@ -4,6 +4,26 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] — 2026-05-20
+
+### Removed
+- `outlook_get_timezone`, `outlook_set_timezone`, `outlook_get_auto_reply`, `outlook_set_auto_reply` and the `mailbox_settings` permission category. Microsoft Graph's `/me/mailboxSettings` resource is documented as `Delegated (personal Microsoft account): Not supported`; every sub-path returns `ErrorAccessDenied` on outlook.com / hotmail.com / live.com mailboxes regardless of granted scopes. The project supports personal accounts only, so these four tools shipped in 1.7.0 are non-viable for every user. Verified directly against the live Graph API. The original brainstorm claim that `mailboxSettings` "works fully on outlook.com" was incorrect, and the v1.7.0 PR shipped without an integration smoke test that would have caught it.
+- `MailboxSettings.Read` / `MailboxSettings.ReadWrite` Graph consent scopes (no longer requested).
+
+### Fixed
+- `outlook-mcp auth` device-code polling timeout raised from 300s to 900s to match Microsoft's 15-minute device-code TTL. The shorter default was failing real users whose sign-in flow takes more than 5 minutes (2FA, passkey prompts, browser delays).
+
+### Unchanged from 1.7.0
+- `outlook_list_inbox_overrides`, `outlook_set_inbox_override`, `outlook_delete_inbox_override` — Focused Inbox per-sender override CRUD via `/me/inferenceClassification/overrides`. Verified working on personal accounts.
+
+### Migration from 1.7.0
+- If you upgraded to 1.7.0 and re-authed: no action needed. The removed tools simply disappear; nothing else is affected.
+- If you added `mailbox_settings` to `allow_categories` in `~/.outlook-mcp/config.json`: the server will refuse to load until you remove that string. The category no longer exists.
+
+### Tool count
+- 1.7.0: 61 tools, 14 categories.
+- 1.7.1: **57 tools, 13 categories.**
+
 ## [1.7.0] — 2026-05-19
 
 ### Added — Mail Triage / Inference Overrides (3 tools)
