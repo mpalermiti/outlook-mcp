@@ -1,7 +1,11 @@
 """Tests for MCP server tool registration."""
 
-from outlook_mcp.server import mcp  # noqa: I001 - single import
+from unittest.mock import MagicMock, patch
 
+import pytest
+
+from outlook_mcp.errors import GraphAPIError
+from outlook_mcp.server import _wrap_tool_errors, mcp
 
 EXPECTED_TOOLS = [
     # Auth (3)
@@ -111,3 +115,109 @@ def test_tools_have_descriptions():
     """Every registered tool has a non-empty description."""
     for name, tool in mcp._tool_manager._tools.items():
         assert tool.description, f"Tool {name} has no description"
+
+
+# ── Error-wrapper end-to-end ──────────────────────────────────────────
+
+
+def _make_odata_error(status_code: int, code: str, message: str):
+    """Build a Graph SDK ODataError fixture (mirrors test_error_wrapper.py)."""
+    from msgraph.generated.models.o_data_errors.main_error import MainError
+    from msgraph.generated.models.o_data_errors.o_data_error import ODataError
+
+    inner = MainError()
+    inner.code = code
+    inner.message = message
+
+    err = ODataError()
+    err.response_status_code = status_code
+    err.message = message
+    err.error = inner
+    return err
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_errors_converts_graph_sdk_error():
+    """A tool decorated with _wrap_tool_errors converts ODataError -> GraphAPIError."""
+
+    @_wrap_tool_errors
+    async def fake_tool():
+        raise _make_odata_error(403, "ErrorAccessDenied", "no access")
+
+    with pytest.raises(GraphAPIError) as exc_info:
+        await fake_tool()
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.error_code == "ErrorAccessDenied"
+    assert exc_info.value.action is not None
+    assert "ROADMAP" in exc_info.value.action
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_errors_passes_through_outlook_mcp_error():
+    """OutlookMCPError subclasses must NOT be rewrapped (already structured)."""
+    from outlook_mcp.errors import ReadOnlyError
+
+    @_wrap_tool_errors
+    async def fake_tool():
+        raise ReadOnlyError("outlook_send_message")
+
+    with pytest.raises(ReadOnlyError):
+        await fake_tool()
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_errors_passes_through_value_error():
+    """Validation errors stay as ValueError so callers see the original message."""
+
+    @_wrap_tool_errors
+    async def fake_tool():
+        raise ValueError("Invalid datetime: 'oops'")
+
+    with pytest.raises(ValueError, match="Invalid datetime"):
+        await fake_tool()
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_errors_passes_through_unknown_exception():
+    """Truly unexpected errors are bubbled unchanged (not wrapped)."""
+
+    class WeirdError(Exception):
+        pass
+
+    @_wrap_tool_errors
+    async def fake_tool():
+        raise WeirdError("surprise")
+
+    with pytest.raises(WeirdError, match="surprise"):
+        await fake_tool()
+
+
+@pytest.mark.asyncio
+async def test_wrap_tool_errors_end_to_end_via_mocked_implementation():
+    """End-to-end: mock the underlying impl to raise ODataError; the decorated
+    server-level tool function hands back GraphAPIError, not the raw SDK shape.
+    """
+    fake_ctx = MagicMock()
+    fake_ctx.request_context.lifespan_context = {
+        "auth": MagicMock(),
+        "config": MagicMock(),
+    }
+
+    odata = _make_odata_error(429, "TooManyRequests", "slow down")
+
+    from outlook_mcp import server as server_mod
+
+    # Stub the graph-client factory so we don't try to build a real Kiota auth
+    # provider from a MagicMock credential.
+    with (
+        patch.object(server_mod, "_get_graph_client", return_value=MagicMock()),
+        patch.object(server_mod.mail_read, "list_inbox", side_effect=odata),
+    ):
+        with pytest.raises(GraphAPIError) as exc_info:
+            await server_mod.outlook_list_inbox(fake_ctx)
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.error_code == "TooManyRequests"
+    assert exc_info.value.action is not None
+    assert "retry" in exc_info.value.action.lower()

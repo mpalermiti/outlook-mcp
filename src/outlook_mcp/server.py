@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import functools
+from collections.abc import Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
 
 from outlook_mcp import __version__
 from outlook_mcp.auth import AuthManager
 from outlook_mcp.config import load_config
+from outlook_mcp.errors import OutlookMCPError, wrap_graph_error
 from outlook_mcp.graph import GraphClient
 from outlook_mcp.tools import (
     admin,
@@ -69,10 +73,40 @@ def _get_graph_client(ctx: Context) -> GraphClient:
     return GraphClient(auth.get_credential())
 
 
+def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap an async tool function to translate Graph SDK errors.
+
+    - Pass through ``OutlookMCPError`` subclasses (already structured).
+    - Pass through ``ValueError`` (validation errors carry useful messages).
+    - Convert Graph SDK errors (``ODataError`` / ``APIError``) into
+      ``GraphAPIError`` via :func:`wrap_graph_error` so agents see
+      ``{code, message, action}`` instead of raw SDK exception text.
+    - Re-raise anything else unchanged.
+    """
+
+    @functools.wraps(func)
+    async def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return await func(*args, **kwargs)
+        except OutlookMCPError:
+            raise
+        except ValueError:
+            raise
+        except Exception as exc:
+            try:
+                raise wrap_graph_error(exc) from exc
+            except TypeError:
+                # Not a Graph SDK error — bubble the original.
+                raise exc from None
+
+    return wrapper
+
+
 # ── Auth Tools ──────────────────────────────────────────
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_auth_status(ctx: Context) -> dict:
     """Check authentication status. Run `outlook-mcp auth` on the host if needed."""
     auth = _get_auth(ctx)
@@ -89,6 +123,7 @@ async def outlook_auth_status(ctx: Context) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_inbox(
     ctx: Context,
     folder: str = "inbox",
@@ -123,6 +158,7 @@ async def outlook_list_inbox(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_read_message(
     ctx: Context,
     message_id: str,
@@ -143,6 +179,7 @@ async def outlook_read_message(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_search_mail(
     ctx: Context,
     query: str,
@@ -160,6 +197,7 @@ async def outlook_search_mail(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_folders(
     ctx: Context,
     cursor: str | None = None,
@@ -180,6 +218,7 @@ async def outlook_list_folders(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_send_message(
     ctx: Context,
     to: list[str],
@@ -217,6 +256,7 @@ async def outlook_send_message(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_reply(
     ctx: Context,
     message_id: str,
@@ -233,6 +273,7 @@ async def outlook_reply(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_forward(
     ctx: Context,
     message_id: str,
@@ -249,6 +290,7 @@ async def outlook_forward(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_move_message(
     ctx: Context,
     message_id: str,
@@ -265,6 +307,7 @@ async def outlook_move_message(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_delete_message(
     ctx: Context,
     message_id: str,
@@ -277,6 +320,7 @@ async def outlook_delete_message(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_flag_message(
     ctx: Context,
     message_id: str,
@@ -289,6 +333,7 @@ async def outlook_flag_message(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_categorize_message(
     ctx: Context,
     message_id: str,
@@ -303,6 +348,7 @@ async def outlook_categorize_message(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_mark_read(
     ctx: Context,
     message_id: str,
@@ -315,6 +361,7 @@ async def outlook_mark_read(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_reclassify_message(
     ctx: Context,
     message_id: str,
@@ -329,6 +376,7 @@ async def outlook_reclassify_message(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_inbox_overrides(ctx: Context) -> dict:
     """List Focused Inbox per-sender override rules.
 
@@ -341,6 +389,7 @@ async def outlook_list_inbox_overrides(ctx: Context) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_set_inbox_override(
     ctx: Context,
     sender_email: str,
@@ -360,6 +409,7 @@ async def outlook_set_inbox_override(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_delete_inbox_override(
     ctx: Context,
     override_id: str,
@@ -376,6 +426,7 @@ async def outlook_delete_inbox_override(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_events(
     ctx: Context,
     days: int = 7,
@@ -399,6 +450,7 @@ async def outlook_list_events(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_get_event(
     ctx: Context,
     event_id: str,
@@ -412,6 +464,7 @@ async def outlook_get_event(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_create_event(
     ctx: Context,
     subject: str,
@@ -443,6 +496,7 @@ async def outlook_create_event(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_update_event(
     ctx: Context,
     event_id: str,
@@ -461,6 +515,7 @@ async def outlook_update_event(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_delete_event(
     ctx: Context,
     event_id: str,
@@ -472,6 +527,7 @@ async def outlook_delete_event(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_rsvp(
     ctx: Context,
     event_id: str,
@@ -488,6 +544,7 @@ async def outlook_rsvp(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_contacts(
     ctx: Context,
     count: int = 25,
@@ -499,6 +556,7 @@ async def outlook_list_contacts(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_search_contacts(
     ctx: Context,
     query: str,
@@ -510,6 +568,7 @@ async def outlook_search_contacts(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_get_contact(ctx: Context, contact_id: str) -> dict:
     """Get full contact details by ID."""
     client = _get_graph_client(ctx)
@@ -517,6 +576,7 @@ async def outlook_get_contact(ctx: Context, contact_id: str) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_create_contact(
     ctx: Context,
     first_name: str,
@@ -542,6 +602,7 @@ async def outlook_create_contact(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_update_contact(
     ctx: Context,
     contact_id: str,
@@ -565,6 +626,7 @@ async def outlook_update_contact(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_delete_contact(ctx: Context, contact_id: str) -> dict:
     """Delete a contact by ID."""
     client = _get_graph_client(ctx)
@@ -576,6 +638,7 @@ async def outlook_delete_contact(ctx: Context, contact_id: str) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_task_lists(ctx: Context) -> dict:
     """List all To Do task lists."""
     client = _get_graph_client(ctx)
@@ -583,6 +646,7 @@ async def outlook_list_task_lists(ctx: Context) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_tasks(
     ctx: Context,
     list_id: str | None = None,
@@ -596,6 +660,7 @@ async def outlook_list_tasks(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_create_task(
     ctx: Context,
     title: str,
@@ -623,6 +688,7 @@ async def outlook_create_task(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_update_task(
     ctx: Context,
     task_id: str,
@@ -648,6 +714,7 @@ async def outlook_update_task(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_complete_task(
     ctx: Context,
     task_id: str,
@@ -665,6 +732,7 @@ async def outlook_complete_task(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_delete_task(
     ctx: Context,
     task_id: str,
@@ -685,6 +753,7 @@ async def outlook_delete_task(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_drafts(
     ctx: Context,
     count: int = 25,
@@ -696,6 +765,7 @@ async def outlook_list_drafts(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_create_draft(
     ctx: Context,
     to: list[str],
@@ -738,6 +808,7 @@ async def outlook_create_draft(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_update_draft(
     ctx: Context,
     draft_id: str,
@@ -781,6 +852,7 @@ async def outlook_update_draft(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_send_draft(ctx: Context, draft_id: str) -> dict:
     """Send an existing draft message."""
     client = _get_graph_client(ctx)
@@ -789,6 +861,7 @@ async def outlook_send_draft(ctx: Context, draft_id: str) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_delete_draft(ctx: Context, draft_id: str) -> dict:
     """Delete a draft message."""
     client = _get_graph_client(ctx)
@@ -800,6 +873,7 @@ async def outlook_delete_draft(ctx: Context, draft_id: str) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_attachments(ctx: Context, message_id: str) -> dict:
     """List attachments on a message."""
     client = _get_graph_client(ctx)
@@ -807,6 +881,7 @@ async def outlook_list_attachments(ctx: Context, message_id: str) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_download_attachment(
     ctx: Context,
     message_id: str,
@@ -824,6 +899,7 @@ async def outlook_download_attachment(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_send_with_attachments(
     ctx: Context,
     to: list[str],
@@ -859,6 +935,7 @@ async def outlook_send_with_attachments(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_attach_to_draft(
     ctx: Context,
     draft_id: str,
@@ -880,6 +957,7 @@ async def outlook_attach_to_draft(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_remove_draft_attachment(
     ctx: Context,
     draft_id: str,
@@ -900,6 +978,7 @@ async def outlook_remove_draft_attachment(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_create_folder(
     ctx: Context,
     name: str,
@@ -917,6 +996,7 @@ async def outlook_create_folder(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_rename_folder(
     ctx: Context,
     folder_id: str,
@@ -934,6 +1014,7 @@ async def outlook_rename_folder(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_delete_folder(ctx: Context, folder_id: str) -> dict:
     """Delete a user-created mail folder."""
     client = _get_graph_client(ctx)
@@ -949,6 +1030,7 @@ async def outlook_delete_folder(ctx: Context, folder_id: str) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_thread(
     ctx: Context,
     conversation_id: str,
@@ -960,6 +1042,7 @@ async def outlook_list_thread(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_copy_message(
     ctx: Context,
     message_id: str,
@@ -983,6 +1066,7 @@ async def outlook_copy_message(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_batch_triage(
     ctx: Context,
     message_ids: list[str],
@@ -1005,6 +1089,7 @@ async def outlook_batch_triage(
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_whoami(ctx: Context) -> dict:
     """Get current user profile: display name, email, and ID."""
     client = _get_graph_client(ctx)
@@ -1012,6 +1097,7 @@ async def outlook_whoami(ctx: Context) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_calendars(ctx: Context) -> dict:
     """List all calendars for the current user."""
     client = _get_graph_client(ctx)
@@ -1022,6 +1108,7 @@ async def outlook_list_calendars(ctx: Context) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_categories(ctx: Context) -> dict:
     """List master categories with names and colors."""
     client = _get_graph_client(ctx)
@@ -1029,6 +1116,7 @@ async def outlook_list_categories(ctx: Context) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_get_mail_tips(ctx: Context, emails: list[str]) -> dict:
     """Get mail tips for recipients: delivery restrictions, OOF messages, etc."""
     client = _get_graph_client(ctx)
@@ -1039,6 +1127,7 @@ async def outlook_get_mail_tips(ctx: Context, emails: list[str]) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_list_accounts(ctx: Context) -> dict:
     """List configured accounts with authentication status."""
     auth = _get_auth(ctx)
@@ -1046,6 +1135,7 @@ async def outlook_list_accounts(ctx: Context) -> dict:
 
 
 @mcp.tool()
+@_wrap_tool_errors
 async def outlook_switch_account(ctx: Context, name: str) -> dict:
     """Switch to a different configured account."""
     auth = _get_auth(ctx)
