@@ -10,11 +10,12 @@ from outlook_mcp.server import _wrap_tool_errors, mcp
 EXPECTED_TOOLS = [
     # Auth (3)
     "outlook_auth_status",
-    # Mail read (4)
+    # Mail read (5)
     "outlook_list_inbox",
     "outlook_read_message",
     "outlook_search_mail",
     "outlook_list_folders",
+    "outlook_list_inbox_delta",
     # Mail write (3)
     "outlook_send_message",
     "outlook_reply",
@@ -86,9 +87,9 @@ EXPECTED_TOOLS = [
 
 
 def test_tool_count():
-    """All 57 tools are registered (auth is CLI-only now)."""
+    """All 58 tools are registered (auth is CLI-only now)."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 57
+    assert len(registered) == 58
 
 
 def test_all_tools_registered():
