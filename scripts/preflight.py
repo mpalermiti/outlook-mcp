@@ -50,6 +50,13 @@ ENDPOINTS: list[tuple[str, str]] = [
     ("me/todo/lists", "To Do"),
     ("me/inferenceClassification/overrides", "Focused Inbox overrides"),
     ("me/outlook/masterCategories", "Categories"),
+    ("me/mailFolders/inbox/messages/delta", "Mail delta"),
+    (
+        "me/calendarView/delta?startDateTime=2026-05-21T00:00:00Z"
+        "&endDateTime=2026-05-28T00:00:00Z",
+        "Calendar delta",
+    ),
+    ("me/contacts/delta", "Contacts delta"),
 ]
 
 
