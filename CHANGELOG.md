@@ -4,6 +4,49 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] — 2026-05-21
+
+### Added — Delta queries (3 tools)
+
+Wraps Microsoft Graph's `$delta` endpoints. The use case: an agent's
+recurring poll (morning brief, hourly inbox check) currently re-fetches
+the last N messages on every run, even when nothing changed. With delta
+queries the second-and-later call returns only what changed since the
+last token — typically 0–3 items on a stable inbox. Real money on
+per-token billing for recurring agent jobs.
+
+- `outlook_list_inbox_delta(folder="inbox", page_size=50, delta_token=None)`
+  — wraps `GET /me/mailFolders/{folder}/messages/delta`.
+- `outlook_list_events_delta(start, end, page_size=50, delta_token=None)`
+  — wraps `GET /me/calendarView/delta`. `start` and `end` (ISO 8601) are
+  required on the first call; ignored on follow-ups (the cursor encodes
+  the window).
+- `outlook_list_contacts_delta(page_size=50, delta_token=None)` — wraps
+  `GET /me/contacts/delta`.
+
+**Cursor semantics.** The `delta_token` is opaque to the caller (it's
+the deltaLink or nextLink URL Graph hands back, passed through as a
+string). outlook-mcp does *not* persist tokens server-side — the agent
+stores its own watermark and replays it. Matches the existing
+pagination `cursor` pattern.
+
+**Tombstones.** Deleted items come back as `{id, is_deleted: True}`
+with no other fields. Agents should treat them as cache evictions.
+Live items also carry `is_deleted: False` for symmetry.
+
+**Cap behavior.** Each call auto-follows `@odata.nextLink` internally
+up to `page_size * 4` items, then stops with `has_more: True` and the
+nextLink as the returned `delta_token` so the caller can resume. This
+keeps a single tool call bounded even on a large first-call snapshot
+(e.g. ~12k contacts).
+
+**Verified working on personal accounts via the preflight script** —
+the three new delta endpoints are reachable from `/me/...` on
+outlook.com mailboxes without additional consent scopes.
+
+### Tool count
+- 1.8.0 → 1.9.0: **57 → 60 tools, 13 categories** (no new category).
+
 ## [1.8.0] — 2026-05-21
 
 ### Added — Agent-friendly shape

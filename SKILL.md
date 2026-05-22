@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 57 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops. Granular permissions, OS-keyring auth, /$batch-optimized triage. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 60 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -56,7 +56,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
    ```
 6. **Restart the gateway:** `openclaw gateway restart`
 
-## Tools (57)
+## Tools (60)
 
 ### Auth
 - `outlook_auth_status` — Check authentication status and read-only mode
@@ -66,6 +66,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_read_message` — Get full message by ID
 - `outlook_search_mail` — Search mail using KQL query
 - `outlook_list_folders` — List all mail folders
+- `outlook_list_inbox_delta` — List only inbox changes since last call (massive token savings for recurring agent jobs)
 
 ### Mail — Write
 - `outlook_send_message` — Send email with recipients, CC, BCC, HTML, importance
@@ -86,6 +87,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 ### Calendar
 - `outlook_list_events` — List events in date range (expands recurring)
 - `outlook_get_event` — Get event details
+- `outlook_list_events_delta` — List only event changes since last call within a window (massive token savings for recurring agent jobs)
 - `outlook_create_event` — Create event with attendees, recurrence, online meeting
 - `outlook_update_event` — Update event fields
 - `outlook_delete_event` — Delete event
@@ -98,6 +100,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_create_contact` — Create
 - `outlook_update_contact` — Update
 - `outlook_delete_contact` — Delete
+- `outlook_list_contacts_delta` — List only contact changes since last call (massive token savings for recurring agent jobs)
 
 ### To Do
 - `outlook_list_task_lists` — List To Do lists
