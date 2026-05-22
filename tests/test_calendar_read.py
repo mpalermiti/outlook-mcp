@@ -120,6 +120,58 @@ class TestListEvents:
             await list_events(mock_client, after="not-a-date", timezone="UTC")
 
 
+class TestListEventsConcise:
+    async def test_list_events_concise_drops_body_and_attendees(self):
+        """concise=True returns is_organizer + attendees_count, no body/organizer/categories."""
+        mock_event = _make_mock_event(
+            attendees=[
+                {"name": "Alice", "email": "alice@test.com", "response": "accepted"},
+                {"name": "Bob", "email": "bob@test.com", "response": "none"},
+            ],
+            categories=["Blue Category"],
+        )
+        # is_organizer is read via getattr, set it explicitly on the mock.
+        mock_event.is_organizer = True
+
+        mock_client = AsyncMock()
+        mock_client.me.calendar_view.get = AsyncMock(
+            return_value=MagicMock(value=[mock_event], odata_next_link=None)
+        )
+
+        result = await list_events(mock_client, days=7, timezone="UTC", concise=True)
+        event = result["events"][0]
+        assert event["id"] == "AAMkAG123="
+        assert event["subject"] == "Team Meeting"
+        # Concise-mode-only fields.
+        assert event["is_organizer"] is True
+        assert event["is_online_meeting"] is False
+        assert event["attendees_count"] == 2
+        # Fields that must be dropped.
+        assert "organizer" not in event
+        assert "response_status" not in event
+        assert "categories" not in event
+        assert "body" not in event
+        assert "attendees" not in event
+
+    async def test_list_events_default_keeps_full_shape(self):
+        """concise=False (default) preserves the existing event shape."""
+        mock_event = _make_mock_event()
+        mock_client = AsyncMock()
+        mock_client.me.calendar_view.get = AsyncMock(
+            return_value=MagicMock(value=[mock_event], odata_next_link=None)
+        )
+
+        result = await list_events(mock_client, days=7, timezone="UTC")
+        event = result["events"][0]
+        # Existing fields.
+        assert "organizer" in event
+        assert "response_status" in event
+        assert "is_online" in event
+        # New concise-only fields must NOT bleed into default mode.
+        assert "is_organizer" not in event
+        assert "attendees_count" not in event
+
+
 class TestGetEvent:
     async def test_get_event_validates_id(self):
         """get_event rejects invalid event IDs."""

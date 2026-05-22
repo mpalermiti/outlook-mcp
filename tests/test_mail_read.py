@@ -239,6 +239,91 @@ class TestSearchMail:
         mock_client.me.mail_folders.by_mail_folder_id.assert_called_with("inbox")
 
 
+class TestConciseMode:
+    @pytest.mark.asyncio
+    async def test_list_inbox_concise_drops_body_and_recipients(self):
+        """concise=True drops preview and categories from each message summary."""
+        mock_message = _make_mock_message(
+            body_preview="Long preview text...",
+            categories=["Red", "Blue"],
+        )
+        mock_client = _make_folder_mock([mock_message])
+        result = await list_inbox(mock_client, folder="inbox", concise=True)
+        msg = result["messages"][0]
+        assert "preview" not in msg
+        assert "categories" not in msg
+        # Headers kept
+        assert msg["id"] == "AAMkAG123="
+        assert msg["from_email"] == "sender@test.com"
+        assert msg["subject"] == "Test Subject"
+        assert msg["is_read"] is False
+        assert msg["has_attachments"] is False
+        assert msg["conversation_id"] == "conv123"
+        assert msg["importance"] == "normal"
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_default_keeps_full_shape(self):
+        """concise=False (default) preserves the existing message shape."""
+        mock_client = _make_folder_mock([_make_mock_message()])
+        result = await list_inbox(mock_client, folder="inbox")
+        msg = result["messages"][0]
+        assert "preview" in msg
+        assert "categories" in msg
+
+    @pytest.mark.asyncio
+    async def test_read_message_concise_drops_body_keeps_preview(self):
+        """concise=True replaces body/body_html with a single-line body_preview."""
+        mock_msg = _make_mock_message(
+            body_content="<p>Hello\n\nworld   with   spaces</p>" + ("x" * 500),
+        )
+        mock_client = _make_message_mock(mock_msg)
+        result = await read_message(mock_client, "AAMkAG123=", concise=True)
+        assert "body" not in result
+        assert "body_html" not in result
+        assert "body_preview" in result
+        # Preview is single-line and capped at 200 chars.
+        assert "\n" not in result["body_preview"]
+        assert len(result["body_preview"]) <= 200
+        # Headers preserved.
+        assert result["subject"] == "Test Subject"
+        assert result["from_email"] == "sender@test.com"
+        assert "to" in result
+        assert "cc" in result
+
+    @pytest.mark.asyncio
+    async def test_read_message_default_keeps_full_body(self):
+        """concise=False (default) keeps the existing body/body_html fields."""
+        mock_msg = _make_mock_message(body_content="<p>Hello</p>")
+        mock_client = _make_message_mock(mock_msg)
+        result = await read_message(mock_client, "AAMkAG123=")
+        assert "body" in result
+        assert "body_html" in result
+        assert "body_preview" not in result
+
+    @pytest.mark.asyncio
+    async def test_search_mail_concise_drops_body_and_recipients(self):
+        """concise=True drops preview and categories from search results."""
+        mock_message = _make_mock_message(
+            body_preview="Long preview...",
+            categories=["Important"],
+        )
+        mock_client = _make_search_mock([mock_message])
+        result = await search_mail(mock_client, query="test", concise=True)
+        msg = result["messages"][0]
+        assert "preview" not in msg
+        assert "categories" not in msg
+        assert msg["subject"] == "Test Subject"
+
+    @pytest.mark.asyncio
+    async def test_search_mail_default_keeps_full_shape(self):
+        """concise=False (default) preserves the existing search result shape."""
+        mock_client = _make_search_mock([_make_mock_message()])
+        result = await search_mail(mock_client, query="test")
+        msg = result["messages"][0]
+        assert "preview" in msg
+        assert "categories" in msg
+
+
 def _make_folder(folder_id: str, name: str, *, total=0, unread=0, parent_id=None, children=0):
     """Build a MagicMock that stands in for a Graph MailFolder entity."""
     f = MagicMock()

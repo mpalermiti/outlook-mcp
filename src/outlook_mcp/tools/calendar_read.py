@@ -128,6 +128,36 @@ def _format_event_detail(event: Any) -> dict:
     }
 
 
+def _format_event_concise(event: Any) -> dict:
+    """Return a token-efficient event dict for concise-mode listings.
+
+    Keeps: id, subject, start, end, location, is_all_day, is_organizer,
+    is_online_meeting, attendees_count. Drops: body, organizer (object),
+    response_status, categories, full attendees list.
+    """
+    start_str = ""
+    if event.start:
+        start_str = f"{event.start.date_time} ({event.start.time_zone})"
+
+    end_str = ""
+    if event.end:
+        end_str = f"{event.end.date_time} ({event.end.time_zone})"
+
+    return {
+        "id": event.id,
+        "subject": sanitize_output(event.subject or "(no subject)"),
+        "start": start_str,
+        "end": end_str,
+        "location": sanitize_output(
+            event.location.display_name if event.location and event.location.display_name else ""
+        ),
+        "is_all_day": bool(event.is_all_day),
+        "is_organizer": bool(getattr(event, "is_organizer", False)),
+        "is_online_meeting": bool(event.is_online_meeting),
+        "attendees_count": len(event.attendees or []),
+    }
+
+
 async def list_events(
     graph_client: Any,
     days: int = 7,
@@ -136,12 +166,17 @@ async def list_events(
     count: int = 50,
     timezone: str = "UTC",
     cursor: str | None = None,
+    concise: bool = False,
 ) -> dict:
     """List calendar events using calendarView.
 
     The calendarView endpoint requires startDateTime and endDateTime.
     If after/before are not provided, they are computed from `days`
     relative to "now" in the configured timezone.
+
+    concise: when True, return a compact event shape — drops ``organizer``,
+    ``response_status``, ``categories``; adds ``is_organizer`` and
+    ``attendees_count``. Default False preserves the existing shape.
     """
     count = _clamp(count, 1, 100)
     start_utc, end_utc = _compute_calendar_range(days, after, before, timezone)
@@ -150,10 +185,18 @@ async def list_events(
     query_params["start_date_time"] = start_utc
     query_params["end_date_time"] = end_utc
     query_params["$orderby"] = "start/dateTime"
-    query_params["$select"] = (
-        "id,subject,start,end,location,isAllDay,"
-        "organizer,responseStatus,isOnlineMeeting,categories"
-    )
+    if concise:
+        # We need attendees + isOrganizer to compute the concise fields.
+        # Keep the select tight to avoid pulling full event bodies.
+        query_params["$select"] = (
+            "id,subject,start,end,location,isAllDay,"
+            "isOrganizer,isOnlineMeeting,attendees"
+        )
+    else:
+        query_params["$select"] = (
+            "id,subject,start,end,location,isAllDay,"
+            "organizer,responseStatus,isOnlineMeeting,categories"
+        )
 
     from msgraph.generated.users.item.calendar_view.calendar_view_request_builder import (
         CalendarViewRequestBuilder,
@@ -164,7 +207,10 @@ async def list_events(
     )
     response = await graph_client.me.calendar_view.get(request_configuration=req_config)
 
-    events = [_format_event_summary(e) for e in (response.value or [])]
+    if concise:
+        events = [_format_event_concise(e) for e in (response.value or [])]
+    else:
+        events = [_format_event_summary(e) for e in (response.value or [])]
 
     return {
         "events": events,

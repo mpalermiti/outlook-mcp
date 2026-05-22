@@ -23,6 +23,17 @@ def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
 
 
+# Fields stripped from the message-summary dict when ``concise=True``.
+# Kept in sync with the docstrings on ``outlook_list_inbox`` /
+# ``outlook_search_mail``.
+_CONCISE_SUMMARY_DROP = ("preview", "categories")
+
+
+def _concise_summary(summary: dict) -> dict:
+    """Return a copy of a message-summary dict with bulky fields stripped."""
+    return {k: v for k, v in summary.items() if k not in _CONCISE_SUMMARY_DROP}
+
+
 def _format_message_summary(msg: Any) -> dict:
     """Convert Graph SDK message to summary dict.
 
@@ -84,11 +95,15 @@ async def list_inbox(
     skip: int = 0,
     cursor: str | None = None,
     classification: str | None = None,
+    concise: bool = False,
 ) -> dict:
     """List messages in a folder.
 
     classification: filter by Focused Inbox classification — "focused" or "other".
     None means no filter (both).
+
+    concise: when True, drop ``preview`` and ``categories`` from each message
+    (smaller payload for triage scans). Default False preserves the existing shape.
     """
     count = _clamp(count, 1, 100)
     folder = await resolve_folder_id(graph_client, folder)
@@ -141,6 +156,8 @@ async def list_inbox(
     )
 
     messages = [_format_message_summary(m) for m in (response.value or [])]
+    if concise:
+        messages = [_concise_summary(m) for m in messages]
 
     return {
         "messages": messages,
@@ -150,11 +167,23 @@ async def list_inbox(
     }
 
 
+def _make_body_preview(content: str, limit: int = 200) -> str:
+    """Compact a body to a single-line ``body_preview`` of at most ``limit`` chars.
+
+    Strips HTML to plain text via the same sanitizer used elsewhere, then
+    collapses whitespace (newlines, tabs, runs of spaces) into single spaces.
+    """
+    plain = sanitize_output(content or "", multiline=True)
+    collapsed = " ".join(plain.split())
+    return collapsed[:limit]
+
+
 async def read_message(
     graph_client: Any,
     message_id: str,
     format: str = "text",
     include_deferred_send: bool = False,
+    concise: bool = False,
 ) -> dict:
     """Read a single message by ID.
 
@@ -162,6 +191,11 @@ async def read_message(
     PR_DEFERRED_SEND_TIME extended property (the value Exchange reads to
     schedule deferred delivery) as ``deferred_send_datetime`` in the
     response. ``null`` if the property isn't set on the message.
+
+    Pass ``concise=True`` to drop the full ``body`` / ``body_html`` fields
+    and surface a single-line ``body_preview`` (first 200 chars, whitespace
+    collapsed). Headers (from/to/cc/subject/received/importance/...) are
+    preserved. Default False keeps the existing shape.
     """
     message_id = validate_graph_id(message_id)
 
@@ -290,6 +324,13 @@ async def read_message(
         "conversation_id": msg.conversation_id or "",
     }
 
+    if concise:
+        # Surface a compact preview drawn from whichever body content we have.
+        preview_source = msg.body.content if msg.body and msg.body.content else ""
+        result.pop("body", None)
+        result.pop("body_html", None)
+        result["body_preview"] = _make_body_preview(preview_source)
+
     if include_deferred_send:
         result["deferred_send_datetime"] = deferred_value
 
@@ -302,8 +343,13 @@ async def search_mail(
     count: int = 25,
     folder: str | None = None,
     cursor: str | None = None,
+    concise: bool = False,
 ) -> dict:
-    """Search mail using KQL."""
+    """Search mail using KQL.
+
+    concise: when True, drop ``preview`` and ``categories`` from each message
+    (smaller payload for triage scans). Default False preserves the existing shape.
+    """
     count = _clamp(count, 1, 100)
     safe_query = sanitize_kql(query)
 
@@ -338,6 +384,8 @@ async def search_mail(
         response = await graph_client.me.messages.get(request_configuration=req_config)
 
     messages = [_format_message_summary(m) for m in (response.value or [])]
+    if concise:
+        messages = [_concise_summary(m) for m in messages]
 
     return {
         "messages": messages,

@@ -135,12 +135,16 @@ async def outlook_list_inbox(
     skip: int = 0,
     cursor: str | None = None,
     classification: str | None = None,
+    concise: bool = False,
 ) -> dict:
     """List messages. Filters: read status, sender, date, Focused Inbox classification.
 
     `folder` accepts display names ("Junk Email", "Sent Items", "TLDR"), well-known
     names ("inbox", "junkemail", "sentitems"), or Graph IDs. Prefer names — do not
     cache or transcribe Graph IDs across turns.
+
+    Pass `concise=True` to drop preview/categories per message — ~10x fewer tokens,
+    suitable for triage scans before deciding to fetch full content.
     """
     client = _get_graph_client(ctx)
     return await mail_read.list_inbox(
@@ -154,6 +158,7 @@ async def outlook_list_inbox(
         skip,
         cursor=cursor,
         classification=classification,
+        concise=concise,
     )
 
 
@@ -164,6 +169,7 @@ async def outlook_read_message(
     message_id: str,
     format: str = "text",
     include_deferred_send: bool = False,
+    concise: bool = False,
 ) -> dict:
     """Get full message by ID. Format: text, html, or full (both).
 
@@ -171,10 +177,18 @@ async def outlook_read_message(
     PR_DEFERRED_SEND_TIME extended property as ``deferred_send_datetime``
     in the response. Useful when you need to recreate a scheduled draft
     (e.g. delete + create-fresh) and want to preserve its scheduled time.
+
+    Pass `concise=True` to drop the full body (and body_html) and surface a
+    single-line `body_preview` (first 200 chars) — ~10x fewer tokens,
+    suitable for triage scans before deciding to fetch full content.
     """
     client = _get_graph_client(ctx)
     return await mail_read.read_message(
-        client.sdk_client, message_id, format, include_deferred_send
+        client.sdk_client,
+        message_id,
+        format,
+        include_deferred_send,
+        concise=concise,
     )
 
 
@@ -186,14 +200,20 @@ async def outlook_search_mail(
     count: int = 25,
     folder: str | None = None,
     cursor: str | None = None,
+    concise: bool = False,
 ) -> dict:
     """Search mail using KQL query. Query is automatically sanitized.
 
     `folder` accepts display names ("Junk Email", "TLDR"), well-known names,
     or Graph IDs. Prefer names — do not cache or transcribe Graph IDs across turns.
+
+    Pass `concise=True` to drop preview/categories per message — ~10x fewer tokens,
+    suitable for triage scans before deciding to fetch full content.
     """
     client = _get_graph_client(ctx)
-    return await mail_read.search_mail(client.sdk_client, query, count, folder, cursor=cursor)
+    return await mail_read.search_mail(
+        client.sdk_client, query, count, folder, cursor=cursor, concise=concise
+    )
 
 
 @mcp.tool()
@@ -434,8 +454,14 @@ async def outlook_list_events(
     before: str | None = None,
     count: int = 50,
     cursor: str | None = None,
+    concise: bool = False,
 ) -> dict:
-    """List calendar events in a date range. Expands recurring events."""
+    """List calendar events in a date range. Expands recurring events.
+
+    Pass `concise=True` to drop body/attendees/organizer/categories per event
+    (only id/subject/start/end/location/flags + attendees_count) — ~10x fewer
+    tokens, suitable for day-at-a-glance scans before fetching full event detail.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await calendar_read.list_events(
@@ -446,6 +472,7 @@ async def outlook_list_events(
         count,
         config.timezone,
         cursor=cursor,
+        concise=concise,
     )
 
 
@@ -1035,10 +1062,20 @@ async def outlook_list_thread(
     ctx: Context,
     conversation_id: str,
     count: int = 50,
+    concise: bool = False,
 ) -> dict:
-    """List messages in a conversation thread, chronological order."""
+    """List messages in a conversation thread, chronological order.
+
+    Pass `concise=True` to strip quoted prior-message text from each message's
+    preview (heuristic: drop everything below the first ``On ... wrote:`` /
+    ``From: ...`` / ``----- Original Message -----`` line) — ~10x fewer tokens
+    on long reply chains, suitable for thread scans before diving into a
+    specific message.
+    """
     client = _get_graph_client(ctx)
-    return await mail_thread.list_thread(client.sdk_client, conversation_id, count)
+    return await mail_thread.list_thread(
+        client.sdk_client, conversation_id, count, concise=concise
+    )
 
 
 @mcp.tool()
