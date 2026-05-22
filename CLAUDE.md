@@ -37,6 +37,10 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
   - `user.py` — User profile, calendars
   - `admin.py` — Categories, mail tips
   - `inference_overrides.py` — Focused Inbox per-sender override CRUD
+  - `mail_delta.py` — Mail delta-sync queries (`outlook_list_inbox_delta`)
+  - `calendar_delta.py` — Calendar delta-sync queries (`outlook_list_events_delta`)
+  - `contacts_delta.py` — Contacts delta-sync queries (`outlook_list_contacts_delta`)
+  - `_delta.py` — Shared httpx-backed delta helper (raw HTTP bypasses the SDK)
 - `src/outlook_mcp/models/` — Pydantic models for I/O
 
 ## Conventions

@@ -24,7 +24,7 @@ You'll like this if you're:
 - Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
 - Security-conscious: tokens in the OS keyring (Keychain on macOS), granular `allow_categories`, optional `read_only` mode, zero telemetry
 
-This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 57 tools — way more than you need for "read my inbox").
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 60 tools — way more than you need for "read my inbox").
 
 ### How it differs from other Outlook tools you'll find
 
@@ -44,7 +44,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 57 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 60 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -59,15 +59,15 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 ## Features
 
-**57 tools** across 13 categories:
+**60 tools** across 13 categories:
 
 - **Auth (1)** -- auth status check (login is via CLI)
-- **Mail Read (4)** -- list inbox (with Focused Inbox filter), read message, search (KQL), list folders
+- **Mail Read (5)** -- list inbox (with Focused Inbox filter), read message, search (KQL), list folders, delta-sync inbox changes
 - **Mail Write (3)** -- send, reply/reply-all, forward
 - **Mail Triage (9)** -- move, delete (soft by default), flag, categorize, mark read/unread, reclassify (Focused Inbox), list/set/delete per-sender Focused Inbox overrides
-- **Calendar Read (2)** -- list events (with recurring expansion), get event details
+- **Calendar Read (3)** -- list events (with recurring expansion), get event details, delta-sync event changes
 - **Calendar Write (4)** -- create, update, delete, RSVP (accept/decline/tentative)
-- **Contacts (6)** -- list, search, get, create, update, delete
+- **Contacts (7)** -- list, search, get, create, update, delete, delta-sync changes
 - **To Do (6)** -- list task lists, list/create/update/complete/delete tasks
 - **Drafts (5)** -- list, create, update, send, delete
 - **Attachments (5)** -- list, download, send-with-attachments, attach-to-draft, remove-draft-attachment
@@ -244,6 +244,7 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 | `outlook_read_message` | Get full message by ID. Format: `text`, `html`, or `full` (both). Pass `include_deferred_send=True` to also surface the draft's scheduled delivery time. |
 | `outlook_search_mail` | Search mail using KQL query. Optionally scope to a folder by name or ID. |
 | `outlook_list_folders` | List mail folders with counts, `parent_id`, and `child_count`. Pass `recursive=true` to walk the full folder tree (subfolders included). |
+| `outlook_list_inbox_delta` | List only inbox changes since the last call. First call returns a full snapshot plus a `delta_token`; subsequent calls (token passed back) return only added/updated/deleted items. Deletes come back as `{id, is_deleted: True}`. Cursor is stateless — agent persists and replays. |
 
 ### Mail Write
 
@@ -273,6 +274,7 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 |------|-------------|
 | `outlook_list_events` | List events in a date range. Expands recurring events. Configurable via `days`, `after`, `before`. |
 | `outlook_get_event` | Get full event details: attendees, body, online meeting URL, recurrence. |
+| `outlook_list_events_delta` | List only event changes inside a window since the last call. `start` and `end` (ISO 8601) required on the first call (Graph constraint — no whole-calendar sync). Deletes come back as `{id, is_deleted: True}`. Cursor is stateless. |
 
 ### Calendar Write
 
@@ -293,6 +295,7 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 | `outlook_create_contact` | Create a new contact. |
 | `outlook_update_contact` | Update contact fields. |
 | `outlook_delete_contact` | Delete a contact. |
+| `outlook_list_contacts_delta` | List only contact changes since the last call. Deletes come back as `{id, is_deleted: True}`. Cursor is stateless. |
 
 ### To Do
 
