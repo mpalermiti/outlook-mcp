@@ -39,6 +39,7 @@ Programmatic management of Outlook inbox rules via `/me/mailFolders/inbox/messag
 
 ## Done
 
+- **1.8.0** — Agent-friendly shape, pure code. Two upgrades, no new tools: (a) `concise=True` opt-in on the five high-volume read tools (`outlook_list_inbox`, `outlook_read_message`, `outlook_search_mail`, `outlook_list_events`, `outlook_list_thread`) — drops bulky body / attendee / categories / quoted-text fields for ~10× smaller payloads on triage scans; (b) Graph SDK error wrapper that translates `ODataError`/`APIError` into a structured `GraphAPIError(code, message, action)` with recovery hints (re-auth on 401, ROADMAP pointer on 403/`ErrorAccessDenied`, re-list on 404, back-off on 429, retry on 503). Strict backward compat — defaults preserve the existing response shapes.
 - **1.7.1** — Yanked the four mailbox-settings tools added in 1.7.0 (see CHANGELOG). Microsoft Graph's `/me/mailboxSettings` resource isn't supported for personal accounts, which is the project's only target. Auth timeout raised from 5 to 15 minutes.
 - **1.7.0** — Focused Inbox per-sender override CRUD (upsert by sender, case-insensitive match): `outlook_list_inbox_overrides`, `outlook_set_inbox_override`, `outlook_delete_inbox_override`. Tool count: 54 → 57.
 - **1.6.1** — Documentation-only refresh; corrected the Linux token-storage claim and updated tool-reference tables.

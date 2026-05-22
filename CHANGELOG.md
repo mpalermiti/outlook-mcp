@@ -4,6 +4,19 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] — 2026-05-21
+
+### Added — Agent-friendly shape
+
+- **Concise mode** — opt-in `concise=True` flag on the five high-volume read tools (`outlook_list_inbox`, `outlook_read_message`, `outlook_search_mail`, `outlook_list_events`, `outlook_list_thread`). When set, the server drops bulky fields (`preview`/`categories` for message summaries; full `body`/`body_html` for single-message reads, replaced with a 200-char single-line `body_preview`; `body`/`organizer`/`response_status`/`categories` plus the full `attendees` list for events, replaced with `is_organizer` and `attendees_count`; quoted prior-message text on thread previews, via a heuristic on `On ... wrote:` / `From: ...` / `----- Original Message -----` markers). Typical payload reduction ~10×, designed for triage scans before deciding to fetch full content.
+
+- **Graph error wrapper** — every tool now passes its result through a thin decorator that converts msgraph's `ODataError` / `kiota_abstractions.APIError` into a structured `GraphAPIError(status_code, error_code, message, action)` with recovery hints for 401 ("run `outlook-mcp auth` on the host"), 403/`ErrorAccessDenied` (ROADMAP pointer to known unsupported-endpoint dead-ends), 404/`ErrorItemNotFound` ("re-list to get fresh IDs"), 429 ("back off, respect Retry-After"), and 503 ("transient — retry after a short delay"). `OutlookMCPError` subclasses and `ValueError`s pass through unchanged; non-Graph exceptions bubble up untouched.
+
+No new tools; existing tool responses unchanged when `concise=False` (default). Strict backward compat for existing callers.
+
+### Tool count
+- 1.7.1 → 1.8.0: **57 tools, 13 categories** (no change).
+
 ## [1.7.1] — 2026-05-20
 
 ### Removed

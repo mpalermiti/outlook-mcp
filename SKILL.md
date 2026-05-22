@@ -22,6 +22,10 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
 
 > Independent open-source project. Not affiliated with Microsoft.
 
+## Agent-friendly
+
+Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`, `outlook_search_mail`, `outlook_list_events`, `outlook_list_thread`) to drop large body fields — ~10× fewer tokens for triage scans. Graph errors are wrapped into structured `{code, message, action}` responses with recovery hints (re-auth on 401, ROADMAP pointer on 403/ErrorAccessDenied, re-list on 404, back-off on 429, retry on 503).
+
 ## Important
 
 - **Personal Microsoft accounts only** (`@outlook.com`, `@hotmail.com`, `@live.com`). Work/school accounts (Entra ID) are not supported in v1.

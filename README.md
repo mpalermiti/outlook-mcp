@@ -85,6 +85,14 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 - **Soft delete** -- delete moves to Deleted Items by default. Hard delete requires explicit `permanent: true`.
 - **Timezone-aware** -- calendar operations respect your configured IANA timezone.
 
+### Agent-friendly shape (1.8.0)
+
+Two pure-code upgrades that make the same 57 tools cheaper and more recoverable for AI agents:
+
+- **Concise mode** — pass `concise=True` to the five high-volume read tools (`outlook_list_inbox`, `outlook_read_message`, `outlook_search_mail`, `outlook_list_events`, `outlook_list_thread`) to drop bulky fields: full message bodies, per-event attendee lists, quoted prior-message text in threads, body previews/categories on inbox listings. Typical payload reduction ~10×. Default `concise=False` preserves the existing response shape — strict backward compat.
+
+- **Structured Graph errors** — every tool wraps msgraph SDK exceptions into `{code, message, action}` responses with operator-friendly recovery hints: re-auth on 401, ROADMAP pointer on 403/`ErrorAccessDenied` (known unsupported-endpoint dead-ends), re-list on 404/`ErrorItemNotFound`, back-off on 429, retry on 503. `OutlookMCPError` subclasses and validation errors pass through unchanged.
+
 ---
 
 ## Azure AD App Registration
