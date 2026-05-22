@@ -17,9 +17,11 @@ from outlook_mcp.graph import GraphClient
 from outlook_mcp.tools import (
     admin,
     batch,
+    calendar_delta,
     calendar_read,
     calendar_write,
     contacts,
+    contacts_delta,
     inference_overrides,
     mail_attachments,
     mail_delta,
@@ -518,6 +520,31 @@ async def outlook_get_event(
     return await calendar_read.get_event(client.sdk_client, event_id)
 
 
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_list_events_delta(
+    ctx: Context,
+    start: str | None = None,
+    end: str | None = None,
+    page_size: int = 50,
+    delta_token: str | None = None,
+) -> dict:
+    """List only calendar events that changed since the last call.
+
+    Graph's ``/me/calendarView/delta`` requires an explicit
+    ``[start, end]`` ISO 8601 window on the first call — there's no
+    whole-calendar sync, only windowed deltas. Subsequent calls
+    (with ``delta_token``) reuse the window encoded in the cursor;
+    ``start`` / ``end`` may be omitted then.
+
+    Deleted events return as ``{id, is_deleted: True}`` with no other
+    fields. When ``has_more=True`` pass the returned ``delta_token``
+    back immediately to keep draining the round.
+    """
+    client = _get_graph_client(ctx)
+    return await calendar_delta.list_events_delta(client, start, end, page_size, delta_token)
+
+
 # ── Calendar Write Tools ────────────────────────────────
 
 
@@ -690,6 +717,27 @@ async def outlook_delete_contact(ctx: Context, contact_id: str) -> dict:
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await contacts.delete_contact(client.sdk_client, contact_id, config=config)
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_list_contacts_delta(
+    ctx: Context,
+    page_size: int = 50,
+    delta_token: str | None = None,
+) -> dict:
+    """List only contacts that changed since the last call.
+
+    Graph's ``/me/contacts/delta`` accepts no first-call query parameters
+    other than the ``Prefer: odata.maxpagesize=N`` page-size header — the
+    tool wires ``page_size`` to that header and ignores everything else.
+
+    Deleted contacts return as ``{id, is_deleted: True}`` with no other
+    fields. When ``has_more=True`` pass the returned ``delta_token``
+    back immediately to keep draining the round.
+    """
+    client = _get_graph_client(ctx)
+    return await contacts_delta.list_contacts_delta(client, page_size, delta_token)
 
 
 # ── To Do Tools ────────────────────────────────────────
