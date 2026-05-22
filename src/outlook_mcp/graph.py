@@ -26,3 +26,9 @@ class GraphClient:
         )
         request_adapter = GraphRequestAdapter(auth_provider)
         self.sdk_client = GraphServiceClient(request_adapter=request_adapter)
+        # Retained so delta-query tools can mint raw bearer tokens for direct
+        # httpx calls to Graph's *delta endpoints — the SDK's typed delta
+        # builders rebuild URL templates from query-parameter dataclasses and
+        # silently drop the ``@removed`` annotation we need to surface to
+        # callers, so the delta module bypasses the SDK.
+        self.credential = credential

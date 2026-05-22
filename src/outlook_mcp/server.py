@@ -22,6 +22,7 @@ from outlook_mcp.tools import (
     contacts,
     inference_overrides,
     mail_attachments,
+    mail_delta,
     mail_drafts,
     mail_folders,
     mail_read,
@@ -232,6 +233,36 @@ async def outlook_list_folders(
     """
     client = _get_graph_client(ctx)
     return await mail_read.list_folders(client.sdk_client, cursor=cursor, recursive=recursive)
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_list_inbox_delta(
+    ctx: Context,
+    folder: str = "inbox",
+    page_size: int = 50,
+    delta_token: str | None = None,
+) -> dict:
+    """List only messages that changed since the last call. Stateless cursor.
+
+    First call (no ``delta_token``): full snapshot of ``folder``. Returns a
+    ``delta_token`` you persist on the agent side.
+
+    Subsequent calls (pass that token back): only added/updated/deleted
+    messages since the previous call. Deleted messages return as
+    ``{id, is_deleted: True}`` with no other fields — agents should treat
+    them as tombstones and drop any cached payload.
+
+    When ``has_more=True`` the per-call cap stopped mid-sync; pass the
+    returned ``delta_token`` back immediately to keep draining. When
+    ``delta_token`` comes back ``None`` Graph signaled "no change" — keep
+    using your previous token.
+
+    Massive token savings for recurring agent jobs (morning briefs, hourly
+    polls): a stable inbox returns ~0 messages per call instead of 25.
+    """
+    client = _get_graph_client(ctx)
+    return await mail_delta.list_inbox_delta(client, folder, page_size, delta_token)
 
 
 # ── Mail Write Tools ────────────────────────────────────
