@@ -78,6 +78,73 @@ class TestListThread:
         assert qp.orderby == ["receivedDateTime asc"]
         assert qp.top == 10
 
+    async def test_list_thread_concise_strips_quoted_text(self):
+        """concise=True drops everything from the first quoted-reply marker on."""
+        quoted = (
+            "Thanks for the update.\n\n"
+            "On Mon, May 5, 2026 at 10:00 AM, Alice <alice@example.com> wrote:\n"
+            "> previous message body here\n"
+            "> more quoted content"
+        )
+        mock_msg = _make_mock_message(id="m1", body_preview=quoted)
+        mock_client = MagicMock()
+        mock_client.me.messages.get = AsyncMock(
+            return_value=MagicMock(value=[mock_msg], odata_next_link=None)
+        )
+
+        result = await list_thread(mock_client, conversation_id="conv123", concise=True)
+        msg = result["messages"][0]
+        # Only the leading content remains.
+        assert "Thanks for the update." in msg["preview"]
+        assert "On Mon" not in msg["preview"]
+        assert "previous message body" not in msg["preview"]
+        # categories should be dropped in concise mode.
+        assert "categories" not in msg
+
+    async def test_list_thread_concise_handles_from_header(self):
+        """`From: ...` header style also triggers the heuristic."""
+        body = "Sure thing.\n\nFrom: Bob <bob@example.com>\nSubject: Re: Hi\n\nold content"
+        mock_msg = _make_mock_message(id="m1", body_preview=body)
+        mock_client = MagicMock()
+        mock_client.me.messages.get = AsyncMock(
+            return_value=MagicMock(value=[mock_msg], odata_next_link=None)
+        )
+
+        result = await list_thread(mock_client, conversation_id="conv123", concise=True)
+        msg = result["messages"][0]
+        assert "Sure thing." in msg["preview"]
+        assert "From: Bob" not in msg["preview"]
+        assert "old content" not in msg["preview"]
+
+    async def test_list_thread_concise_handles_original_message_divider(self):
+        """`----- Original Message -----` also triggers the heuristic."""
+        body = "Quick reply.\n\n----- Original Message -----\nFrom: Carol\nDetails..."
+        mock_msg = _make_mock_message(id="m1", body_preview=body)
+        mock_client = MagicMock()
+        mock_client.me.messages.get = AsyncMock(
+            return_value=MagicMock(value=[mock_msg], odata_next_link=None)
+        )
+
+        result = await list_thread(mock_client, conversation_id="conv123", concise=True)
+        msg = result["messages"][0]
+        assert "Quick reply." in msg["preview"]
+        assert "Original Message" not in msg["preview"]
+
+    async def test_list_thread_default_keeps_full_shape(self):
+        """concise=False (default) preserves the existing summary shape."""
+        body = "Hello\n\nOn Mon, May 5, 2026 at 10:00 AM, Alice <alice@example.com> wrote:\n> old"
+        mock_msg = _make_mock_message(id="m1", body_preview=body, categories=["Red"])
+        mock_client = MagicMock()
+        mock_client.me.messages.get = AsyncMock(
+            return_value=MagicMock(value=[mock_msg], odata_next_link=None)
+        )
+
+        result = await list_thread(mock_client, conversation_id="conv123")
+        msg = result["messages"][0]
+        # Existing shape: preview unchanged, categories present.
+        assert "On Mon" in msg["preview"]
+        assert msg["categories"] == ["Red"]
+
 
 class TestCopyMessage:
     async def test_copy_validates_message_id(self):
