@@ -4,15 +4,6 @@ Planned work for `outlook-graph-mcp`. Items here are committed-to direction; tim
 
 ## Near-term
 
-### Delta queries for `list_inbox` / folder scans
-Swap repeated `/me/mailFolders/inbox/messages` polls for `/me/mailFolders/inbox/messages/delta`. Returns only what changed since the last delta token. Makes recurring agent workflows (morning briefs, daily junk scans, weekly digests) near-free instead of re-fetching 25 messages on every run.
-
-**Shape:** new `outlook_list_inbox_delta` tool (or `delta=true` flag on `list_inbox`) that persists the delta token per-folder in the config dir and returns only new/changed/removed messages on subsequent calls.
-
-**Impact:** 10–100× fewer tokens transferred per poll for stable inboxes. Meaningful for agent cost + latency.
-
----
-
 ### Mail rules CRUD
 Programmatic management of Outlook inbox rules via `/me/mailFolders/inbox/messageRules`. No other MCP I'm aware of exposes this.
 
@@ -39,6 +30,7 @@ Programmatic management of Outlook inbox rules via `/me/mailFolders/inbox/messag
 
 ## Done
 
+- **1.9.0** — Delta queries (3 new tools): `outlook_list_inbox_delta`, `outlook_list_events_delta`, `outlook_list_contacts_delta`. Wraps Graph's `$delta` endpoints. First call returns a snapshot plus an opaque `delta_token`; subsequent calls (token passed back) return only added/updated/deleted items. Tombstones are `{id, is_deleted: True}` with no other fields — agents drop cached payloads cleanly. Stateless cursor (server doesn't persist tokens, matching the existing pagination `cursor` pattern). Per-call safety cap auto-follows `@odata.nextLink` up to `page_size * 4` items, then surfaces `has_more: True` plus the nextLink so the caller resumes. Massive token savings for recurring agent jobs polling a stable inbox/calendar/contacts. Tool count: 57 → 60.
 - **1.8.0** — Agent-friendly shape, pure code. Two upgrades, no new tools: (a) `concise=True` opt-in on the five high-volume read tools (`outlook_list_inbox`, `outlook_read_message`, `outlook_search_mail`, `outlook_list_events`, `outlook_list_thread`) — drops bulky body / attendee / categories / quoted-text fields for ~10× smaller payloads on triage scans; (b) Graph SDK error wrapper that translates `ODataError`/`APIError` into a structured `GraphAPIError(code, message, action)` with recovery hints (re-auth on 401, ROADMAP pointer on 403/`ErrorAccessDenied`, re-list on 404, back-off on 429, retry on 503). Strict backward compat — defaults preserve the existing response shapes.
 - **1.7.1** — Yanked the four mailbox-settings tools added in 1.7.0 (see CHANGELOG). Microsoft Graph's `/me/mailboxSettings` resource isn't supported for personal accounts, which is the project's only target. Auth timeout raised from 5 to 15 minutes.
 - **1.7.0** — Focused Inbox per-sender override CRUD (upsert by sender, case-insensitive match): `outlook_list_inbox_overrides`, `outlook_set_inbox_override`, `outlook_delete_inbox_override`. Tool count: 54 → 57.
