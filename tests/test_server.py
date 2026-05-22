@@ -30,22 +30,24 @@ EXPECTED_TOOLS = [
     "outlook_list_inbox_overrides",
     "outlook_set_inbox_override",
     "outlook_delete_inbox_override",
-    # Calendar read (2)
+    # Calendar read (3)
     "outlook_list_events",
     "outlook_get_event",
+    "outlook_list_events_delta",
     # Calendar write (4)
     "outlook_create_event",
     "outlook_update_event",
     "outlook_delete_event",
     "outlook_rsvp",
     # ── Tier 2 ──────────────────────────────────────────
-    # Contacts (6)
+    # Contacts (7)
     "outlook_list_contacts",
     "outlook_search_contacts",
     "outlook_get_contact",
     "outlook_create_contact",
     "outlook_update_contact",
     "outlook_delete_contact",
+    "outlook_list_contacts_delta",
     # To Do (6)
     "outlook_list_task_lists",
     "outlook_list_tasks",
@@ -87,9 +89,9 @@ EXPECTED_TOOLS = [
 
 
 def test_tool_count():
-    """All 58 tools are registered (auth is CLI-only now)."""
+    """All 60 tools are registered (auth is CLI-only now)."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 58
+    assert len(registered) == 60
 
 
 def test_all_tools_registered():
