@@ -22,6 +22,7 @@ from outlook_mcp.tools import (
     calendar_write,
     contacts,
     contacts_delta,
+    digest,
     inference_overrides,
     mail_attachments,
     mail_delta,
@@ -753,6 +754,39 @@ async def outlook_list_contacts_delta(
     """
     client = _get_graph_client(ctx)
     return await contacts_delta.list_contacts_delta(client, page_size, delta_token)
+
+
+# ── Digest Tool ─────────────────────────────────────────
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_changes_since(
+    ctx: Context,
+    delta_tokens: dict | None = None,
+    fallback_window_hours: int = 24,
+) -> dict:
+    """One structured "since last call" digest across mail, events, and contacts.
+
+    Use this for recurring agent loops (morning brief, hourly inbox sweep) — one call
+    returns counts, urgent_flagged mail, by-sender rollup, plus new/cancelled events and
+    contacts counts. Use the three individual delta tools (outlook_list_inbox_delta,
+    outlook_list_events_delta, outlook_list_contacts_delta) when you need raw item lists
+    or per-resource control.
+
+    Example: first call: outlook_changes_since(); next:
+    outlook_changes_since(delta_tokens=<delta_tokens from prior response>).
+    First call returns a snapshot filtered to the last `fallback_window_hours` (default 24)
+    so the digest doesn't surface thousands of historical items; subsequent calls (tokens
+    passed back) return only what changed. Each resource's token is independent — drop
+    one stale token without re-syncing the others. If Graph 410s on a token
+    (`syncStateNotFound`), that resource auto-resyncs and `_meta.resync` lists which one.
+    `urgent_flagged` = high-importance OR flagged mail. `by_sender` = top 5 senders.
+    Calendar `modified[]` is reserved for future use — modified events surface in `new[]`
+    today (Graph delta doesn't distinguish them).
+    """
+    client = _get_graph_client(ctx)
+    return await digest.changes_since(client, delta_tokens, fallback_window_hours)
 
 
 # ── To Do Tools ────────────────────────────────────────
