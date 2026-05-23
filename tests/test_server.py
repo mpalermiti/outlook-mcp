@@ -48,6 +48,8 @@ EXPECTED_TOOLS = [
     "outlook_update_contact",
     "outlook_delete_contact",
     "outlook_list_contacts_delta",
+    # Digest (1)
+    "outlook_changes_since",
     # To Do (6)
     "outlook_list_task_lists",
     "outlook_list_tasks",
@@ -89,9 +91,9 @@ EXPECTED_TOOLS = [
 
 
 def test_tool_count():
-    """All 60 tools are registered (auth is CLI-only now)."""
+    """All 61 tools are registered (auth is CLI-only now)."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 60
+    assert len(registered) == 61
 
 
 def test_all_tools_registered():
@@ -194,6 +196,43 @@ async def test_wrap_tool_errors_passes_through_unknown_exception():
 
     with pytest.raises(WeirdError, match="surprise"):
         await fake_tool()
+
+
+@pytest.mark.asyncio
+async def test_outlook_changes_since_returns_top_level_shape():
+    """End-to-end: the digest wrapper returns mail/events/contacts/delta_tokens/window."""
+    fake_ctx = MagicMock()
+    fake_ctx.request_context.lifespan_context = {
+        "auth": MagicMock(),
+        "config": MagicMock(),
+    }
+
+    fake_response = {
+        "mail": {
+            "new_count": 0,
+            "modified_count": 0,
+            "removed_count": 0,
+            "urgent_flagged": [],
+            "by_sender": {},
+        },
+        "events": {"new": [], "modified": [], "cancelled": []},
+        "contacts": {"new_count": 0, "modified_count": 0, "removed_count": 0},
+        "delta_tokens": {"mail": "m", "events": "e", "contacts": "c"},
+        "window": {"from": "2026-05-21T00:00:00Z", "to": "2026-05-22T00:00:00Z"},
+    }
+
+    from outlook_mcp import server as server_mod
+
+    async def fake_changes_since(client, tokens, hours):
+        return fake_response
+
+    with (
+        patch.object(server_mod, "_get_graph_client", return_value=MagicMock()),
+        patch.object(server_mod.digest, "changes_since", side_effect=fake_changes_since),
+    ):
+        result = await server_mod.outlook_changes_since(fake_ctx)
+
+    assert set(result.keys()) >= {"mail", "events", "contacts", "delta_tokens", "window"}
 
 
 @pytest.mark.asyncio
