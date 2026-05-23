@@ -195,6 +195,35 @@ async def outlook_read_message(
 
 @mcp.tool()
 @_wrap_tool_errors
+async def outlook_read_messages(
+    ctx: Context,
+    message_ids: list[str],
+    format: str = "text",
+    concise: bool = False,
+    include_deferred_send: bool = False,
+) -> dict:
+    """Bulk read up to 20 messages by ID via $batch — use NOT N outlook_read_message calls.
+
+    Per-message shape in `messages` matches outlook_read_message byte-for-byte for the same
+    (format, concise, include_deferred_send). Ordering follows input `message_ids`. Returns
+    `{messages, failures, requested, succeeded, failed}` — 404s on some IDs are surfaced in
+    `failures` without failing the whole call (partial-failure tolerant).
+
+    Example: outlook_read_messages(message_ids=[id1, id2, id3], concise=True)
+    Hard cap of 20 (Graph $batch limit).
+    """
+    client = _get_graph_client(ctx)
+    return await mail_read.read_messages(
+        client,
+        message_ids,
+        format=format,
+        concise=concise,
+        include_deferred_send=include_deferred_send,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
 async def outlook_search_mail(
     ctx: Context,
     query: str,

@@ -1,8 +1,12 @@
-"""Mail read tools: list_inbox, read_message, search_mail, list_folders."""
+"""Mail read tools: list_inbox, read_message, read_messages, search_mail, list_folders."""
 
 from __future__ import annotations
 
+import json
 from typing import Any
+from urllib.parse import quote
+
+import httpx
 
 from outlook_mcp.folder_resolver import (
     fetch_all_child_folders,
@@ -17,6 +21,11 @@ from outlook_mcp.validation import (
     validate_email,
     validate_graph_id,
 )
+
+GRAPH_BASE = "https://graph.microsoft.com/v1.0/"
+GRAPH_TOKEN_SCOPE = "https://graph.microsoft.com/.default"
+BATCH_URL = GRAPH_BASE + "$batch"
+MAX_BATCH_SIZE = 20
 
 
 def _clamp(value: int, low: int, high: int) -> int:
@@ -167,6 +176,190 @@ async def list_inbox(
     }
 
 
+def _format_read_message_from_sdk(
+    msg: Any, format: str, concise: bool, deferred_value: str | None, include_deferred_send: bool
+) -> dict:
+    """Build the ``read_message`` wire shape from an SDK ``Message`` object.
+
+    Module-private — extracted from ``read_message`` so the bulk-read tool
+    (``read_messages``) can share the same body / preview / sanitization
+    logic via the ``_format_read_message_from_raw`` adapter below.
+    """
+    from_addr = ""
+    from_name = ""
+    if msg.from_ and msg.from_.email_address:
+        from_addr = msg.from_.email_address.address or ""
+        from_name = msg.from_.email_address.name or ""
+
+    to_list = []
+    for r in msg.to_recipients or []:
+        if r.email_address:
+            to_list.append({
+                "name": sanitize_output(r.email_address.name or ""),
+                "email": r.email_address.address or "",
+            })
+
+    cc_list = []
+    for r in msg.cc_recipients or []:
+        if r.email_address:
+            cc_list.append({
+                "name": sanitize_output(r.email_address.name or ""),
+                "email": r.email_address.address or "",
+            })
+
+    body_text = ""
+    body_html = None
+    if msg.body:
+        content = msg.body.content or ""
+        if format in ("html", "full"):
+            body_html = content
+        if format in ("text", "full"):
+            body_text = sanitize_output(content, multiline=True)
+
+    attachments = []
+    for att in msg.attachments or []:
+        attachments.append({
+            "id": att.id,
+            "name": sanitize_output(att.name or ""),
+            "size": att.size or 0,
+        })
+
+    importance = "normal"
+    if msg.importance and hasattr(msg.importance, "value"):
+        importance = msg.importance.value
+
+    flag_status = "notFlagged"
+    if msg.flag and msg.flag.flag_status and hasattr(msg.flag.flag_status, "value"):
+        flag_status = msg.flag.flag_status.value
+
+    result = {
+        "id": msg.id,
+        "subject": sanitize_output(msg.subject or "(no subject)"),
+        "from_email": from_addr,
+        "from_name": sanitize_output(from_name),
+        "to": to_list,
+        "cc": cc_list,
+        "received": str(msg.received_date_time or ""),
+        "body": body_text,
+        "body_html": body_html,
+        "is_read": bool(msg.is_read),
+        "importance": importance,
+        "has_attachments": bool(msg.has_attachments),
+        "attachments": attachments,
+        "categories": list(msg.categories or []),
+        "flag": flag_status,
+        "conversation_id": msg.conversation_id or "",
+    }
+
+    if concise:
+        # Surface a compact preview drawn from whichever body content we have.
+        preview_source = msg.body.content if msg.body and msg.body.content else ""
+        result.pop("body", None)
+        result.pop("body_html", None)
+        result["body_preview"] = _make_body_preview(preview_source)
+
+    if include_deferred_send:
+        result["deferred_send_datetime"] = deferred_value
+
+    return result
+
+
+def _format_read_message_from_raw(
+    raw: dict, format: str, concise: bool, include_deferred_send: bool
+) -> dict:
+    """Build the ``read_message`` wire shape from a raw Graph JSON dict.
+
+    Used by the bulk-read tool (``read_messages``) which goes through
+    Graph's ``$batch`` endpoint via raw httpx — the SDK ``Message`` object
+    isn't available there. Output is byte-identical to
+    ``_format_read_message_from_sdk`` for the same input message.
+
+    Mirrors ``mail_delta._format_message_delta`` in spirit (dict-shape
+    Graph response → outlook-mcp wire shape).
+    """
+    fa = raw.get("from") or {}
+    from_ea = fa.get("emailAddress") or {}
+    from_addr = from_ea.get("address") or ""
+    from_name = from_ea.get("name") or ""
+
+    to_list = []
+    for r in raw.get("toRecipients") or []:
+        ea = (r or {}).get("emailAddress") or {}
+        to_list.append({
+            "name": sanitize_output(ea.get("name") or ""),
+            "email": ea.get("address") or "",
+        })
+
+    cc_list = []
+    for r in raw.get("ccRecipients") or []:
+        ea = (r or {}).get("emailAddress") or {}
+        cc_list.append({
+            "name": sanitize_output(ea.get("name") or ""),
+            "email": ea.get("address") or "",
+        })
+
+    body = raw.get("body") or {}
+    content = body.get("content") or ""
+    body_text = ""
+    body_html = None
+    if format in ("html", "full"):
+        body_html = content
+    if format in ("text", "full"):
+        body_text = sanitize_output(content, multiline=True)
+
+    attachments = []
+    for att in raw.get("attachments") or []:
+        attachments.append({
+            "id": att.get("id"),
+            "name": sanitize_output(att.get("name") or ""),
+            "size": att.get("size") or 0,
+        })
+
+    flag_status = "notFlagged"
+    flag_node = raw.get("flag")
+    if isinstance(flag_node, dict):
+        flag_status = flag_node.get("flagStatus") or "notFlagged"
+
+    result = {
+        "id": raw.get("id"),
+        "subject": sanitize_output(raw.get("subject") or "(no subject)"),
+        "from_email": from_addr,
+        "from_name": sanitize_output(from_name),
+        "to": to_list,
+        "cc": cc_list,
+        "received": str(raw.get("receivedDateTime") or ""),
+        "body": body_text,
+        "body_html": body_html,
+        "is_read": bool(raw.get("isRead")),
+        "importance": raw.get("importance") or "normal",
+        "has_attachments": bool(raw.get("hasAttachments")),
+        "attachments": attachments,
+        "categories": list(raw.get("categories") or []),
+        "flag": flag_status,
+        "conversation_id": raw.get("conversationId") or "",
+    }
+
+    if concise:
+        result.pop("body", None)
+        result.pop("body_html", None)
+        result["body_preview"] = _make_body_preview(content)
+
+    if include_deferred_send:
+        from outlook_mcp.tools.mail_drafts import _PR_DEFERRED_SEND_TIME_ID
+
+        # Graph normalizes the property tag's hex segment to lowercase
+        # in the response (matches the SDK path in ``read_message``).
+        target = _PR_DEFERRED_SEND_TIME_ID.lower()
+        deferred_value: str | None = None
+        for prop in raw.get("singleValueExtendedProperties") or []:
+            if ((prop or {}).get("id") or "").lower() == target:
+                deferred_value = prop.get("value")
+                break
+        result["deferred_send_datetime"] = deferred_value
+
+    return result
+
+
 def _make_body_preview(content: str, limit: int = 200) -> str:
     """Compact a body to a single-line ``body_preview`` of at most ``limit`` chars.
 
@@ -258,83 +451,159 @@ async def read_message(
     else:
         msg = await graph_client.me.messages.by_message_id(message_id).get()
 
-    from_addr = ""
-    from_name = ""
-    if msg.from_ and msg.from_.email_address:
-        from_addr = msg.from_.email_address.address or ""
-        from_name = msg.from_.email_address.name or ""
+    return _format_read_message_from_sdk(
+        msg, format, concise, deferred_value, include_deferred_send
+    )
 
-    to_list = []
-    for r in msg.to_recipients or []:
-        if r.email_address:
-            to_list.append({
-                "name": sanitize_output(r.email_address.name or ""),
-                "email": r.email_address.address or "",
-            })
 
-    cc_list = []
-    for r in msg.cc_recipients or []:
-        if r.email_address:
-            cc_list.append({
-                "name": sanitize_output(r.email_address.name or ""),
-                "email": r.email_address.address or "",
-            })
+def _build_read_subrequest_url(message_id: str, include_deferred_send: bool) -> str:
+    """Build the per-sub-request URL path for ``read_messages``.
 
-    body_text = ""
-    body_html = None
-    if msg.body:
-        content = msg.body.content or ""
-        if format in ("html", "full"):
-            body_html = content
-        if format in ("text", "full"):
-            body_text = sanitize_output(content, multiline=True)
+    Matches what ``read_message`` requests:
 
-    attachments = []
-    for att in msg.attachments or []:
-        attachments.append({
-            "id": att.id,
-            "name": sanitize_output(att.name or ""),
-            "size": att.size or 0,
+    - Default: ``/me/messages/{id}`` (all default fields).
+    - ``include_deferred_send=True``: adds the singleValueExtendedProperties
+      expansion filtered to ``PR_DEFERRED_SEND_TIME``, same as the raw URL
+      ``read_message`` builds via Kiota's ``RAW_URL_KEY`` path.
+    """
+    safe_id = quote(message_id, safe="")
+    if not include_deferred_send:
+        return f"/me/messages/{safe_id}"
+
+    from outlook_mcp.tools.mail_drafts import _PR_DEFERRED_SEND_TIME_ID
+
+    filter_expr = f"id eq '{_PR_DEFERRED_SEND_TIME_ID}'"
+    # Match ``read_message``: keep ``= '`` literal, percent-encode the rest.
+    encoded_filter = quote(filter_expr, safe="= '")
+    return (
+        f"/me/messages/{safe_id}"
+        f"?$expand=singleValueExtendedProperties($filter={encoded_filter})"
+    )
+
+
+async def read_messages(
+    graph_client: Any,
+    message_ids: list[str],
+    format: str = "text",
+    concise: bool = False,
+    include_deferred_send: bool = False,
+) -> dict:
+    """Read up to 20 messages by ID in a single Graph ``$batch`` round-trip.
+
+    Replaces N sequential ``read_message`` calls with one HTTP request.
+    Each per-message entry in ``messages`` matches what ``read_message``
+    returns for the same ``(format, concise, include_deferred_send)``
+    combo, byte-for-byte. Ordering follows the input ``message_ids``
+    list, not Graph's response order.
+
+    Args:
+        graph_client: A ``GraphClient`` instance. Needs ``credential`` for
+            bearer-token minting (the SDK client isn't used here — raw
+            httpx hits the ``$batch`` endpoint directly).
+        message_ids: 1-20 Graph message IDs. Each is validated via
+            ``validate_graph_id`` before the HTTP call.
+        format: ``"text"`` (default), ``"html"``, or ``"full"`` — same
+            semantics as ``read_message``.
+        concise: When True, drop ``body``/``body_html`` per the v1.8.0
+            concise contract; surface a single-line ``body_preview``.
+        include_deferred_send: When True, fetch the
+            PR_DEFERRED_SEND_TIME extended property on each message and
+            surface it as ``deferred_send_datetime``.
+
+    Returns:
+        ``{messages, failures, requested, succeeded, failed}`` where
+        ``messages`` is the list of read_message-shaped dicts in input
+        order (failed IDs skipped), and ``failures`` is a list of
+        ``{id, status, code, message}`` for sub-requests that didn't
+        return 2xx. Input-validation errors raise ``ValueError``;
+        transport-level errors raise ``httpx.HTTPStatusError`` (a 5xx on
+        the whole batch is *not* a partial failure).
+    """
+    if not message_ids:
+        raise ValueError("message_ids must not be empty")
+    if len(message_ids) > MAX_BATCH_SIZE:
+        raise ValueError(
+            f"Maximum {MAX_BATCH_SIZE} messages per batch (Graph API limit)"
+        )
+
+    # Fail fast on malformed IDs *before* any HTTP work.
+    for mid in message_ids:
+        validate_graph_id(mid)
+
+    credential = graph_client.credential
+
+    subrequests = []
+    for i, mid in enumerate(message_ids):
+        subrequests.append({
+            "id": str(i),
+            "method": "GET",
+            "url": _build_read_subrequest_url(mid, include_deferred_send),
         })
 
-    importance = "normal"
-    if msg.importance and hasattr(msg.importance, "value"):
-        importance = msg.importance.value
+    batch_body = {"requests": subrequests}
 
-    flag_status = "notFlagged"
-    if msg.flag and msg.flag.flag_status and hasattr(msg.flag.flag_status, "value"):
-        flag_status = msg.flag.flag_status.value
-
-    result = {
-        "id": msg.id,
-        "subject": sanitize_output(msg.subject or "(no subject)"),
-        "from_email": from_addr,
-        "from_name": sanitize_output(from_name),
-        "to": to_list,
-        "cc": cc_list,
-        "received": str(msg.received_date_time or ""),
-        "body": body_text,
-        "body_html": body_html,
-        "is_read": bool(msg.is_read),
-        "importance": importance,
-        "has_attachments": bool(msg.has_attachments),
-        "attachments": attachments,
-        "categories": list(msg.categories or []),
-        "flag": flag_status,
-        "conversation_id": msg.conversation_id or "",
+    tok = credential.get_token(GRAPH_TOKEN_SCOPE)
+    headers = {
+        "Authorization": f"Bearer {tok.token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
     }
 
-    if concise:
-        # Surface a compact preview drawn from whichever body content we have.
-        preview_source = msg.body.content if msg.body and msg.body.content else ""
-        result.pop("body", None)
-        result.pop("body_html", None)
-        result["body_preview"] = _make_body_preview(preview_source)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            BATCH_URL,
+            headers=headers,
+            content=json.dumps(batch_body),
+        )
+        resp.raise_for_status()
+        payload = resp.json()
 
-    if include_deferred_send:
-        result["deferred_send_datetime"] = deferred_value
+    # Rebuild input ordering. Graph's spec lets responses arrive in any
+    # order; we used the input index as the sub-request id so reassembly
+    # is trivial.
+    responses_by_id: dict[str, dict] = {}
+    for sub in payload.get("responses") or []:
+        responses_by_id[str(sub.get("id"))] = sub
 
-    return result
+    messages: list[dict] = []
+    failures: list[dict] = []
+
+    for i, mid in enumerate(message_ids):
+        sub = responses_by_id.get(str(i))
+        if sub is None:
+            failures.append({
+                "id": mid,
+                "status": 0,
+                "code": "NoResponse",
+                "message": "no sub-response returned by Graph for this id",
+            })
+            continue
+
+        status = sub.get("status", 0)
+        body = sub.get("body") or {}
+
+        if 200 <= status < 300:
+            messages.append(
+                _format_read_message_from_raw(
+                    body, format, concise, include_deferred_send
+                )
+            )
+        else:
+            err = body.get("error") or {}
+            failures.append({
+                "id": mid,
+                "status": status,
+                "code": err.get("code") or "",
+                "message": err.get("message") or "",
+            })
+
+    return {
+        "messages": messages,
+        "failures": failures,
+        "requested": len(message_ids),
+        "succeeded": len(messages),
+        "failed": len(failures),
+    }
 
 
 async def search_mail(
