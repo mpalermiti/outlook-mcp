@@ -24,7 +24,7 @@ You'll like this if you're:
 - Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
 - Security-conscious: tokens in the OS keyring (Keychain on macOS), granular `allow_categories`, optional `read_only` mode, zero telemetry
 
-This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 60 tools — way more than you need for "read my inbox").
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 61 tools — way more than you need for "read my inbox").
 
 ### How it differs from other Outlook tools you'll find
 
@@ -44,7 +44,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 60 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 61 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -59,10 +59,10 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 ## Features
 
-**60 tools** across 13 categories:
+**61 tools** across 13 categories:
 
 - **Auth (1)** -- auth status check (login is via CLI)
-- **Mail Read (5)** -- list inbox (with Focused Inbox filter), read message, search (KQL), list folders, delta-sync inbox changes
+- **Mail Read (6)** -- list inbox (with Focused Inbox filter), read message, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
 - **Mail Write (3)** -- send, reply/reply-all, forward
 - **Mail Triage (9)** -- move, delete (soft by default), flag, categorize, mark read/unread, reclassify (Focused Inbox), list/set/delete per-sender Focused Inbox overrides
 - **Calendar Read (3)** -- list events (with recurring expansion), get event details, delta-sync event changes
@@ -245,6 +245,7 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 | `outlook_search_mail` | Search mail using KQL query. Optionally scope to a folder by name or ID. |
 | `outlook_list_folders` | List mail folders with counts, `parent_id`, and `child_count`. Pass `recursive=true` to walk the full folder tree (subfolders included). |
 | `outlook_list_inbox_delta` | List only inbox changes since the last call. First call returns a full snapshot plus a `delta_token`; subsequent calls (token passed back) return only added/updated/deleted items. Deletes come back as `{id, is_deleted: True}`. Cursor is stateless — agent persists and replays. |
+| `outlook_changes_since` | One structured "since last call" digest composing mail/events/contacts deltas. Returns counts + `urgent_flagged` mail + top-5 `by_sender` + new/cancelled events. Each resource has an independent `delta_token`; stale-token recovery (HTTP 410) auto-resyncs that resource and surfaces `_meta.resync`. First-call snapshot is filtered to `fallback_window_hours` (default 24). Designed for recurring agent loops. |
 
 ### Mail Write
 

@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 60 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 61 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -56,7 +56,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
    ```
 6. **Restart the gateway:** `openclaw gateway restart`
 
-## Tools (60)
+## Tools (61)
 
 ### Auth
 - `outlook_auth_status` — Check authentication status and read-only mode
@@ -101,6 +101,9 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_update_contact` — Update
 - `outlook_delete_contact` — Delete
 - `outlook_list_contacts_delta` — List only contact changes since last call (massive token savings for recurring agent jobs)
+
+### Digest
+- `outlook_changes_since` — One structured "since last call" digest across mail, events, and contacts. Composes the three delta tools into counts + urgent-flagged mail + top-5 senders + new/cancelled events; auto-recovers from stale tokens. Designed for recurring agent loops (morning brief, hourly inbox sweep).
 
 ### To Do
 - `outlook_list_task_lists` — List To Do lists
