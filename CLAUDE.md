@@ -41,6 +41,7 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
   - `calendar_delta.py` — Calendar delta-sync queries (`outlook_list_events_delta`)
   - `contacts_delta.py` — Contacts delta-sync queries (`outlook_list_contacts_delta`)
   - `_delta.py` — Shared httpx-backed delta helper (raw HTTP bypasses the SDK)
+  - `digest.py` — Composed "since last call" digest (`outlook_changes_since`) wrapping the three delta tools
 - `src/outlook_mcp/models/` — Pydantic models for I/O
 
 ## Conventions

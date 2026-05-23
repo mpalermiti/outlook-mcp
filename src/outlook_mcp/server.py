@@ -783,7 +783,8 @@ async def outlook_changes_since(
     (`syncStateNotFound`), that resource auto-resyncs and `_meta.resync` lists which one.
     `urgent_flagged` = high-importance OR flagged mail. `by_sender` = top 5 senders.
     Calendar `modified[]` is reserved for future use — modified events surface in `new[]`
-    today (Graph delta doesn't distinguish them).
+    today (Graph delta doesn't distinguish them). Calendar `organizer_email` is also
+    currently empty (the v1.9.0 delta formatter surfaces the organizer name only).
     """
     client = _get_graph_client(ctx)
     return await digest.changes_since(client, delta_tokens, fallback_window_hours)

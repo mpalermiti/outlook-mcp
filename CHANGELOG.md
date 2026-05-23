@@ -4,6 +4,30 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] — 2026-05-22
+
+### Added — Composed "since last call" digest (1 tool)
+
+One new MCP tool: `outlook_changes_since(delta_tokens=None, fallback_window_hours=24)`. Wraps the three v1.9.0 delta tools (mail, events, contacts) into a single structured payload. Designed for recurring agent loops — a morning brief or hourly inbox sweep that wants ONE call instead of orchestrating three deltas and reasoning over raw item shapes itself.
+
+**Return shape (top-level):**
+- `mail`: `{new_count, modified_count, removed_count, urgent_flagged[], by_sender{}}` — `urgent_flagged` is mail where `importance == "high"` OR `flag == "flagged"`; `by_sender` is the top 5 senders by message count in the digest window.
+- `events`: `{new[], modified[], cancelled[]}` — cancelled bucket holds delta tombstones; modified bucket is currently reserved (Graph delta responses don't carry an affirmative change marker on live events, so changes surface as `new[]` today — see the tool docstring).
+- `contacts`: `{new_count, modified_count, removed_count}`.
+- `delta_tokens`: `{mail, events, contacts}` — caller-managed watermarks for the next call, same pattern as the v1.9.0 delta tools.
+- `window`: `{from, to}` — when the digest's bootstrap window starts/ends.
+
+**First-call behavior.** For each resource without a delta token, the digest bootstraps by calling the underlying delta tool with no token (which returns a full snapshot plus a fresh token). It then filters the snapshot to the last `fallback_window_hours` so the digest doesn't surface thousands of historical items on first run. For calendar specifically: passes `start = now - fallback_window_hours` and `end = now + 7 days` to capture recent + upcoming changes.
+
+**Subsequent-call behavior.** With a stored `delta_tokens` dict the digest uses each token verbatim, drains pagination up to 5 internal pages (~1,000 items per resource per call), and classifies each item. Each resource is independent — a missing or stale token for one doesn't block the other two.
+
+**`syncStateNotFound` recovery.** If a stored token is too old, Graph returns HTTP 410. The digest auto-drops that bad token, re-bootstraps just that resource as a "first call", and surfaces `_meta.resync: ["mail"]` (etc.) so the caller knows their watermark was discarded. Other resources are unaffected.
+
+**No new Graph endpoints.** This release composes already-tested v1.9.0 endpoints; preflight remains at 13 endpoints.
+
+### Tool count
+- 1.9.1 → 1.10.0: **60 → 61 tools, 13 categories** (no new category).
+
 ## [1.9.1] — 2026-05-22
 
 ### Changed — Tool docstring audit (no behavior change)
