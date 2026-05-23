@@ -4,6 +4,18 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] — 2026-05-22
+
+### Added — Bulk message read via `$batch` (1 tool)
+
+One new MCP tool: `outlook_read_messages(message_ids, format="text", concise=False, include_deferred_send=False)`. Reads up to 20 messages by ID in a single Graph `$batch` round-trip instead of N sequential calls. Per-message shape in `messages[]` matches `outlook_read_message` byte-for-byte for the same `(format, concise, include_deferred_send)` combo — agents can collapse a "fetch N messages by ID" loop into one call without changing how they consume the result.
+
+**Return shape.** `{messages, failures, requested, succeeded, failed}` where `messages` is the read_message-shaped dicts in input order (Graph response order is not trusted; the impl uses the input index as the sub-request id and rebuilds), `failures` is `{id, status, code, message}` for IDs that didn't return 2xx, and the three counts satisfy `requested == succeeded + failed`.
+
+**Partial failures are not exceptions.** A 404 on one of 20 IDs surfaces in `failures[]`; the other 19 are returned in `messages[]`. Only input-validation errors (empty list, >20 IDs, malformed Graph ID) and transport-level failures (Graph 5xx on the whole batch) raise.
+
+**Tool count: 61 → 62, 13 categories** (no new category — extends Mail Read).
+
 ## [1.10.0] — 2026-05-22
 
 ### Added — Composed "since last call" digest (1 tool)

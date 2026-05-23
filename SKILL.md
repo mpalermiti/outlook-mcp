@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 61 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 62 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -56,7 +56,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
    ```
 6. **Restart the gateway:** `openclaw gateway restart`
 
-## Tools (61)
+## Tools (62)
 
 ### Auth
 - `outlook_auth_status` — Check authentication status and read-only mode
@@ -64,6 +64,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 ### Mail — Read
 - `outlook_list_inbox` — List messages with filters (folder, unread, sender, date)
 - `outlook_read_message` — Get full message by ID
+- `outlook_read_messages` — Bulk read up to 20 messages by ID in one `$batch` round-trip (use NOT N read_message calls)
 - `outlook_search_mail` — Search mail using KQL query
 - `outlook_list_folders` — List all mail folders
 - `outlook_list_inbox_delta` — List only inbox changes since last call (massive token savings for recurring agent jobs)
