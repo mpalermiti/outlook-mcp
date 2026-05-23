@@ -140,14 +140,15 @@ async def outlook_list_inbox(
     classification: str | None = None,
     concise: bool = False,
 ) -> dict:
-    """List messages. Filters: read status, sender, date, Focused Inbox classification.
+    """List messages in one folder with structured filters (read, sender, date, Focused class).
 
-    `folder` accepts display names ("Junk Email", "Sent Items", "TLDR"), well-known
-    names ("inbox", "junkemail", "sentitems"), or Graph IDs. Prefer names — do not
-    cache or transcribe Graph IDs across turns.
+    Use this for folder-scoped browsing; use outlook_search_mail for KQL full-text search across
+    all folders. For polling/recurring agents use outlook_list_inbox_delta (typically 10x cheaper
+    after the first call).
 
-    Pass `concise=True` to drop preview/categories per message — ~10x fewer tokens,
-    suitable for triage scans before deciding to fetch full content.
+    Example: outlook_list_inbox(folder="Junk Email", unread_only=True, count=5)
+    `folder` accepts display names, well-known names ("inbox", "junkemail"), or Graph IDs — prefer
+    names. Pass concise=True to drop large fields (preview, categories) — ~10x fewer tokens.
     """
     client = _get_graph_client(ctx)
     return await mail_read.list_inbox(
@@ -174,16 +175,12 @@ async def outlook_read_message(
     include_deferred_send: bool = False,
     concise: bool = False,
 ) -> dict:
-    """Get full message by ID. Format: text, html, or full (both).
+    """Get one full message by ID. `format` is "text", "html", or "full" (both).
 
-    Pass ``include_deferred_send=True`` to surface the
-    PR_DEFERRED_SEND_TIME extended property as ``deferred_send_datetime``
-    in the response. Useful when you need to recreate a scheduled draft
-    (e.g. delete + create-fresh) and want to preserve its scheduled time.
-
-    Pass `concise=True` to drop the full body (and body_html) and surface a
-    single-line `body_preview` (first 200 chars) — ~10x fewer tokens,
-    suitable for triage scans before deciding to fetch full content.
+    Pass include_deferred_send=True to also return the scheduled-send time (PR_DEFERRED_SEND_TIME)
+    as deferred_send_datetime — useful when recreating a delayed draft.
+    Pass concise=True to drop large fields (body, body_html) and return a 200-char body_preview —
+    ~10x fewer tokens for triage scans.
     """
     client = _get_graph_client(ctx)
     return await mail_read.read_message(
@@ -205,13 +202,14 @@ async def outlook_search_mail(
     cursor: str | None = None,
     concise: bool = False,
 ) -> dict:
-    """Search mail using KQL query. Query is automatically sanitized.
+    """Full-text search mail with KQL across all folders (or one, if `folder` is set).
 
-    `folder` accepts display names ("Junk Email", "TLDR"), well-known names,
-    or Graph IDs. Prefer names — do not cache or transcribe Graph IDs across turns.
+    Use this for "find emails about X"; use outlook_list_inbox for structured filters scoped to a
+    single folder.
 
-    Pass `concise=True` to drop preview/categories per message — ~10x fewer tokens,
-    suitable for triage scans before deciding to fetch full content.
+    Example: outlook_search_mail(query="from:sarah@acme.com received>=2026-01-01", count=10)
+    `query` is Microsoft KQL (from:, subject:, received>=, hasattachment:true, AND/OR/NOT).
+    Pass concise=True to drop large fields (preview, categories) — ~10x fewer tokens.
     """
     client = _get_graph_client(ctx)
     return await mail_read.search_mail(
@@ -226,12 +224,10 @@ async def outlook_list_folders(
     cursor: str | None = None,
     recursive: bool = False,
 ) -> dict:
-    """List mail folders with message counts, parent ID, and child count.
+    """List mail folders with message counts, parent_id, and child count.
 
-    Default returns top-level folders only. Pass `recursive=True` to walk the
-    full folder tree — use this when searching for subfolders or mapping the
-    hierarchy. Each folder includes `parent_id` so callers can reconstruct the
-    tree.
+    Default is top-level only; pass recursive=True to walk the full tree and resolve subfolder
+    names.
     """
     client = _get_graph_client(ctx)
     return await mail_read.list_folders(client.sdk_client, cursor=cursor, recursive=recursive)
@@ -245,23 +241,15 @@ async def outlook_list_inbox_delta(
     page_size: int = 50,
     delta_token: str | None = None,
 ) -> dict:
-    """List only messages that changed since the last call. Stateless cursor.
+    """List only inbox changes since the last call.
 
-    First call (no ``delta_token``): full snapshot of ``folder``. Returns a
-    ``delta_token`` you persist on the agent side.
+    Use this for polling/recurring agents — typically 10x cheaper than outlook_list_inbox after
+    the first call. Use outlook_list_inbox for one-shot snapshots.
 
-    Subsequent calls (pass that token back): only added/updated/deleted
-    messages since the previous call. Deleted messages return as
-    ``{id, is_deleted: True}`` with no other fields — agents should treat
-    them as tombstones and drop any cached payload.
-
-    When ``has_more=True`` the per-call cap stopped mid-sync; pass the
-    returned ``delta_token`` back immediately to keep draining. When
-    ``delta_token`` comes back ``None`` Graph signaled "no change" — keep
-    using your previous token.
-
-    Massive token savings for recurring agent jobs (morning briefs, hourly
-    polls): a stable inbox returns ~0 messages per call instead of 25.
+    Example: first call: outlook_list_inbox_delta(); next:
+    outlook_list_inbox_delta(delta_token=<token from prior response>).
+    is_deleted=True items are tombstones (drop cached payload). has_more=True means drain
+    immediately by passing the returned delta_token back.
     """
     client = _get_graph_client(ctx)
     return await mail_delta.list_inbox_delta(client, folder, page_size, delta_token)
@@ -285,10 +273,11 @@ async def outlook_send_message(
     request_read_receipt: bool = False,
     reply_to: list[str] | None = None,
 ) -> dict:
-    """Send email with recipients, CC, BCC, HTML support, importance, and sensitivity.
+    """Send an email immediately, no human review.
 
-    Pass ``reply_to`` to have recipient replies routed to addresses other than
-    the authenticated sender (e.g. a shared team alias).
+    For human-review workflows use outlook_create_draft + outlook_send_draft instead.
+    For replying to an existing message use outlook_reply; for calendar invites use outlook_rsvp.
+    Pass reply_to to route recipient replies to a different address (e.g. a shared team alias).
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -317,7 +306,10 @@ async def outlook_reply(
     reply_all: bool = False,
     is_html: bool = False,
 ) -> dict:
-    """Reply or reply-all to a message."""
+    """Reply (or reply-all) to an email message.
+
+    Use this for email; use outlook_rsvp for calendar meeting invites.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_write.reply(
@@ -333,7 +325,7 @@ async def outlook_forward(
     to: list[str],
     comment: str | None = None,
 ) -> dict:
-    """Forward a message to recipients."""
+    """Forward an existing message to new recipients, with optional comment."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_write.forward(client.sdk_client, message_id, to, comment, config=config)
@@ -349,10 +341,11 @@ async def outlook_move_message(
     message_id: str,
     folder: str,
 ) -> dict:
-    """Move a message to a folder.
+    """Move a message to another folder (removes from source).
 
-    `folder` accepts display names ("Junk Email", "Archive", "TLDR"), well-known
-    names ("inbox", "deleteditems"), or Graph IDs. Prefer names.
+    Use outlook_copy_message to duplicate without removing the source. For deletion use
+    outlook_delete_message (not move to "deleteditems"). `folder` accepts display names,
+    well-known names ("inbox", "archive", "deleteditems"), or Graph IDs — prefer names.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -366,7 +359,11 @@ async def outlook_delete_message(
     message_id: str,
     permanent: bool = False,
 ) -> dict:
-    """Delete a message. Moves to Deleted Items by default. Set permanent=true to hard delete."""
+    """Delete a message — soft delete (to Deleted Items) by default; permanent=True to hard-delete.
+
+    This is the canonical way to delete a message. Do NOT use
+    outlook_move_message(folder="deleteditems") for deletion.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_triage.delete_message(client.sdk_client, message_id, permanent, config=config)
@@ -379,7 +376,7 @@ async def outlook_flag_message(
     message_id: str,
     status: str,
 ) -> dict:
-    """Set follow-up flag. Status: flagged, complete, or notFlagged."""
+    """Set the follow-up flag on a message. `status` is "flagged", "complete", or "notFlagged"."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_triage.flag_message(client.sdk_client, message_id, status, config=config)
@@ -392,7 +389,10 @@ async def outlook_categorize_message(
     message_id: str,
     categories: list[str],
 ) -> dict:
-    """Set categories on a message."""
+    """Set categories on a message (replaces the full list).
+
+    Example: outlook_categorize_message(message_id=..., categories=["Follow-up", "Pricing"])
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_triage.categorize_message(
@@ -407,7 +407,7 @@ async def outlook_mark_read(
     message_id: str,
     is_read: bool,
 ) -> dict:
-    """Mark a message as read or unread."""
+    """Mark a single message as read or unread (set is_read=True or False)."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_triage.mark_read(client.sdk_client, message_id, is_read, config=config)
@@ -420,7 +420,11 @@ async def outlook_reclassify_message(
     message_id: str,
     classification: str,
 ) -> dict:
-    """Reclassify a message's Focused Inbox placement. classification: "focused" or "other"."""
+    """Reclassify ONE message's Focused/Other placement. `classification` is "focused" or "other".
+
+    Use this to fix a single message; use outlook_set_inbox_override for a sticky rule that affects
+    future messages from the same sender.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_triage.reclassify_message(
@@ -431,11 +435,10 @@ async def outlook_reclassify_message(
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_list_inbox_overrides(ctx: Context) -> dict:
-    """List Focused Inbox per-sender override rules.
+    """List the user's Focused Inbox per-sender override rules.
 
-    Returns the user's `inferenceClassification/overrides` — the rule-level
-    parallel of ``outlook_reclassify_message``. Each override forces mail from
-    a given sender into Focused or Other regardless of Graph's inference.
+    Each override forces mail from a given sender into Focused or Other regardless of Graph's
+    inference.
     """
     client = _get_graph_client(ctx)
     return await inference_overrides.list_inbox_overrides(client.sdk_client)
@@ -448,11 +451,13 @@ async def outlook_set_inbox_override(
     sender_email: str,
     classify_as: str,
 ) -> dict:
-    """Upsert a Focused Inbox override for a sender. classify_as: "focused" or "other".
+    """Create or update a sticky Focused/Other rule for a sender (upsert, case-insensitive).
 
-    If an override already exists for ``sender_email`` (case-insensitive),
-    it's PATCHed; otherwise a new one is POSTed. Returns ``status: "created"``
-    or ``status: "updated"`` so callers can distinguish.
+    Use this to permanently change classification for FUTURE messages from a sender; use
+    outlook_reclassify_message to fix ONE existing message.
+
+    Example: outlook_set_inbox_override(sender_email="marketing@acme.com", classify_as="other")
+    Returns status: "created" or "updated".
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -467,7 +472,7 @@ async def outlook_delete_inbox_override(
     ctx: Context,
     override_id: str,
 ) -> dict:
-    """Delete a Focused Inbox override by ID."""
+    """Delete a Focused Inbox per-sender override rule by its ID."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await inference_overrides.delete_inbox_override(
@@ -489,11 +494,12 @@ async def outlook_list_events(
     cursor: str | None = None,
     concise: bool = False,
 ) -> dict:
-    """List calendar events in a date range. Expands recurring events.
+    """List calendar events in a date range (expands recurring instances).
 
-    Pass `concise=True` to drop body/attendees/organizer/categories per event
-    (only id/subject/start/end/location/flags + attendees_count) — ~10x fewer
-    tokens, suitable for day-at-a-glance scans before fetching full event detail.
+    Use for one-shot queries; use outlook_list_events_delta for polling/recurring agents.
+
+    Pass concise=True to drop large fields (body, attendees, organizer, categories) — ~10x fewer
+    tokens for day-at-a-glance scans.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -515,7 +521,7 @@ async def outlook_get_event(
     ctx: Context,
     event_id: str,
 ) -> dict:
-    """Get full event details by ID."""
+    """Get one full calendar event by ID, including body, attendees, organizer, and recurrence."""
     client = _get_graph_client(ctx)
     return await calendar_read.get_event(client.sdk_client, event_id)
 
@@ -529,17 +535,15 @@ async def outlook_list_events_delta(
     page_size: int = 50,
     delta_token: str | None = None,
 ) -> dict:
-    """List only calendar events that changed since the last call.
+    """List only calendar event changes within a window since the last call.
 
-    Graph's ``/me/calendarView/delta`` requires an explicit
-    ``[start, end]`` ISO 8601 window on the first call — there's no
-    whole-calendar sync, only windowed deltas. Subsequent calls
-    (with ``delta_token``) reuse the window encoded in the cursor;
-    ``start`` / ``end`` may be omitted then.
+    Use this for polling/recurring agents — typically 10x cheaper than outlook_list_events after
+    the first call. Use outlook_list_events for one-shot queries.
 
-    Deleted events return as ``{id, is_deleted: True}`` with no other
-    fields. When ``has_more=True`` pass the returned ``delta_token``
-    back immediately to keep draining the round.
+    Example: first call: outlook_list_events_delta(start="2026-05-22T00:00:00Z",
+    end="2026-05-29T00:00:00Z"); next: outlook_list_events_delta(delta_token=<token>).
+    start/end (ISO 8601) required on first call only; the cursor encodes the window thereafter.
+    is_deleted=True items are tombstones. has_more=True means drain immediately.
     """
     client = _get_graph_client(ctx)
     return await calendar_delta.list_events_delta(client, start, end, page_size, delta_token)
@@ -562,7 +566,12 @@ async def outlook_create_event(
     is_online: bool = False,
     recurrence: str | None = None,
 ) -> dict:
-    """Create a calendar event with attendees, recurrence, and online meeting support."""
+    """Create a calendar event with optional attendees, recurrence, and Teams online meeting.
+
+    Example: outlook_create_event(subject="Q3 review", start="2026-08-15T14:00:00Z",
+    end="2026-08-15T15:00:00Z", attendees=["alice@acme.com"], is_online=True)
+    `start`/`end` are ISO 8601. `recurrence` accepts a simple string ("daily", "weekly", "monthly").
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await calendar_write.create_event(
@@ -591,7 +600,7 @@ async def outlook_update_event(
     location: str | None = None,
     body: str | None = None,
 ) -> dict:
-    """Update event fields."""
+    """Update fields on an existing event (partial patch — only provided fields change)."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await calendar_write.update_event(
@@ -605,7 +614,7 @@ async def outlook_delete_event(
     ctx: Context,
     event_id: str,
 ) -> dict:
-    """Delete a calendar event."""
+    """Delete a calendar event by ID (cancels and notifies attendees if you're the organizer)."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await calendar_write.delete_event(client.sdk_client, event_id, config=config)
@@ -619,7 +628,10 @@ async def outlook_rsvp(
     response: str,
     message: str | None = None,
 ) -> dict:
-    """RSVP to an event. Response: accept, decline, or tentative."""
+    """RSVP to a calendar meeting invite. `response` is "accept", "decline", or "tentative".
+
+    Use this for meeting invites; use outlook_reply to reply to a regular email message.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await calendar_write.rsvp(client.sdk_client, event_id, response, message, config=config)
@@ -635,7 +647,10 @@ async def outlook_list_contacts(
     count: int = 25,
     cursor: str | None = None,
 ) -> dict:
-    """List contacts with pagination."""
+    """List contacts with cursor pagination.
+
+    Use for one-shot queries; use outlook_list_contacts_delta for polling/recurring agents.
+    """
     client = _get_graph_client(ctx)
     return await contacts.list_contacts(client.sdk_client, count, cursor=cursor)
 
@@ -647,7 +662,7 @@ async def outlook_search_contacts(
     query: str,
     count: int = 25,
 ) -> dict:
-    """Search contacts using KQL query."""
+    """Search contacts by name or email using KQL query syntax."""
     client = _get_graph_client(ctx)
     return await contacts.search_contacts(client.sdk_client, query, count)
 
@@ -655,7 +670,7 @@ async def outlook_search_contacts(
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_get_contact(ctx: Context, contact_id: str) -> dict:
-    """Get full contact details by ID."""
+    """Get one full contact by ID."""
     client = _get_graph_client(ctx)
     return await contacts.get_contact(client.sdk_client, contact_id)
 
@@ -671,7 +686,7 @@ async def outlook_create_contact(
     company: str | None = None,
     title: str | None = None,
 ) -> dict:
-    """Create a new contact."""
+    """Create a new contact with name and optional email, phone, company, title."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await contacts.create_contact(
@@ -696,7 +711,7 @@ async def outlook_update_contact(
     email: str | None = None,
     phone: str | None = None,
 ) -> dict:
-    """Update an existing contact (partial patch)."""
+    """Update an existing contact (partial patch — only provided fields change)."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await contacts.update_contact(
@@ -726,15 +741,15 @@ async def outlook_list_contacts_delta(
     page_size: int = 50,
     delta_token: str | None = None,
 ) -> dict:
-    """List only contacts that changed since the last call.
+    """List only contact changes since the last call.
 
-    Graph's ``/me/contacts/delta`` accepts no first-call query parameters
-    other than the ``Prefer: odata.maxpagesize=N`` page-size header — the
-    tool wires ``page_size`` to that header and ignores everything else.
+    Use this for polling/recurring agents — typically 10x cheaper than outlook_list_contacts after
+    the first call. Use outlook_list_contacts for one-shot queries.
 
-    Deleted contacts return as ``{id, is_deleted: True}`` with no other
-    fields. When ``has_more=True`` pass the returned ``delta_token``
-    back immediately to keep draining the round.
+    Example: first call: outlook_list_contacts_delta(); next:
+    outlook_list_contacts_delta(delta_token=<token from prior response>).
+    is_deleted=True items are tombstones (drop cached payload). has_more=True means drain
+    immediately by passing the returned delta_token back.
     """
     client = _get_graph_client(ctx)
     return await contacts_delta.list_contacts_delta(client, page_size, delta_token)
@@ -746,7 +761,7 @@ async def outlook_list_contacts_delta(
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_list_task_lists(ctx: Context) -> dict:
-    """List all To Do task lists."""
+    """List all Microsoft To Do task lists for the current user."""
     client = _get_graph_client(ctx)
     return await todo.list_task_lists(client.sdk_client)
 
@@ -760,7 +775,10 @@ async def outlook_list_tasks(
     count: int = 25,
     cursor: str | None = None,
 ) -> dict:
-    """List tasks in a To Do list with optional status filter."""
+    """List tasks in a To Do list with optional `status` filter.
+
+    `status`: "notStarted", "inProgress", or "completed".
+    """
     client = _get_graph_client(ctx)
     return await todo.list_tasks(client.sdk_client, list_id, status, count, cursor=cursor)
 
@@ -777,7 +795,12 @@ async def outlook_create_task(
     reminder: bool | None = None,
     recurrence: dict | None = None,
 ) -> dict:
-    """Create a task in a To Do list."""
+    """Create a Microsoft To Do task with optional due date, importance, body, and recurrence.
+
+    Example: outlook_create_task(title="Send invoice", due="2026-09-01", importance="high")
+    `due` is ISO 8601. `importance` is "low", "normal", or "high". Defaults to the user's default
+    list when `list_id` is omitted.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await todo.create_task(
@@ -804,7 +827,7 @@ async def outlook_update_task(
     body: str | None = None,
     importance: str | None = None,
 ) -> dict:
-    """Update a task in a To Do list (partial patch)."""
+    """Update fields on a To Do task (partial patch — only provided fields change)."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await todo.update_task(
@@ -826,7 +849,7 @@ async def outlook_complete_task(
     task_id: str,
     list_id: str | None = None,
 ) -> dict:
-    """Mark a task as completed."""
+    """Mark a To Do task as completed."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await todo.complete_task(
@@ -844,7 +867,7 @@ async def outlook_delete_task(
     task_id: str,
     list_id: str | None = None,
 ) -> dict:
-    """Delete a task from a To Do list."""
+    """Delete a task from a Microsoft To Do list."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await todo.delete_task(
@@ -865,7 +888,7 @@ async def outlook_list_drafts(
     count: int = 25,
     cursor: str | None = None,
 ) -> dict:
-    """List messages in the Drafts folder."""
+    """List messages in the Drafts folder with cursor pagination."""
     client = _get_graph_client(ctx)
     return await mail_drafts.list_drafts(client.sdk_client, count, cursor=cursor)
 
@@ -884,17 +907,13 @@ async def outlook_create_draft(
     reply_to: list[str] | None = None,
     deferred_send_datetime: str | None = None,
 ) -> dict:
-    """Create a draft message in the Drafts folder.
+    """Create a draft email for later review/send (pair with outlook_send_draft).
 
-    Pass ``reply_to`` to pre-populate the draft's Reply-To addresses.
-
-    Pass ``deferred_send_datetime`` (ISO 8601, e.g.
-    ``"2026-05-06T08:00:00Z"``) to schedule the draft for delayed
-    delivery via the PR_DEFERRED_SEND_TIME extended property. Once the
-    draft is sent (e.g. with ``outlook_send_draft``), Exchange holds the
-    message server-side until that instant — the client doesn't need to
-    be online at the scheduled time. Match Outlook desktop's "Delay
-    Delivery" feature.
+    Use this when a human should review before sending; use outlook_send_message to send
+    immediately without review.
+    Pass deferred_send_datetime (ISO 8601, e.g. "2026-05-06T08:00:00Z") to schedule delayed
+    delivery — Exchange holds the message server-side after outlook_send_draft.
+    Pass reply_to to pre-populate the Reply-To header.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -926,20 +945,12 @@ async def outlook_update_draft(
     is_html: bool = False,
     deferred_send_datetime: str | None = None,
 ) -> dict:
-    """Update an existing draft message.
+    """Update an existing draft (partial patch).
 
-    Pass ``reply_to=[...]`` to overwrite the draft's Reply-To addresses;
-    pass ``reply_to=[]`` to clear them.
-
-    Pass ``is_html=True`` when ``body`` is HTML. Required when overwriting a
-    draft that was originally composed as HTML in the Outlook web/desktop UI
-    — PATCHing such a draft with a Text body is rejected by the
-    consumer-Outlook MAPI store with ErrorAccessDenied / MapiSetProperties.
-
-    Pass ``deferred_send_datetime`` (ISO 8601) to set or replace the
-    draft's PR_DEFERRED_SEND_TIME extended property — the value Exchange
-    reads to schedule delayed delivery once the draft is sent. Pass an
-    empty string to clear a previously-set deferred send time.
+    Pass is_html=True when body is HTML — required when overwriting a draft originally composed
+    as HTML (consumer Outlook rejects Text-over-HTML PATCH).
+    Pass reply_to=[...] to overwrite Reply-To; reply_to=[] to clear it.
+    Pass deferred_send_datetime (ISO 8601) to set the scheduled-send time; empty string clears it.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -960,7 +971,7 @@ async def outlook_update_draft(
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_send_draft(ctx: Context, draft_id: str) -> dict:
-    """Send an existing draft message."""
+    """Send an existing draft (pair with outlook_create_draft for human-review send flow)."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_drafts.send_draft(client.sdk_client, draft_id, config=config)
@@ -969,7 +980,7 @@ async def outlook_send_draft(ctx: Context, draft_id: str) -> dict:
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_delete_draft(ctx: Context, draft_id: str) -> dict:
-    """Delete a draft message."""
+    """Delete a draft message by ID."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_drafts.delete_draft(client.sdk_client, draft_id, config=config)
@@ -981,7 +992,7 @@ async def outlook_delete_draft(ctx: Context, draft_id: str) -> dict:
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_list_attachments(ctx: Context, message_id: str) -> dict:
-    """List attachments on a message."""
+    """List attachments on a message — returns IDs, names, sizes, and content types."""
     client = _get_graph_client(ctx)
     return await mail_attachments.list_attachments(client.sdk_client, message_id)
 
@@ -994,7 +1005,7 @@ async def outlook_download_attachment(
     attachment_id: str,
     save_path: str,
 ) -> dict:
-    """Download an attachment and save decoded bytes to a file."""
+    """Download an attachment from a message and write decoded bytes to `save_path` on the host."""
     client = _get_graph_client(ctx)
     return await mail_attachments.download_attachment(
         client.sdk_client,
@@ -1018,10 +1029,10 @@ async def outlook_send_with_attachments(
     importance: str = "normal",
     reply_to: list[str] | None = None,
 ) -> dict:
-    """Send a message with file attachments. Handles large files automatically.
+    """Send an email with file attachments; auto-switches to upload-session for files >3MB.
 
-    Pass ``reply_to`` to route recipient replies to a different address than
-    the authenticated sender.
+    `attachment_paths` must be absolute paths to files that exist on the host. Pass reply_to to
+    route replies to a different address.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -1047,10 +1058,10 @@ async def outlook_attach_to_draft(
     draft_id: str,
     attachment_paths: list[str],
 ) -> dict:
-    """Add attachments to an existing draft. Handles large files automatically.
+    """Add attachments to an existing draft; auto-switches to upload-session for files >3MB.
 
-    Returns the new attachment IDs so the caller can remove individual
-    attachments later via ``outlook_remove_draft_attachment``.
+    `attachment_paths` must be absolute paths to files that exist on the host. Returns new
+    attachment IDs for later removal via outlook_remove_draft_attachment.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -1069,7 +1080,7 @@ async def outlook_remove_draft_attachment(
     draft_id: str,
     attachment_id: str,
 ) -> dict:
-    """Remove a single attachment from a draft message."""
+    """Remove a single attachment from a draft message by attachment ID."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_attachments.remove_draft_attachment(
@@ -1090,7 +1101,7 @@ async def outlook_create_folder(
     name: str,
     parent_folder: str | None = None,
 ) -> dict:
-    """Create a mail folder, optionally under a parent folder."""
+    """Create a mail folder; pass `parent_folder` (name or ID) to nest under an existing folder."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_folders.create_folder(
@@ -1108,7 +1119,7 @@ async def outlook_rename_folder(
     folder_id: str,
     name: str,
 ) -> dict:
-    """Rename a mail folder."""
+    """Rename a user-created mail folder by ID."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_folders.rename_folder(
@@ -1122,7 +1133,7 @@ async def outlook_rename_folder(
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_delete_folder(ctx: Context, folder_id: str) -> dict:
-    """Delete a user-created mail folder."""
+    """Delete a user-created mail folder by ID; refuses well-known folders (inbox, sentitems)."""
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await mail_folders.delete_folder(
@@ -1143,18 +1154,13 @@ async def outlook_list_thread(
     count: int = 50,
     concise: bool = False,
 ) -> dict:
-    """List messages in a conversation thread, chronological order.
+    """List all messages in a conversation thread, chronological order.
 
-    Pass `concise=True` to strip quoted prior-message text from each message's
-    preview (heuristic: drop everything below the first ``On ... wrote:`` /
-    ``From: ...`` / ``----- Original Message -----`` line) — ~10x fewer tokens
-    on long reply chains, suitable for thread scans before diving into a
-    specific message.
+    Needs `conversation_id` from a message's metadata. Pass concise=True to drop large fields
+    (quoted prior-message text in each preview) — ~10x fewer tokens on long reply chains.
     """
     client = _get_graph_client(ctx)
-    return await mail_thread.list_thread(
-        client.sdk_client, conversation_id, count, concise=concise
-    )
+    return await mail_thread.list_thread(client.sdk_client, conversation_id, count, concise=concise)
 
 
 @mcp.tool()
@@ -1164,9 +1170,10 @@ async def outlook_copy_message(
     message_id: str,
     folder: str,
 ) -> dict:
-    """Copy a message to a folder.
+    """Copy a message to another folder (duplicates; source is unchanged).
 
-    `folder` accepts display names, well-known names, or Graph IDs. Prefer names.
+    Use outlook_move_message to remove from source. `folder` accepts display names, well-known
+    names, or Graph IDs — prefer names.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -1189,7 +1196,14 @@ async def outlook_batch_triage(
     action: str,
     value: str,
 ) -> dict:
-    """Triage up to 20 messages in one call. Actions: move, flag, categorize, mark_read."""
+    """Triage up to 20 messages in one $batch call.
+
+    `action` is "move", "flag", "categorize", or "mark_read".
+
+    Example: outlook_batch_triage(message_ids=[id1, id2], action="move", value="Archive")
+    `value` is the action target (folder name for move, status for flag/mark_read, category name
+    for categorize). Hard cap of 20.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await batch.batch_triage(
@@ -1207,7 +1221,7 @@ async def outlook_batch_triage(
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_whoami(ctx: Context) -> dict:
-    """Get current user profile: display name, email, and ID."""
+    """Get the authenticated user's profile (display name, email, ID)."""
     client = _get_graph_client(ctx)
     return await user.whoami(client.sdk_client)
 
@@ -1215,7 +1229,7 @@ async def outlook_whoami(ctx: Context) -> dict:
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_list_calendars(ctx: Context) -> dict:
-    """List all calendars for the current user."""
+    """List all calendars available to the authenticated user (primary + secondary)."""
     client = _get_graph_client(ctx)
     return await user.list_calendars(client.sdk_client)
 
@@ -1226,7 +1240,10 @@ async def outlook_list_calendars(ctx: Context) -> dict:
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_list_categories(ctx: Context) -> dict:
-    """List master categories with names and colors."""
+    """List the user's master category definitions (names + colors).
+
+    Provides the valid values for outlook_categorize_message.
+    """
     client = _get_graph_client(ctx)
     return await admin.list_categories(client.sdk_client)
 
@@ -1234,7 +1251,7 @@ async def outlook_list_categories(ctx: Context) -> dict:
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_get_mail_tips(ctx: Context, emails: list[str]) -> dict:
-    """Get mail tips for recipients: delivery restrictions, OOF messages, etc."""
+    """Pre-send check for recipients: out-of-office, delivery limits, mailbox-full warnings."""
     client = _get_graph_client(ctx)
     return await admin.get_mail_tips(client.sdk_client, emails)
 
@@ -1245,7 +1262,7 @@ async def outlook_get_mail_tips(ctx: Context, emails: list[str]) -> dict:
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_list_accounts(ctx: Context) -> dict:
-    """List configured accounts with authentication status."""
+    """List all configured Outlook accounts and their authentication status."""
     auth = _get_auth(ctx)
     return {"accounts": auth.list_accounts()}
 
@@ -1253,7 +1270,7 @@ async def outlook_list_accounts(ctx: Context) -> dict:
 @mcp.tool()
 @_wrap_tool_errors
 async def outlook_switch_account(ctx: Context, name: str) -> dict:
-    """Switch to a different configured account."""
+    """Switch the active Outlook account by configured `name` (from outlook_list_accounts)."""
     auth = _get_auth(ctx)
     return auth.switch_account(name)
 
