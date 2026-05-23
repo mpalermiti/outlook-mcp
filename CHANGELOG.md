@@ -4,6 +4,12 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] — 2026-05-22
+
+### Changed — Tool docstring audit (no behavior change)
+
+Docstring audit. Every `@mcp.tool()` docstring has been rewritten to a consistent shape — one-line action, contrastive pointer for ambiguous pairs (e.g. `outlook_reply` vs `outlook_rsvp`, `outlook_send_message` vs `outlook_create_draft` + `outlook_send_draft`, `outlook_reclassify_message` vs `outlook_set_inbox_override`, snapshot vs delta tools, search vs list, move vs copy, delete vs move-to-deleteditems), concrete syntax example for params with non-obvious shape (KQL queries, ISO 8601 dates, delta-token round-trips, attachment paths, batch shape). Designed to reduce wrong-tool selection by AI agents. No behavior changes; signatures, params, defaults, return shapes are byte-identical to 1.9.0.
+
 ## [1.9.0] — 2026-05-21
 
 ### Added — Delta queries (3 tools)
