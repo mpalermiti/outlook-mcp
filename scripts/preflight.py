@@ -39,6 +39,14 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0/"
 # script runs fast and doesn't drag the user's full mailbox over the
 # wire. The label maps to the outlook_mcp tool group(s) that depend
 # on this endpoint, so a failure points at the broken tools directly.
+#
+# NOTE: ``/$batch`` is exercised by ``outlook_read_messages`` (v1.11.0)
+# and ``outlook_batch_triage`` but isn't directly preflighted — it's a
+# POST endpoint with a body, and the current preflight harness only
+# issues GETs. The underlying ``me/messages`` GET is already covered
+# below, and ``$batch`` is just transport, so the surface is exercised
+# indirectly. Refactor to support POST rows if a $batch-specific
+# regression ever needs catching at preflight time.
 ENDPOINTS: list[tuple[str, str]] = [
     ("me", "Auth / whoami"),
     ("me/messages?$top=1", "Mail read / search"),

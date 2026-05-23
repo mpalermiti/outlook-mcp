@@ -10,9 +10,10 @@ from outlook_mcp.server import _wrap_tool_errors, mcp
 EXPECTED_TOOLS = [
     # Auth (3)
     "outlook_auth_status",
-    # Mail read (5)
+    # Mail read (6)
     "outlook_list_inbox",
     "outlook_read_message",
+    "outlook_read_messages",
     "outlook_search_mail",
     "outlook_list_folders",
     "outlook_list_inbox_delta",
@@ -91,9 +92,9 @@ EXPECTED_TOOLS = [
 
 
 def test_tool_count():
-    """All 61 tools are registered (auth is CLI-only now)."""
+    """All 62 tools are registered (auth is CLI-only now)."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 61
+    assert len(registered) == 62
 
 
 def test_all_tools_registered():
@@ -196,6 +197,38 @@ async def test_wrap_tool_errors_passes_through_unknown_exception():
 
     with pytest.raises(WeirdError, match="surprise"):
         await fake_tool()
+
+
+@pytest.mark.asyncio
+async def test_outlook_read_messages_wires_through_to_impl():
+    """End-to-end: the new bulk-read tool is callable via the decorated wrapper."""
+    fake_ctx = MagicMock()
+    fake_ctx.request_context.lifespan_context = {
+        "auth": MagicMock(),
+        "config": MagicMock(),
+    }
+
+    expected = {
+        "messages": [{"id": "AAA=", "subject": "x"}],
+        "failures": [],
+        "requested": 1,
+        "succeeded": 1,
+        "failed": 0,
+    }
+
+    from outlook_mcp import server as server_mod
+
+    async def fake_read_messages(client, message_ids, **kwargs):
+        assert message_ids == ["AAA="]
+        return expected
+
+    with (
+        patch.object(server_mod, "_get_graph_client", return_value=MagicMock()),
+        patch.object(server_mod.mail_read, "read_messages", side_effect=fake_read_messages),
+    ):
+        result = await server_mod.outlook_read_messages(fake_ctx, ["AAA="])
+
+    assert result == expected
 
 
 @pytest.mark.asyncio
