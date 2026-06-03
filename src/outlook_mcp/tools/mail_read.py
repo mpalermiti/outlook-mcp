@@ -392,6 +392,11 @@ async def read_message(
     """
     message_id = validate_graph_id(message_id)
 
+    # URL-encode the message ID for the SDK path parameter
+    # Graph IDs use URL-safe base64 with _ and - which must be encoded
+    from urllib.parse import quote
+    encoded_message_id = quote(message_id, safe='')
+
     deferred_value: str | None = None
 
     if include_deferred_send:
@@ -412,7 +417,7 @@ async def read_message(
         from outlook_mcp.tools.mail_drafts import _PR_DEFERRED_SEND_TIME_ID
 
         adapter = graph_client.me.messages.by_message_id(
-            message_id
+            encoded_message_id
         ).request_adapter
         filter_expr = f"id eq '{_PR_DEFERRED_SEND_TIME_ID}'"
         # Keep `=`, space, and single quotes literal — Graph requires
@@ -421,7 +426,7 @@ async def read_message(
         # get percent-encoded.
         encoded_filter = quote(filter_expr, safe="= '")
         raw_url = (
-            f"{adapter.base_url}/me/messages/{quote(message_id, safe='')}"
+            f"{adapter.base_url}/me/messages/{quote(encoded_message_id, safe='')}"
             f"?$expand=singleValueExtendedProperties("
             f"$filter={encoded_filter})"
         )
@@ -449,7 +454,7 @@ async def read_message(
                 deferred_value = prop.value
                 break
     else:
-        msg = await graph_client.me.messages.by_message_id(message_id).get()
+        msg = await graph_client.me.messages.by_message_id(encoded_message_id).get()
 
     return _format_read_message_from_sdk(
         msg, format, concise, deferred_value, include_deferred_send
