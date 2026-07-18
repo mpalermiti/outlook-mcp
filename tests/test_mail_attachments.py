@@ -1,6 +1,5 @@
 """Tests for mail attachment tools."""
 
-import base64
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -86,14 +85,18 @@ class TestListAttachments:
 
 class TestDownloadAttachment:
     async def test_download_writes_decoded_content_to_path(self, tmp_path):
-        """download_attachment decodes Graph contentBytes to file."""
+        """download_attachment writes the SDK's raw contentBytes to file.
+
+        content_bytes is the SDK's already-decoded raw bytes (see
+        test_download_writes_binary_bytes_unchanged), so it is written verbatim.
+        """
         raw_content = b"%PDF-1.7\nfile content bytes"
         mock_att = MagicMock()
         mock_att.id = "att1"
         mock_att.name = "report.pdf"
         mock_att.size = len(raw_content)
         mock_att.content_type = "application/pdf"
-        mock_att.content_bytes = base64.b64encode(raw_content)
+        mock_att.content_bytes = raw_content
 
         mock_client = MagicMock()
         mock_client.me.messages.by_message_id.return_value.attachments.by_attachment_id.return_value.get = AsyncMock(  # noqa: E501
@@ -109,6 +112,42 @@ class TestDownloadAttachment:
         )
         assert result["saved_to"] == save_path
         assert os.path.isfile(save_path)
+        with open(save_path, "rb") as f:
+            assert f.read() == raw_content
+
+    async def test_download_writes_binary_bytes_unchanged(self, tmp_path):
+        """download_attachment writes the SDK's already-decoded bytes verbatim.
+
+        The msgraph SDK (Kiota) base64-decodes contentBytes into raw ``bytes``
+        during deserialization, so ``attachment.content_bytes`` is the raw file
+        content — including bytes that are not valid UTF-8 (e.g. a .docx zip
+        header). The tool must write them unchanged, not decode again. Regression
+        guard for issue #25.
+        """
+        # Real-world binary: a zip/.docx local-file-header magic plus non-UTF-8 bytes.
+        raw_content = b"PK\x03\x04\x14\x00\x00\x00\x08\x00\xff\xfe\x00\x01binary"
+        mock_att = MagicMock()
+        mock_att.id = "att1"
+        mock_att.name = "report.docx"
+        mock_att.size = len(raw_content)
+        mock_att.content_type = (
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+        mock_att.content_bytes = raw_content
+
+        mock_client = MagicMock()
+        mock_client.me.messages.by_message_id.return_value.attachments.by_attachment_id.return_value.get = AsyncMock(  # noqa: E501
+            return_value=mock_att
+        )
+
+        save_path = str(tmp_path / "report.docx")
+        result = await download_attachment(
+            mock_client,
+            message_id="AAMkAG123=",
+            attachment_id="att1",
+            save_path=save_path,
+        )
+        assert result["saved_to"] == save_path
         with open(save_path, "rb") as f:
             assert f.read() == raw_content
 
