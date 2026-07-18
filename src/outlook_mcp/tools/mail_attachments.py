@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import mimetypes
 import os
 from typing import Any
@@ -79,7 +78,7 @@ async def download_attachment(
     """Download an attachment.
 
     GET /me/messages/{id}/attachments/{att_id}
-    Decodes content, writes bytes to save_path, and returns the path.
+    Writes the file bytes to save_path and returns the path.
     """
     message_id = validate_graph_id(message_id)
     attachment_id = validate_graph_id(attachment_id)
@@ -90,7 +89,10 @@ async def download_attachment(
         .attachments.by_attachment_id(attachment_id)
         .get()
     )
-    content = base64.b64decode(attachment.content_bytes.decode("utf-8"), validate=True)
+    # The msgraph SDK (Kiota) already base64-decodes contentBytes into raw bytes
+    # during deserialization, so content_bytes is the raw file content. Decoding
+    # again corrupts binary files / raises UnicodeDecodeError (issue #25).
+    content = attachment.content_bytes
 
     with open(save_path, "wb") as f:
         f.write(content)
