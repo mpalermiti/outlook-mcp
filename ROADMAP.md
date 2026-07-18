@@ -13,6 +13,28 @@ Programmatic management of Outlook inbox rules via `/me/mailFolders/inbox/messag
 
 ---
 
+## Performance & efficiency
+
+Stack-ranked agent-optimization work from a 2026-07 review. The server already implements the standard Graph playbook — `$select` on every query, cursor pagination, `concise=True` payloads, delta queries, `$batch` bulk ops, dual (name + ID) identifiers. These items target the remaining gaps: static tool-context cost, connection reuse, and cross-resource latency for recurring agent loops. Ranked by impact-for-agents; each notes effort so they can be re-sorted.
+
+1. **Config-gated toolsets** — 62 tool schemas load into client context every turn (large fixed token cost; tool-selection accuracy degrades past ~30–50 tools). Gate registration behind config so a client loads only the groups it uses (e.g. `mail,calendar,todo,digest`), or split into `outlook-core` + `outlook-admin` servers. Additive; no behavior change to enabled tools. Highest recurring-cost lever, and the only one fixable purely server-side. **Impact: high · Effort: med.**
+2. **Parallelize `outlook_changes_since`** — `digest.py` awaits mail → events → contacts sequentially though they're independent. `asyncio.gather` gives ~2–3× lower latency on the most-used recurring-agent tool. **Impact: high · Effort: low.**
+3. **Persistent Graph connection reuse** — `_get_graph_client` builds a new `GraphServiceClient` (and TLS pool) per tool call; the raw-httpx `$batch`/delta paths (`read_messages`, `fetch_delta_pages`) open ephemeral clients. Cache the client in the lifespan context (one per account, invalidate on `switch_account`) and share one long-lived httpx client for the raw paths. Compounds with #2. **Impact: high · Effort: med.**
+4. **Tool annotations** — set `readOnlyHint` / `destructiveHint` (`ToolAnnotations`, supported by the SDK) on all tools so clients can auto-approve reads and gate destructive ops (delete mail, decline event). Currently unset on all 62. **Impact: med · Effort: low.**
+5. **Folder name→ID memoization** — `resolve_folder_id` re-fetches the full `/me/mailFolders` tree (plus a BFS subfolder walk) on every display-name resolution; well-known names and Graph IDs already short-circuit with no network call. Add an in-memory, session-scoped name→ID cache (bust on lookup failure). Removes a full folder-tree fetch per custom-folder triage op. **Impact: med · Effort: low–med.**
+6. **Throttling hardening on raw-httpx paths** — the SDK path already retries 429/503 via kiota's `RetryHandler`; `read_messages` and `fetch_delta_pages` don't retry the batch/delta envelope. Separately, `$batch` returns 200 even when sub-requests are throttled — `batch_triage` and `read_messages` currently record a 429'd sub-request as a permanent failure instead of retrying it with `Retry-After`. **Impact: med · Effort: low–med.**
+7. **gzip on raw-httpx paths** — send `Accept-Encoding: gzip` (httpx auto-decompresses). Smaller payloads on large bodies. **Impact: low · Effort: trivial.**
+8. **Structured output schemas** — tools return untyped `dict`; typed Pydantic returns would emit `outputSchema` / `structuredContent`. Gate on confirming the target client consumes it (otherwise pure cost). **Impact: low · Effort: med.**
+
+**Suggested sequencing:** #2 + #3 + #4 as one test-first PR (all high-certainty, ~half a day), then decide #1's grouping from a measured tool-schema token count, then #5 / #6.
+
+### Deferred (revisit if the hosting model changes)
+- **Change-notification webhooks** as the delta trigger (eliminates fixed-interval polling) — needs a public HTTPS endpoint; N/A for stdio/local.
+- **Code-execution-with-MCP** progressive tool disclosure (large token reduction) — needs a client that presents tools as a sandboxed code API.
+- **FastMCP 2.x migration** for middleware/tags — its `ResponseCachingMiddleware` conflicts with the no-local-caching principle; config-gating (#1) delivers the tag benefit without the dependency swap.
+
+---
+
 ## Ideas (not committed)
 
 - **Shared / delegated mailboxes** — `/users/{id}/messages` path for delegated access
