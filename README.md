@@ -226,6 +226,27 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 
 ---
 
+## Troubleshooting
+
+### `SSL: CERTIFICATE_VERIFY_FAILED` on Linux
+
+If auth fails with `[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate`, your Python environment can't find the system CA bundle. This is common on minimal/container Linux images and with the isolated venv from `uv tool install`.
+
+Point Python at your system CA bundle. Set **both** variables — auth (via `azure-identity` → `requests`) reads `REQUESTS_CA_BUNDLE`, while the delta/`$batch` paths (via `httpx`) read `SSL_CERT_FILE`:
+
+```bash
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt      # httpx + Python ssl
+export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt  # azure-identity auth
+```
+
+The path varies by distro: Debian/Ubuntu use `/etc/ssl/certs/ca-certificates.crt`; RHEL/Fedora use `/etc/pki/tls/certs/ca-bundle.crt`. If the file is missing, install your distro's CA package (`ca-certificates`). Set these in the same environment your MCP client launches the server from so they apply at runtime, not just to the one-time `auth` command.
+
+### Token cache stored unencrypted (Linux)
+
+A one-time startup warning about the token cache falling back to plaintext means `libsecret`/PyGObject isn't importable — see [Privacy and Security](#privacy-and-security) for the fix.
+
+---
+
 ## Tool Reference
 
 ### Auth

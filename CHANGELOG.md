@@ -14,6 +14,10 @@ Regression from [#9](https://github.com/mpalermiti/outlook-mcp/pull/9) (v1.6-era
 
 No API, signature, or tool-count change. **Tool count: 62, 13 categories** (unchanged).
 
+### Docs
+
+- Added a **Troubleshooting** section to the README covering `SSL: CERTIFICATE_VERIFY_FAILED` on Linux ([#24](https://github.com/mpalermiti/outlook-mcp/issues/24)) — point Python at the system CA bundle via both `SSL_CERT_FILE` (httpx delta/`$batch` paths) and `REQUESTS_CA_BUNDLE` (azure-identity auth).
+
 ## [1.11.0] — 2026-05-22
 
 ### Added — Bulk message read via `$batch` (1 tool)
