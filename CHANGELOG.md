@@ -4,6 +4,16 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.1] — 2026-07-18
+
+### Fixed — `outlook_download_attachment` corrupted binary attachments ([#25](https://github.com/mpalermiti/outlook-mcp/issues/25))
+
+`outlook_download_attachment` raised `UnicodeDecodeError` on any attachment whose bytes aren't valid UTF-8 — in practice every non-text file (`.pdf`, `.docx`, images, etc.). The tool double-decoded `contentBytes`: the msgraph SDK (Kiota) already base64-decodes it into raw `bytes` during deserialization, but the tool then called `.decode("utf-8")` + `base64.b64decode()` on the already-decoded bytes. It now writes `attachment.content_bytes` verbatim.
+
+Regression from [#9](https://github.com/mpalermiti/outlook-mcp/pull/9) (v1.6-era), which added decoding that is correct for the raw Graph REST/JSON API but wrong when going through the SDK. Diagnosed and verified by @AI-OWEN. Added a regression test that downloads a non-UTF-8 binary payload and asserts byte-for-byte fidelity; corrected the pre-existing download test whose mock fed base64-*encoded* bytes and thereby masked the bug.
+
+No API, signature, or tool-count change. **Tool count: 62, 13 categories** (unchanged).
+
 ## [1.11.0] — 2026-05-22
 
 ### Added — Bulk message read via `$batch` (1 tool)
