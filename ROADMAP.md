@@ -15,23 +15,42 @@ Programmatic management of Outlook inbox rules via `/me/mailFolders/inbox/messag
 
 ## Performance & efficiency
 
-Stack-ranked agent-optimization work from a 2026-07 review. The server already implements the standard Graph playbook — `$select` on every query, cursor pagination, `concise=True` payloads, delta queries, `$batch` bulk ops, dual (name + ID) identifiers. These items target the remaining gaps: static tool-context cost, connection reuse, and cross-resource latency for recurring agent loops. Ranked by impact-for-agents; each notes effort so they can be re-sorted.
+Stack-ranked agent-optimization work from a 2026-07 review, re-validated against a mid-2026 market scan (MCP spec evolution, competing email/calendar MCPs, Microsoft's first-party moves). The scan's verdict: every ecosystem signal points *into* this perf/cost work, not away from it — depth (delta, `$batch`, connection reuse, throttling, gating) is the durable differentiator, since the leanest competitors ship none of it. The server already implements the standard Graph playbook (`$select`, cursor pagination, `concise=True`, delta queries, `$batch`, dual name+ID identifiers); the items below target the remaining gaps.
 
-1. **Config-gated toolsets** — 62 tool schemas load into client context every turn (large fixed token cost; tool-selection accuracy degrades past ~30–50 tools). Gate registration behind config so a client loads only the groups it uses (e.g. `mail,calendar,todo,digest`), or split into `outlook-core` + `outlook-admin` servers. Additive; no behavior change to enabled tools. Highest recurring-cost lever, and the only one fixable purely server-side. **Impact: high · Effort: med.**
-2. **Parallelize `outlook_changes_since`** — `digest.py` awaits mail → events → contacts sequentially though they're independent. `asyncio.gather` gives ~2–3× lower latency on the most-used recurring-agent tool. **Impact: high · Effort: low.**
-3. **Persistent Graph connection reuse** — `_get_graph_client` builds a new `GraphServiceClient` (and TLS pool) per tool call; the raw-httpx `$batch`/delta paths (`read_messages`, `fetch_delta_pages`) open ephemeral clients. Cache the client in the lifespan context (one per account, invalidate on `switch_account`) and share one long-lived httpx client for the raw paths. Compounds with #2. **Impact: high · Effort: med.**
-4. **Tool annotations** — set `readOnlyHint` / `destructiveHint` (`ToolAnnotations`, supported by the SDK) on all tools so clients can auto-approve reads and gate destructive ops (delete mail, decline event). Currently unset on all 62. **Impact: med · Effort: low.**
-5. **Folder name→ID memoization** — `resolve_folder_id` re-fetches the full `/me/mailFolders` tree (plus a BFS subfolder walk) on every display-name resolution; well-known names and Graph IDs already short-circuit with no network call. Add an in-memory, session-scoped name→ID cache (bust on lookup failure). Removes a full folder-tree fetch per custom-folder triage op. **Impact: med · Effort: low–med.**
-6. **Throttling hardening on raw-httpx paths** — the SDK path already retries 429/503 via kiota's `RetryHandler`; `read_messages` and `fetch_delta_pages` don't retry the batch/delta envelope. Separately, `$batch` returns 200 even when sub-requests are throttled — `batch_triage` and `read_messages` currently record a 429'd sub-request as a permanent failure instead of retrying it with `Retry-After`. **Impact: med · Effort: low–med.**
-7. **gzip on raw-httpx paths** — send `Accept-Encoding: gzip` (httpx auto-decompresses). Smaller payloads on large bodies. **Impact: low · Effort: trivial.**
-8. **Structured output schemas** — tools return untyped `dict`; typed Pydantic returns would emit `outputSchema` / `structuredContent`. Gate on confirming the target client consumes it (otherwise pure cost). **Impact: low · Effort: med.**
+**Strategic context (de-risks the whole program):** Microsoft's first-party Outlook MCP surfaces (Work IQ, GA 2026-06-16; Agent 365 "Outlook Mail" / "Outlook Calendar" servers) are gated to M365-Copilot-licensed / Frontier *enterprise* tenants over org data — **no consumer Outlook.com (personal MSA) support**. The personal-account niche this server owns is therefore uncontested by Microsoft today. **Watch item / kill-switch:** a future Microsoft first-party MCP for personal accounts is the one event that would materially threaten this project — monitor.
 
-**Suggested sequencing:** #2 + #3 + #4 as one test-first PR (all high-certainty, ~half a day), then decide #1's grouping from a measured tool-schema token count, then #5 / #6.
+**Measured baseline (2026-07-18):** the 62 tool schemas serialize to **~8,644 tokens/turn** (o200k proxy; Claude ±~10%), avg 139 tok/tool — real but far from the debunked "50–120K context tax." Biggest domains: mail 25%, drafts 12%, calendar 10%. This settles the config-gating design (Tier 0 #4).
 
-### Deferred (revisit if the hosting model changes)
-- **Change-notification webhooks** as the delta trigger (eliminates fixed-interval polling) — needs a public HTTPS endpoint; N/A for stdio/local.
-- **Code-execution-with-MCP** progressive tool disclosure (large token reduction) — needs a client that presents tools as a sandboxed code API.
-- **FastMCP 2.x migration** for middleware/tags — its `ResponseCachingMiddleware` conflicts with the no-local-caching principle; config-gating (#1) delivers the tag benefit without the dependency swap.
+### Tier 0 — Neo personal-account perf/cost (fixed priority; ship first, as `v1.12.0`)
+
+Committed. Latency + token/API cost for the persistent single-agent recurring mail+calendar loop. All externally re-validated by the scan; none displaced by it.
+
+1. **Parallelize `outlook_changes_since`** — `digest.py` awaits mail → events → contacts sequentially though they're independent. `asyncio.gather` → ~2–3× lower latency on the most-used recurring tool. **Impact: high · Effort: low.**
+2. **Persistent Graph connection reuse** — `_get_graph_client` builds a new `GraphServiceClient` (+ TLS pool) per call; raw-httpx `$batch`/delta paths (`read_messages`, `fetch_delta_pages`) open ephemeral clients. Cache the client in the lifespan context (one per account, invalidate on `switch_account`) and share one long-lived httpx client for the raw paths. Compounds with #1. **Impact: high · Effort: med.**
+3. **Tool annotations** — set `readOnlyHint` / `destructiveHint` (`ToolAnnotations`, SDK-supported) on all 62 so clients auto-approve reads and gate destructive ops. Aligns with the 2025-11-25 spec. **Impact: med · Effort: low.**
+4. **Config-gated toolsets** — highest recurring-cost lever and the only one fixable purely server-side; validated by Microsoft's own Work-IQ 10-verb design. **Decision (from the measurement): a flexible toolset selector, NOT a two-package `core`/`admin` split** — the admin/override/batch group is only ~7% of tokens, so a binary split barely helps; real reduction comes from dropping whole *domains* a client doesn't use. Gate registration behind config (e.g. `OUTLOOK_MCP_TOOLSETS=mail,calendar,digest,delta`). For Neo's mail+calendar slice that's ~4,155 tok — **~52% off every turn.** Additive; no behavior change to enabled tools. **Impact: high · Effort: med.**
+5. **Throttling hardening on raw-httpx paths** *(promoted from "med" — the scan reframes it as a correctness bug, not just perf)*. The SDK path retries 429/503 via kiota's `RetryHandler`, but `read_messages` / `fetch_delta_pages` don't retry the batch/delta envelope, and `$batch` returns 200 even when sub-requests are throttled — currently recorded as a *permanent failure* instead of retried with `Retry-After`. Graph enforces a global 130,000 req/10s ceiling on top of per-mailbox limits; direct (non-SDK) callers must implement `Retry-After` + backoff themselves. **Impact: med–high · Effort: low–med.**
+6. **Folder name→ID memoization** — `resolve_folder_id` re-fetches the full `/me/mailFolders` tree (+ BFS subfolder walk) per display-name resolution; well-known names and Graph IDs already short-circuit. Add a session-scoped name→ID cache (bust on lookup failure). **Impact: med · Effort: low–med.**
+7. **gzip on raw-httpx paths** — send `Accept-Encoding: gzip` (httpx auto-decompresses). **Impact: low · Effort: trivial.**
+
+**Sequencing:** #1 + #2 + #3 as one test-first PR (high-certainty, ~half a day) → #5 (correctness) → #4 (selector; grouping now settled by the measurement) → #6 / #7.
+
+### Tier 1 — public multi-agent registry audience (additive; zero impact on Neo's stdio loop; gated on client support)
+
+For the population installing this from the MCP registry, not for Neo. stdio stays the default and unchanged.
+
+- **Stateless Streamable-HTTP deployment** — the 2026-07-28 spec RC removed `Mcp-Session-Id`, so a remote server can scale behind a plain round-robin LB with no session store. Optional remote transport alongside stdio.
+- **OAuth discovery hardening** — OIDC Discovery, RFC 9728 Protected-Resource-Metadata, incremental scope consent (SEP-835), Client ID Metadata Documents (SEP-991). Load-bearing only when exposed as a remote OAuth resource.
+- **`tools/list` caching** — SEP-2549 `ttlMs` / `cacheScope` once SDK + clients honor it.
+- **Cross-provider / multi-account** — a competing server already unifies M365 + Outlook.com + Google in one MCP. The unused `config.accounts` array is the hook. Real but new; secondary to Tier 0.
+
+**Caveat:** several Tier-1 surfaces are release-candidate / draft spec (statelessness RC, SEP-2549) — don't build against them until Claude / Cursor / OpenClaw actually honor them.
+
+### Tier 2 — deferred (hosting- or client-gated; revisit when the precondition lands)
+- **Change-notification webhooks** as the delta trigger (near-real-time, avoids polling/throttling) — needs a public HTTPS endpoint; N/A for stdio/local. Rich-mode notifications carry the changed object inline (a token lever) but need an encryption cert. Recommended end-state is delta-tokens **+** webhooks.
+- **Code-execution-with-MCP / progressive tool disclosure** — needs a client that presents tools as a sandboxed code API; still theoretical for the single-personal-agent case.
+- **Structured output schemas** — typed Pydantic returns → `outputSchema` / `structuredContent`. Gate on confirming the target client consumes it (else pure cost).
+- **FastMCP 2.x migration** for middleware/tags — its `ResponseCachingMiddleware` conflicts with the no-local-caching principle; the Tier-0 selector delivers the tag benefit without the dependency swap.
 
 ---
 
