@@ -29,6 +29,7 @@ Behavior summary:
 
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -308,22 +309,28 @@ async def _run_mail(
     *,
     token: str | None,
     window_start: datetime,
-    resync_log: list[str],
-) -> tuple[dict, str | None]:
-    """Run the mail resource end-to-end with resync recovery."""
+) -> tuple[dict, str | None, bool]:
+    """Run the mail resource end-to-end with resync recovery.
+
+    Returns ``(section, new_token, resynced)`` — ``resynced`` is True when a
+    stale token forced a full re-bootstrap. Each runner reports its own
+    resync so the composed digest can order them deterministically (the
+    runners execute concurrently and must not share mutable state).
+    """
     bootstrap_window: datetime | None = window_start if token is None else None
+    resynced = False
 
     try:
         items, new_token = await _drain_mail(graph_client, delta_token=token)
     except Exception as exc:
         if token is not None and _is_sync_state_not_found(exc):
-            resync_log.append("mail")
+            resynced = True
             items, new_token = await _drain_mail(graph_client, delta_token=None)
             bootstrap_window = window_start
         else:
             raise
 
-    return _classify_mail(items, window_start=bootstrap_window), new_token
+    return _classify_mail(items, window_start=bootstrap_window), new_token, resynced
 
 
 async def _run_events(
@@ -332,9 +339,12 @@ async def _run_events(
     token: str | None,
     bootstrap_start: str,
     bootstrap_end: str,
-    resync_log: list[str],
-) -> tuple[dict, str | None]:
-    """Run the events resource end-to-end with resync recovery."""
+) -> tuple[dict, str | None, bool]:
+    """Run the events resource end-to-end with resync recovery.
+
+    Returns ``(section, new_token, resynced)`` — see ``_run_mail``.
+    """
+    resynced = False
     if token is None:
         items, new_token = await _drain_events(
             graph_client,
@@ -352,7 +362,7 @@ async def _run_events(
             )
         except Exception as exc:
             if _is_sync_state_not_found(exc):
-                resync_log.append("events")
+                resynced = True
                 items, new_token = await _drain_events(
                     graph_client,
                     start=bootstrap_start,
@@ -362,26 +372,29 @@ async def _run_events(
             else:
                 raise
 
-    return _classify_events(items), new_token
+    return _classify_events(items), new_token, resynced
 
 
 async def _run_contacts(
     graph_client: Any,
     *,
     token: str | None,
-    resync_log: list[str],
-) -> tuple[dict, str | None]:
-    """Run the contacts resource end-to-end with resync recovery."""
+) -> tuple[dict, str | None, bool]:
+    """Run the contacts resource end-to-end with resync recovery.
+
+    Returns ``(section, new_token, resynced)`` — see ``_run_mail``.
+    """
+    resynced = False
     try:
         items, new_token = await _drain_contacts(graph_client, delta_token=token)
     except Exception as exc:
         if token is not None and _is_sync_state_not_found(exc):
-            resync_log.append("contacts")
+            resynced = True
             items, new_token = await _drain_contacts(graph_client, delta_token=None)
         else:
             raise
 
-    return _classify_contacts(items), new_token
+    return _classify_contacts(items), new_token, resynced
 
 
 # ── Public entry point ────────────────────────────────────────────────
@@ -411,26 +424,43 @@ async def changes_since(
     events_token = tokens.get("events")
     contacts_token = tokens.get("contacts")
 
-    resync_log: list[str] = []
+    # The three resources are independent — fetch them concurrently. Each
+    # runner handles its own stale-token resync internally, so a 410 on one
+    # resource never cancels the others; only a genuine error propagates and
+    # cancels siblings (matching the previous sequential behavior).
+    (
+        (mail_section, mail_new_token, mail_resynced),
+        (events_section, events_new_token, events_resynced),
+        (contacts_section, contacts_new_token, contacts_resynced),
+    ) = await asyncio.gather(
+        _run_mail(
+            graph_client,
+            token=mail_token,
+            window_start=window_start,
+        ),
+        _run_events(
+            graph_client,
+            token=events_token,
+            bootstrap_start=bootstrap_start_iso,
+            bootstrap_end=bootstrap_end_iso,
+        ),
+        _run_contacts(
+            graph_client,
+            token=contacts_token,
+        ),
+    )
 
-    mail_section, mail_new_token = await _run_mail(
-        graph_client,
-        token=mail_token,
-        window_start=window_start,
-        resync_log=resync_log,
-    )
-    events_section, events_new_token = await _run_events(
-        graph_client,
-        token=events_token,
-        bootstrap_start=bootstrap_start_iso,
-        bootstrap_end=bootstrap_end_iso,
-        resync_log=resync_log,
-    )
-    contacts_section, contacts_new_token = await _run_contacts(
-        graph_client,
-        token=contacts_token,
-        resync_log=resync_log,
-    )
+    # Build the resync log in fixed resource order (gather completion order is
+    # nondeterministic; the wire output must not be).
+    resync_log = [
+        name
+        for name, resynced in (
+            ("mail", mail_resynced),
+            ("events", events_resynced),
+            ("contacts", contacts_resynced),
+        )
+        if resynced
+    ]
 
     result: dict = {
         "mail": mail_section,

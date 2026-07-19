@@ -8,6 +8,7 @@ so we exercise the digest's composition / classification / window-filter
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -476,3 +477,50 @@ def test_digest_does_not_call_check_permission():
     src = open(digest_mod.__file__).read()
     assert "check_permission" not in src
     assert "from outlook_mcp.permissions" not in src
+
+
+# ── 12. Resources are fetched concurrently, not sequentially ──────────
+
+
+@pytest.mark.asyncio
+async def test_changes_since_fetches_resources_concurrently():
+    """The three delta resources are fetched concurrently (asyncio.gather).
+
+    Rendezvous barrier: each mocked delta call blocks until all three have
+    started. Under sequential awaits, the first call blocks on the barrier
+    forever (the other two never start), so its inner wait_for times out and
+    changes_since raises. Under concurrent gather, all three start, the barrier
+    releases, and the digest completes normally. This is what makes the
+    most-used recurring tool ~2-3x lower latency.
+    """
+    started = 0
+    all_started = asyncio.Event()
+
+    async def _rendezvous():
+        nonlocal started
+        started += 1
+        if started == 3:
+            all_started.set()
+        # If the three don't run concurrently, this never releases.
+        await asyncio.wait_for(all_started.wait(), timeout=1.0)
+
+    async def fake_inbox(client, *, page_size, delta_token):
+        await _rendezvous()
+        return _mail_response([], token="mt")
+
+    async def fake_events(client, *, start, end, page_size, delta_token):
+        await _rendezvous()
+        return _events_response([], token="et")
+
+    async def fake_contacts(client, *, page_size, delta_token):
+        await _rendezvous()
+        return _contacts_response([], token="ct")
+
+    with (
+        patch.object(digest, "list_inbox_delta", new=fake_inbox),
+        patch.object(digest, "list_events_delta", new=fake_events),
+        patch.object(digest, "list_contacts_delta", new=fake_contacts),
+    ):
+        result = await changes_since(_mock_graph_client())
+
+    assert result["delta_tokens"] == {"mail": "mt", "events": "et", "contacts": "ct"}
