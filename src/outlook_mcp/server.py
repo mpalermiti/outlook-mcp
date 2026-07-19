@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import functools
+import os
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from outlook_mcp import __version__
+from outlook_mcp import __version__, toolsets
 from outlook_mcp.auth import AuthManager
 from outlook_mcp.config import load_config
 from outlook_mcp.errors import OutlookMCPError, wrap_graph_error
@@ -1351,6 +1352,14 @@ async def outlook_switch_account(ctx: Context, name: str) -> dict:
     """Switch the active Outlook account by configured `name` (from outlook_list_accounts)."""
     auth = _get_auth(ctx)
     return auth.switch_account(name)
+
+
+# ── Annotations + config-gated toolsets ───────────────────────────────
+# Applied once, after every @mcp.tool above has registered. Sets read-only /
+# destructive annotations on all tools, and — when OUTLOOK_MCP_TOOLSETS is set
+# (e.g. "mail,calendar,digest,delta") — loads only those groups so clients that
+# don't need all 62 tools don't pay the per-turn context cost. Unset = all.
+toolsets.configure(mcp, toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")))
 
 
 def main():
