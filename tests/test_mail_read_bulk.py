@@ -370,3 +370,53 @@ class TestIncludeDeferredSend:
             _fake_graph_client(), ["AAA="], include_deferred_send=True
         )
         assert result["messages"][0]["deferred_send_datetime"] is None
+
+
+# ── Throttling (429 sub-request retry) ──────────────────────────────────
+
+
+class TestBatchReadThrottling:
+    @pytest.mark.asyncio
+    async def test_throttled_subrequest_is_retried_then_succeeds(self, patched_httpx):
+        """A 429 sub-request is re-sent (Retry-After) and lands in messages.
+
+        $batch returns HTTP 200 even when a sub-request is throttled; the tool
+        must retry that sub-request instead of recording it as a permanent
+        failure. Retry-After "0" keeps the test instant.
+        """
+        post_mock, _ = patched_httpx
+        post_mock.side_effect = [
+            _batch_response([
+                {"id": "0", "status": 429, "headers": {"Retry-After": "0"}, "body": {}},
+            ]),
+            _batch_response([_ok_sub("0", _raw_message("AAA=", subject="Recovered"))]),
+        ]
+
+        result = await read_messages(_fake_graph_client(), ["AAA="])
+
+        assert result["failed"] == 0
+        assert result["succeeded"] == 1
+        assert result["failures"] == []
+        assert len(result["messages"]) == 1
+        assert result["messages"][0]["subject"] == "Recovered"
+        # Second call re-sent only the throttled id.
+        assert post_mock.call_count == 2
+        retry_body = json.loads(post_mock.call_args_list[1].kwargs["content"])
+        assert [r["id"] for r in retry_body["requests"]] == ["0"]
+
+    @pytest.mark.asyncio
+    async def test_persistent_throttle_recorded_as_failure_not_infinite(
+        self, patched_httpx
+    ):
+        """A sub-request throttled past max_retries is bounded and recorded."""
+        post_mock, _ = patched_httpx
+        post_mock.return_value = _batch_response([
+            {"id": "0", "status": 429, "headers": {"Retry-After": "0"}, "body": {}},
+        ])
+
+        result = await read_messages(_fake_graph_client(), ["AAA="])
+
+        assert result["failed"] == 1
+        assert result["failures"][0]["status"] == 429
+        # initial + bounded retries (default max_retries=3) = 4 calls, not infinite.
+        assert post_mock.call_count == 4

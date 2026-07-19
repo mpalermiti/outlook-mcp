@@ -72,9 +72,23 @@ def _get_config(ctx: Context):
 
 
 def _get_graph_client(ctx: Context) -> GraphClient:
-    """Create Graph client from auth context."""
+    """Return a Graph client, reused across tool calls for the same credential.
+
+    Building a ``GraphServiceClient`` (auth provider, request adapter, TLS
+    connection pool) on every tool call is wasteful on recurring agent loops.
+    Cache one in the lifespan context and reuse it while the credential is
+    unchanged. A ``switch_account`` / re-auth swaps ``AuthManager.credential``
+    for a different object, so an identity check rebuilds the client
+    automatically — no explicit invalidation needed.
+    """
     auth = _get_auth(ctx)
-    return GraphClient(auth.get_credential())
+    credential = auth.get_credential()  # raises AuthRequiredError if unauthenticated
+    lifespan_ctx = ctx.request_context.lifespan_context
+    cached = lifespan_ctx.get("graph_client")
+    if cached is None or cached.credential is not credential:
+        cached = GraphClient(credential)
+        lifespan_ctx["graph_client"] = cached
+    return cached
 
 
 def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
