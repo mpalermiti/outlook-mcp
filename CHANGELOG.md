@@ -4,6 +4,32 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] — 2026-07-18
+
+Performance & efficiency pass for recurring agent loops (personal-account mail + calendar). No new tools, no breaking changes; the default tool surface is unchanged (62 tools). Validated against a measured tool-schema token count (~8,644 tokens/turn) and a mid-2026 ecosystem review.
+
+### Added — Config-gated toolsets
+
+`OUTLOOK_MCP_TOOLSETS` env var (e.g. `mail,calendar,digest,delta`) loads only the named tool groups plus the always-on `account`/auth tools, instead of all 62. Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`. A client that only needs mail + calendar drops the surface from 62 → ~30 tools (~52% fewer tool-schema tokens per turn). Unset = all tools (backward compatible). The grouping is a flexible selector rather than a fixed core/admin package split — the measurement showed the admin/override/batch group is only ~7% of tokens, so real savings come from dropping whole unused domains.
+
+### Added — Tool annotations
+
+Every tool now carries `readOnlyHint` / `destructiveHint` (`ToolAnnotations`): 26 read-only tools, 8 destructive (delete/remove), the rest additive writes. Clients can auto-approve reads and gate destructive ops (delete mail, decline event) without a hardcoded allowlist. Classification lives in `toolsets.py` as one reviewable table, drift-guarded by a test.
+
+### Changed — Concurrent digest
+
+`outlook_changes_since` fetches mail / events / contacts concurrently (`asyncio.gather`) instead of sequentially — ~2–3× lower latency on the most-used recurring tool. Each resource still resyncs independently on a stale token; the `_meta.resync` order is deterministic regardless of completion order.
+
+### Changed — Graph client reuse
+
+`_get_graph_client` caches one `GraphServiceClient` (auth provider, request adapter, TLS pool) in the lifespan context and reuses it while the credential is unchanged, instead of rebuilding it on every tool call. A `switch_account` / re-auth swaps the credential object, so an identity check rebuilds automatically.
+
+### Fixed — Throttling on the raw-httpx paths
+
+New `throttle.py` restores `Retry-After` honoring on the delta / `$batch` paths that bypass the SDK's kiota `RetryHandler`:
+- `outlook_changes_since` / delta queries retry the delta GET on 429/503.
+- `outlook_read_messages` — a `$batch` returns HTTP 200 even when a sub-request is throttled (429/503); the tool now re-issues just the throttled sub-requests honoring `Retry-After` (bounded by `max_retries`) instead of recording a 429 as a permanent failure.
+
 ## [1.11.1] — 2026-07-18
 
 ### Fixed — `outlook_download_attachment` corrupted binary attachments ([#25](https://github.com/mpalermiti/outlook-mcp/issues/25))
