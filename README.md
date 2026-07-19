@@ -392,6 +392,17 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions).
 | `read_only` | `bool` | `false` | When `true`, all write tools (send, reply, move, delete, create, update, RSVP) return an error. |
 | `allow_categories` | `list[string]` | `[]` | Optional. Restrict write tools to specific categories (see below). Empty list = all writes allowed when `read_only: false`. |
 
+### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`
+
+All 62 tool schemas load into the client's context every turn (~8.6k tokens). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
+
+```bash
+# e.g. a recurring mail + calendar agent: ~30 tools instead of 62 (~52% fewer tool tokens/turn)
+OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"
+```
+
+Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`. Unset (the default) loads everything — fully backward compatible. This only affects which tools are advertised; enabled tools behave identically.
+
 ### Granular Write Permissions (optional)
 
 By default, `read_only: false` unlocks **all** write tools. For finer control, set `allow_categories` to restrict write access to specific categories. Read tools (list, search, get) are always allowed — `allow_categories` only narrows the write surface.
