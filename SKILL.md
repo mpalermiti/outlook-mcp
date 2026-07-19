@@ -158,3 +158,4 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - Mail search uses KQL syntax
 - Start with `read_only: true`, flip when comfortable
 - **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 7 categories and example policies.
+- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context; unset loads all 62. Tools carry read-only / destructive annotations so clients can auto-approve reads.

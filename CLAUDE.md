@@ -24,6 +24,8 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
 - `src/outlook_mcp/validation.py` — Input validation (OData, KQL, IDs, datetimes)
 - `src/outlook_mcp/errors.py` — Exception hierarchy
 - `src/outlook_mcp/pagination.py` — Cursor-based pagination
+- `src/outlook_mcp/throttle.py` — Retry-After honoring for the raw-httpx delta/`$batch` paths (SDK path already retries via kiota)
+- `src/outlook_mcp/toolsets.py` — Tool annotations + config-gated toolset selection (`OUTLOOK_MCP_TOOLSETS`); `configure()` runs once after registration
 - `src/outlook_mcp/tools/` — One file per tool group:
   - `auth_tools.py`, `mail_read.py`, `mail_write.py`, `mail_triage.py` — Tier 1
   - `calendar_read.py`, `calendar_write.py` — Tier 1
