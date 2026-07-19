@@ -27,6 +27,8 @@ from typing import Any
 
 import httpx
 
+from outlook_mcp.throttle import send_with_retry
+
 GRAPH_BASE = "https://graph.microsoft.com/v1.0/"
 GRAPH_TOKEN_SCOPE = "https://graph.microsoft.com/.default"
 
@@ -119,7 +121,9 @@ async def fetch_delta_pages(
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         while True:
-            r = await client.get(url, headers=base_headers)
+            # Retry the delta GET on 429/503 (this raw-httpx path bypasses the
+            # SDK's kiota RetryHandler, so it must honor Retry-After itself).
+            r = await send_with_retry(client, "GET", url, headers=base_headers)
             r.raise_for_status()
             body = r.json()
 

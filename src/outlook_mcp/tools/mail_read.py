@@ -14,6 +14,7 @@ from outlook_mcp.folder_resolver import (
     resolve_folder_id,
 )
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
+from outlook_mcp.throttle import retry_throttled_subrequests, send_with_retry
 from outlook_mcp.validation import (
     sanitize_kql,
     sanitize_output,
@@ -540,8 +541,6 @@ async def read_messages(
             "url": _build_read_subrequest_url(mid, include_deferred_send),
         })
 
-    batch_body = {"requests": subrequests}
-
     tok = credential.get_token(GRAPH_TOKEN_SCOPE)
     headers = {
         "Authorization": f"Bearer {tok.token}",
@@ -550,20 +549,26 @@ async def read_messages(
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            BATCH_URL,
-            headers=headers,
-            content=json.dumps(batch_body),
-        )
-        resp.raise_for_status()
-        payload = resp.json()
 
-    # Rebuild input ordering. Graph's spec lets responses arrive in any
-    # order; we used the input index as the sub-request id so reassembly
-    # is trivial.
-    responses_by_id: dict[str, dict] = {}
-    for sub in payload.get("responses") or []:
-        responses_by_id[str(sub.get("id"))] = sub
+        async def _post_batch(reqs: list[dict]) -> dict:
+            # Envelope retry (429/503 on the whole $batch) via send_with_retry;
+            # a genuine transport error (e.g. 500) still raises.
+            resp = await send_with_retry(
+                client,
+                "POST",
+                BATCH_URL,
+                headers=headers,
+                content=json.dumps({"requests": reqs}),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+        # $batch returns HTTP 200 even when individual sub-requests are
+        # throttled (429/503). retry_throttled_subrequests re-issues just the
+        # throttled sub-requests with Retry-After instead of recording them as
+        # permanent failures. Graph's response order isn't trusted; we keyed
+        # each sub-request by its input index, so this returns an id->sub map.
+        responses_by_id = await retry_throttled_subrequests(_post_batch, subrequests)
 
     messages: list[dict] = []
     failures: list[dict] = []
