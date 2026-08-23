@@ -154,6 +154,7 @@ async def outlook_list_inbox(
     skip: int = 0,
     cursor: str | None = None,
     classification: str | None = None,
+    uncategorized_only: bool = False,
     concise: bool = False,
 ) -> dict:
     """List messages in one folder with structured filters (read, sender, date, Focused class).
@@ -165,6 +166,7 @@ async def outlook_list_inbox(
     Example: outlook_list_inbox(folder="Junk Email", unread_only=True, count=5)
     `folder` accepts display names, well-known names ("inbox", "junkemail"), or Graph IDs — prefer
     names. Pass concise=True to drop large fields (preview, categories) — ~10x fewer tokens.
+    Pass uncategorized_only=True to return only messages with no categories assigned.
     """
     client = _get_graph_client(ctx)
     return await mail_read.list_inbox(
@@ -178,6 +180,7 @@ async def outlook_list_inbox(
         skip,
         cursor=cursor,
         classification=classification,
+        uncategorized_only=uncategorized_only,
         concise=concise,
     )
 
