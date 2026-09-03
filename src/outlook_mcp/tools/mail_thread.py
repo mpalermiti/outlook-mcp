@@ -9,7 +9,7 @@ from outlook_mcp.config import Config
 from outlook_mcp.folder_resolver import resolve_folder_id
 from outlook_mcp.pagination import build_request_config
 from outlook_mcp.permissions import CATEGORY_MAIL_TRIAGE, check_permission
-from outlook_mcp.tools.mail_read import _format_message_summary
+from outlook_mcp.tools.mail_read import RECEIVED_FLOOR, _format_message_summary
 from outlook_mcp.validation import sanitize_output, validate_graph_id
 
 
@@ -66,7 +66,12 @@ async def list_thread(
     count = _clamp(count, 1, 100)
 
     query_params = {
-        "$filter": f"conversationId eq '{conversation_id}'",
+        # The receivedDateTime floor must precede conversationId or Graph rejects
+        # the receivedDateTime $orderby with 400 InefficientFilter — see
+        # RECEIVED_FLOOR. Without it this tool 400s on every call.
+        "$filter": (
+            f"receivedDateTime ge {RECEIVED_FLOOR} and conversationId eq '{conversation_id}'"
+        ),
         "$orderby": "receivedDateTime asc",
         "$top": count,
         "$select": (

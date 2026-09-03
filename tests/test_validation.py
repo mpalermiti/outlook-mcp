@@ -1,5 +1,7 @@
 """Tests for input validation — ported from olkcli patterns."""
 
+import itertools
+
 import pytest
 
 from outlook_mcp.validation import (
@@ -82,12 +84,6 @@ class TestKqlSanitization:
     def test_simple_query(self):
         assert sanitize_kql("budget report") == '"budget report"'
 
-    def test_strips_dangerous_chars(self):
-        result = sanitize_kql('from:boss" OR (hack)')
-        assert '"' not in result.strip('"')
-        assert "(" not in result.strip('"')
-        assert ")" not in result.strip('"')
-
     def test_preserves_alphanumeric(self):
         result = sanitize_kql("meeting notes 2026")
         assert "meeting" in result
@@ -95,9 +91,71 @@ class TestKqlSanitization:
         assert "2026" in result
 
     def test_strips_kql_operators(self):
+        # `&`, `|`, `!` are not Graph operators — the uppercase words are.
+        # The symbol forms silently zero out an otherwise-matching query.
         result = sanitize_kql("test & hack | evil")
         assert "&" not in result
         assert "|" not in result
+
+    # ── Property restrictions must survive (the #30 regression) ──
+
+    def test_preserves_property_restriction_colon(self):
+        """Stripping `:` turned every documented query into a 0-result phrase."""
+        assert sanitize_kql("subject:Unlock") == '"subject:Unlock"'
+
+    def test_preserves_all_documented_query_forms(self):
+        for query in (
+            "from:sarah@acme.com",
+            "hasattachment:true",
+            "received>=2026-01-01",
+            "subject:a AND subject:b",
+            "subject:a OR subject:b",
+            "NOT subject:a",
+        ):
+            assert sanitize_kql(query) == f'"{query}"', query
+
+    def test_preserves_grouping_parens(self):
+        assert sanitize_kql("subject:(a OR b)") == '"subject:(a OR b)"'
+
+    # ── Security: the two chars that must never survive ──
+
+    def test_strips_quote_that_would_neutralize_search(self):
+        """An embedded quote makes Graph silently discard $search and return
+        the whole mailbox — 200, no error. This is the real injection vector."""
+        result = sanitize_kql('Haverhill" OR "Wayfair')
+        assert result == '"Haverhill OR Wayfair"'
+        assert result.count('"') == 2
+
+    def test_strips_backslash_escape_metachar(self):
+        """`\\` is a real string-literal escape: `\\s` is a 400 and a trailing
+        `\\` escapes our own closing quote (400, unterminated literal)."""
+        assert sanitize_kql("back\\slash") == '"backslash"'
+        assert "\\" not in sanitize_kql("Acrisure\\")
+
+    def test_strips_bare_wildcard(self):
+        """Graph already prefix-matches (`subject:Amaz` == `subject:Amaz*`), so
+        `*` buys nothing. Allowing it would turn a bare `*` into a silent
+        whole-mailbox read; stripping it leaves an empty query we reject."""
+        with pytest.raises(ValueError, match="empty after sanitization"):
+            sanitize_kql("*")
+
+    def test_rejects_query_that_sanitizes_to_empty(self):
+        """$search="" is an opaque Graph BadRequest — fail clearly instead."""
+        for query in ('"""', "&|!", "   "):
+            with pytest.raises(ValueError, match="empty after sanitization"):
+                sanitize_kql(query)
+
+    def test_wrapper_invariant_holds_for_any_input(self):
+        """The invariant that actually prevents the vulnerability: whatever goes
+        in, exactly two quotes come out and no backslash survives."""
+        for combo in itertools.product('ab":\\()&|!*<>= ', repeat=3):
+            try:
+                result = sanitize_kql("".join(combo))
+            except ValueError:
+                continue  # rejected outright — also safe
+            assert result.count('"') == 2, result
+            assert "\\" not in result, result
+            assert result.startswith('"') and result.endswith('"'), result
 
 
 class TestFolderNameValidation:

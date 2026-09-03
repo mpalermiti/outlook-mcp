@@ -93,6 +93,16 @@ def _format_message_summary(msg: Any) -> dict:
 
 VALID_CLASSIFICATIONS = {"focused", "other"}
 
+# Graph rejects `$orderby=receivedDateTime` combined with a `$filter` on any other
+# property (400 InefficientFilter) unless a receivedDateTime clause comes FIRST in
+# the filter. Presence alone is not enough — clause order is load-bearing, verified
+# live: the same clauses with receivedDateTime second still 400. When the caller
+# supplies no after/before we prepend this permissive floor to satisfy the index.
+# 1900-01-01 is a readable floor that predates any real mail item; mailbox $count is
+# identical with and without it. See https://devblogs.microsoft.com/microsoft365dev/
+# update-to-filtering-and-sorting-rest-api/
+RECEIVED_FLOOR = "1900-01-01T00:00:00Z"
+
 
 async def list_inbox(
     graph_client: Any,
@@ -129,28 +139,38 @@ async def list_inbox(
     if not cursor and skip:
         query_params["$skip"] = skip
 
-    # Build filter with validated inputs
-    filters = []
+    # Build filter with validated inputs. Clauses are validated in signature order
+    # (so validation errors keep their existing precedence) but emitted with the
+    # receivedDateTime clauses first — see RECEIVED_FLOOR.
+    date_filters: list[str] = []
+    other_filters: list[str] = []
     if unread_only:
-        filters.append("isRead eq false")
+        other_filters.append("isRead eq false")
     if from_address:
         validate_email(from_address)
         safe_from = from_address.replace("'", "''")
-        filters.append(f"from/emailAddress/address eq '{safe_from}'")
+        other_filters.append(f"from/emailAddress/address eq '{safe_from}'")
     if after:
         safe_after = validate_datetime(after)
-        filters.append(f"receivedDateTime ge {safe_after}")
+        date_filters.append(f"receivedDateTime ge {safe_after}")
     if before:
         safe_before = validate_datetime(before)
-        filters.append(f"receivedDateTime le {safe_before}")
+        date_filters.append(f"receivedDateTime le {safe_before}")
     if classification is not None:
         if classification not in VALID_CLASSIFICATIONS:
             raise ValueError(
                 f"Invalid classification '{classification}'. "
                 f"Must be one of: {sorted(VALID_CLASSIFICATIONS)}"
             )
-        filters.append(f"inferenceClassification eq '{classification}'")
+        other_filters.append(f"inferenceClassification eq '{classification}'")
 
+    # $orderby is unconditionally `receivedDateTime desc`, so any non-date clause
+    # needs a leading receivedDateTime clause. A caller-supplied after/before
+    # already satisfies that — don't double-add.
+    if other_filters and not date_filters:
+        date_filters.append(f"receivedDateTime ge {RECEIVED_FLOOR}")
+
+    filters = date_filters + other_filters
     if filters:
         query_params["$filter"] = " and ".join(filters)
 

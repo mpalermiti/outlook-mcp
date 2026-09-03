@@ -154,11 +154,12 @@ class TestSearchContacts:
         result = await search_contacts(mock_client, query='John" OR (hack)')
         assert result["count"] == 0
 
-        # Verify the search param was sanitized (quotes/parens stripped)
+        # Verify the search param was sanitized. Only the string-literal
+        # boundary chars are stripped; `(` is legitimate KQL grouping.
         call_kwargs = mock_client.me.contacts.get.call_args
         qp = call_kwargs.kwargs["request_configuration"].query_parameters
         assert '"' not in qp.search.strip('"')
-        assert "(" not in qp.search.strip('"')
+        assert "\\" not in qp.search
 
     async def test_search_returns_contacts(self):
         """search_contacts returns matching contacts."""
