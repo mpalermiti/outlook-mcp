@@ -65,7 +65,11 @@ For the population installing this from the MCP registry, not for Neo. stdio sta
 
 ## Investigated and not viable
 
-- **Mailbox settings (timezone, auto-reply, working hours, etc.)** — `/me/mailboxSettings/*` is documented as "Delegated (personal Microsoft account): Not supported" and verified to return `ErrorAccessDenied` on outlook.com mailboxes regardless of granted scopes. The resource is Exchange Online-only; consumer Outlook.com uses a different backend that Microsoft never bridged to Graph for this endpoint. Re-investigate if Microsoft publishes a consumer-account path for these settings.
+- **Mailbox settings (timezone, auto-reply, working hours, etc.)** — `/me/mailboxSettings/*` returns `403 ErrorAccessDenied` on outlook.com / hotmail.com / live.com mailboxes regardless of granted scopes. Verified against the live API when the 1.7.0 tools were yanked in 1.7.1, and re-verified 2026-09-03 (`/me/mailboxSettings`, `/timeZone`, `/automaticRepliesSetting`, `/workingHours` — all 403).
+
+  **Correction (2026-09-03):** this entry previously claimed the endpoint "is documented as `Delegated (personal Microsoft account): Not supported`". That quote is misattributed. The [Get](https://learn.microsoft.com/en-us/graph/api/user-get-mailboxsettings?view=graph-rest-1.0) and [Update](https://learn.microsoft.com/en-us/graph/api/user-update-mailboxsettings?view=graph-rest-1.0) mailboxSettings pages both *do* list personal Microsoft accounts as supported, and their generated permissions tables have been unchanged since 2023-10-27 — so they did not say "Not supported" when 1.7.1 shipped either. A neighbouring `MailboxSettings`-scoped page does carry that exact string for personal accounts ([Get workHoursAndLocations](https://learn.microsoft.com/en-us/graph/api/workhoursandlocationssetting-get?view=graph-rest-1.0), a different resource at `/me/settings/workHoursAndLocations`), which is the likely source of the mix-up. The empirical 403 is unaffected — it was always the real justification. Earlier prose also asserted the resource is "Exchange Online-only" and that consumer Outlook.com uses an unbridged backend; that is a plausible hypothesis, not something we verified.
+
+  **Do not treat the permissions table as evidence this works** — re-probe the live API before investing here.
 
 ---
 
