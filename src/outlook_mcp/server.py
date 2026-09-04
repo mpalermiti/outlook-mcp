@@ -1,4 +1,4 @@
-"""FastMCP server for Microsoft Outlook."""
+"""MCP server for Microsoft Outlook."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 
 from outlook_mcp import __version__, toolsets
 from outlook_mcp.auth import AuthManager
@@ -49,14 +49,12 @@ async def lifespan(server):
     yield {"config": config, "auth": auth}
 
 
-mcp = FastMCP(
+mcp = MCPServer(
     "outlook-mcp",
     instructions="MCP server for Microsoft Outlook via Microsoft Graph API",
     lifespan=lifespan,
+    version=__version__,
 )
-# FastMCP doesn't expose a `version` kwarg, so set it on the underlying server
-# directly. Otherwise serverInfo.version reports the MCP SDK's version.
-mcp._mcp_server.version = __version__
 
 
 # ── Helpers ─────────────────────────────────────────────
