@@ -14,3 +14,43 @@ jobs:
       - run: uv sync --all-extras
       - run: uv run ruff check src/ tests/
       - run: uv run pytest --cov=outlook_mcp -v
+
+  # Guards the failure mode that shipped 1.12.0 and 1.13.0 broken for five weeks:
+  # `mcp[cli]` was declared with no upper bound, mcp 2.0.0 removed
+  # `mcp.server.fastmcp`, and every fresh `pip install` got a server that died on
+  # import. The `test` job above cannot see this — `uv sync` resolves through
+  # uv.lock, which pinned the old, working version.
+  #
+  # So this job deliberately ignores the lockfile and resolves like a real user,
+  # then imports the server from the built wheel. Any future upstream major that
+  # breaks us fails here instead of on someone's machine.
+  fresh-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Build wheel
+        run: uv build
+      - name: Install from wheel with a fresh dependency resolve (no uv.lock)
+        run: |
+          uv venv "$RUNNER_TEMP/fresh"
+          uv pip install --python "$RUNNER_TEMP/fresh/bin/python" dist/*.whl
+      - name: Report resolved dependency versions
+        run: |
+          "$RUNNER_TEMP/fresh/bin/python" - <<'PY'
+          import importlib.metadata as md
+          for name in ("mcp", "msgraph-sdk", "azure-identity", "pydantic"):
+              print(f"{name}=={md.version(name)}")
+          PY
+      - name: Server must import and register its full tool surface
+        run: |
+          "$RUNNER_TEMP/fresh/bin/python" - <<'PY'
+          import outlook_mcp.server as s
+          tools = [a for a in dir(s) if a.startswith("outlook_")]
+          assert len(tools) == 62, f"expected 62 tools, got {len(tools)}"
+          print(f"OK: server imports, {len(tools)} tools registered")
+          PY
+      - name: CLI entrypoint must run
+        run: "$RUNNER_TEMP/fresh/bin/outlook-mcp" status || true
