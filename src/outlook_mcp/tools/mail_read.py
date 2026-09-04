@@ -115,8 +115,8 @@ async def list_inbox(
     skip: int = 0,
     cursor: str | None = None,
     classification: str | None = None,
-    uncategorized_only: bool = False,
     concise: bool = False,
+    uncategorized_only: bool = False,
 ) -> dict:
     """List messages in a folder.
 

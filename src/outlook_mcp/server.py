@@ -154,10 +154,10 @@ async def outlook_list_inbox(
     skip: int = 0,
     cursor: str | None = None,
     classification: str | None = None,
-    uncategorized_only: bool = False,
     concise: bool = False,
+    uncategorized_only: bool = False,
 ) -> dict:
-    """List messages in one folder with structured filters (read, sender, date, Focused class).
+    """List messages in one folder with structured filters (read, sender, date, category, Focused).
 
     Use this for folder-scoped browsing; use outlook_search_mail for KQL full-text search across
     all folders. For polling/recurring agents use outlook_list_inbox_delta (typically 10x cheaper
@@ -180,8 +180,8 @@ async def outlook_list_inbox(
         skip,
         cursor=cursor,
         classification=classification,
-        uncategorized_only=uncategorized_only,
         concise=concise,
+        uncategorized_only=uncategorized_only,
     )
 
 
