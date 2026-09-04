@@ -45,7 +45,21 @@ def test_wrap_403_access_denied_references_roadmap():
     assert wrapped.status_code == 403
     assert wrapped.error_code == "ErrorAccessDenied"
     assert wrapped.action is not None
-    assert "ROADMAP" in wrapped.action
+    assert (
+        "https://github.com/mpalermiti/outlook-mcp/blob/main/ROADMAP.md"
+        "#investigated-and-not-viable" in wrapped.action
+    )
+
+
+def test_roadmap_anchor_heading_still_exists():
+    """The 403 hint deep-links to ROADMAP.md#investigated-and-not-viable.
+    ROADMAP.md is not shipped in the sdist or wheel, so the hint has to be a
+    URL — fail loudly here if the heading it points at is ever renamed.
+    """
+    from pathlib import Path
+
+    roadmap = Path(__file__).resolve().parents[1] / "ROADMAP.md"
+    assert "## Investigated and not viable" in roadmap.read_text(encoding="utf-8")
 
 
 def test_wrap_403_unknown_subcode_has_no_hint():

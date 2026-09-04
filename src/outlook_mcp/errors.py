@@ -103,8 +103,9 @@ class GraphAPIError(OutlookMCPError):
 _HINT_TABLE: dict[tuple[int, str | None], str] = {
     (401, None): "Token may have expired — run `outlook-mcp auth` on the host.",
     (403, "ErrorAccessDenied"): (
-        "Endpoint may not be supported for this account type. "
-        "See ROADMAP 'Investigated and not viable' for known dead-ends."
+        "Endpoint may not be supported for this account type. See "
+        "https://github.com/mpalermiti/outlook-mcp/blob/main/ROADMAP.md"
+        "#investigated-and-not-viable for known dead-ends."
     ),
     (404, "ErrorItemNotFound"): (
         "Resource not found. The ID may be stale — re-list to get current IDs."
