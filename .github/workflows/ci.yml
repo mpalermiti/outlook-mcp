@@ -52,5 +52,6 @@ jobs:
           assert len(tools) == 62, f"expected 62 tools, got {len(tools)}"
           print(f"OK: server imports, {len(tools)} tools registered")
           PY
-      - name: CLI entrypoint must run
-        run: "$RUNNER_TEMP/fresh/bin/outlook-mcp" status || true
+      - name: CLI entrypoint must be wired and runnable
+        run: |
+          "$RUNNER_TEMP/fresh/bin/outlook-mcp" --help
