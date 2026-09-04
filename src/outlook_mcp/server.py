@@ -155,8 +155,9 @@ async def outlook_list_inbox(
     cursor: str | None = None,
     classification: str | None = None,
     concise: bool = False,
+    uncategorized_only: bool = False,
 ) -> dict:
-    """List messages in one folder with structured filters (read, sender, date, Focused class).
+    """List messages in one folder with structured filters (read, sender, date, category, Focused).
 
     Use this for folder-scoped browsing; use outlook_search_mail for KQL full-text search across
     all folders. For polling/recurring agents use outlook_list_inbox_delta (typically 10x cheaper
@@ -165,6 +166,7 @@ async def outlook_list_inbox(
     Example: outlook_list_inbox(folder="Junk Email", unread_only=True, count=5)
     `folder` accepts display names, well-known names ("inbox", "junkemail"), or Graph IDs — prefer
     names. Pass concise=True to drop large fields (preview, categories) — ~10x fewer tokens.
+    Pass uncategorized_only=True to return only messages with no categories assigned.
     """
     client = _get_graph_client(ctx)
     return await mail_read.list_inbox(
@@ -179,6 +181,7 @@ async def outlook_list_inbox(
         cursor=cursor,
         classification=classification,
         concise=concise,
+        uncategorized_only=uncategorized_only,
     )
 
 

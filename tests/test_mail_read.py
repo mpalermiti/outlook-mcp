@@ -195,6 +195,53 @@ class TestListInbox:
         assert "inferenceClassification eq 'focused'" in qp.filter
         assert " and " in qp.filter
 
+    @pytest.mark.asyncio
+    async def test_list_inbox_uncategorized_only_adds_odata(self):
+        """uncategorized_only=True adds not categories/any() filter to query."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(mock_client, uncategorized_only=True)
+
+        call_kwargs = (
+            mock_client.me.mail_folders.by_mail_folder_id.return_value
+            .messages.get.call_args
+        )
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert qp.filter is not None
+        assert "not categories/any()" in qp.filter
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_uncategorized_only_absent_by_default(self):
+        """uncategorized_only=False (default) adds no $filter at all."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(mock_client)
+
+        call_kwargs = (
+            mock_client.me.mail_folders.by_mail_folder_id.return_value
+            .messages.get.call_args
+        )
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert qp.filter is None
+
+    @pytest.mark.asyncio
+    async def test_list_inbox_uncategorized_only_combines_with_other_filters(self):
+        """uncategorized_only joins with unread_only and classification via 'and'."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(
+            mock_client,
+            unread_only=True,
+            classification="focused",
+            uncategorized_only=True,
+        )
+
+        call_kwargs = (
+            mock_client.me.mail_folders.by_mail_folder_id.return_value
+            .messages.get.call_args
+        )
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert "isRead eq false" in qp.filter
+        assert "inferenceClassification eq 'focused'" in qp.filter
+        assert "not categories/any()" in qp.filter
+
 
 class TestListInboxFilterOrdering:
     """Graph 400s with InefficientFilter unless a receivedDateTime clause leads

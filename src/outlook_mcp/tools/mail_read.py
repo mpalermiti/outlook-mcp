@@ -116,11 +116,15 @@ async def list_inbox(
     cursor: str | None = None,
     classification: str | None = None,
     concise: bool = False,
+    uncategorized_only: bool = False,
 ) -> dict:
     """List messages in a folder.
 
     classification: filter by Focused Inbox classification — "focused" or "other".
     None means no filter (both).
+
+    uncategorized_only: when True, filter to only messages with no categories assigned
+    (uses OData ``not categories/any()``). Default False.
 
     concise: when True, drop ``preview`` and ``categories`` from each message
     (smaller payload for triage scans). Default False preserves the existing shape.
@@ -163,6 +167,8 @@ async def list_inbox(
                 f"Must be one of: {sorted(VALID_CLASSIFICATIONS)}"
             )
         other_filters.append(f"inferenceClassification eq '{classification}'")
+    if uncategorized_only:
+        other_filters.append("not categories/any()")
 
     # $orderby is unconditionally `receivedDateTime desc`, so any non-date clause
     # needs a leading receivedDateTime clause. A caller-supplied after/before
