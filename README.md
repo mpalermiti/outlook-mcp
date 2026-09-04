@@ -62,7 +62,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 **62 tools** across 13 categories:
 
 - **Auth (1)** -- auth status check (login is via CLI)
-- **Mail Read (7)** -- list inbox (with Focused Inbox filter), read message, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
+- **Mail Read (7)** -- list inbox (with Focused Inbox and uncategorized filters), read message, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
 - **Mail Write (3)** -- send, reply/reply-all, forward
 - **Mail Triage (9)** -- move, delete (soft by default), flag, categorize, mark read/unread, reclassify (Focused Inbox), list/set/delete per-sender Focused Inbox overrides
 - **Calendar Read (3)** -- list events (with recurring expansion), get event details, delta-sync event changes
