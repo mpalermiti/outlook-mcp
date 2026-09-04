@@ -5,7 +5,7 @@ MCP server for Microsoft Outlook personal accounts (Outlook.com/Hotmail) via Mic
 Works with any MCP client (OpenClaw, Claude Code, Cursor).
 
 ## Tech Stack
-- Python 3.10+, FastMCP, msgraph-sdk, azure-identity, Pydantic v2
+- Python 3.10+, MCP Python SDK 2.x (`MCPServer`), msgraph-sdk, azure-identity, Pydantic v2
 - Package manager: uv
 - Testing: pytest + pytest-asyncio
 
@@ -18,8 +18,15 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
 - `uv run outlook-mcp` — start server (stdio)
 - `uv run python scripts/preflight.py` — pre-release Graph smoke test (must pass before tagging; see `RELEASING.md`)
 
+## Releasing
+Publishing is automated — do **not** run `uv publish` or `mcp-publisher` by hand.
+Publishing a GitHub release triggers `.github/workflows/publish.yml`, which re-checks
+the version lockstep, runs tests and lint, builds, and publishes to PyPI and the MCP
+registry via GitHub OIDC (no stored credentials). Full process in `RELEASING.md`.
+Still manual by design: the live tier (run it *before* tagging) and ClawHub.
+
 ## Architecture
-- `src/outlook_mcp/server.py` — FastMCP entry point, lifespan context
+- `src/outlook_mcp/server.py` — `MCPServer` entry point, lifespan context
 - `src/outlook_mcp/auth.py` — Device code OAuth2 via azure-identity
 - `src/outlook_mcp/graph.py` — Graph client factory
 - `src/outlook_mcp/config.py` — Config file management (~/.outlook-mcp/)
@@ -57,3 +64,4 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
 - Errors: raise OutlookMCPError subclasses, never return error dicts
 - Datetimes: UTC in responses, config timezone for input interpretation
 - Delete: soft delete (move to Deleted Items) by default
+- Dependency bounds: an unbounded requirement can break every fresh install without a single commit. `mcp[cli]` with no upper bound shipped a package that could not be installed for five weeks (2026-07-28 → 09-03) while CI stayed green — `uv sync` resolves through `uv.lock`, so the `test` job never sees what a new user actually gets. The `fresh-install` (per push) and `published-install` (weekly cron) jobs in `ci.yml` are the guard against this class; keep them working
