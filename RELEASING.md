@@ -76,21 +76,34 @@ gh pr merge <num> --rebase --delete-branch
 git checkout main && git pull --ff-only
 ```
 
-## 5. Tag + GitHub release
+## 5. Tag + GitHub release — this publishes everything
 
 ```bash
 gh release create vX.Y.Z --target main --title "vX.Y.Z" --notes "<changelog body>"
 ```
 
-## 6. Publish
+Publishing the release triggers `.github/workflows/publish.yml`, which re-checks the version lockstep, runs tests and lint, builds, publishes to **PyPI**, waits for PyPI's index to catch up, then publishes to the **MCP registry**. Both authenticate through GitHub OIDC — no stored tokens, and no five-minute registry login to race by hand.
+
+Watch it:
 
 ```bash
-uv build
-uv publish dist/outlook_graph_mcp-X.Y.Z-py3-none-any.whl dist/outlook_graph_mcp-X.Y.Z.tar.gz
+gh run watch
+```
 
+If it fails partway, re-run it. Uploads already on PyPI are skipped, so a dispatch retries only what didn't finish:
+
+```bash
+gh workflow run publish.yml
+```
+
+> The workflow deliberately does **not** run the live tier — those need real credentials. Step 1 is still yours, and still the step that matters: a green offline suite is exactly what shipped 1.13.0 and 1.13.1 broken.
+
+## 6. Publish to ClawHub (the one manual channel)
+
+ClawHub has no OIDC equivalent, so it stays hand-run:
+
+```bash
 clawhub publish "$(pwd)" --version X.Y.Z --tags latest --changelog "<one-liner>"
-
-mcp-publisher publish   # may need `mcp-publisher login github` if JWT expired
 ```
 
 ## 7. Update GitHub About
@@ -112,3 +125,20 @@ And confirm the MCP registry shows the new version as `(latest)`:
 ```bash
 curl -s 'https://registry.modelcontextprotocol.io/v0/servers?search=mpalermiti&limit=20' | python3 -c "import json,sys; [print(s['server'].get('version'), '(latest)' if s.get('_meta',{}).get('io.modelcontextprotocol.registry/official',{}).get('isLatest') else '') for s in json.load(sys.stdin).get('servers', [])]"
 ```
+
+
+## Appendix — one-time PyPI trusted publisher setup
+
+Step 5 uploads to PyPI without a token by using PyPI's *trusted publishing*: PyPI verifies the workflow through GitHub OIDC rather than a stored API token. It has to be registered once in PyPI's web UI — it cannot be scripted:
+
+1. Go to <https://pypi.org/manage/project/outlook-graph-mcp/settings/publishing/>
+2. Add a **GitHub** publisher with exactly:
+
+   | Field | Value |
+   | --- | --- |
+   | Owner | `mpalermiti` |
+   | Repository | `outlook-mcp` |
+   | Workflow name | `publish.yml` |
+   | Environment | *(leave blank)* |
+
+Until this is saved, the workflow's PyPI step fails with an OIDC/trusted-publishing error. Once saved, `UV_PUBLISH_TOKEN` is no longer needed and can be dropped from the shell environment.

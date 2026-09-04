@@ -1,0 +1,122 @@
+name: Publish
+
+# Tagging a release is the whole release.
+#
+# This publishes to PyPI and the MCP registry with no stored credentials. Both
+# verify us through GitHub's OIDC: GitHub vouches for this specific workflow at
+# run time, so there is no token to keep, rotate, or leak — and no five-minute
+# registry login to race by hand.
+#
+# What this does NOT replace: the live-Graph smoke test (RELEASING.md step 1).
+# Those need real credentials and cannot run here. Run them BEFORE you tag —
+# a green offline suite is exactly what shipped 1.13.0 and 1.13.1 broken.
+#
+# ClawHub has no OIDC equivalent and stays manual:
+#   clawhub publish "$(pwd)" --version X.Y.Z --tags latest --changelog "..."
+#
+# One-time PyPI setup is required before this can work. See RELEASING.md.
+
+on:
+  release:
+    types: [published]
+  # Manual re-run — safe to repeat. PyPI uploads are skipped if already present,
+  # so a dispatch after a partial failure retries only what did not finish.
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # lets GitHub vouch for this job to PyPI and the registry
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+
+      # The version lives in three places and they must agree. A mismatch means
+      # a half-updated release — better to stop before anything is published.
+      - name: Version lockstep check
+        id: version
+        run: |
+          PY_VERSION=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          if [ -z "$PY_VERSION" ]; then
+            echo "::error::could not read version from pyproject.toml"
+            exit 1
+          fi
+          SJ_COUNT=$(grep -c "\"version\": \"$PY_VERSION\"" server.json || true)
+          if [ "$SJ_COUNT" -ne 2 ]; then
+            echo "::error::server.json must carry version $PY_VERSION in both fields (found $SJ_COUNT)"
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" = "release" ]; then
+            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+            if [ "$PY_VERSION" != "$TAG_VERSION" ]; then
+              echo "::error::tag v$TAG_VERSION does not match pyproject version $PY_VERSION"
+              exit 1
+            fi
+          fi
+          echo "version=$PY_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing $PY_VERSION"
+
+      - name: Tests and lint
+        run: |
+          uv sync --all-extras
+          uv run pytest -q
+          uv run ruff check src/ tests/
+
+      - name: Build
+        run: uv build
+
+      # No token. PyPI trusted publishing verifies this repo and workflow via
+      # OIDC. --check-url makes a re-run skip files already uploaded instead of
+      # failing on a duplicate.
+      - name: Publish to PyPI
+        run: |
+          uv publish \
+            --trusted-publishing always \
+            --check-url https://pypi.org/simple/outlook-graph-mcp/
+
+      # The registry refuses a version it cannot find on PyPI, and PyPI's index
+      # lags its own upload by up to a couple of minutes. Wait rather than race.
+      - name: Wait for PyPI to serve the new version
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+              "https://pypi.org/pypi/outlook-graph-mcp/$VERSION/json")
+            if [ "$CODE" = "200" ]; then
+              echo "PyPI is serving $VERSION"
+              exit 0
+            fi
+            echo "attempt $i: PyPI returned $CODE — waiting 10s"
+            sleep 10
+          done
+          echo "::error::PyPI never served $VERSION after 5 minutes"
+          exit 1
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      # Replaces `mcp-publisher login github`, which needs a browser and issues
+      # a token that expires five minutes later.
+      - name: Publish to the MCP registry
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+
+      - name: Summary
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          {
+            echo "### Published $VERSION"
+            echo ""
+            echo "- PyPI: https://pypi.org/project/outlook-graph-mcp/$VERSION/"
+            echo "- MCP registry: io.github.mpalermiti/outlook-mcp"
+            echo ""
+            echo "Still manual: \`clawhub publish \"\$(pwd)\" --version $VERSION --tags latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
