@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from outlook_mcp.tools.mail_read import (
+    RECEIVED_FLOOR,
     _format_message_summary,
     list_folders,
     list_inbox,
@@ -193,6 +194,88 @@ class TestListInbox:
         assert "isRead eq false" in qp.filter
         assert "inferenceClassification eq 'focused'" in qp.filter
         assert " and " in qp.filter
+
+
+class TestListInboxFilterOrdering:
+    """Graph 400s with InefficientFilter unless a receivedDateTime clause leads
+    the $filter, because $orderby is unconditionally receivedDateTime desc.
+    Clause ORDER is load-bearing, so these assert position, not just presence.
+    """
+
+    @staticmethod
+    def _filter_for(mock_client):
+        call_kwargs = (
+            mock_client.me.mail_folders.by_mail_folder_id.return_value
+            .messages.get.call_args
+        )
+        return call_kwargs.kwargs["request_configuration"].query_parameters.filter
+
+    @pytest.mark.asyncio
+    async def test_no_filter_means_no_floor(self):
+        """An unfiltered call needs no floor — $orderby alone is fine."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(mock_client)
+        assert self._filter_for(mock_client) is None
+
+    @pytest.mark.asyncio
+    async def test_floor_prepended_for_non_date_filter(self):
+        """from_address alone returned 400 in 1.12.0 — it needs the floor."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(mock_client, from_address="sarah@acme.com")
+        assert self._filter_for(mock_client) == (
+            f"receivedDateTime ge {RECEIVED_FLOOR} "
+            "and from/emailAddress/address eq 'sarah@acme.com'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_classification_leads_with_floor(self):
+        """classification alone also returned 400 in 1.12.0."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(mock_client, classification="focused")
+        assert self._filter_for(mock_client).startswith(
+            f"receivedDateTime ge {RECEIVED_FLOOR} and"
+        )
+
+    @pytest.mark.asyncio
+    async def test_caller_date_filter_is_not_double_floored(self):
+        """A caller-supplied `after` already satisfies the index — don't add."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(mock_client, after="2026-01-01", from_address="s@acme.com")
+        filter_str = self._filter_for(mock_client)
+        assert RECEIVED_FLOOR not in filter_str
+        assert filter_str.startswith("receivedDateTime ge 2026-01-01")
+
+    @pytest.mark.asyncio
+    async def test_before_only_leads_and_is_not_floored(self):
+        """A `before`-only filter leads with `le` and is accepted by Graph."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(mock_client, before="2026-06-01", unread_only=True)
+        filter_str = self._filter_for(mock_client)
+        assert RECEIVED_FLOOR not in filter_str
+        assert filter_str.startswith("receivedDateTime le 2026-06-01")
+
+    @pytest.mark.asyncio
+    async def test_date_clauses_always_precede_other_clauses(self):
+        """The invariant: no non-date clause may appear before a date clause."""
+        mock_client = _make_folder_mock([])
+        await list_inbox(
+            mock_client,
+            unread_only=True,
+            from_address="s@acme.com",
+            classification="focused",
+            after="2026-01-01",
+            before="2026-06-01",
+        )
+        clauses = self._filter_for(mock_client).split(" and ")
+        is_date = [c.startswith("receivedDateTime") for c in clauses]
+        assert is_date == sorted(is_date, reverse=True), clauses
+
+    @pytest.mark.asyncio
+    async def test_validation_error_precedence_unchanged(self):
+        """Reordering emitted clauses must not reorder validation errors."""
+        mock_client = _make_folder_mock([])
+        with pytest.raises(ValueError, match="email"):
+            await list_inbox(mock_client, from_address="bogus", after="not-a-date")
 
 
 class TestReadMessage:

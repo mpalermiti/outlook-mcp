@@ -254,6 +254,8 @@ async def outlook_search_mail(
 
     Example: outlook_search_mail(query="from:sarah@acme.com received>=2026-01-01", count=10)
     `query` is Microsoft KQL (from:, subject:, received>=, hasattachment:true, AND/OR/NOT).
+    Operators must be UPPERCASE — lowercase `and` is matched as a literal term. Two terms
+    with no operator between them broaden the search; use AND explicitly to narrow.
     Pass concise=True to drop large fields (preview, categories) — ~10x fewer tokens.
     """
     client = _get_graph_client(ctx)

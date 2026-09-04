@@ -12,8 +12,21 @@ _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 # Phone pattern
 _PHONE_RE = re.compile(r"^[0-9 ()+.\-]{1,30}$")
 
-# KQL dangerous characters to strip
-_KQL_DANGEROUS = re.compile(r'[":()&|!*\\]')
+# KQL characters to strip. The value is embedded as `$search="<value>"`, so the
+# only real boundary is the string literal itself. Verified live against Graph:
+#   "  MUST strip — an embedded quote makes Graph SILENTLY DISCARD $search and
+#      return the whole mailbox (200, no error). This is the actual vector.
+#   \  MUST strip — a real escape metachar. `\s` is a 400 (unrecognized escape)
+#      and a trailing `\` escapes our closing quote (400, unterminated literal).
+#   *  stripped — buys nothing (Graph already prefix-matches: `subject:Amaz` and
+#      `subject:Amaz*` both return 50), and a bare `*` would become a silent
+#      whole-mailbox read where it is currently a loud 400.
+#   &|! stripped — not operators. Graph's operators are the uppercase words
+#      AND/OR/NOT; the symbol forms silently zero out an otherwise-matching query.
+# `:` `(` `)` are deliberately NOT stripped — they are the property-restriction and
+# grouping syntax the tools document, and stripping `:` silently turned every
+# documented query into a zero-result free-text phrase.
+_KQL_DANGEROUS = re.compile(r'["&|!*\\]')
 
 # Control characters (C0 + C1 + DEL), excluding \n and \t
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
@@ -83,8 +96,20 @@ def validate_datetime(value: str) -> str:
 
 
 def sanitize_kql(query: str) -> str:
-    """Sanitize a KQL search query to prevent injection."""
+    """Sanitize a KQL search query to prevent injection.
+
+    The value is embedded as ``$search="<value>"``; the surrounding quotes are
+    load-bearing (an unquoted ``:`` is a Graph 400), so the strip only has to
+    protect the string-literal boundary. See ``_KQL_DANGEROUS``.
+    """
     sanitized = _KQL_DANGEROUS.sub("", query)
+    if not sanitized.strip():
+        # Would send $search="" — Graph answers with an opaque BadRequest.
+        raise ValueError(
+            f"Search query is empty after sanitization: {query[:50]!r}. "
+            'Quotes, backslashes and the characters & | ! * are removed; '
+            "use KQL syntax like subject:budget or from:sarah@acme.com."
+        )
     return f'"{sanitized}"'
 
 
