@@ -1,47 +1,21 @@
-"""Integration smoke test — requires real Azure AD app and prior outlook_login.
+"""Integration smoke tests — require a real Azure AD app and a cached token.
 
 Run with: uv run pytest -m integration -v
-Skipped by default in CI.
+Auto-skipped without credentials (so CI, which has none, skips them).
+
+These check that each tool returns its documented response SHAPE. They are not
+query-shape guards — see tests/test_live_query_shape.py for those.
+
+READ-ONLY: every call here must be a read. Never add a write to this module.
+
+Fixtures (real_config / real_auth / real_graph_client) live in conftest.py and
+are shared with the live tier.
 """
 
 import pytest
 
 # Mark all tests in this module as integration tests
 pytestmark = pytest.mark.integration
-
-
-@pytest.fixture
-def real_config():
-    """Load real config from ~/.outlook-mcp/config.json."""
-    from outlook_mcp.config import load_config
-
-    config = load_config()
-    if not config.client_id:
-        pytest.skip("No client_id configured — run Azure AD app setup first")
-    return config
-
-
-@pytest.fixture
-def real_auth(real_config):
-    """Get real AuthManager with existing credentials."""
-    from outlook_mcp.auth import AuthManager
-
-    auth = AuthManager(real_config)
-    # Try to create credential with cached token
-    try:
-        auth.login()
-        auth.get_credential()
-    except Exception:
-        pytest.skip("Not authenticated — run outlook_login first")
-    return auth
-
-
-@pytest.fixture
-def real_graph_client(real_auth):
-    """Get real Graph client."""
-    from outlook_mcp.graph import GraphClient
-
-    return GraphClient(real_auth.get_credential())
 
 
 @pytest.mark.asyncio
@@ -109,6 +83,8 @@ async def test_list_drafts_smoke(real_graph_client):
     from outlook_mcp.tools.mail_drafts import list_drafts
 
     result = await list_drafts(real_graph_client.sdk_client)
-    assert "drafts" in result
+    # NB: the key is "messages", not "drafts" — this assertion said "drafts"
+    # and never failed because the whole tier was silently skipping.
+    assert "messages" in result
     assert "count" in result
-    assert isinstance(result["drafts"], list)
+    assert isinstance(result["messages"], list)

@@ -1,6 +1,6 @@
 [project]
 name = "outlook-graph-mcp"
-version = "1.12.0"
+version = "1.13.0"
 description = "MCP server for Microsoft Outlook via Microsoft Graph API"
 readme = "README.md"
 license = "MIT"
@@ -68,8 +68,14 @@ select = ["E", "F", "I", "N", "W", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# Default run is the offline unit suite. The credentialed tiers are opt-in via
+# `-m integration` / `-m live` (a CLI -m overrides this one). Without this they
+# run for real on any machine that happens to hold a cached token, and merely
+# *skip* in CI — which reads as "covered" when nothing was exercised.
+addopts = "-m 'not integration and not live'"
 markers = [
     "integration: marks tests that require real Azure AD auth (deselect with '-m \"not integration\"')",
+    "live: query-shape guards that call real Graph — the mock suite cannot see a query Graph rejects or mis-evaluates (run with '-m live'; see RELEASING.md)",
 ]
 
 [dependency-groups]

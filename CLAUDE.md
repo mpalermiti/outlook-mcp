@@ -10,7 +10,9 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
 - Testing: pytest + pytest-asyncio
 
 ## Commands
-- `uv run pytest` — run tests
+- `uv run pytest` — run tests (offline unit suite; `integration`/`live` markers are deselected by default)
+- `uv run pytest -m live -v` — live query-shape guards; run before tagging if you changed any `$filter`/`$orderby`/`$search` construction (see `RELEASING.md` 1b)
+- `uv run pytest -m integration -v` — live response-shape smoke tests
 - `uv run ruff check src/ tests/` — lint
 - `uv run ruff format src/ tests/` — format
 - `uv run outlook-mcp` — start server (stdio)
@@ -51,7 +53,7 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
 - Tool names prefixed with `outlook_`
 - All input validated via Pydantic + validation.py before Graph API calls
 - No telemetry, no local caching, no third-party calls
-- Tests: TDD, pytest, mock Graph client for unit tests
+- Tests: TDD, pytest, mock Graph client for unit tests. Mocks assert what we *send* — they cannot see a query Graph rejects or silently mis-evaluates, so anything that builds a `$filter`/`$orderby`/`$search` string also needs a `@pytest.mark.live` guard
 - Errors: raise OutlookMCPError subclasses, never return error dicts
 - Datetimes: UTC in responses, config timezone for input interpretation
 - Delete: soft delete (move to Deleted Items) by default
