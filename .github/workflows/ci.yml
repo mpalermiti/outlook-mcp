@@ -1,7 +1,14 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  # Mondays 14:00 UTC (~7am Pacific). See `published-install` below for why.
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
 jobs:
   test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -25,6 +32,7 @@ jobs:
   # then imports the server from the built wheel. Any future upstream major that
   # breaks us fails here instead of on someone's machine.
   fresh-install:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,3 +63,45 @@ jobs:
       - name: CLI entrypoint must be wired and runnable
         run: |
           "$RUNNER_TEMP/fresh/bin/outlook-mcp" --help
+
+  # Answers the question that went unanswered for five weeks: can a new user
+  # install the *published* package today and get a server that starts?
+  #
+  # `fresh-install` above resolves dependencies like a real user, but it only
+  # runs on push — so it structurally cannot catch what actually bit us. Nothing
+  # was pushed. `mcp` 2.0.0 landed 2026-07-28, ten days after the last commit,
+  # and every install from PyPI was dead on arrival until 2026-09-03. The repo
+  # was byte-identical on both sides of the break.
+  #
+  # So this one runs on a clock instead of on a commit, and installs from PyPI
+  # rather than the working tree — which also covers a bad publish, not just a
+  # breaking upstream release.
+  published-install:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Install the latest published release from PyPI
+        run: |
+          uv venv "$RUNNER_TEMP/pypi"
+          uv pip install --python "$RUNNER_TEMP/pypi/bin/python" outlook-graph-mcp
+      - name: Report what a new user actually gets
+        run: |
+          "$RUNNER_TEMP/pypi/bin/python" - <<'PY'
+          import importlib.metadata as md
+          for name in ("outlook-graph-mcp", "mcp", "msgraph-sdk", "azure-identity", "pydantic"):
+              print(f"{name}=={md.version(name)}")
+          PY
+      - name: Published server must import and register its full tool surface
+        run: |
+          "$RUNNER_TEMP/pypi/bin/python" - <<'PY'
+          import outlook_mcp.server as s
+          tools = [a for a in dir(s) if a.startswith("outlook_")]
+          assert len(tools) == 62, f"expected 62 tools, got {len(tools)}"
+          print(f"OK: published package imports, {len(tools)} tools registered")
+          PY
+      - name: CLI entrypoint must be wired and runnable
+        run: |
+          "$RUNNER_TEMP/pypi/bin/outlook-mcp" --help
