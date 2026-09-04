@@ -191,7 +191,7 @@ def annotation_for(name: str) -> ToolAnnotations:
 def configure(mcp: Any, enabled: set[str] | None) -> None:
     """Apply annotations to every registered tool and gate by enabled toolsets.
 
-    Mutates the FastMCP tool manager in place: sets each tool's ``annotations``
+    Mutates the MCPServer tool manager in place: sets each tool's ``annotations``
     and removes tools whose group isn't enabled. Called once at import time
     after all ``@mcp.tool`` decorators have run.
     """

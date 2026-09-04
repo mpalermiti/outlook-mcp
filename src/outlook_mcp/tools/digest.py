@@ -408,7 +408,7 @@ async def changes_since(
     """Composed "since last call" digest across mail / events / contacts.
 
     See module docstring for full behavior. The function calls the
-    underlying v1.9.0 delta *tool functions* directly (not the FastMCP
+    underlying v1.9.0 delta *tool functions* directly (not the MCPServer
     wrappers) so it composes cleanly without going through the server.
     """
     now = datetime.now(timezone.utc)
