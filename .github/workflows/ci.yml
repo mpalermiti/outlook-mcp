@@ -76,6 +76,11 @@ jobs:
   # So this one runs on a clock instead of on a commit, and installs from PyPI
   # rather than the working tree — which also covers a bad publish, not just a
   # breaking upstream release.
+  #
+  # CAVEAT: GitHub disables scheduled workflows after 60 days of repository
+  # inactivity — i.e. a long enough quiet period switches off the guard that
+  # exists to cover quiet periods. GitHub emails a warning first and re-enabling
+  # is one click, so don't dismiss that mail as noise.
   published-install:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest

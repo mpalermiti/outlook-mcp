@@ -51,8 +51,8 @@ For the population installing this from the MCP registry, not for Neo. stdio sta
 ### Tier 2 — deferred (hosting- or client-gated; revisit when the precondition lands)
 - **Change-notification webhooks** as the delta trigger (near-real-time, avoids polling/throttling) — needs a public HTTPS endpoint; N/A for stdio/local. Rich-mode notifications carry the changed object inline (a token lever) but need an encryption cert. Recommended end-state is delta-tokens **+** webhooks.
 - **Code-execution-with-MCP / progressive tool disclosure** — needs a client that presents tools as a sandboxed code API; still theoretical for the single-personal-agent case.
-- **Structured output schemas** — typed Pydantic returns → `outputSchema` / `structuredContent`. Gate on confirming the target client consumes it (else pure cost).
-- **FastMCP 2.x migration** for middleware/tags — its `ResponseCachingMiddleware` conflicts with the no-local-caching principle; the Tier-0 selector delivers the tag benefit without the dependency swap.
+- **Structured output schemas** — typed Pydantic returns → `outputSchema` / `structuredContent`. Gate on confirming the target client consumes it (else pure cost). *Cheaper since 1.14.0: `structured_output` is a first-class kwarg on `MCPServer.tool()` in the 2.x SDK. Verified 2026-09-04 over a real stdio session that we currently emit `TextContent` only and no `structuredContent`, so adopting this stays fully opt-in.*
+- **FastMCP 2.x migration** for middleware/tags — *note: this means jlowin's separate `fastmcp` package, NOT the official `mcp` SDK 2.x, which this project already runs as of 1.14.0.* Its `ResponseCachingMiddleware` conflicts with the no-local-caching principle; the Tier-0 selector delivers the tag benefit without the dependency swap.
 
 ---
 
