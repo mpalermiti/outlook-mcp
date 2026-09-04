@@ -16,6 +16,36 @@ If the script reports failures, do not tag. Either fix the affected tools or rem
 
 When adding a new tool that hits a Graph endpoint family not yet covered, add a row to `ENDPOINTS` in `scripts/preflight.py`.
 
+## 1b. Live query-shape tests
+
+```bash
+uv run pytest -m live -v
+```
+
+Preflight answers "does this endpoint exist and respond?" — it treats a 400 as a non-blocking SKIP. This tier answers the different question: **does Graph accept and correctly evaluate the queries we actually build?**
+
+That gap shipped three bugs in 1.12.0, all under a fully green mock suite:
+
+- `$orderby` + any non-date `$filter` → `400 InefficientFilter`, breaking `from_address` and `classification` on every call (#31)
+- `list_thread` hit the same rule and 400'd unconditionally — it had never worked in a released version
+- `sanitize_kql` stripped `:`, so every documented KQL property restriction returned `200` with **zero results** (#30)
+
+The second failure mode is the dangerous one: a silent 200 with wrong data. Mocks assert what we *send*; only a live call sees what Graph *does*. These tests assert on returned data, not just absence of an exception.
+
+Read-only, and mailbox-independent — they harvest their own fixtures and skip cleanly when the mailbox lacks the needed data. Auto-skipped without a cached token.
+
+If you change how any `$filter`, `$orderby` or `$search` string is built, run this before tagging.
+
+## 1c. Integration smoke tests
+
+```bash
+uv run pytest -m integration -v
+```
+
+Response-shape checks for each tool family. Read-only.
+
+> These skipped silently for their entire existence — the fixture called a non-existent `AuthManager.login()`, and the `except Exception` swallowed the `AttributeError`. Fixed in 1.13.0. If you see `skipped` here, confirm it's really a missing token and not a broken fixture.
+
 ## 2. Tests + lint
 
 ```bash
@@ -23,7 +53,7 @@ uv run pytest --tb=no -q
 uv run ruff check src/ tests/
 ```
 
-A single pre-existing failure (`test_graph.py::test_graph_client_init`, SOCKS env import) is expected and unrelated.
+The default run is the offline unit suite only — `addopts` deselects the `integration` and `live` markers, so this needs no network or token. Expect `N passed, 16 deselected` and zero failures.
 
 ## 3. Version bump
 
