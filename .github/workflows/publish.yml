@@ -107,7 +107,21 @@ jobs:
       - name: Publish to the MCP registry
         run: |
           ./mcp-publisher login github-oidc
-          ./mcp-publisher publish
+          # The registry rejects a duplicate version, which would turn the
+          # documented retry (`gh workflow run publish.yml`) red after a run
+          # that already succeeded. Treat "already published" as done — the
+          # same idempotence --check-url gives the PyPI step above.
+          set +e
+          OUT=$(./mcp-publisher publish 2>&1)
+          CODE=$?
+          echo "$OUT"
+          if [ "$CODE" -ne 0 ]; then
+            if echo "$OUT" | grep -q "cannot publish duplicate version"; then
+              echo "Already in the registry at this version — nothing to do."
+              exit 0
+            fi
+            exit "$CODE"
+          fi
 
       - name: Summary
         run: |
