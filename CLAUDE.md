@@ -54,12 +54,15 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   - `_delta.py` — Shared httpx-backed delta helper (raw HTTP bypasses the SDK)
   - `_recurrence.py` — Shared recurrence conversion for calendar events and To Do tasks (Graph models both identically)
   - `digest.py` — Composed "since last call" digest (`outlook_changes_since`) wrapping the three delta tools
-- `src/outlook_mcp/models/` — Pydantic models for I/O
 
 ## Conventions
 - One tool = one operation (not grouped CRUD)
 - Tool names prefixed with `outlook_`
-- All input validated via Pydantic + validation.py before Graph API calls
+- All input validated in `validation.py` before Graph API calls; tool-argument types are
+  enforced by the schemas `MCPServer` generates from the annotations. There is deliberately
+  no hand-written Pydantic I/O layer — one existed until 1.16.0, was wired to nothing, and
+  is why #41 went unnoticed for fourteen releases: a validator that looked authoritative and
+  never ran. If you add one, wire it to the tool path in the same commit.
 - No telemetry, no local caching, no third-party calls
 - Tests: TDD, pytest, mock Graph client for unit tests. Mocks assert what we *send* — they cannot see a query Graph rejects or silently mis-evaluates, so anything that builds a `$filter`/`$orderby`/`$search` string also needs a `@pytest.mark.live` guard
 - Errors: raise OutlookMCPError subclasses, never return error dicts
