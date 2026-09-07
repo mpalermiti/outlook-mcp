@@ -4,9 +4,9 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.15.0] — 2026-09-07
 
-Recurring calendar events, which have never actually worked.
+Recurring calendar events, which have never actually worked, and a timezone bug found while fixing them.
 
 ### Fixed
 
@@ -23,6 +23,7 @@ Recurring calendar events, which have never actually worked.
 
 - **`recurrence` accepts three input shapes** on `outlook_create_event`: a Microsoft Graph recurrence object (matching `outlook_create_task`, which has taken `dict` since 1.5.0); a JSON-encoded string of one, since some client bridges stringify nested arguments; or a shorthand — `daily`, `weekdays`, `weekly`, `monthly`, `yearly` — expanded against the event's own start, so `weekly` on a Monday start means every Monday and `monthly` on the 7th means the 7th.
 - **`range.startDate` is reconciled with the event start.** Graph requires the range to begin on the day of the first occurrence and returns `ErrorInvalidRecurrenceRange` otherwise. It is now defaulted from `start` when omitted, and a supplied value that disagrees is rejected locally with a message naming both dates instead of surfacing as an opaque 400. The date is taken as the caller wrote it rather than UTC-normalized, so an evening or early-morning series doesn't shift a day.
+- **`recurrence` on `outlook_update_event`.** There was previously no path to add recurrence to an event that already existed — the parameter simply wasn't there, so a single event could never become a series. It now takes the same three shapes as `outlook_create_event`. Graph anchors a series on the master's start, so when `start` isn't part of the same patch the event's current start is read first and used as the anchor; a partial patch that omits `recurrence` leaves any existing pattern untouched. Reading that start back also required `event_start_date` to tolerate Graph's seven-digit fractional seconds, which `datetime.fromisoformat` rejects on the project's 3.10 floor.
 - **`type` on `outlook_get_event`** — `singleInstance`, `seriesMaster`, `occurrence` or `exception`. This is the field that lets a client confirm a series actually took; its absence is part of why #41 needed a raw Graph call to diagnose.
 - **`src/outlook_mcp/tools/_recurrence.py`** — recurrence conversion shared by calendar and To Do, which model it identically. `build_patterned_recurrence` is To Do's 1.5.0 converter moved here unchanged, so `outlook_create_task` keeps exactly its previous behavior; `build_event_recurrence` is the calendar entry point layered on top; `serialize_recurrence` is the inverse for read paths.
 - **`live_write` test tier** — the project's first write-side tests, and the reason this fix is trustworthy. Recurrence cannot be validated any other way: a `PatternedRecurrence` that is well-formed to the SDK still 400s if the range disagrees with the start, and mocks only ever assert what we *build*. Double-gated (marker deselected by default **and** skipped without `OUTLOOK_MCP_LIVE_WRITE=1`), calendar-only, no attendees, bounded ranges only, everything deleted in a `finally`. Rules in `tests/conftest.py`; runbook step 1d in `RELEASING.md`.

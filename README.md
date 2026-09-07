@@ -304,7 +304,7 @@ A one-time startup warning about the token cache falling back to plaintext means
 | Tool | Description |
 |------|-------------|
 | `outlook_create_event` | Create event with location, attendees, online meeting support. Pass `recurrence` to create a **series**: a shorthand (`daily`, `weekdays`, `weekly`, `monthly`, `yearly`, anchored on `start`) or a full [Graph recurrence object](https://learn.microsoft.com/graph/api/resources/patternedrecurrence) for anything else. `range.startDate` defaults to the event's start date. |
-| `outlook_update_event` | Update event fields (subject, time, location, body). Only patches changed fields. |
+| `outlook_update_event` | Update event fields (subject, time, location, body). Only patches changed fields. Pass `recurrence` to turn a single event into a series, or replace an existing pattern. |
 | `outlook_delete_event` | Delete a calendar event. |
 | `outlook_rsvp` | RSVP to an event: `accept`, `decline`, or `tentative`. Optionally include a message. |
 

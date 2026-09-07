@@ -21,7 +21,7 @@ from datetime import date, timedelta
 import pytest
 
 from outlook_mcp.tools.calendar_read import get_event
-from outlook_mcp.tools.calendar_write import create_event, delete_event
+from outlook_mcp.tools.calendar_write import create_event, delete_event, update_event
 from tests.conftest import LIVE_WRITE_SUBJECT
 
 pytestmark = [pytest.mark.live_write, pytest.mark.asyncio]
@@ -35,7 +35,7 @@ def _anchor_monday() -> date:
 
 @asynccontextmanager
 async def _temporary_event(client, config, **kwargs):
-    """Create an event, hand back its detail, and always delete it."""
+    """Create an event, hand back its id, and always delete it."""
     created = await create_event(
         client.sdk_client,
         subject=LIVE_WRITE_SUBJECT,
@@ -44,7 +44,7 @@ async def _temporary_event(client, config, **kwargs):
     )
     event_id = created["event_id"]
     try:
-        yield await get_event(client.sdk_client, event_id)
+        yield event_id
     finally:
         await delete_event(client.sdk_client, event_id, config=config)
 
@@ -65,7 +65,8 @@ class TestRecurringSeriesAreAccepted:
                 "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
                 "range": {"type": "numbered", "numberOfOccurrences": 2},
             },
-        ) as detail:
+        ) as event_id:
+            detail = await get_event(real_graph_client.sdk_client, event_id)
             # The bug: this came back "singleInstance" with recurrence None.
             assert detail["type"] == "seriesMaster"
             assert detail["recurrence"] is not None
@@ -89,7 +90,8 @@ class TestRecurringSeriesAreAccepted:
                 "pattern": {"type": "daily", "interval": 1},
                 "range": {"type": "numbered", "numberOfOccurrences": 2},
             },
-        ) as detail:
+        ) as event_id:
+            detail = await get_event(real_graph_client.sdk_client, event_id)
             assert detail["type"] == "seriesMaster"
             assert detail["recurrence"]["range"]["startDate"] == monday.isoformat()
 
@@ -115,7 +117,8 @@ class TestRecurringSeriesAreAccepted:
             start=f"{monday.isoformat()}T13:00:00Z",
             end=f"{monday.isoformat()}T13:30:00Z",
             recurrence=expanded,
-        ) as detail:
+        ) as event_id:
+            detail = await get_event(real_graph_client.sdk_client, event_id)
             assert detail["type"] == "seriesMaster"
             assert detail["recurrence"]["pattern"]["daysOfWeek"] == ["monday"]
 
@@ -130,7 +133,8 @@ class TestNonRecurringIsUnchanged:
             live_write_config,
             start=f"{monday.isoformat()}T15:00:00Z",
             end=f"{monday.isoformat()}T15:30:00Z",
-        ) as detail:
+        ) as event_id:
+            detail = await get_event(real_graph_client.sdk_client, event_id)
             assert detail["type"] == "singleInstance"
             assert detail["recurrence"] is None
 
@@ -158,3 +162,36 @@ class TestGraphRejectsAMismatchedRange:
                 },
                 config=live_write_config,
             )
+
+
+class TestUpdatingIntoASeries:
+    async def test_update_converts_a_single_event_into_a_series(
+        self, real_graph_client, live_write_config
+    ):
+        """The #41 follow-on: there was no path to add recurrence to an existing event."""
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            start=f"{monday.isoformat()}T19:00:00Z",
+            end=f"{monday.isoformat()}T19:30:00Z",
+        ) as event_id:
+            before = await get_event(real_graph_client.sdk_client, event_id)
+            assert before["type"] == "singleInstance"
+
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                recurrence={
+                    "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                    "range": {"type": "numbered", "numberOfOccurrences": 2},
+                },
+                config=live_write_config,
+            )
+
+            after = await get_event(real_graph_client.sdk_client, event_id)
+            assert after["type"] == "seriesMaster"
+            assert after["recurrence"]["pattern"]["daysOfWeek"] == ["monday"]
+            # The anchor was read off the event itself — no `start` was passed.
+            assert after["recurrence"]["range"]["startDate"] == monday.isoformat()

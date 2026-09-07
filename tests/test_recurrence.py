@@ -205,3 +205,26 @@ class TestSerializeRecurrence:
                 "recurrenceTimeZone": "UTC",
             },
         }
+
+
+class TestEventStartDate:
+    """``event_start_date`` also parses what Graph hands *back*, not just user input."""
+
+    def test_parses_graph_seven_digit_fractional_seconds(self):
+        """Graph returns "…T09:00:00.0000000"; datetime.fromisoformat rejects that on 3.10."""
+        from outlook_mcp.tools._recurrence import event_start_date
+
+        assert event_start_date("2026-09-07T09:00:00.0000000") == date(2026, 9, 7)
+
+    def test_parses_ordinary_shapes(self):
+        from outlook_mcp.tools._recurrence import event_start_date
+
+        assert event_start_date("2026-09-07T09:00:00Z") == date(2026, 9, 7)
+        assert event_start_date("2026-09-07T09:00:00+02:00") == date(2026, 9, 7)
+        assert event_start_date("2026-09-07") == date(2026, 9, 7)
+
+    def test_rejects_garbage(self):
+        from outlook_mcp.tools._recurrence import event_start_date
+
+        with pytest.raises(ValueError, match="Invalid event start"):
+            event_start_date("not-a-date")

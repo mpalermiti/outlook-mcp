@@ -103,12 +103,20 @@ async def update_event(
     end: str | None = None,
     location: str | None = None,
     body: str | None = None,
+    recurrence: dict | str | None = None,
     *,
     config: Config,
 ) -> dict:
     """Update an existing calendar event.
 
     Only patches changed fields.
+
+    Setting ``recurrence`` turns a single event into a series, or replaces the
+    pattern of an existing one. It takes the same shapes as ``create_event``.
+    Graph anchors the range on the series master's start, so when ``start``
+    isn't part of the same patch the event's current start is read first.
+    Passing ``None`` leaves any existing recurrence untouched — this is a
+    partial patch; delete the event to end a series.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_update_event")
     event_id = validate_graph_id(event_id)
@@ -144,6 +152,18 @@ async def update_event(
         event.body = ItemBody()
         event.body.content = body
         event.body.content_type = BodyType.Text
+
+    if recurrence is not None:
+        anchor = start
+        if anchor is None:
+            current = await graph_client.me.events.by_event_id(event_id).get()
+            anchor = getattr(getattr(current, "start", None), "date_time", None)
+            if not anchor:
+                raise ValueError(
+                    "Could not read the event's current start to anchor the recurrence "
+                    "range; pass `start` alongside `recurrence`."
+                )
+        event.recurrence = build_event_recurrence(recurrence, start=anchor)
 
     response = await graph_client.me.events.by_event_id(event_id).patch(event)
 

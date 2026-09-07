@@ -662,12 +662,26 @@ async def outlook_update_event(
     end: str | None = None,
     location: str | None = None,
     body: str | None = None,
+    recurrence: dict | str | None = None,
 ) -> dict:
-    """Update fields on an existing event (partial patch — only provided fields change)."""
+    """Update fields on an existing event (partial patch — only provided fields change).
+
+    `recurrence` takes the same shapes as outlook_create_event and converts a single
+    event into a series, or replaces an existing series' pattern. Omit it to leave any
+    recurrence alone; there is no way to strip one — delete the event to end a series.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await calendar_write.update_event(
-        client.sdk_client, event_id, subject, start, end, location, body, config=config
+        client.sdk_client,
+        event_id,
+        subject,
+        start,
+        end,
+        location,
+        body,
+        recurrence,
+        config=config,
     )
 
 

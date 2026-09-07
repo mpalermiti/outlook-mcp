@@ -25,6 +25,7 @@ Three layers, deliberately separate:
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -43,6 +44,11 @@ _WEEKDAYS = (
 # They were accepted and silently dropped until #41; agents in the wild send
 # them, so they expand to real patterns rather than becoming a hard error.
 _SHORTHANDS = ("daily", "weekdays", "weekly", "monthly", "yearly")
+
+# Graph serializes datetimes with seven fractional digits ("...T09:00:00.0000000").
+# datetime.fromisoformat accepts at most six before 3.11, and the project floor is
+# 3.10 — so trim to six when reading an event's own start back off the wire.
+_OVERLONG_FRACTION = re.compile(r"(\.\d{6})\d+")
 
 
 def build_patterned_recurrence(recurrence: dict) -> Any:
@@ -128,7 +134,7 @@ def event_start_date(start: str) -> date:
     date of the first occurrence — converting to UTC first would move an
     early-morning or late-evening series a day off.
     """
-    text = start.strip()
+    text = _OVERLONG_FRACTION.sub(r"\1", start.strip())
     if text.endswith(("Z", "z")):
         text = text[:-1] + "+00:00"
     try:

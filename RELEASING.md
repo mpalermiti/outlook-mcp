@@ -65,7 +65,7 @@ uv run pytest --tb=no -q
 uv run ruff check src/ tests/
 ```
 
-The default run is the offline unit suite only — `addopts` deselects the `integration` and `live` markers, so this needs no network or token. Expect `N passed, 21 deselected` and zero failures.
+The default run is the offline unit suite only — `addopts` deselects the `integration` and `live` markers, so this needs no network or token. Expect `N passed, 22 deselected` and zero failures.
 
 ## 3. Version bump
 

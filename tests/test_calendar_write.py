@@ -1,5 +1,6 @@
 """Tests for calendar write tools."""
 
+from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -251,6 +252,123 @@ class TestUpdateEvent:
                 subject="Nope",
                 config=_CFG_RO,
             )
+
+    async def test_update_event_ignores_no_recurrence(self):
+        """Omitting recurrence leaves it unset on the patch (regression guard)."""
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(mock_client, event_id="AAMkAG123=", subject="X", config=_CFG)
+
+        assert builder.patch.call_args[0][0].recurrence is None
+        builder.get.assert_not_called()
+
+    async def test_update_event_sets_recurrence_with_explicit_start(self):
+        """Patching start + recurrence together needs no extra round trip."""
+        from msgraph.generated.models.day_of_week import DayOfWeek
+        from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
+
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-09-07T12:30:00Z",
+            end="2026-09-07T13:30:00Z",
+            recurrence="weekly",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.recurrence.pattern.type is RecurrencePatternType.Weekly
+        assert patched.recurrence.pattern.days_of_week == [DayOfWeek.Monday]
+        builder.get.assert_not_called()
+
+    async def test_update_event_reads_current_start_when_none_given(self):
+        """Recurrence alone: Graph needs the range anchored on the event's own start."""
+        from msgraph.generated.models.day_of_week import DayOfWeek
+
+        current = MagicMock()
+        # Graph returns 7 fractional digits, which datetime.fromisoformat rejects on 3.10.
+        current.start = MagicMock(date_time="2026-09-07T12:30:00.0000000", time_zone="UTC")
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client, event_id="AAMkAG123=", recurrence="weekly", config=_CFG
+        )
+
+        builder.get.assert_awaited_once()
+        patched = builder.patch.call_args[0][0]
+        assert patched.recurrence.pattern.days_of_week == [DayOfWeek.Monday]
+        assert patched.recurrence.range.start_date == date(2026, 9, 7)
+
+    async def test_update_event_accepts_a_graph_recurrence_object(self):
+        from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
+
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-09-07T12:30:00Z",
+            recurrence={
+                "pattern": {"type": "absoluteMonthly", "interval": 1, "dayOfMonth": 7},
+                "range": {"type": "numbered", "numberOfOccurrences": 3},
+            },
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.recurrence.pattern.type is RecurrencePatternType.AbsoluteMonthly
+        assert patched.recurrence.range.number_of_occurrences == 3
+
+    async def test_update_event_errors_when_start_cannot_be_resolved(self):
+        """Better a named error than a Graph 400 on a series with no anchor."""
+        current = MagicMock()
+        current.start = None
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock()
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError, match="start"):
+            await update_event(
+                mock_client, event_id="AAMkAG123=", recurrence="weekly", config=_CFG
+            )
+
+        builder.patch.assert_not_called()
+
+    async def test_update_event_rejects_bad_recurrence_before_patching(self):
+        builder = _make_event_builder()
+        builder.patch = AsyncMock()
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError, match="daily"):
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-09-07T12:30:00Z",
+                recurrence="biweekly",
+                config=_CFG,
+            )
+
+        builder.patch.assert_not_called()
 
 
 class TestDeleteEvent:
