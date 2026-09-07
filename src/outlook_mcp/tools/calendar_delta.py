@@ -66,6 +66,7 @@ async def list_events_delta(
     end: str | None,
     page_size: int = 50,
     delta_token: str | None = None,
+    timezone: str = "UTC",
 ) -> dict:
     """List calendar-view changes within ``[start, end]`` since the last token.
 
@@ -76,6 +77,9 @@ async def list_events_delta(
             ignored when ``delta_token`` is set (the cursor already
             encodes the window).
         end: ISO 8601 window end. Same as ``start``.
+        timezone: IANA zone that zone-less ``start``/``end`` values are
+            interpreted in. Defaults to UTC; the server passes
+            ``config.timezone``.
         page_size: Items per Graph page (1-100). Mapped to
             ``Prefer: odata.maxpagesize=N`` — Graph rejects ``$top`` on
             this endpoint.
@@ -97,8 +101,8 @@ async def list_events_delta(
                 "(ISO 8601 datetimes) on the first call — Graph's "
                 "/me/calendarView/delta endpoint has no whole-calendar sync."
             )
-        safe_start = validate_datetime(start)
-        safe_end = validate_datetime(end)
+        safe_start = validate_datetime(start, timezone)
+        safe_end = validate_datetime(end, timezone)
         initial_url = urljoin(GRAPH_BASE, "me/calendarView/delta")
         initial_url = (
             f"{initial_url}?startDateTime={quote(safe_start, safe='')}"

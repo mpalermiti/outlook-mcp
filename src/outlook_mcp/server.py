@@ -180,6 +180,7 @@ async def outlook_list_inbox(
         classification=classification,
         concise=concise,
         uncategorized_only=uncategorized_only,
+        timezone=_get_config(ctx).timezone,
     )
 
 
@@ -598,7 +599,9 @@ async def outlook_list_events_delta(
     is_deleted=True items are tombstones. has_more=True means drain immediately.
     """
     client = _get_graph_client(ctx)
-    return await calendar_delta.list_events_delta(client, start, end, page_size, delta_token)
+    return await calendar_delta.list_events_delta(
+        client, start, end, page_size, delta_token, timezone=_get_config(ctx).timezone
+    )
 
 
 # ── Calendar Write Tools ────────────────────────────────

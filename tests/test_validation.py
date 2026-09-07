@@ -80,6 +80,77 @@ class TestDatetimeValidation:
             validate_datetime("2026-04-12T00:00:00Z eq true")
 
 
+class TestZonelessDatetimeInterpretation:
+    """Zone-less input must mean the same instant regardless of what host we run on.
+
+    ``validate_datetime`` used to hand a naive datetime to ``.astimezone()``,
+    which resolves against the *process's* local clock. The same query string
+    therefore meant a different instant on a UTC container than on a laptop in
+    California — a silent 7-hour skew in every ``$filter`` bound and, worse, in
+    the deferred-send time of a scheduled message.
+    """
+
+    def test_naive_datetime_defaults_to_utc(self):
+        assert validate_datetime("2026-10-22T12:30:00") == "2026-10-22T12:30:00Z"
+
+    def test_naive_datetime_honors_an_explicit_zone(self):
+        assert (
+            validate_datetime("2026-10-22T12:30:00", tz="America/Los_Angeles")
+            == "2026-10-22T19:30:00Z"
+        )
+
+    def test_bare_date_honors_an_explicit_zone(self):
+        """"after=2026-10-22" means the caller's midnight, not UTC's."""
+        assert validate_datetime("2026-10-22", tz="America/Los_Angeles") == "2026-10-22T07:00:00Z"
+
+    def test_bare_date_defaults_to_utc(self):
+        assert validate_datetime("2026-10-22") == "2026-10-22T00:00:00Z"
+
+    def test_naive_input_ignores_the_host_clock(self, monkeypatch):
+        """The regression guard: flip the process timezone, get the same answer."""
+        import time
+
+        results = set()
+        try:
+            for zone in ("UTC", "America/Los_Angeles", "Europe/Berlin", "Asia/Tokyo"):
+                monkeypatch.setenv("TZ", zone)
+                time.tzset()
+                results.add(validate_datetime("2026-10-22T12:30:00"))
+                results.add(validate_datetime("2026-10-22T12:30:00", tz="Europe/Berlin"))
+        finally:
+            monkeypatch.delenv("TZ", raising=False)
+            time.tzset()
+
+        assert results == {"2026-10-22T12:30:00Z", "2026-10-22T10:30:00Z"}
+
+    def test_offset_input_is_unaffected_by_the_zone_argument(self):
+        """An explicit offset already pins the instant — tz must not second-guess it."""
+        assert (
+            validate_datetime("2026-10-22T12:30:00+02:00", tz="America/Los_Angeles")
+            == "2026-10-22T10:30:00Z"
+        )
+
+    def test_utc_suffix_is_unaffected_by_the_zone_argument(self):
+        assert (
+            validate_datetime("2026-10-22T12:30:00Z", tz="America/Los_Angeles")
+            == "2026-10-22T12:30:00Z"
+        )
+
+    def test_dst_is_resolved_by_the_zone_not_a_fixed_offset(self):
+        """Los Angeles is UTC-7 in July and UTC-8 in January."""
+        assert (
+            validate_datetime("2026-07-15T12:00:00", tz="America/Los_Angeles")
+            == "2026-07-15T19:00:00Z"
+        )
+        assert (
+            validate_datetime("2026-01-15T12:00:00", tz="America/Los_Angeles")
+            == "2026-01-15T20:00:00Z"
+        )
+
+    def test_unknown_zone_is_rejected(self):
+        with pytest.raises(ValueError, match="timezone"):
+            validate_datetime("2026-10-22T12:30:00", tz="Mars/Olympus_Mons")
+
 class TestKqlSanitization:
     def test_simple_query(self):
         assert sanitize_kql("budget report") == '"budget report"'

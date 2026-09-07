@@ -117,6 +117,7 @@ async def list_inbox(
     classification: str | None = None,
     concise: bool = False,
     uncategorized_only: bool = False,
+    timezone: str = "UTC",
 ) -> dict:
     """List messages in a folder.
 
@@ -125,6 +126,9 @@ async def list_inbox(
 
     uncategorized_only: when True, filter to only messages with no categories assigned
     (uses OData ``not categories/any()``). Default False.
+
+    timezone: IANA zone that zone-less ``after``/``before`` values are interpreted in.
+    Defaults to UTC; the server passes ``config.timezone``.
 
     concise: when True, drop ``preview`` and ``categories`` from each message
     (smaller payload for triage scans). Default False preserves the existing shape.
@@ -155,10 +159,10 @@ async def list_inbox(
         safe_from = from_address.replace("'", "''")
         other_filters.append(f"from/emailAddress/address eq '{safe_from}'")
     if after:
-        safe_after = validate_datetime(after)
+        safe_after = validate_datetime(after, timezone)
         date_filters.append(f"receivedDateTime ge {safe_after}")
     if before:
-        safe_before = validate_datetime(before)
+        safe_before = validate_datetime(before, timezone)
         date_filters.append(f"receivedDateTime le {safe_before}")
     if classification is not None:
         if classification not in VALID_CLASSIFICATIONS:

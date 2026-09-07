@@ -2,6 +2,7 @@
 
 import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # Graph API entity ID pattern: alphanumeric, =, +, /, -
 _GRAPH_ID_RE = re.compile(r"^[a-zA-Z0-9_=+/\-]{1,1024}$")
@@ -66,15 +67,31 @@ def validate_email(value: str) -> str:
     return value
 
 
-def validate_datetime(value: str) -> str:
-    """Validate and re-serialize a datetime string.
+def validate_datetime(value: str, tz: str = "UTC") -> str:
+    """Validate and re-serialize a datetime string to UTC.
 
     Accepts ISO 8601 formats. Rejects injection attempts.
     Returns a safe ISO 8601 string suitable for OData filters.
+
+    `tz` is the IANA zone that *zone-less* input is interpreted in — a naive
+    datetime ("2026-10-22T12:30:00") or a bare date ("2026-10-22"), which the
+    caller has told us nothing about. Input that already carries a `Z` or an
+    offset pins its own instant and is unaffected.
+
+    Callers with a Config pass `config.timezone`; the default keeps zone-less
+    input meaning UTC. It must never be resolved against the host clock: that
+    made an identical query mean different instants on a UTC container and on
+    a laptop in California, silently skewing every date filter and the send
+    time of every scheduled message.
     """
     # First pass: reject anything that doesn't look like a date
     if not _ISO_DATETIME_RE.match(value):
         raise ValueError(f"Invalid datetime format: {value[:50]}")
+
+    try:
+        zone = ZoneInfo(tz)
+    except (ZoneInfoNotFoundError, ValueError) as e:
+        raise ValueError(f"Invalid timezone: {tz[:50]}") from e
 
     # Second pass: actually parse it to ensure validity
     try:
@@ -84,13 +101,15 @@ def validate_datetime(value: str) -> str:
                 dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
             else:
                 dt = datetime.fromisoformat(value)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=zone)
             # Re-serialize to UTC ISO 8601
             utc_dt = dt.astimezone(timezone.utc)
             return utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         else:
-            # Date only — validate by parsing
-            dt = datetime.strptime(value, "%Y-%m-%d")
-            return f"{value}T00:00:00Z"
+            # Date only — midnight in `tz`
+            dt = datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=zone)
+            return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     except (ValueError, OverflowError) as e:
         raise ValueError(f"Invalid datetime: {value[:50]}") from e
 

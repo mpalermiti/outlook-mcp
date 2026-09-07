@@ -29,13 +29,13 @@ def _compute_calendar_range(
     tz = ZoneInfo(timezone)
 
     if after:
-        start_utc = validate_datetime(after)
+        start_utc = validate_datetime(after, timezone)
     else:
         now_local = datetime.now(tz)
         start_utc = now_local.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     if before:
-        end_utc = validate_datetime(before)
+        end_utc = validate_datetime(before, timezone)
     else:
         now_local = datetime.now(tz)
         end_local = now_local + timedelta(days=days)
