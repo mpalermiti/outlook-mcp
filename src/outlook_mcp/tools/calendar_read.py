@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
+from outlook_mcp.tools._recurrence import serialize_recurrence
 from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
 
 
@@ -113,9 +114,11 @@ def _format_event_detail(event: Any) -> dict:
     if event.online_meeting and event.online_meeting.join_url:
         online_meeting_url = event.online_meeting.join_url
 
-    recurrence = None
-    if event.recurrence:
-        recurrence = str(event.recurrence)
+    # `type` is what tells a client a series actually took: seriesMaster vs
+    # singleInstance / occurrence / exception.
+    event_type = ""
+    if event.type is not None:
+        event_type = event.type.value if hasattr(event.type, "value") else str(event.type)
 
     return {
         **summary,
@@ -123,7 +126,8 @@ def _format_event_detail(event: Any) -> dict:
         "body": body,
         "attendees": attendees,
         "online_meeting_url": online_meeting_url,
-        "recurrence": recurrence,
+        "recurrence": serialize_recurrence(event.recurrence),
+        "type": event_type,
         "categories": list(event.categories or []),
     }
 

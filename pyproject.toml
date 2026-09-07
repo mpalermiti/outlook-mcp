@@ -72,10 +72,11 @@ asyncio_mode = "auto"
 # `-m integration` / `-m live` (a CLI -m overrides this one). Without this they
 # run for real on any machine that happens to hold a cached token, and merely
 # *skip* in CI — which reads as "covered" when nothing was exercised.
-addopts = "-m 'not integration and not live'"
+addopts = "-m 'not integration and not live and not live_write'"
 markers = [
     "integration: marks tests that require real Azure AD auth (deselect with '-m \"not integration\"')",
     "live: query-shape guards that call real Graph — the mock suite cannot see a query Graph rejects or mis-evaluates (run with '-m live'; see RELEASING.md)",
+    "live_write: the one tier that WRITES to a real calendar — creates and deletes events to prove Graph accepts a payload the mocks can only assert we built (run with '-m live_write' AND OUTLOOK_MCP_LIVE_WRITE=1; see tests/conftest.py)",
 ]
 
 [dependency-groups]

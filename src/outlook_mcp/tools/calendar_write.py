@@ -6,6 +6,7 @@ from typing import Any
 
 from outlook_mcp.config import Config
 from outlook_mcp.permissions import CATEGORY_CALENDAR_WRITE, check_permission
+from outlook_mcp.tools._recurrence import build_event_recurrence
 from outlook_mcp.validation import validate_datetime, validate_email, validate_graph_id
 
 
@@ -19,7 +20,7 @@ async def create_event(
     attendees: list[str] | None = None,
     is_all_day: bool = False,
     is_online: bool = False,
-    recurrence: str | None = None,
+    recurrence: dict | str | None = None,
     *,
     config: Config,
 ) -> dict:
@@ -27,6 +28,10 @@ async def create_event(
 
     Validates inputs, builds a Graph Event object, and posts via
     graph_client.me.events.post().
+
+    ``recurrence`` accepts a Graph recurrence object, a JSON string of one, or
+    a shorthand ("daily", "weekdays", "weekly", "monthly", "yearly"). Setting
+    it makes the created event a series master rather than a single occurrence.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_create_event")
 
@@ -77,6 +82,9 @@ async def create_event(
             att.email_address = EmailAddress()
             att.email_address.address = email
             event.attendees.append(att)
+
+    if recurrence:
+        event.recurrence = build_event_recurrence(recurrence, start=start)
 
     response = await graph_client.me.events.post(event)
 

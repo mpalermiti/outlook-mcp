@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.permissions import CATEGORY_TODO_WRITE, check_permission
+from outlook_mcp.tools._recurrence import build_patterned_recurrence as _build_recurrence
 from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
 
 _VALID_IMPORTANCES = {"low", "normal", "high"}
@@ -26,83 +27,6 @@ def _importance_enum(value: str) -> Any:
         "normal": Importance.Normal,
         "high": Importance.High,
     }[value]
-
-
-def _build_recurrence(recurrence: dict) -> Any:
-    """Convert a Graph JSON-shape recurrence dict into a typed PatternedRecurrence.
-
-    Expects the documented Microsoft Graph JSON shape with camelCase keys:
-      {"pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"], ...},
-       "range":   {"type": "endDate", "startDate": "2026-04-22", "endDate": "2026-12-31", ...}}
-
-    String enums are mapped to the SDK enum members; ISO dates are parsed.
-    """
-    from msgraph.generated.models.day_of_week import DayOfWeek
-    from msgraph.generated.models.patterned_recurrence import PatternedRecurrence
-    from msgraph.generated.models.recurrence_pattern import RecurrencePattern
-    from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
-    from msgraph.generated.models.recurrence_range import RecurrenceRange
-    from msgraph.generated.models.recurrence_range_type import RecurrenceRangeType
-    from msgraph.generated.models.week_index import WeekIndex
-
-    if not isinstance(recurrence, dict):
-        raise ValueError("recurrence must be a dict with 'pattern' and 'range' keys")
-
-    pattern_in = recurrence.get("pattern") or {}
-    range_in = recurrence.get("range") or {}
-    if not pattern_in or not range_in:
-        raise ValueError("recurrence must include both 'pattern' and 'range'")
-
-    def _enum_lookup(enum_cls: Any, value: str, label: str) -> Any:
-        # SDK enum members are PascalCase; Graph JSON uses camelCase
-        try:
-            return enum_cls(value)
-        except ValueError:
-            target = value[:1].upper() + value[1:]
-            try:
-                return enum_cls[target]
-            except KeyError as e:
-                valid = [m.value for m in enum_cls]
-                raise ValueError(
-                    f"Invalid {label} '{value}'. Must be one of: {valid}"
-                ) from e
-
-    pattern = RecurrencePattern()
-    if "type" in pattern_in:
-        pattern.type = _enum_lookup(RecurrencePatternType, pattern_in["type"], "pattern.type")
-    if "interval" in pattern_in:
-        pattern.interval = int(pattern_in["interval"])
-    if "month" in pattern_in:
-        pattern.month = int(pattern_in["month"])
-    if "dayOfMonth" in pattern_in:
-        pattern.day_of_month = int(pattern_in["dayOfMonth"])
-    if "daysOfWeek" in pattern_in:
-        pattern.days_of_week = [
-            _enum_lookup(DayOfWeek, d, "pattern.daysOfWeek") for d in pattern_in["daysOfWeek"]
-        ]
-    if "firstDayOfWeek" in pattern_in:
-        pattern.first_day_of_week = _enum_lookup(
-            DayOfWeek, pattern_in["firstDayOfWeek"], "pattern.firstDayOfWeek"
-        )
-    if "index" in pattern_in:
-        pattern.index = _enum_lookup(WeekIndex, pattern_in["index"], "pattern.index")
-
-    rng = RecurrenceRange()
-    if "type" in range_in:
-        rng.type = _enum_lookup(RecurrenceRangeType, range_in["type"], "range.type")
-    if "startDate" in range_in:
-        rng.start_date = date.fromisoformat(range_in["startDate"])
-    if "endDate" in range_in:
-        rng.end_date = date.fromisoformat(range_in["endDate"])
-    if "numberOfOccurrences" in range_in:
-        rng.number_of_occurrences = int(range_in["numberOfOccurrences"])
-    if "recurrenceTimeZone" in range_in:
-        rng.recurrence_time_zone = range_in["recurrenceTimeZone"]
-
-    pr = PatternedRecurrence()
-    pr.pattern = pattern
-    pr.range = rng
-    return pr
 
 
 def _datetime_timezone(iso_dt: str, tz: str = "UTC") -> Any:

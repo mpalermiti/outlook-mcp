@@ -17,6 +17,19 @@ _CFG = Config(client_id="test")
 _CFG_RO = Config(client_id="test", read_only=True)
 
 
+def _created(subject: str, event_id: str = "AAMkAGnew="):
+    """Mock Graph response for a successful event POST."""
+    resp = MagicMock()
+    resp.id = event_id
+    resp.subject = subject
+    return resp
+
+
+def _posted(mock_client):
+    """The Event object handed to me.events.post()."""
+    return mock_client.me.events.post.call_args[0][0]
+
+
 def _make_event_builder():
     """Create a MagicMock event builder with async endpoints.
 
@@ -85,6 +98,124 @@ class TestCreateEvent:
         )
         assert result["status"] == "created"
         mock_client.me.events.post.assert_called_once()
+
+    async def test_create_event_ignores_no_recurrence(self):
+        """No recurrence argument leaves the Event's recurrence unset (regression guard)."""
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Lunch"))
+
+        await create_event(
+            mock_client,
+            subject="Lunch",
+            start="2026-04-15T12:00:00Z",
+            end="2026-04-15T13:00:00Z",
+            config=_CFG,
+        )
+
+        assert _posted(mock_client).recurrence is None
+
+    async def test_create_event_sets_recurrence_from_dict(self):
+        """#41: a Graph-shape recurrence dict reaches the posted Event as PatternedRecurrence."""
+        from msgraph.generated.models.day_of_week import DayOfWeek
+        from msgraph.generated.models.patterned_recurrence import PatternedRecurrence
+        from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
+
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Weekly sync"))
+
+        await create_event(
+            mock_client,
+            subject="Weekly sync",
+            start="2026-09-07T12:30:00Z",
+            end="2026-09-07T13:30:00Z",
+            recurrence={
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday", "friday"]},
+                "range": {"type": "noEnd", "startDate": "2026-09-07"},
+            },
+            config=_CFG,
+        )
+
+        posted = _posted(mock_client)
+        assert isinstance(posted.recurrence, PatternedRecurrence)
+        assert posted.recurrence.pattern.type is RecurrencePatternType.Weekly
+        assert posted.recurrence.pattern.days_of_week == [DayOfWeek.Monday, DayOfWeek.Friday]
+
+    async def test_create_event_sets_recurrence_from_json_string(self):
+        """The workaround shape from #41 — a JSON string — now produces a real series."""
+        import json
+
+        from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
+
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Weekly sync"))
+
+        await create_event(
+            mock_client,
+            subject="Weekly sync",
+            start="2026-09-07T12:30:00Z",
+            end="2026-09-07T13:30:00Z",
+            recurrence=json.dumps(
+                {
+                    "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                    "range": {"type": "noEnd", "startDate": "2026-09-07"},
+                }
+            ),
+            config=_CFG,
+        )
+
+        assert _posted(mock_client).recurrence.pattern.type is RecurrencePatternType.Weekly
+
+    async def test_create_event_expands_the_documented_shorthand(self):
+        """The docstring has advertised "weekly" since 1.0 — make it mean something."""
+        from msgraph.generated.models.day_of_week import DayOfWeek
+        from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
+
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
+
+        await create_event(
+            mock_client,
+            subject="Standup",
+            start="2026-09-07T09:00:00Z",  # a Monday
+            end="2026-09-07T09:15:00Z",
+            recurrence="weekly",
+            config=_CFG,
+        )
+
+        posted = _posted(mock_client)
+        assert posted.recurrence.pattern.type is RecurrencePatternType.Weekly
+        assert posted.recurrence.pattern.days_of_week == [DayOfWeek.Monday]
+
+    async def test_create_event_rejects_an_unknown_shorthand(self):
+        """Silently dropping an unparseable recurrence is what caused #41."""
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Nope"))
+
+        with pytest.raises(ValueError, match="daily"):
+            await create_event(
+                mock_client,
+                subject="Nope",
+                start="2026-09-07T09:00:00Z",
+                end="2026-09-07T09:15:00Z",
+                recurrence="biweekly",
+                config=_CFG,
+            )
+
+        mock_client.me.events.post.assert_not_called()
+
+    async def test_create_event_checks_permission_before_building_recurrence(self):
+        """Read-only mode must short-circuit before any recurrence parsing."""
+        mock_client = AsyncMock()
+
+        with pytest.raises(ReadOnlyError):
+            await create_event(
+                mock_client,
+                subject="Weekly sync",
+                start="2026-09-07T12:30:00Z",
+                end="2026-09-07T13:30:00Z",
+                recurrence="biweekly",
+                config=_CFG_RO,
+            )
 
 
 class TestUpdateEvent:

@@ -296,14 +296,14 @@ A one-time startup warning about the token cache falling back to plaintext means
 | Tool | Description |
 |------|-------------|
 | `outlook_list_events` | List events in a date range. Expands recurring events. Configurable via `days`, `after`, `before`. |
-| `outlook_get_event` | Get full event details: attendees, body, online meeting URL, recurrence. |
+| `outlook_get_event` | Get full event details: attendees, body, online meeting URL, recurrence, `type` (`singleInstance` / `seriesMaster` / `occurrence` / `exception`). |
 | `outlook_list_events_delta` | List only event changes inside a window since the last call. `start` and `end` (ISO 8601) required on the first call (Graph constraint — no whole-calendar sync). Deletes come back as `{id, is_deleted: True}`. Cursor is stateless. |
 
 ### Calendar Write
 
 | Tool | Description |
 |------|-------------|
-| `outlook_create_event` | Create event with location, attendees, recurrence, online meeting support. |
+| `outlook_create_event` | Create event with location, attendees, online meeting support. Pass `recurrence` to create a **series**: a shorthand (`daily`, `weekdays`, `weekly`, `monthly`, `yearly`, anchored on `start`) or a full [Graph recurrence object](https://learn.microsoft.com/graph/api/resources/patternedrecurrence) for anything else. `range.startDate` defaults to the event's start date. |
 | `outlook_update_event` | Update event fields (subject, time, location, body). Only patches changed fields. |
 | `outlook_delete_event` | Delete a calendar event. |
 | `outlook_rsvp` | RSVP to an event: `accept`, `decline`, or `tentative`. Optionally include a message. |

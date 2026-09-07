@@ -13,11 +13,36 @@ Two tiers here need real credentials and are skipped without them:
     in #30, #31 and the ``list_thread`` repair was invisible to 558 green mock
     tests. See ``tests/test_live_query_shape.py``.
 
-Both tiers are READ-ONLY. Never add a fixture or test here that writes to the
-mailbox — no sends, drafts, category or folder mutations, no deletes.
+``-m live_write``
+    The only tier that mutates a real mailbox, added for #41. Some
+    payloads can only be validated by Graph accepting them — a recurrence that
+    is well-formed to the SDK still 400s if the range disagrees with the start
+    — and a mock cannot see that. Kept as narrow as possible.
+
+Tiers 1 and 2 are READ-ONLY: never add a fixture or test there that writes to
+the mailbox — no sends, drafts, category or folder mutations, no deletes.
+
+Rules for ``live_write``, which exists precisely because it breaks that:
+
+* Double-gated — the marker is deselected by default *and* the tier skips
+  unless ``OUTLOOK_MCP_LIVE_WRITE=1``. A cached token alone must never be
+  enough to write to someone's calendar.
+* Calendar only. No mail: nothing here may send, and a stray send is not
+  recoverable.
+* No attendees, ever. A recurring invite emails real people on every
+  occurrence.
+* Bounded ranges only (``numbered``/``endDate``) — never ``noEnd``.
+* Every created item is removed in a ``finally``, and subjects carry
+  ``LIVE_WRITE_SUBJECT`` so anything a crash leaks is greppable in the UI.
 """
 
+import os
+
 import pytest
+
+# Prefix for every item this tier creates, so an orphan left by a hard crash is
+# obvious in the calendar UI and easy to search for.
+LIVE_WRITE_SUBJECT = "[outlook-mcp live-write guard] safe to delete"
 
 
 @pytest.fixture
@@ -69,3 +94,21 @@ def real_graph_client(real_auth):
     from outlook_mcp.graph import GraphClient
 
     return GraphClient(real_auth.get_credential())
+
+
+@pytest.fixture
+def live_write_config(real_config):
+    """Real config for the write tier, or skip.
+
+    Gates on an explicit environment opt-in beyond the marker: these tests
+    create and delete real calendar events on whatever account the cached token
+    belongs to.
+    """
+    if os.environ.get("OUTLOOK_MCP_LIVE_WRITE") != "1":
+        pytest.skip(
+            "Write tier is opt-in — set OUTLOOK_MCP_LIVE_WRITE=1 to let it "
+            "create and delete events on the authenticated calendar"
+        )
+    if real_config.read_only:
+        pytest.skip("Config is read_only — the write tier cannot run")
+    return real_config

@@ -35,6 +35,7 @@ class EventDetail(BaseModel):
     is_online: bool = False
     online_meeting_url: str | None = None
     recurrence: dict | None = None
+    type: str = ""
     categories: list[str] = Field(default_factory=list)
 
 
@@ -49,12 +50,17 @@ class CreateEventInput(BaseModel):
     attendees: list[str] | None = None
     is_all_day: bool = False
     is_online: bool = False
-    recurrence: str | None = None
+    recurrence: dict | str | None = None
 
     @field_validator("recurrence")
     @classmethod
-    def validate_recurrence(cls, v: str | None) -> str | None:
-        if v is not None and v not in ("daily", "weekdays", "weekly", "monthly", "yearly"):
+    def validate_recurrence(cls, v: dict | str | None) -> dict | str | None:
+        """Accept a Graph recurrence object, a JSON string of one, or a shorthand."""
+        if v is None or isinstance(v, dict):
+            return v
+        if v.strip().startswith(("{", "[")):
+            return v
+        if v not in ("daily", "weekdays", "weekly", "monthly", "yearly"):
             raise ValueError(f"recurrence must be daily/weekdays/weekly/monthly/yearly; got {v}")
         return v
 

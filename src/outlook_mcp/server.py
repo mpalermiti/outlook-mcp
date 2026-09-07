@@ -569,7 +569,11 @@ async def outlook_get_event(
     ctx: Context,
     event_id: str,
 ) -> dict:
-    """Get one full calendar event by ID, including body, attendees, organizer, and recurrence."""
+    """Get one full calendar event by ID: body, attendees, organizer, recurrence, type.
+
+    `recurrence` comes back in the same shape outlook_create_event accepts; `type` is
+    "singleInstance", "seriesMaster", "occurrence" or "exception".
+    """
     client = _get_graph_client(ctx)
     return await calendar_read.get_event(client.sdk_client, event_id)
 
@@ -612,13 +616,21 @@ async def outlook_create_event(
     attendees: list[str] | None = None,
     is_all_day: bool = False,
     is_online: bool = False,
-    recurrence: str | None = None,
+    recurrence: dict | str | None = None,
 ) -> dict:
     """Create a calendar event with optional attendees, recurrence, and Teams online meeting.
 
     Example: outlook_create_event(subject="Q3 review", start="2026-08-15T14:00:00Z",
     end="2026-08-15T15:00:00Z", attendees=["alice@acme.com"], is_online=True)
-    `start`/`end` are ISO 8601. `recurrence` accepts a simple string ("daily", "weekly", "monthly").
+    `start`/`end` are ISO 8601. Passing `recurrence` creates a series, not a single event.
+    It takes either a shorthand — "daily", "weekdays", "weekly", "monthly", "yearly", all
+    anchored on `start` and open-ended — or a full Microsoft Graph recurrence object for
+    anything else, e.g. every other Mon+Fri for 10 occurrences:
+    {"pattern": {"type": "weekly", "interval": 2, "daysOfWeek": ["monday", "friday"]},
+     "range": {"type": "numbered", "numberOfOccurrences": 10}}
+    `range.startDate` defaults to the event's start date. Prefer a bounded range
+    ("endDate"/"numbered") when the event has attendees — a "noEnd" series invites them
+    to every future occurrence.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)

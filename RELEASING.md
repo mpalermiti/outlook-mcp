@@ -46,6 +46,18 @@ Response-shape checks for each tool family. Read-only.
 
 > These skipped silently for their entire existence — the fixture called a non-existent `AuthManager.login()`, and the `except Exception` swallowed the `AttributeError`. Fixed in 1.13.0. If you see `skipped` here, confirm it's really a missing token and not a broken fixture.
 
+## 1d. Write-tier guards (calendar only)
+
+```bash
+OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write -v
+```
+
+The only tier that writes. It creates short, bounded, attendee-free recurring events on the authenticated calendar and deletes each one in a `finally`.
+
+It exists because recurrence cannot be validated any other way: a `PatternedRecurrence` that is well-formed to the SDK still 400s with `ErrorInvalidRecurrenceRange` if the range disagrees with the series master's start. `outlook_create_event` accepted a `recurrence` argument and silently discarded it for fourteen minor versions (#41) under a fully green mock suite — mocks assert what we *build*.
+
+Double-gated on purpose: the marker is deselected by default **and** the tier skips without `OUTLOOK_MCP_LIVE_WRITE=1`, so a cached token alone can never write to a calendar. Run it if you changed anything under `tools/_recurrence.py` or `calendar_write.py`. See the rules at the top of `tests/conftest.py` before adding to it.
+
 ## 2. Tests + lint
 
 ```bash
@@ -53,7 +65,7 @@ uv run pytest --tb=no -q
 uv run ruff check src/ tests/
 ```
 
-The default run is the offline unit suite only — `addopts` deselects the `integration` and `live` markers, so this needs no network or token. Expect `N passed, 16 deselected` and zero failures.
+The default run is the offline unit suite only — `addopts` deselects the `integration` and `live` markers, so this needs no network or token. Expect `N passed, 21 deselected` and zero failures.
 
 ## 3. Version bump
 

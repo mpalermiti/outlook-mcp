@@ -87,9 +87,9 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 
 ### Calendar
 - `outlook_list_events` — List events in date range (expands recurring)
-- `outlook_get_event` — Get event details
+- `outlook_get_event` — Get event details, incl. `recurrence` and `type` (`seriesMaster` etc.)
 - `outlook_list_events_delta` — List only event changes since last call within a window (massive token savings for recurring agent jobs)
-- `outlook_create_event` — Create event with attendees, recurrence, online meeting
+- `outlook_create_event` — Create event with attendees, online meeting; `recurrence` (shorthand or Graph object) creates a series
 - `outlook_update_event` — Update event fields
 - `outlook_delete_event` — Delete event
 - `outlook_rsvp` — Accept, decline, or tentatively accept

@@ -4,6 +4,31 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Recurring calendar events, which have never actually worked.
+
+### Fixed
+
+- **`outlook_create_event` silently discarded `recurrence`.** Every "recurring" event the server has ever created was a single occurrence with `recurrence: null`. The parameter was declared on both the tool and the handler and then never assigned to the Graph `Event` before `POST /me/events` — so the call returned `status: created` and looked like it worked. Two independent failures sat on that one argument: the tool schema typed it `str | None`, so a Graph recurrence object was rejected by Pydantic before reaching the handler, and the JSON-string workaround reached the handler and was dropped there. The `daily`/`weekly`/`monthly` shorthands the docstring has advertised since 1.0 were equally inert — `CreateEventInput.validate_recurrence` in `models/calendar.py` is referenced only by its own unit test, never by the tool path, so any string was accepted and ignored. Reported by @Wermeling. ([#41])
+- **`outlook_get_event` returned a Python repr for `recurrence`.** The read path did `str(event.recurrence)`, emitting ~500 characters of `PatternedRecurrence(additional_data={}, odata_type=None, pattern=...)` into a field the response model declares as `dict | None`. It now returns the same JSON shape `outlook_create_event` accepts, with unset fields omitted.
+
+### Added
+
+- **`recurrence` accepts three input shapes** on `outlook_create_event`: a Microsoft Graph recurrence object (matching `outlook_create_task`, which has taken `dict` since 1.5.0); a JSON-encoded string of one, since some client bridges stringify nested arguments; or a shorthand — `daily`, `weekdays`, `weekly`, `monthly`, `yearly` — expanded against the event's own start, so `weekly` on a Monday start means every Monday and `monthly` on the 7th means the 7th.
+- **`range.startDate` is reconciled with the event start.** Graph requires the range to begin on the day of the first occurrence and returns `ErrorInvalidRecurrenceRange` otherwise. It is now defaulted from `start` when omitted, and a supplied value that disagrees is rejected locally with a message naming both dates instead of surfacing as an opaque 400. The date is taken as the caller wrote it rather than UTC-normalized, so an evening or early-morning series doesn't shift a day.
+- **`type` on `outlook_get_event`** — `singleInstance`, `seriesMaster`, `occurrence` or `exception`. This is the field that lets a client confirm a series actually took; its absence is part of why #41 needed a raw Graph call to diagnose.
+- **`src/outlook_mcp/tools/_recurrence.py`** — recurrence conversion shared by calendar and To Do, which model it identically. `build_patterned_recurrence` is To Do's 1.5.0 converter moved here unchanged, so `outlook_create_task` keeps exactly its previous behavior; `build_event_recurrence` is the calendar entry point layered on top; `serialize_recurrence` is the inverse for read paths.
+- **`live_write` test tier** — the project's first write-side tests, and the reason this fix is trustworthy. Recurrence cannot be validated any other way: a `PatternedRecurrence` that is well-formed to the SDK still 400s if the range disagrees with the start, and mocks only ever assert what we *build*. Double-gated (marker deselected by default **and** skipped without `OUTLOOK_MCP_LIVE_WRITE=1`), calendar-only, no attendees, bounded ranges only, everything deleted in a `finally`. Rules in `tests/conftest.py`; runbook step 1d in `RELEASING.md`.
+
+### Verified
+
+- Five write-tier tests green against live Graph on a personal `@outlook.com` account: the series master is created, comes back `type: seriesMaster`, the recurrence round-trips through `outlook_get_event` as a dict, the `startDate` we default is one Graph accepts, and a non-recurring control still reports `singleInstance`. Every created event deleted; the calendar was re-queried afterwards and held no leftovers.
+- Offline suite: **609 passed, 21 deselected** (was 577 / 16 at 1.14.0). `ruff check src/ tests/ scripts/` clean.
+- A separate probe (`scripts/probe_datetime_semantics.py`) established what Graph does with the datetimes this tool sends, since `create_event` labels every start `timeZone: "UTC"` while passing the caller's string through verbatim. Graph honors an explicit offset (`12:30:00+02:00` → `10:30:00Z`) and reads a naive datetime as the declared UTC. Both are correct and deterministic; no change was made. Recorded because the obvious "fix" — using the normalized value `validate_datetime` already computes and throws away — would have introduced a real bug, resolving naive input against the *server's* local clock.
+
+[#41]: https://github.com/mpalermiti/outlook-mcp/issues/41
+
 ## [1.14.0] — 2026-09-04
 
 Migration to the `mcp` 2.x SDK, lifting the `<2` ceiling that 1.13.1 pinned as a stopgap. **No behavior change for clients** — all 62 tool schemas serialize byte-for-byte identically to 1.13.1.

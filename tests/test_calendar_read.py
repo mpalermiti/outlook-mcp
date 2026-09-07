@@ -41,6 +41,7 @@ def _make_mock_event(**overrides):
         join_url=overrides.get("join_url", None)
     )
     event.recurrence = overrides.get("recurrence", None)
+    event.type = overrides.get("type", None)
     attendee_data = overrides.get("attendees", [])
     attendees = []
     for a in attendee_data:
@@ -203,3 +204,45 @@ class TestGetEvent:
         assert result["attendees"][0]["name"] == "Alice"
         assert result["attendees"][0]["response"] == "accepted"
         assert result["categories"] == ["Blue Category"]
+
+class TestEventDetailRecurrence:
+    """#41 follow-on: recurrence must come back as the same JSON shape create accepts."""
+
+    def _detail(self, **overrides):
+        from outlook_mcp.tools.calendar_read import _format_event_detail
+
+        return _format_event_detail(_make_mock_event(**overrides))
+
+    def test_no_recurrence_is_none(self):
+        assert self._detail()["recurrence"] is None
+
+    def test_recurrence_is_a_dict_not_a_repr(self):
+        """str(PatternedRecurrence) leaked a ~500-char Python repr into the payload."""
+        from outlook_mcp.tools._recurrence import build_event_recurrence
+
+        pr = build_event_recurrence(
+            {
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                "range": {"type": "noEnd", "startDate": "2026-09-07"},
+            },
+            start="2026-09-07T12:30:00Z",
+        )
+
+        assert self._detail(recurrence=pr)["recurrence"] == {
+            "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+            "range": {"type": "noEnd", "startDate": "2026-09-07"},
+        }
+
+    def test_series_master_type_is_surfaced(self):
+        """`type` is what tells a client the series actually took — see #41's repro."""
+        assert self._detail(type=MagicMock(value="seriesMaster"))["type"] == "seriesMaster"
+
+    def test_missing_type_is_empty_string(self):
+        assert self._detail()["type"] == ""
+
+    def test_summary_stays_lean(self):
+        """Detail-only: list results must not grow a recurrence/type field."""
+        summary = _format_event_summary(_make_mock_event(type=MagicMock(value="seriesMaster")))
+
+        assert "recurrence" not in summary
+        assert "type" not in summary
