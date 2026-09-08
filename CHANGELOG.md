@@ -4,6 +4,16 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`remove_recurrence` on `outlook_update_event`.** Ending a series previously meant deleting the event — there was no way to turn a series master back into a single occurrence. `remove_recurrence=True` does that, keeping the first occurrence's time. It is a separate flag rather than a sentinel on `recurrence`, because `None` there already means "leave alone"; passing both raises.
+
+  The implementation is not the obvious one. Graph clears a series with an explicit `"recurrence": null`, but the msgraph SDK **omits any field set to `None`** from the serialized payload — `Event(subject="x", recurrence=None)` serializes to `{"subject": "x"}` — so `event.recurrence = None` is a silent no-op of exactly the kind that produced [#41]. The null is therefore sent through `additional_data`, which kiota does serialize. Two tests pin this: one asserts the wire format contains `"recurrence": null` rather than checking the attribute (an attribute assertion would stay green through the bug), and one asserts the SDK still drops an explicit `None`, so if kiota ever changes, the workaround can be simplified.
+
+  Verified live: a `seriesMaster` becomes a `singleInstance` with `recurrence: null` and its start time intact.
+
 ## [1.16.0] — 2026-09-07
 
 Calendar editing catches up with calendar creation, and a layer that only looked like validation comes out.

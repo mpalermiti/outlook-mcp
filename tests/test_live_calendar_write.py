@@ -277,3 +277,42 @@ class TestPatchingEventFlags:
             is_online=True,
         ) as event_id:
             assert (await get_event(real_graph_client.sdk_client, event_id))["is_online"] is False
+
+
+class TestRemovingRecurrence:
+    async def test_remove_recurrence_turns_a_series_back_into_one_event(
+        self, real_graph_client, live_write_config
+    ):
+        """Ending a series without deleting it — previously impossible through this server.
+
+        This is the assertion mocks cannot make: the SDK omits a field set to
+        None, so the payload that actually reaches Graph is the whole question.
+        """
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            start=f"{monday.isoformat()}T16:00:00Z",
+            end=f"{monday.isoformat()}T16:30:00Z",
+            recurrence={
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                "range": {"type": "numbered", "numberOfOccurrences": 3},
+            },
+        ) as event_id:
+            assert (await get_event(real_graph_client.sdk_client, event_id))[
+                "type"
+            ] == "seriesMaster"
+
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                remove_recurrence=True,
+                config=live_write_config,
+            )
+
+            after = await get_event(real_graph_client.sdk_client, event_id)
+            assert after["type"] == "singleInstance"
+            assert after["recurrence"] is None
+            # The first occurrence's time survives the conversion.
+            assert "16:00:00" in after["start"]

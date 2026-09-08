@@ -479,6 +479,94 @@ class TestUpdateEvent:
         )
 
         assert builder.patch.call_args[0][0].is_all_day is False
+    async def test_remove_recurrence_sends_an_explicit_null(self):
+        """The SDK DROPS `event.recurrence = None` — it must go via additional_data.
+
+        Asserting on the serialized JSON, not on the attribute: the whole failure
+        mode here is a payload the SDK silently omits, and an attribute-level
+        assertion would stay green through exactly that bug.
+        """
+        from kiota_serialization_json.json_serialization_writer import (
+            JsonSerializationWriter,
+        )
+
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client, event_id="AAMkAG123=", remove_recurrence=True, config=_CFG
+        )
+
+        writer = JsonSerializationWriter()
+        builder.patch.call_args[0][0].serialize(writer)
+        assert '"recurrence": null' in writer.get_serialized_content().decode()
+
+    async def test_setting_event_recurrence_none_would_not_have_worked(self):
+        """Pins why additional_data is used. If kiota ever starts serializing an
+        explicit None, this fails and the workaround can be simplified."""
+        from kiota_serialization_json.json_serialization_writer import (
+            JsonSerializationWriter,
+        )
+        from msgraph.generated.models.event import Event
+
+        event = Event()
+        event.subject = "x"
+        event.recurrence = None
+
+        writer = JsonSerializationWriter()
+        event.serialize(writer)
+        assert "recurrence" not in writer.get_serialized_content().decode()
+
+    async def test_omitting_remove_recurrence_sends_no_recurrence_key(self):
+        """A partial patch must not blank a series just because it edited the subject."""
+        from kiota_serialization_json.json_serialization_writer import (
+            JsonSerializationWriter,
+        )
+
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(mock_client, event_id="AAMkAG123=", subject="X", config=_CFG)
+
+        writer = JsonSerializationWriter()
+        builder.patch.call_args[0][0].serialize(writer)
+        assert "recurrence" not in writer.get_serialized_content().decode()
+
+    async def test_remove_recurrence_conflicts_with_setting_one(self):
+        builder = _make_event_builder()
+        builder.patch = AsyncMock()
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError, match="both"):
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-09-07T12:30:00Z",
+                recurrence="weekly",
+                remove_recurrence=True,
+                config=_CFG,
+            )
+
+        builder.patch.assert_not_called()
+
+    async def test_remove_recurrence_needs_no_extra_round_trip(self):
+        """Unlike setting one, clearing needs no start anchor — don't GET the event."""
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client, event_id="AAMkAG123=", remove_recurrence=True, config=_CFG
+        )
+
+        builder.get.assert_not_called()
+
 
 class TestDeleteEvent:
     async def test_delete_event_calls_delete(self):

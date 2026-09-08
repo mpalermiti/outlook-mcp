@@ -104,6 +104,7 @@ async def update_event(
     location: str | None = None,
     body: str | None = None,
     recurrence: dict | str | None = None,
+    remove_recurrence: bool = False,
     attendees: list[str] | None = None,
     is_all_day: bool | None = None,
     *,
@@ -136,7 +137,19 @@ async def update_event(
     Graph anchors the range on the series master's start, so when ``start``
     isn't part of the same patch the event's current start is read first.
     Passing ``None`` leaves any existing recurrence untouched — this is a
-    partial patch; delete the event to end a series.
+    partial patch.
+
+    ``remove_recurrence=True`` turns a series master back into a single event,
+    keeping the first occurrence's time. It is a separate flag rather than a
+    sentinel value on ``recurrence`` because ``None`` there already means
+    "leave alone", and the two are mutually exclusive.
+
+    It has to go through ``additional_data``: Graph clears a series with an
+    explicit ``"recurrence": null``, but the SDK omits a field set to ``None``
+    from the payload entirely, so ``event.recurrence = None`` is a silent
+    no-op. ``test_setting_event_recurrence_none_would_not_have_worked`` pins
+    that; if kiota ever starts emitting explicit nulls, it fails and this can
+    be simplified.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_update_event")
     event_id = validate_graph_id(event_id)
@@ -195,6 +208,16 @@ async def update_event(
                 "midnight boundaries, e.g. start=2026-10-22T00:00:00Z, end=2026-10-23T00:00:00Z"
             )
         event.is_all_day = is_all_day
+
+    if remove_recurrence:
+        if recurrence is not None:
+            raise ValueError(
+                "Pass either recurrence or remove_recurrence, not both — they ask for "
+                "opposite things"
+            )
+        # The SDK drops `event.recurrence = None`; additional_data survives
+        # serialization as an explicit JSON null, which is what Graph needs.
+        event.additional_data = {**(event.additional_data or {}), "recurrence": None}
 
     if recurrence is not None:
         anchor = start

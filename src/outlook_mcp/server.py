@@ -666,6 +666,7 @@ async def outlook_update_event(
     location: str | None = None,
     body: str | None = None,
     recurrence: dict | str | None = None,
+    remove_recurrence: bool = False,
     attendees: list[str] | None = None,
     is_all_day: bool | None = None,
 ) -> dict:
@@ -673,7 +674,8 @@ async def outlook_update_event(
 
     `recurrence` takes the same shapes as outlook_create_event and converts a single
     event into a series, or replaces an existing series' pattern. Omit it to leave any
-    recurrence alone; there is no way to strip one — delete the event to end a series.
+    recurrence alone; pass remove_recurrence=True to turn a series back into a single
+    event, keeping the first occurrence's time (the two are mutually exclusive).
     `attendees` REPLACES the whole guest list (Graph has no add-one operation) and sends
     invitations to everyone on it plus cancellations to anyone dropped — pass the full
     intended list; [] removes everyone. `is_all_day` REQUIRES start and end in the same
@@ -691,6 +693,7 @@ async def outlook_update_event(
         location,
         body,
         recurrence,
+        remove_recurrence,
         attendees,
         is_all_day,
         config=config,
