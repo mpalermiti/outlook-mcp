@@ -76,7 +76,7 @@ def real_auth(real_config):
     from outlook_mcp.auth import AuthManager
 
     auth = AuthManager(real_config)
-    if not auth.try_cached_token(auth.get_scopes()):
+    if not auth.try_cached_token():
         pytest.skip("Not authenticated — run `outlook-mcp auth` on this host first")
     return auth
 

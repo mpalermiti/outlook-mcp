@@ -155,3 +155,67 @@ class TestForward:
             await forward(
                 mock_client, message_id="AAMkAG123=", to=["a@b.com"], config=_CFG_RO,
             )
+
+
+class TestReplyContentType:
+    """#41 shape found by the dead-parameter guard: is_html was accepted and ignored.
+
+    Graph's reply action takes `comment` as plain text only. Markup has to ride
+    on the action's `message` field as an ItemBody, so setting `comment` for an
+    HTML reply silently strips it.
+    """
+
+    async def test_plain_reply_uses_comment(self):
+        mock_client = MagicMock()
+        msg_builder = MagicMock()
+        msg_builder.reply.post = AsyncMock()
+        mock_client.me.messages.by_message_id.return_value = msg_builder
+
+        await reply(mock_client, message_id="AAMkAG123=", body="Thanks!", config=_CFG)
+
+        posted = msg_builder.reply.post.call_args[0][0]
+        assert posted.comment == "Thanks!"
+        assert posted.message is None
+
+    async def test_html_reply_rides_on_message_body(self):
+        from msgraph.generated.models.body_type import BodyType
+
+        mock_client = MagicMock()
+        msg_builder = MagicMock()
+        msg_builder.reply.post = AsyncMock()
+        mock_client.me.messages.by_message_id.return_value = msg_builder
+
+        await reply(
+            mock_client,
+            message_id="AAMkAG123=",
+            body="<b>Thanks!</b>",
+            is_html=True,
+            config=_CFG,
+        )
+
+        posted = msg_builder.reply.post.call_args[0][0]
+        assert posted.message.body.content == "<b>Thanks!</b>"
+        assert posted.message.body.content_type is BodyType.Html
+        # Setting both would duplicate the text in the sent reply.
+        assert posted.comment is None
+
+    async def test_html_reply_all_rides_on_message_body(self):
+        from msgraph.generated.models.body_type import BodyType
+
+        mock_client = MagicMock()
+        msg_builder = MagicMock()
+        msg_builder.reply_all.post = AsyncMock()
+        mock_client.me.messages.by_message_id.return_value = msg_builder
+
+        await reply(
+            mock_client,
+            message_id="AAMkAG123=",
+            body="<i>All</i>",
+            reply_all=True,
+            is_html=True,
+            config=_CFG,
+        )
+
+        posted = msg_builder.reply_all.post.call_args[0][0]
+        assert posted.message.body.content_type is BodyType.Html
+        assert posted.comment is None

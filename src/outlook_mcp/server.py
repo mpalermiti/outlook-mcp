@@ -45,7 +45,7 @@ async def lifespan(server):
     auth = AuthManager(config)
     # Try to load cached token silently — if this fails, tools will
     # return an error telling the user to run `outlook-mcp auth`.
-    auth.try_cached_token(auth.get_token_scopes())
+    auth.try_cached_token()
     yield {"config": config, "auth": auth}
 
 

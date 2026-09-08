@@ -104,6 +104,12 @@ async def reply(
     """Reply to a message.
 
     Uses reply.post() or reply_all.post() based on the reply_all flag.
+
+    Graph's reply action takes ``comment`` as plain text. An HTML reply has to
+    go through the action's ``message`` field instead, as an ItemBody with
+    contentType HTML — ``comment`` alone cannot carry markup. ``is_html`` was
+    accepted and ignored here until 1.18.0, so every "HTML" reply went out as
+    plain text.
     """
     check_permission(config, CATEGORY_MAIL_SEND, "outlook_reply")
     message_id = validate_graph_id(message_id)
@@ -117,13 +123,30 @@ async def reply(
 
     msg_builder = graph_client.me.messages.by_message_id(message_id)
 
+    def _apply_body(request_body: Any) -> None:
+        """Put the text where Graph will honour it for this content type."""
+        if not is_html:
+            request_body.comment = body
+            return
+        from msgraph.generated.models.body_type import BodyType
+        from msgraph.generated.models.item_body import ItemBody
+        from msgraph.generated.models.message import Message
+
+        # comment is plain-text only; markup must ride on message.body, and
+        # setting both would duplicate the text in the sent reply.
+        reply_message = Message()
+        reply_message.body = ItemBody()
+        reply_message.body.content = body
+        reply_message.body.content_type = BodyType.Html
+        request_body.message = reply_message
+
     if reply_all:
         request_body = ReplyAllPostRequestBody()
-        request_body.comment = body
+        _apply_body(request_body)
         await msg_builder.reply_all.post(request_body)
     else:
         request_body = ReplyPostRequestBody()
-        request_body.comment = body
+        _apply_body(request_body)
         await msg_builder.reply.post(request_body)
 
     return {"status": "replied", "reply_all": reply_all}

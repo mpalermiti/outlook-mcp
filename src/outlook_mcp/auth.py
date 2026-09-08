@@ -146,7 +146,7 @@ class AuthManager:
             kwargs["authentication_record"] = auth_record
         return DeviceCodeCredential(**kwargs)
 
-    def login_interactive(self, scopes: list[str]) -> None:
+    def login_interactive(self) -> None:
         """Run the device code flow interactively in the terminal.
 
         Uses get_token() which respects the token cache — if a valid
@@ -181,7 +181,7 @@ class AuthManager:
         self.credential = cred
         print("Authenticated successfully.")
 
-    def try_cached_token(self, scopes: list[str]) -> bool:
+    def try_cached_token(self) -> bool:
         """Try to get a token silently using a saved AuthenticationRecord.
 
         Returns True if a valid token was obtained without user interaction.

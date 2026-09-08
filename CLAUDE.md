@@ -64,7 +64,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   is why #41 went unnoticed for fourteen releases: a validator that looked authoritative and
   never ran. If you add one, wire it to the tool path in the same commit.
 - No telemetry, no local caching, no third-party calls
-- Tests: TDD, pytest, mock Graph client for unit tests. Mocks assert what we *send* — they cannot see a query Graph rejects or silently mis-evaluates, so anything that builds a `$filter`/`$orderby`/`$search` string also needs a `@pytest.mark.live` guard
+- Tests: TDD, pytest, mock Graph client for unit tests. `tests/test_no_dead_parameters.py` fails the build on any parameter declared and never read — the #41 shape; use it, remove it, or justify it in that file's ALLOWED set. Mocks assert what we *send* — they cannot see a query Graph rejects or silently mis-evaluates, so anything that builds a `$filter`/`$orderby`/`$search` string also needs a `@pytest.mark.live` guard
 - Errors: raise OutlookMCPError subclasses, never return error dicts
 - Datetimes: UTC in responses, config timezone for input interpretation
 - Delete: soft delete (move to Deleted Items) by default

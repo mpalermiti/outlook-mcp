@@ -4,6 +4,29 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.18.0] — 2026-09-08
+
+A guard against the bug class that produced [#41], and the bug it immediately found.
+
+### Added
+
+- **`tests/test_no_dead_parameters.py`** — fails the build on any parameter that is declared and never read. That is the static half of the #41 shape: `outlook_create_event` took `recurrence`, threaded it to the handler, never applied it, and returned `status: created` for fourteen releases. An AST walk catches it offline, in CI, for free.
+
+  Deliberately strict about what counts as a use: only `Name` loads, never attribute names. Counting `event.recurrence` as a use of a `recurrence` parameter is precisely how #41 would have slipped past. Functions taking `*args`/`**kwargs` are skipped, since forwarding makes the question undecidable. Two framework-callback parameters are allowlisted with written reasons, and a second test fails if an allowlist entry goes stale — a stale exemption silently re-opens the hole it was excusing. The guard is mutation-verified: injecting a dead parameter makes it fail with the file, line and parameter name.
+
+  It catches one of the three shapes. Graph accepting a field and ignoring it (`is_online`, 1.16.0) needs live coverage; the SDK dropping a field from the payload (`remove_recurrence`, 1.17.0) needs assertions on serialized output. Both are noted in the module docstring.
+
+### Fixed
+
+- **`outlook_reply` ignored `is_html`** — found by the new guard on its first run. Every reply sent with `is_html=True` went out as plain text, with any markup stripped. Graph's reply action takes `comment` as plain text only; markup has to ride on the action's `message` field as an `ItemBody` with contentType HTML. Both are now set correctly and exclusively — setting `comment` alongside `message` would duplicate the text in the sent reply. Verified that Graph stores and preserves an HTML body on a reply-shaped message; the send path itself is not live-tested, because the write tier does not send mail.
+- **`AuthManager.login_interactive()` and `try_cached_token()` took a `scopes` argument they ignored**, resolving scopes internally via `get_token_scopes()` instead. Callers passed a value that did nothing. The parameter is removed from both. Internal API; no MCP tool signature changes.
+
+### Verified
+
+- Offline **619 passed, 26 deselected**; ruff clean across `src/`, `tests/`, `scripts/`.
+- preflight 13/13, live 10, integration 6, live_write 10 — the auth signature change is on the path every credentialed tier and `outlook-mcp status` uses, so all four were re-run.
+- 62 tools, unchanged.
+
 ## [1.17.0] — 2026-09-07
 
 Ending a series without deleting it.

@@ -87,7 +87,7 @@ def classify(status_code: int) -> str:
 def fetch_token() -> str:
     config = load_config()
     am = AuthManager(config)
-    am.try_cached_token(am.get_token_scopes())
+    am.try_cached_token()
     cred = am.get_credential()
     tok = cred.get_token("https://graph.microsoft.com/.default")
     return tok.token

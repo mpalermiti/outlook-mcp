@@ -71,14 +71,14 @@ def test_login_interactive_requires_client_id():
     config = Config()  # No client_id
     auth = AuthManager(config)
     with pytest.raises(ValueError, match="client_id"):
-        auth.login_interactive(auth.get_scopes())
+        auth.login_interactive()
 
 
 def test_try_cached_token_returns_false_without_client_id():
     """try_cached_token returns False if client_id is not set."""
     config = Config()
     auth = AuthManager(config)
-    assert auth.try_cached_token(auth.get_scopes()) is False
+    assert auth.try_cached_token() is False
 
 
 class TestUnencryptedFallbackDetection:

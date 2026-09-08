@@ -27,12 +27,11 @@ def cmd_auth() -> None:
         sys.exit(1)
 
     auth = AuthManager(config)
-    scopes = auth.get_scopes()
     mode = "read-only" if config.read_only else "read-write"
     print(f"Authenticating with {mode} scopes...")
     print()
 
-    auth.login_interactive(scopes)
+    auth.login_interactive()
     print()
     print("Done. The MCP server will use this cached token automatically.")
 
@@ -45,14 +44,13 @@ def cmd_status() -> None:
         sys.exit(1)
 
     auth = AuthManager(config)
-    scopes = auth.get_scopes()
 
     print(f"Client ID: {config.client_id[:8]}...")
     print(f"Tenant:    {config.tenant_id}")
     print(f"Mode:      {'read-only' if config.read_only else 'read-write'}")
     print()
 
-    if auth.try_cached_token(scopes):
+    if auth.try_cached_token():
         print("Status: authenticated (cached token valid)")
     else:
         print("Status: not authenticated")
