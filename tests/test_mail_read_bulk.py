@@ -420,3 +420,16 @@ class TestBatchReadThrottling:
         assert result["failures"][0]["status"] == 429
         # initial + bounded retries (default max_retries=3) = 4 calls, not infinite.
         assert post_mock.call_count == 4
+
+
+class TestCompression:
+    @pytest.mark.asyncio
+    async def test_batch_post_requests_gzip(self, patched_httpx):
+        """A $batch response carries up to 20 messages — ask Graph to compress it."""
+        post_mock, set_response = patched_httpx
+        set_response(_batch_response([]))
+
+        await read_messages(_fake_graph_client(), message_ids=["AAMkAG1="])
+
+        headers = post_mock.await_args.kwargs["headers"]
+        assert headers["Accept-Encoding"] == "gzip"

@@ -111,6 +111,9 @@ async def fetch_delta_pages(
     base_headers = {
         "Authorization": f"Bearer {_bearer_token(credential)}",
         "Accept": "application/json",
+        # httpx decompresses transparently; delta pages are large and highly
+        # compressible, and polling agents fetch them constantly.
+        "Accept-Encoding": "gzip",
     }
     if headers:
         base_headers.update(headers)

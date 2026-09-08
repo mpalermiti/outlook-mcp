@@ -259,3 +259,17 @@ async def test_no_links_at_all_returns_none_token():
     assert result["messages"] == []
     assert result["delta_token"] is None
     assert result["has_more"] is False
+
+
+
+class TestCompression:
+    @pytest.mark.asyncio
+    async def test_delta_get_requests_gzip(self):
+        """Delta pages are large and highly compressible; polling agents refetch constantly."""
+        body = {"value": [], "@odata.deltaLink": "https://graph/delta?$deltatoken=abc"}
+        patch_client, fake_client = _async_client_with([_http_response(body)])
+        with _patch_resolve(), patch_client:
+            await list_inbox_delta(_mock_graph_client(), folder="inbox", page_size=50)
+
+        headers = fake_client.get.await_args.kwargs["headers"]
+        assert headers["Accept-Encoding"] == "gzip"

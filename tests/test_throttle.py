@@ -162,3 +162,4 @@ async def test_subrequest_429_bounded_records_final():
     )
     assert merged["0"]["status"] == 429  # bounded — recorded after retries exhausted
     assert len(slept) == 2
+

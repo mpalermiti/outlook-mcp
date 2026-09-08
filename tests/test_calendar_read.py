@@ -240,9 +240,18 @@ class TestEventDetailRecurrence:
     def test_missing_type_is_empty_string(self):
         assert self._detail()["type"] == ""
 
-    def test_summary_stays_lean(self):
-        """Detail-only: list results must not grow a recurrence/type field."""
+    def test_summary_carries_type_so_listings_can_tell_series_apart(self):
         summary = _format_event_summary(_make_mock_event(type=MagicMock(value="seriesMaster")))
 
-        assert "recurrence" not in summary
-        assert "type" not in summary
+        assert summary["type"] == "seriesMaster"
+
+    def test_summary_still_omits_the_recurrence_object(self):
+        """`type` is one short string; the full pattern stays detail-only."""
+        assert "recurrence" not in _format_event_summary(_make_mock_event())
+
+    def test_concise_mode_omits_type(self):
+        from outlook_mcp.tools.calendar_read import _format_event_concise
+
+        concise = _format_event_concise(_make_mock_event(type=MagicMock(value="seriesMaster")))
+
+        assert "type" not in concise

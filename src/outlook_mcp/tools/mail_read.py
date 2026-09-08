@@ -576,6 +576,8 @@ async def read_messages(
         "Authorization": f"Bearer {tok.token}",
         "Content-Type": "application/json",
         "Accept": "application/json",
+        # A $batch response carries up to 20 messages; httpx decompresses it.
+        "Accept-Encoding": "gzip",
     }
 
     async with httpx.AsyncClient(timeout=30.0) as client:

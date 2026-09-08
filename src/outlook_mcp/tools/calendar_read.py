@@ -66,6 +66,13 @@ def _format_event_summary(event: Any) -> dict:
     if event.end:
         end_str = f"{event.end.date_time} ({event.end.time_zone})"
 
+    # `type` distinguishes a seriesMaster from a singleInstance / occurrence /
+    # exception. Without it a listing cannot tell a recurring event from a
+    # one-off without fetching each one.
+    event_type = ""
+    if event.type is not None:
+        event_type = event.type.value if hasattr(event.type, "value") else str(event.type)
+
     return {
         "id": event.id,
         "subject": sanitize_output(event.subject or "(no subject)"),
@@ -78,6 +85,7 @@ def _format_event_summary(event: Any) -> dict:
         "organizer": sanitize_output(organizer_name),
         "response_status": response,
         "is_online": bool(event.is_online_meeting),
+        "type": event_type,
     }
 
 
@@ -114,12 +122,6 @@ def _format_event_detail(event: Any) -> dict:
     if event.online_meeting and event.online_meeting.join_url:
         online_meeting_url = event.online_meeting.join_url
 
-    # `type` is what tells a client a series actually took: seriesMaster vs
-    # singleInstance / occurrence / exception.
-    event_type = ""
-    if event.type is not None:
-        event_type = event.type.value if hasattr(event.type, "value") else str(event.type)
-
     return {
         **summary,
         "organizer": organizer,
@@ -127,7 +129,6 @@ def _format_event_detail(event: Any) -> dict:
         "attendees": attendees,
         "online_meeting_url": online_meeting_url,
         "recurrence": serialize_recurrence(event.recurrence),
-        "type": event_type,
         "categories": list(event.categories or []),
     }
 
@@ -137,7 +138,9 @@ def _format_event_concise(event: Any) -> dict:
 
     Keeps: id, subject, start, end, location, is_all_day, is_organizer,
     is_online_meeting, attendees_count. Drops: body, organizer (object),
-    response_status, categories, full attendees list.
+    response_status, categories, full attendees list, and `type` — concise
+    mode is for day-at-a-glance scans where the series/one-off distinction
+    isn't worth the tokens; use the normal listing when it is.
     """
     start_str = ""
     if event.start:
