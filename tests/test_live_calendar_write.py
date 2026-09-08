@@ -195,3 +195,85 @@ class TestUpdatingIntoASeries:
             assert after["recurrence"]["pattern"]["daysOfWeek"] == ["monday"]
             # The anchor was read off the event itself — no `start` was passed.
             assert after["recurrence"]["range"]["startDate"] == monday.isoformat()
+
+
+class TestPatchingEventFlags:
+    """`attendees` is deliberately NOT exercised here.
+
+    Patching it makes Outlook email invitations to everyone on the list and
+    cancellations to anyone dropped. The no-attendees rule for this tier
+    (see tests/conftest.py) exists precisely for that, and it outranks the
+    coverage. The attendee path is unit-tested against the built payload; its
+    Graph behavior is documented in the tool docstring, not asserted here.
+
+    `is_online` is absent because Graph ignores isOnlineMeeting on consumer
+    mailboxes — see test_online_meeting_is_not_supported_on_personal_accounts.
+    """
+
+    async def test_update_can_make_a_midnight_event_all_day(
+        self, real_graph_client, live_write_config
+    ):
+        """Graph needs the bounds resent with isAllDay; this proves the rule we enforce."""
+        monday = _anchor_monday()
+        tuesday = monday + timedelta(days=1)
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            start=f"{monday.isoformat()}T00:00:00Z",
+            end=f"{tuesday.isoformat()}T00:00:00Z",
+        ) as event_id:
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                start=f"{monday.isoformat()}T00:00:00Z",
+                end=f"{tuesday.isoformat()}T00:00:00Z",
+                is_all_day=True,
+                config=live_write_config,
+            )
+
+            assert (await get_event(real_graph_client.sdk_client, event_id))["is_all_day"] is True
+
+    async def test_subject_edit_leaves_other_fields_alone(
+        self, real_graph_client, live_write_config
+    ):
+        """A partial patch must not blank what it didn't mention."""
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            start=f"{monday.isoformat()}T22:00:00Z",
+            end=f"{monday.isoformat()}T22:30:00Z",
+            location="Room 101",
+        ) as event_id:
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                subject=f"{LIVE_WRITE_SUBJECT} (renamed)",
+                config=live_write_config,
+            )
+
+            after = await get_event(real_graph_client.sdk_client, event_id)
+            assert after["location"] == "Room 101"
+            assert after["is_all_day"] is False
+
+    async def test_online_meeting_is_not_supported_on_personal_accounts(
+        self, real_graph_client, live_write_config
+    ):
+        """Pins the reason `is_online` is absent from update_event.
+
+        Graph accepts isOnlineMeeting on a consumer mailbox and silently drops
+        it. If Microsoft ever starts honouring it, this test fails and tells us
+        the parameter is worth adding.
+        """
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            start=f"{monday.isoformat()}T23:00:00Z",
+            end=f"{monday.isoformat()}T23:30:00Z",
+            is_online=True,
+        ) as event_id:
+            assert (await get_event(real_graph_client.sdk_client, event_id))["is_online"] is False

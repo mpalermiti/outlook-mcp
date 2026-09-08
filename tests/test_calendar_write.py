@@ -370,6 +370,115 @@ class TestUpdateEvent:
 
         builder.patch.assert_not_called()
 
+    async def test_update_event_leaves_new_fields_unset_when_omitted(self):
+        """Critical: omitting them must not force False/empty onto the event."""
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(mock_client, event_id="AAMkAG123=", subject="X", config=_CFG)
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.attendees is None
+        assert patched.is_all_day is None
+        assert patched.is_online_meeting is None
+
+    async def test_update_event_replaces_attendees(self):
+        """Graph replaces the whole collection — we send exactly what the caller gave."""
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            attendees=["alice@test.com", "bob@test.com"],
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert [a.email_address.address for a in patched.attendees] == [
+            "alice@test.com",
+            "bob@test.com",
+        ]
+
+    async def test_update_event_empty_attendee_list_clears_them(self):
+        """[] is a real instruction ("no attendees"), distinct from None ("don't touch")."""
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(mock_client, event_id="AAMkAG123=", attendees=[], config=_CFG)
+
+        assert builder.patch.call_args[0][0].attendees == []
+
+    async def test_update_event_validates_attendee_emails(self):
+        builder = _make_event_builder()
+        builder.patch = AsyncMock()
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError):
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                attendees=["alice@test.com", "not-an-email"],
+                config=_CFG,
+            )
+
+        builder.patch.assert_not_called()
+
+    async def test_update_event_sets_is_all_day_with_bounds(self):
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-10-22T00:00:00Z",
+            end="2026-10-23T00:00:00Z",
+            is_all_day=True,
+            config=_CFG,
+        )
+
+        assert builder.patch.call_args[0][0].is_all_day is True
+
+    async def test_update_event_rejects_all_day_without_bounds(self):
+        """Live Graph returns "Missing parameters: Event.Start" — name it here instead."""
+        builder = _make_event_builder()
+        builder.patch = AsyncMock()
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError, match="start and end"):
+            await update_event(
+                mock_client, event_id="AAMkAG123=", is_all_day=True, config=_CFG
+            )
+
+        builder.patch.assert_not_called()
+
+    async def test_update_event_can_turn_all_day_off(self):
+        """False is an instruction too — must not be swallowed as "unset"."""
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-10-22T00:00:00Z",
+            end="2026-10-23T00:00:00Z",
+            is_all_day=False,
+            config=_CFG,
+        )
+
+        assert builder.patch.call_args[0][0].is_all_day is False
 
 class TestDeleteEvent:
     async def test_delete_event_calls_delete(self):

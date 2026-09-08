@@ -624,7 +624,10 @@ async def outlook_create_event(
     """Create a calendar event with optional attendees, recurrence, and Teams online meeting.
 
     Example: outlook_create_event(subject="Q3 review", start="2026-08-15T14:00:00Z",
-    end="2026-08-15T15:00:00Z", attendees=["alice@acme.com"], is_online=True)
+    end="2026-08-15T15:00:00Z", attendees=["alice@acme.com"])
+    `is_online` is accepted but has no effect on personal accounts — Graph silently ignores
+    isOnlineMeeting for consumer mailboxes (it returns isOnlineMeeting: False,
+    onlineMeetingProvider: "unknown"). Teams meetings require a work/school account.
     `start`/`end` are ISO 8601. Passing `recurrence` creates a series, not a single event.
     It takes either a shorthand — "daily", "weekdays", "weekly", "monthly", "yearly", all
     anchored on `start` and open-ended — or a full Microsoft Graph recurrence object for
@@ -663,12 +666,19 @@ async def outlook_update_event(
     location: str | None = None,
     body: str | None = None,
     recurrence: dict | str | None = None,
+    attendees: list[str] | None = None,
+    is_all_day: bool | None = None,
 ) -> dict:
     """Update fields on an existing event (partial patch — only provided fields change).
 
     `recurrence` takes the same shapes as outlook_create_event and converts a single
     event into a series, or replaces an existing series' pattern. Omit it to leave any
     recurrence alone; there is no way to strip one — delete the event to end a series.
+    `attendees` REPLACES the whole guest list (Graph has no add-one operation) and sends
+    invitations to everyone on it plus cancellations to anyone dropped — pass the full
+    intended list; [] removes everyone. `is_all_day` REQUIRES start and end in the same
+    call, both on midnight boundaries. Omitting an argument leaves it unchanged, so False
+    and [] are instructions, not absences.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -681,6 +691,8 @@ async def outlook_update_event(
         location,
         body,
         recurrence,
+        attendees,
+        is_all_day,
         config=config,
     )
 
