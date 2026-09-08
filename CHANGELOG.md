@@ -4,6 +4,33 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.0] — 2026-09-07
+
+Calendar editing catches up with calendar creation, and a layer that only looked like validation comes out.
+
+### Added
+
+- **`attendees` on `outlook_update_event`.** You could create a meeting with guests but never add one to a meeting that already existed. Note the semantics, which are Graph's, not ours: there is no add-one operation, so the argument **replaces the whole collection** — Outlook emails invitations to everyone on the new list and cancellations to anyone dropped. `[]` removes them all. Every argument on this tool keeps `None` = "leave alone", so `False` and `[]` remain instructions rather than absences.
+- **`is_all_day` on `outlook_update_event`**, which requires `start` and `end` in the *same* call. Graph rejects a lone isAllDay patch with `ErrorInvalidRequest: Missing parameters: Event.Start`; that is now a named local error naming both bounds instead of an opaque 400 from the wire.
+- **`type` on every listed event** (`singleInstance` / `seriesMaster` / `occurrence` / `exception`). `outlook_list_events` could not distinguish a recurring series from a one-off without fetching each event individually. Computed once in the summary formatter; the detail formatter inherits it. `concise=True` still omits it — that mode exists to drop tokens.
+- **`Accept-Encoding: gzip` on the two raw-httpx paths** (`fetch_delta_pages`, `read_messages`). The SDK path already negotiated compression; these bypass the SDK and did not. Delta pages and 20-message `$batch` responses are large, highly compressible, and refetched constantly by polling agents. Roadmap Tier-0 #7.
+
+### Removed
+
+- **`src/outlook_mcp/models/` — the entire Pydantic I/O layer.** All 22 classes across `calendar.py`, `mail.py`, `todo.py`, `contacts.py` and `common.py` were referenced by zero non-model source files; only their own tests imported them. They read as the input-validation layer, and `CLAUDE.md` claimed one existed ("All input validated via Pydantic + validation.py"), but nothing on any tool path ever constructed them. This is the exact mechanism that hid [#41] for fourteen releases: `CreateEventInput.validate_recurrence` enforced the shorthand allowlist, looked authoritative, and never ran. They are redundant by construction — `MCPServer` generates tool schemas from the type annotations. `CLAUDE.md` now says what actually runs, and requires any future model layer to be wired to the tool path in the same commit. Drops 30 tests that exercised only dead code.
+- **`scripts/probe_datetime_semantics.py`.** One-off evidence gathering for 1.15.0's timezone question. The question is answered, the finding is recorded in the 1.15.0 entry below, and a script that creates and deletes real calendar events should not ship in a bundle other people install.
+
+### Fixed
+
+- **`is_online` is documented as a no-op on personal accounts.** Adding it to `outlook_update_event` was in scope until the live write tier caught what mocks cannot: Graph accepts `isOnlineMeeting` on a consumer mailbox and silently ignores it. A created event comes back `isOnlineMeeting: False`, `onlineMeetingProvider: "unknown"`, `onlineMeeting: None`. Teams meetings require a work/school account, which this server does not target — so `outlook_create_event`'s `is_online` parameter has never done anything for this project's only audience. Rather than ship a convincing no-op on a second tool, the parameter was left off `update_event`, the behavior is documented on `create_event`, and a live test now pins it: if Microsoft ever starts honouring it, that test fails and tells us the parameter is worth adding.
+
+### Verified
+
+- Offline suite **608 passed, 25 deselected**; `ruff check src/ tests/` clean; 62 tools register (unchanged — this release adds parameters, not tools).
+- **9 live write-tier tests** against a real personal `@outlook.com` calendar, including all-day conversion, partial-patch isolation, and the online-meeting pin. `attendees` is deliberately *not* exercised live — patching it emails real invitations, and the tier's no-attendees rule outranks the coverage; the built payload is unit-tested instead.
+
+[#41]: https://github.com/mpalermiti/outlook-mcp/issues/41
+
 ## [1.15.0] — 2026-09-07
 
 Recurring calendar events, which have never actually worked, and a timezone bug found while fixing them.
