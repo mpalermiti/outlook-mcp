@@ -27,13 +27,15 @@ Rules for ``live_write``, which exists precisely because it breaks that:
 * Double-gated — the marker is deselected by default *and* the tier skips
   unless ``OUTLOOK_MCP_LIVE_WRITE=1``. A cached token alone must never be
   enough to write to someone's calendar.
-* Calendar only. No mail: nothing here may send, and a stray send is not
+* Calendar, contacts and To Do only — the three surfaces whose writes have no
+  outward side effect. No mail: nothing here may send, and a stray send is not
   recoverable.
 * No attendees, ever. A recurring invite emails real people on every
   occurrence.
 * Bounded ranges only (``numbered``/``endDate``) — never ``noEnd``.
-* Every created item is removed in a ``finally``, and subjects carry
-  ``LIVE_WRITE_SUBJECT`` so anything a crash leaks is greppable in the UI.
+* Every created item is removed in a ``finally``, and subjects/names carry
+  ``LIVE_WRITE_SUBJECT`` / ``LIVE_WRITE_NAME`` so anything a crash leaks is
+  greppable in the UI.
 """
 
 import os
@@ -43,6 +45,8 @@ import pytest
 # Prefix for every item this tier creates, so an orphan left by a hard crash is
 # obvious in the calendar UI and easy to search for.
 LIVE_WRITE_SUBJECT = "[outlook-mcp live-write guard] safe to delete"
+# Contacts and tasks have no subject; their names carry the same marker.
+LIVE_WRITE_NAME = "LiveWriteGuard-SafeToDelete"
 
 
 @pytest.fixture
@@ -107,8 +111,25 @@ def live_write_config(real_config):
     if os.environ.get("OUTLOOK_MCP_LIVE_WRITE") != "1":
         pytest.skip(
             "Write tier is opt-in — set OUTLOOK_MCP_LIVE_WRITE=1 to let it "
-            "create and delete events on the authenticated calendar"
+            "create and delete events, contacts and tasks on the authenticated account"
         )
     if real_config.read_only:
         pytest.skip("Config is read_only — the write tier cannot run")
+
+    # The real config may whitelist only some write categories (`allow_categories`
+    # is a policy for the *server*, e.g. "my agent may not touch contacts"). The
+    # tier's job is to exercise Graph, and the permission gate is unit-tested on
+    # its own, so open the three surfaces this tier is allowed to write on an
+    # in-process copy. ~/.outlook-mcp/config.json is never modified.
+    if real_config.allow_categories:
+        from outlook_mcp.permissions import (
+            CATEGORY_CALENDAR_WRITE,
+            CATEGORY_CONTACTS_WRITE,
+            CATEGORY_TODO_WRITE,
+        )
+
+        needed = {CATEGORY_CALENDAR_WRITE, CATEGORY_CONTACTS_WRITE, CATEGORY_TODO_WRITE}
+        return real_config.model_copy(
+            update={"allow_categories": sorted(set(real_config.allow_categories) | needed)}
+        )
     return real_config

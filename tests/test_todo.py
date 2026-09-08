@@ -489,3 +489,38 @@ class TestDeleteTask:
 
         with pytest.raises(ReadOnlyError):
             await delete_task(client, task_id="task1", config=_CFG_RO)
+
+
+class TestReminderNeedsAnAnchor:
+    """Live finding: Graph stores isReminderOn=false unless reminderDateTime is set."""
+
+    async def test_reminder_sets_reminder_date_time_to_due(self):
+        from kiota_serialization_json.json_serialization_writer import JsonSerializationWriter
+
+        client = _build_mock_client()
+        await create_task(
+            client, title="Anchored", due="2026-10-07T17:00:00Z", reminder=True, config=_CFG
+        )
+
+        post = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.post
+        payload = post.call_args.args[0]
+        writer = JsonSerializationWriter()
+        payload.serialize(writer)
+        wire = writer.get_serialized_content().decode()
+        assert '"isReminderOn": true' in wire
+        assert '"reminderDateTime"' in wire
+        assert "2026-10-07T17:00:00" in wire
+
+    async def test_reminder_without_due_is_rejected_not_dropped(self):
+        client = _build_mock_client()
+        with pytest.raises(ValueError, match="due"):
+            await create_task(client, title="Unanchored", reminder=True, config=_CFG)
+        client.me.todo.lists.by_todo_task_list_id.return_value.tasks.post.assert_not_called()
+
+    async def test_reminder_false_does_not_need_due(self):
+        client = _build_mock_client()
+        await create_task(client, title="Off", reminder=False, config=_CFG)
+        post = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.post
+        payload = post.call_args.args[0]
+        assert payload.is_reminder_on is False
+        assert payload.reminder_date_time is None

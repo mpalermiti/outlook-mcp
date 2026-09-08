@@ -318,7 +318,6 @@ async def outlook_send_message(
     bcc: list[str] | None = None,
     is_html: bool = False,
     importance: str = "normal",
-    sensitivity: str = "normal",
     request_read_receipt: bool = False,
     reply_to: list[str] | None = None,
 ) -> dict:
@@ -339,7 +338,6 @@ async def outlook_send_message(
         bcc,
         is_html,
         importance,
-        sensitivity=sensitivity,
         request_read_receipt=request_read_receipt,
         reply_to=reply_to,
         config=config,
@@ -924,6 +922,8 @@ async def outlook_create_task(
     """Create a Microsoft To Do task with optional due date, importance, body, and recurrence.
 
     Example: outlook_create_task(title="Send invoice", due="2026-09-01", importance="high")
+    `reminder=True` requires `due` and sets the reminder to the due time — Graph silently
+    drops a reminder that has no time.
     `due` is ISO 8601. `importance` is "low", "normal", or "high". Defaults to the user's default
     list when `list_id` is omitted.
     """

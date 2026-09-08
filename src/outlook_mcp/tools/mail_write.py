@@ -18,7 +18,6 @@ async def send_message(
     bcc: list[str] | None = None,
     is_html: bool = False,
     importance: str = "normal",
-    sensitivity: str = "normal",
     request_read_receipt: bool = False,
     reply_to: list[str] | None = None,
     *,
@@ -43,7 +42,6 @@ async def send_message(
     from msgraph.generated.models.item_body import ItemBody
     from msgraph.generated.models.message import Message
     from msgraph.generated.models.recipient import Recipient
-    from msgraph.generated.models.sensitivity import Sensitivity
     from msgraph.generated.users.item.send_mail.send_mail_post_request_body import (
         SendMailPostRequestBody,
     )
@@ -74,13 +72,11 @@ async def send_message(
     }
     msg.importance = importance_map.get(importance, Importance.Normal)
 
-    sensitivity_map = {
-        "normal": Sensitivity.Normal,
-        "personal": Sensitivity.Personal,
-        "private": Sensitivity.Private,
-        "confidential": Sensitivity.Confidential,
-    }
-    msg.sensitivity = sensitivity_map.get(sensitivity, Sensitivity.Normal)
+    # No `sensitivity` here on purpose. msgraph-sdk's Message has no such
+    # field (the assignment used to hang a stray attribute kiota never saw),
+    # and Graph rejects `"sensitivity"` in a POST body with 400
+    # UnableToDeserializePostBody — it is a legacy MAPI property that is not
+    # settable through this endpoint. The parameter never did anything.
     msg.is_read_receipt_requested = request_read_receipt
 
     request_body = SendMailPostRequestBody()

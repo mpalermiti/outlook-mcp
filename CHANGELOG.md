@@ -4,6 +4,32 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.19.0] — 2026-09-08
+
+Tiers 2 and 3 of the silent-no-op audit, and the two bugs they found on their first run.
+
+### Added
+
+- **`tests/test_no_dead_modules.py`** — builds the intra-package import graph from the console-script entry point and fails on any module nothing reaches. The module-level counterpart of the dead-parameter guard: `models/` sat unreferenced for months while 30 tests imported it directly, because tests that import a module by name make dead code look alive. Collects imports from every AST node, since this package imports lazily inside functions. Mutation-verified.
+- **`tests/test_sdk_fields_exist.py`** — every `model.attr = …` in `tools/` where `model` was bound by an `msgraph.generated.models` constructor must name a declared dataclass field of that class. Dataclass instances accept arbitrary attributes, so assigning a field the SDK doesn't have raises nothing, serializes nothing, and reaches nothing. Offline, no mocks.
+- **`tests/test_write_payloads_reach_the_wire.py`** — for eleven write tools across calendar, mail, drafts, contacts and To Do, calls the handler with a distinctive sentinel for every argument, serializes the object handed to `.post()`/`.patch()` exactly as kiota would, and asserts each value is present in that JSON. Attribute-level assertions cannot see a field the handler forgot (#41) or the SDK dropped (`remove_recurrence`); the wire can.
+- **Live round-trips for contacts and To Do** (`test_live_contacts_write.py`, `test_live_todo_write.py`): every parameter each write tool accepts is written, read back through the tool's own read path, and asserted — the only detector for Graph accepting a value and ignoring it. The write tier's rules now cover calendar, contacts and To Do (the three surfaces with no outward side effect; still no mail, ever). Because the real config may whitelist only some write categories, `live_write_config` opens the three it needs on an **in-process copy**; `~/.outlook-mcp/config.json` is never touched.
+
+### Removed
+
+- **`sensitivity` on `outlook_send_message`.** Found by the wire test and confirmed by the field guard: msgraph-sdk's `Message` has no `sensitivity` field — not in the dataclass, not in `serialize()`, not in the deserializers. `msg.sensitivity = Sensitivity.Private` hung a stray attribute on the instance that kiota never saw. Sending it by hand via `additional_data` was then tried against live Graph (as a draft, deleted): `400 UnableToDeserializePostBody`. It is a legacy MAPI property that this endpoint does not accept, so there is nothing to implement. The parameter never did anything for anyone; it is removed rather than left as a convincing no-op. **Schema change** on one tool.
+- **`src/outlook_mcp/tools/auth_tools.py`** — a six-line docstring stub left behind when the auth tools moved into `server.py`, imported by nothing. Flagged by the new module guard.
+
+### Fixed
+
+- **To Do `reminder=True` was silently stored as off.** The live round-trip caught it: Graph accepts `isReminderOn: true`, returns 201, and persists `false` unless `reminderDateTime` is also set. Confirmed by isolating the two cases live. `create_task` now anchors the reminder on the due time, and `reminder=True` without `due` is a named error — there is nothing to anchor it on, and the alternative is the no-op we just removed.
+
+### Verified
+
+- Offline **638 passed, 32 deselected**; ruff clean across `src/`, `tests/`, `scripts/`.
+- **16 live write-tier tests** — calendar 10, contacts 3, To Do 3 — plus preflight 13/13, live 10, integration 6. Calendar, contacts and tasks swept afterwards for leftover test data: none.
+- 62 tools, unchanged.
+
 ## [1.18.0] — 2026-09-08
 
 A guard against the bug class that produced [#41], and the bug it immediately found.

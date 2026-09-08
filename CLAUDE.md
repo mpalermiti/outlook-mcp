@@ -36,7 +36,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 - `src/outlook_mcp/throttle.py` — Retry-After honoring for the raw-httpx delta/`$batch` paths (SDK path already retries via kiota)
 - `src/outlook_mcp/toolsets.py` — Tool annotations + config-gated toolset selection (`OUTLOOK_MCP_TOOLSETS`); `configure()` runs once after registration
 - `src/outlook_mcp/tools/` — One file per tool group:
-  - `auth_tools.py`, `mail_read.py`, `mail_write.py`, `mail_triage.py` — Tier 1
+  - `mail_read.py`, `mail_write.py`, `mail_triage.py` — Tier 1 (auth tools live directly in `server.py`)
   - `calendar_read.py`, `calendar_write.py` — Tier 1
   - `contacts.py` — Contact CRUD
   - `todo.py` — To Do task management
@@ -64,7 +64,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   is why #41 went unnoticed for fourteen releases: a validator that looked authoritative and
   never ran. If you add one, wire it to the tool path in the same commit.
 - No telemetry, no local caching, no third-party calls
-- Tests: TDD, pytest, mock Graph client for unit tests. `tests/test_no_dead_parameters.py` fails the build on any parameter declared and never read — the #41 shape; use it, remove it, or justify it in that file's ALLOWED set. Mocks assert what we *send* — they cannot see a query Graph rejects or silently mis-evaluates, so anything that builds a `$filter`/`$orderby`/`$search` string also needs a `@pytest.mark.live` guard
+- Tests: TDD, pytest, mock Graph client for unit tests. Four offline guards against the silent-no-op class that produced #41 — a call that succeeds and does nothing: `test_no_dead_parameters.py` (parameter declared, never read), `test_no_dead_modules.py` (module nothing imports), `test_sdk_fields_exist.py` (attribute assigned on an SDK model that has no such field — the SDK drops it silently), `test_write_payloads_reach_the_wire.py` (each write argument must appear in the *serialized* payload, not just on the model). Fix the finding or justify an allowlist entry in the file; never weaken the guard. Mocks assert what we *send* — they cannot see a query Graph rejects or silently mis-evaluates, so anything that builds a `$filter`/`$orderby`/`$search` string also needs a `@pytest.mark.live` guard
 - Errors: raise OutlookMCPError subclasses, never return error dicts
 - Datetimes: UTC in responses, config timezone for input interpretation
 - Delete: soft delete (move to Deleted Items) by default

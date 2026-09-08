@@ -248,7 +248,17 @@ async def create_task(
         task_body.body = _text_body(body)
 
     if reminder is not None:
+        # Graph silently stores isReminderOn=false unless reminderDateTime is
+        # also set (verified live). Anchor the reminder on the due time; without
+        # a due there is nothing to anchor it on, so say so instead of no-oping.
+        if reminder and not due:
+            raise ValueError(
+                "reminder=True needs a `due` datetime to anchor the reminder on — "
+                "Graph ignores isReminderOn without reminderDateTime"
+            )
         task_body.is_reminder_on = reminder
+        if reminder:
+            task_body.reminder_date_time = _datetime_timezone(due)
 
     if recurrence:
         task_body.recurrence = _build_recurrence(recurrence)
