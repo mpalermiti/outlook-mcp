@@ -112,11 +112,35 @@ gh workflow run publish.yml
 
 ## 6. Publish to ClawHub (the one manual channel)
 
-ClawHub has no OIDC equivalent, so it stays hand-run:
+ClawHub has no OIDC equivalent, so it stays hand-run. Three steps, and the first and last are the ones that matter.
+
+**6a. Check the CLI is current — nothing else will.**
+
+```bash
+clawhub --cli-version; npm view clawhub version   # must match
+npm i -g clawhub@latest                            # it's npm-global under Homebrew's node, not a brew formula
+```
+
+Site discovery advertises `minCliVersion: "0.1.0"`, so an arbitrarily old client is accepted without a warning. On 2026-09-07 a v0.9.0 client (latest was v0.23.3) printed `✔ OK. Published outlook-mcp@1.15.0` for a submission that was actually pending security scans, and two releases were reported as published to users before anyone checked. Current clients print `pending security scans before it becomes public`, which is the truth.
+
+**6b. Publish.**
 
 ```bash
 clawhub publish "$(pwd)" --version X.Y.Z --tags latest --changelog "<one-liner>"
 ```
+
+Expect it to take a minute or two and to say **pending security scans**. That is success. The scan has taken ~12 min to ~1 h in practice; the version is not public until it clears.
+
+Note that ClawHub bundles the **whole repo** (everything not in `.gitignore` with a text extension — `tests/` included), not the wheel. Don't leave one-off scripts that touch real data lying in the tree at publish time.
+
+**6c. Verify — the CLI's success message is not verification.**
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' https://clawhub.ai/api/v1/skills/outlook-mcp/versions/X.Y.Z   # 200 once public
+curl -s https://clawhub.ai/api/v1/skills/outlook-mcp | python3 -c "import json,sys; print(json.load(sys.stdin)['latestVersion']['version'])"
+```
+
+`404` immediately after publishing is normal (scan pending). `404` an hour later is not — and `clawhub publish` will then refuse the same version number as a duplicate, so don't burn versions probing it; ask on <https://github.com/openclaw/clawhub/issues> (see #3623 for the shape of this).
 
 ## 7. Update GitHub About
 
