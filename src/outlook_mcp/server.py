@@ -1468,3 +1468,66 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ── Workflow prompts ────────────────────────────────────
+#
+# Sequencing guidance is not per-tool knowledge, so it does not belong in 62
+# docstrings that every client pays for on every turn. A prompt costs one line
+# in `prompts/list` until it is invoked — and unlike a SKILL.md, which is not
+# even shipped in the wheel, it reaches every MCP client. These three are the
+# workflows the trajectory archive shows being assembled by hand, call by call.
+
+
+@mcp.prompt(
+    title="Morning brief",
+    description="Today's calendar, unread mail and tasks due, in one pass.",
+)
+def morning_brief(folder: str = "inbox") -> str:
+    """Compose the day-ahead summary from the cheapest calls that answer it."""
+    return (
+        f"Give me a brief for today, in this order:\n"
+        f"1. outlook_list_events(days=1, concise=True) — what is scheduled.\n"
+        f"2. outlook_list_inbox(folder={folder!r}, unread_only=True, concise=True, count=25) — "
+        f"what arrived and is unread.\n"
+        f"3. outlook_list_tasks() — what is due.\n"
+        f"Then summarise in plain language: what is on, what needs a reply, what is overdue. "
+        f"Lead with anything time-critical. Do not open individual messages unless the preview "
+        f"is genuinely ambiguous — and if you need several, use outlook_read_messages once "
+        f"rather than outlook_read_message in a loop."
+    )
+
+
+@mcp.prompt(
+    title="Triage a folder",
+    description="Scan one folder cheaply and act on it in a single batch.",
+)
+def triage_folder(folder: str = "inbox", count: int = 50) -> str:
+    """Scan-then-batch: one read, one write, instead of a call per message."""
+    return (
+        f"Triage {folder!r}:\n"
+        f"1. outlook_list_inbox(folder={folder!r}, count={count}, concise=True) — one scan. "
+        f"The folder name goes straight in; there is no need to list folders first.\n"
+        f"2. Sort what you find into: needs a reply, read and archive, junk, ignore.\n"
+        f"3. Apply the result with outlook_batch_triage in ONE call rather than a "
+        f"mark-read/move/delete per message.\n"
+        f"Tell me what you did and what you left for me. Ask before deleting anything you are "
+        f"not confident about — deletes are recoverable from Deleted Items, but replies are not."
+    )
+
+
+@mcp.prompt(
+    title="Catch up since",
+    description="What changed in mail, calendar and contacts since a point in time.",
+)
+def catch_up(since: str = "24h") -> str:
+    """Steer to the delta path, which is an order of magnitude cheaper on a poll."""
+    return (
+        f"Tell me what changed since {since}.\n"
+        f"Use outlook_changes_since(fallback_window_hours=...) — it composes the mail, calendar "
+        f"and contacts delta queries into one digest and hands back per-resource delta tokens. "
+        f"Keep those tokens and pass them back next time; that call then returns only what "
+        f"changed, which is roughly ten times cheaper than re-scanning.\n"
+        f"Summarise: new mail worth my attention (it flags high-importance and flagged items "
+        f"for you), calendar changes, and anything cancelled."
+    )

@@ -179,12 +179,32 @@ def select_kept_tools(names: list[str], enabled: set[str] | None) -> set[str]:
     return keep
 
 
+# Tools a client may safely repeat with the same arguments — each one PATCHes an
+# absolute value, so the second call lands on the state the first one produced.
+# Opt-in, never inferred: a client that believes this may retry after a timeout,
+# and a wrong entry here sends a second email or re-issues an invitation. The
+# reasoning for every exclusion is in tests/test_idempotent_hints.py, which fails
+# if this set changes. `openWorldHint` is deliberately absent — it is true by
+# default in the schema and true for all 62, so stating it is pure token cost.
+IDEMPOTENT: set[str] = {
+    "outlook_flag_message",
+    "outlook_mark_read",
+    "outlook_categorize_message",
+    "outlook_rename_folder",
+    "outlook_set_inbox_override",
+    "outlook_switch_account",
+    "outlook_download_attachment",
+}
+
+
 def annotation_for(name: str) -> ToolAnnotations:
     """Return the ToolAnnotations for a tool from its read/destructive class."""
     if name in READ_ONLY:
         return ToolAnnotations(readOnlyHint=True)
     if name in DESTRUCTIVE:
         return ToolAnnotations(readOnlyHint=False, destructiveHint=True)
+    if name in IDEMPOTENT:
+        return ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True)
     return ToolAnnotations(readOnlyHint=False, destructiveHint=False)
 
 
