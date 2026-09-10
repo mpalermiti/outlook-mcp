@@ -8,6 +8,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
+from mcp.server.caching import CacheHint
 from mcp.server.mcpserver import Context, MCPServer
 
 from outlook_mcp import __version__, toolsets
@@ -49,11 +50,47 @@ async def lifespan(server):
     yield {"config": config, "auth": auth}
 
 
+# Sent once at connect, to every client, in every session — so it is the right
+# home for the conventions that span tools. Each rule below answers a mistake
+# visible in two months of real trajectories: 115 calls spent re-checking an
+# identity that never changes, and 196 folder listings before folder-scoped
+# scans that resolve display names on their own. That is roughly a quarter of
+# all traffic, bought back for the cost of sending this string.
+INSTRUCTIONS = """\
+Microsoft Outlook (personal accounts: outlook.com, hotmail.com, live.com) via Microsoft Graph.
+
+Working rules, each of which saves a round trip:
+
+- You are already signed in. Do not call outlook_whoami, outlook_list_accounts or
+  outlook_auth_status to check before doing something — just call the tool you need. If a call
+  does fail on authentication, its error says exactly what to run.
+- Folder parameters take display names directly ("Junk Email", "Purchases"), as well as
+  well-known names ("inbox", "drafts") and Graph IDs. Do not list folders first to find an ID.
+  Call outlook_list_folders only when you genuinely need to discover what folders exist.
+- Dates accept ISO 8601 (2026-10-22, or 2026-10-22T14:30:00Z) or a relative offset: `7d` is
+  seven days ago, `+7d` is seven days from now, `now` is this moment. Units: m, h, d, w.
+- Scanning mail or events? Pass concise=True — roughly ten times fewer tokens. To read several
+  messages, call outlook_read_messages once with the IDs, never outlook_read_message in a loop.
+- Polling on a schedule? The delta tools (outlook_list_inbox_delta and friends) return only what
+  changed since the token they handed you last time, and outlook_changes_since composes all
+  three into one digest.
+"""
+
+# SEP-2549: tell the client how long `tools/list` stays fresh, so it can stop
+# re-fetching ~8.6k tokens of schemas. The set is fixed at import — toolset
+# gating reads its env var once — so it cannot change while the process lives.
+# Five minutes rather than an hour because it *can* change across a restart,
+# which is exactly what someone editing OUTLOOK_MCP_TOOLSETS just did. Private:
+# the advertised set depends on this install's configuration, so it is not a
+# shared intermediary's to hand to someone else.
+TOOL_LIST_CACHE = CacheHint(ttl_ms=5 * 60 * 1000, scope="private")
+
 mcp = MCPServer(
     "outlook-mcp",
-    instructions="MCP server for Microsoft Outlook via Microsoft Graph API",
+    instructions=INSTRUCTIONS,
     lifespan=lifespan,
     version=__version__,
+    cache_hints={"tools/list": TOOL_LIST_CACHE},
 )
 
 
@@ -168,6 +205,8 @@ async def outlook_list_inbox(
     `folder` accepts display names, well-known names ("inbox", "junkemail"), or Graph IDs — prefer
     names. Pass concise=True to drop large fields (preview, categories) — ~10x fewer tokens.
     Pass uncategorized_only=True to return only messages with no categories assigned.
+    `after`/`before` take ISO 8601 or a relative offset — `7d` is seven days ago, `+7d` is seven
+    days from now.
     """
     client = _get_graph_client(ctx)
     return await mail_read.list_inbox(
@@ -927,8 +966,9 @@ async def outlook_create_task(
     Example: outlook_create_task(title="Send invoice", due="2026-09-01", importance="high")
     `reminder=True` requires `due` and sets the reminder to the due time — Graph silently
     drops a reminder that has no time.
-    `due` is ISO 8601. `importance` is "low", "normal", or "high". Defaults to the user's default
-    list when `list_id` is omitted.
+    `due` takes ISO 8601 or a relative offset — note `+7d` is seven days from now, while a bare
+    `7d` means seven days *ago*. `importance` is "low", "normal", or "high". Defaults to the
+    user's default list when `list_id` is omitted.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
