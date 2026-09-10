@@ -42,7 +42,8 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
      "client_id": "YOUR-APP-CLIENT-ID",
      "tenant_id": "consumers",
      "timezone": "America/Los_Angeles",
-     "read_only": true
+     "read_only": true,
+     "attachments_dir": "~/.outlook-mcp/attachments"
    }
    ```
 4. **Register with OpenClaw** (writes to `mcp.servers` in `~/.openclaw/openclaw.json`):
@@ -154,7 +155,9 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 
 ## Notes
 - IDs are opaque Graph strings — get them from list/search tools, never guess
-- Dates are ISO 8601, UTC in responses, config timezone for input interpretation
+- Dates take ISO 8601 or a relative offset (`7d` ago, `+7d` from now, `now`); responses are UTC, and zone-less input is read in the config timezone
+- Attachments may only be read from or written to `attachments_dir` — put a file there before asking for it to be sent
+- Three workflow prompts ship with the server: `morning_brief`, `triage_folder`, `catch_up`
 - Mail search uses KQL syntax
 - Start with `read_only: true`, flip when comfortable
 - **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 7 categories and example policies.

@@ -4,6 +4,78 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.20.0] — 2026-09-10
+
+Security, and the first release shaped by what agents actually did rather than by
+what we assumed they would. Two months of recorded trajectories (1,279 tool calls)
+turned out to disagree with the design in three specific places.
+
+### Security
+
+- **Attachment reads and writes are confined to a configured directory.**
+  `outlook_download_attachment` checked its `save_path` only for the substring
+  `..`, so any absolute path was writable. `outlook_send_with_attachments` and
+  `outlook_attach_to_draft` checked nothing at all, so any file the server
+  process could read could be emailed anywhere. Against a mail server — which
+  reads untrusted input for a living — "attach the file at &lt;path&gt; and reply" was
+  a working exfiltration primitive. New `attachments_dir` config (default
+  `~/.outlook-mcp/attachments`) bounds all three. Confinement is resolved rather
+  than textual, so a symlink sitting inside the directory and a sibling directory
+  sharing a name prefix are both refused.
+
+### Fixed
+
+- **Every domain error reached the model as `Error executing tool <name>`.** The
+  2.x SDK forwards the text of an anticipated failure (`ToolError`) and withholds
+  the text of a crash. `OutlookMCPError` inherited from `Exception`, so
+  auth-required, read-only, permission-denied, not-found, every wrapped Graph
+  error and every validation message was classified as a crash and suppressed.
+  Only pydantic's argument-type errors survived, because the SDK raises those
+  itself. The mock suite could not see it: it asserts on exception *types*, which
+  stayed green throughout.
+- **The `action` recovery hints had never reached an agent, on either SDK.** They
+  lived on the exception attribute and never in `str()`. Two of them named
+  `outlook_login`, a tool that does not exist; they now say `outlook-mcp auth`.
+
+### Added
+
+- **Relative dates on every datetime parameter.** `7d` / `-7d` (ago), `+7d` (from
+  now), `now`; units m/h/d/w. The archive shows `after="7d"` attempted fifty
+  times and refused every time, then worked around with a hand-computed
+  timestamp. The rejection message now names the accepted formats.
+- **Connect-time `instructions`.** 115 calls re-checked an identity that cannot
+  change mid-session and 196 listed folders before folder-scoped scans that
+  resolve display names on their own — about a quarter of all traffic. Guidance
+  that spans tools belongs in one string sent once per session, not duplicated
+  into 62 docstrings paid for every turn.
+- **Three workflow prompts** — `morning_brief`, `triage_folder`, `catch_up` — the
+  workflows the archive shows being assembled by hand. `catch_up` is where the
+  delta tools finally get named; they had gone unused because nothing pointed an
+  agent at them.
+- **`ttlMs` / `cacheScope` on `tools/list`** (SEP-2549). Was `ttlMs: 0`, so
+  clients re-fetched ~8.6k tokens of schemas they could have kept. Now five
+  minutes, private.
+- **`idempotentHint` on seven tools** whose operation is a PATCH of an absolute
+  value. Opt-in and pinned rather than inferred: a client that trusts the hint
+  may retry after a timeout, and a wrong entry sends a second email.
+  `openWorldHint` deliberately left unset — it is `true` by default in the schema
+  and would be `true` on all 62, so stating it costs schema tokens on every turn
+  and tells a client nothing new.
+
+### Changed
+
+- **BREAKING:** an attachment path outside `attachments_dir` is now refused.
+  Callers that saved to or attached from arbitrary locations must move the file
+  there or widen the setting. This is why the change ships in a minor rather than
+  a patch.
+
+### Notes
+
+Tool count unchanged at 62. Tool titles were considered and dropped: they would
+have added roughly 10% to the schema bytes every client pays for on every turn,
+and would have displayed "List Inbox" while the README and every error message
+say `outlook_list_inbox`.
+
 ## [1.19.0] — 2026-09-08
 
 Tiers 2 and 3 of the silent-no-op audit, and the two bugs they found on their first run.

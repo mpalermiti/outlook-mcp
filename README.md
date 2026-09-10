@@ -84,6 +84,9 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 - **Read-only mode** -- set `read_only: true` in config to block all write operations.
 - **Soft delete** -- delete moves to Deleted Items by default. Hard delete requires explicit `permanent: true`.
 - **Timezone-aware** -- calendar operations respect your configured IANA timezone.
+- **Relative dates** -- every datetime parameter takes ISO 8601 or an offset: `7d` is seven days ago, `+7d` is seven days from now, `now` is this moment. Units: `m`, `h`, `d`, `w`.
+- **Bounded attachments** -- attachment reads and writes are confined to `attachments_dir`, so a message that asks an agent to mail a file elsewhere on disk cannot be obeyed.
+- **Workflow prompts** -- `morning_brief`, `triage_folder` and `catch_up` ship as MCP prompts, so the common sequences do not have to be reconstructed call by call.
 
 ### Agent-friendly shape (1.8.0)
 
@@ -157,7 +160,8 @@ Create `~/.outlook-mcp/config.json`:
   "client_id": "YOUR_APPLICATION_CLIENT_ID",
   "tenant_id": "consumers",
   "timezone": "America/Los_Angeles",
-  "read_only": true
+  "read_only": true,
+  "attachments_dir": "~/.outlook-mcp/attachments"
 }
 ```
 
@@ -390,6 +394,7 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions).
 | `tenant_id` | `string` | `"consumers"` | Azure AD tenant. Use `"consumers"` for personal Microsoft accounts. |
 | `timezone` | `string` | `"UTC"` | IANA timezone (e.g. `"America/New_York"`). Used for relative date computations in calendar tools. |
 | `read_only` | `bool` | `false` | When `true`, all write tools (send, reply, move, delete, create, update, RSVP) return an error. |
+| `attachments_dir` | `string` | `"~/.outlook-mcp/attachments"` | The only directory the attachment tools may read from or write to. Every path an agent supplies is resolved and must land inside it — a symlink out or a `..` is refused. Widen it only if you understand that anything reachable can be emailed. |
 | `allow_categories` | `list[string]` | `[]` | Optional. Restrict write tools to specific categories (see below). Empty list = all writes allowed when `read_only: false`. |
 
 ### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`

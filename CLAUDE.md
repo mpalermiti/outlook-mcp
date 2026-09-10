@@ -31,7 +31,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 - `src/outlook_mcp/graph.py` — Graph client factory
 - `src/outlook_mcp/config.py` — Config file management (~/.outlook-mcp/)
 - `src/outlook_mcp/validation.py` — Input validation (OData, KQL, IDs, datetimes)
-- `src/outlook_mcp/errors.py` — Exception hierarchy
+- `src/outlook_mcp/errors.py` — Exception hierarchy. `OutlookMCPError` inherits the SDK's `ToolError`; this is load-bearing, not cosmetic (see Conventions)
 - `src/outlook_mcp/pagination.py` — Cursor-based pagination
 - `src/outlook_mcp/throttle.py` — Retry-After honoring for the raw-httpx delta/`$batch` paths (SDK path already retries via kiota)
 - `src/outlook_mcp/toolsets.py` — Tool annotations + config-gated toolset selection (`OUTLOOK_MCP_TOOLSETS`); `configure()` runs once after registration
@@ -65,7 +65,22 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   never ran. If you add one, wire it to the tool path in the same commit.
 - No telemetry, no local caching, no third-party calls
 - Tests: TDD, pytest, mock Graph client for unit tests. Four offline guards against the silent-no-op class that produced #41 — a call that succeeds and does nothing: `test_no_dead_parameters.py` (parameter declared, never read), `test_no_dead_modules.py` (module nothing imports), `test_sdk_fields_exist.py` (attribute assigned on an SDK model that has no such field — the SDK drops it silently), `test_write_payloads_reach_the_wire.py` (each write argument must appear in the *serialized* payload, not just on the model). Fix the finding or justify an allowlist entry in the file; never weaken the guard. Mocks assert what we *send* — they cannot see a query Graph rejects or silently mis-evaluates, so anything that builds a `$filter`/`$orderby`/`$search` string also needs a `@pytest.mark.live` guard
-- Errors: raise OutlookMCPError subclasses, never return error dicts
+- Errors: raise OutlookMCPError subclasses, never return error dicts. They inherit the SDK's
+  `ToolError` — an *anticipated* failure, whose text the SDK forwards to the model. Anything
+  inheriting plain `Exception` is treated as a crash and reaches the model as
+  `Error executing tool <name>` with the message withheld. That is not a detail: it silently
+  suppressed the entire hierarchy from 1.14.0 to 1.19.0 while every type assertion stayed green.
+  A new error type inherits from `OutlookMCPError`, and `__str__` carries the `action` hint
+  because that string is what the agent reads. Guarded by `test_error_text_reaches_client.py`
+- Cross-tool guidance goes in `INSTRUCTIONS` (sent once per session) or a prompt, never into 62
+  docstrings — a docstring is paid for on every turn by every client. A docstring stays
+  self-sufficient for using *that* tool; sequencing across tools does not belong there
+- Anything taking a host filesystem path routes through `resolve_attachment_path`. Paths come
+  from the model, and the model reads email — treat them as untrusted input, and confine by
+  resolving, never by string comparison
+- Tool schemas are a per-turn cost with a measured baseline (~8,644 tokens for 62 tools).
+  Metadata that is correct but inert — `openWorldHint`, which is `true` by default anyway, or
+  titles that restate the tool name — is not free. `test_tool_surface_budget.py` holds the line
 - Datetimes: UTC in responses, config timezone for input interpretation
 - Delete: soft delete (move to Deleted Items) by default
 - Dependency bounds: an unbounded requirement can break every fresh install without a single commit. `mcp[cli]` with no upper bound shipped a package that could not be installed for five weeks (2026-07-28 → 09-03) while CI stayed green — `uv sync` resolves through `uv.lock`, so the `test` job never sees what a new user actually gets. The `fresh-install` (per push) and `published-install` (weekly cron) jobs in `ci.yml` are the guard against this class; keep them working
