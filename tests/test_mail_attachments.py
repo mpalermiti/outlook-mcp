@@ -109,6 +109,7 @@ class TestDownloadAttachment:
             message_id="AAMkAG123=",
             attachment_id="att1",
             save_path=save_path,
+            config=Config(attachments_dir=str(tmp_path)),
         )
         assert result["saved_to"] == save_path
         assert os.path.isfile(save_path)
@@ -146,6 +147,7 @@ class TestDownloadAttachment:
             message_id="AAMkAG123=",
             attachment_id="att1",
             save_path=save_path,
+            config=Config(attachments_dir=str(tmp_path)),
         )
         assert result["saved_to"] == save_path
         with open(save_path, "rb") as f:
@@ -159,7 +161,8 @@ class TestDownloadAttachment:
                 mock_client,
                 message_id="",
                 attachment_id="att1",
-                save_path="/tmp/report.pdf",
+                save_path="report.pdf",
+                config=Config(),
             )
 
     async def test_download_validates_attachment_id(self):
@@ -170,18 +173,24 @@ class TestDownloadAttachment:
                 mock_client,
                 message_id="AAMkAG123=",
                 attachment_id="",
-                save_path="/tmp/report.pdf",
+                save_path="report.pdf",
+                config=Config(),
             )
 
-    async def test_download_rejects_path_traversal(self):
-        """download_attachment rejects save_path with .. traversal."""
+    async def test_download_rejects_path_outside_attachments_dir(self, tmp_path):
+        """A path that escapes the configured directory is refused.
+
+        Full confinement coverage — traversal, symlinks, absolute paths, prefix
+        siblings — lives in tests/test_attachment_paths.py.
+        """
         mock_client = MagicMock()
-        with pytest.raises(ValueError, match="traversal"):
+        with pytest.raises(ValueError, match="attachments_dir"):
             await download_attachment(
                 mock_client,
                 message_id="AAMkAG123=",
                 attachment_id="att1",
-                save_path="/tmp/../etc/passwd",
+                save_path="/etc/passwd",
+                config=Config(attachments_dir=str(tmp_path)),
             )
 
 
@@ -201,7 +210,7 @@ class TestSendWithAttachments:
             subject="Test",
             body="See attached",
             attachment_paths=[str(test_file)],
-            config=_CFG,
+            config=Config(client_id="test", attachments_dir=str(tmp_path)),
         )
         assert result["status"] == "sent"
         assert result["attachment_count"] == 1
@@ -222,7 +231,7 @@ class TestSendWithAttachments:
             body="See attached",
             attachment_paths=[str(test_file)],
             reply_to=["alias@test.com"],
-            config=_CFG,
+            config=Config(client_id="test", attachments_dir=str(tmp_path)),
         )
 
         request_body = mock_client.me.send_mail.post.call_args.args[0]
@@ -244,7 +253,7 @@ class TestSendWithAttachments:
                 body="Hi",
                 attachment_paths=[str(test_file)],
                 reply_to=["not-an-email"],
-                config=_CFG,
+                config=Config(client_id="test", attachments_dir=str(tmp_path)),
             )
 
     async def test_send_raises_read_only(self, tmp_path):
@@ -260,7 +269,7 @@ class TestSendWithAttachments:
                 subject="Test",
                 body="Hi",
                 attachment_paths=[str(test_file)],
-                config=_CFG_RO,
+                config=Config(client_id="test", read_only=True, attachments_dir=str(tmp_path)),
             )
 
     async def test_send_rejects_invalid_email(self, tmp_path):
@@ -276,11 +285,15 @@ class TestSendWithAttachments:
                 subject="Test",
                 body="Hi",
                 attachment_paths=[str(test_file)],
-                config=_CFG,
+                config=Config(client_id="test", attachments_dir=str(tmp_path)),
             )
 
-    async def test_send_rejects_missing_file(self):
-        """send_with_attachments raises FileNotFoundError for missing files."""
+    async def test_send_rejects_missing_file(self, tmp_path):
+        """send_with_attachments raises FileNotFoundError for missing files.
+
+        The path is inside the permitted directory — a path outside it is refused
+        earlier, with a different error (see tests/test_attachment_paths.py).
+        """
         mock_client = MagicMock()
         with pytest.raises(FileNotFoundError):
             await send_with_attachments(
@@ -288,8 +301,8 @@ class TestSendWithAttachments:
                 to=["a@b.com"],
                 subject="Test",
                 body="Hi",
-                attachment_paths=["/nonexistent/file.txt"],
-                config=_CFG,
+                attachment_paths=["nonexistent.txt"],
+                config=Config(client_id="test", attachments_dir=str(tmp_path)),
             )
 
     async def test_send_large_file_uses_upload_session(self, tmp_path):
@@ -321,7 +334,7 @@ class TestSendWithAttachments:
                 subject="Large file",
                 body="See attached",
                 attachment_paths=[str(large_file)],
-                config=_CFG,
+                config=Config(client_id="test", attachments_dir=str(tmp_path)),
             )
         assert result["status"] == "sent"
         assert result["attachment_count"] == 1
@@ -342,7 +355,7 @@ class TestSendWithAttachments:
             attachment_paths=[str(test_file)],
             cc=["cc@test.com"],
             bcc=["bcc@test.com"],
-            config=_CFG,
+            config=Config(client_id="test", attachments_dir=str(tmp_path)),
         )
         assert result["status"] == "sent"
         mock_client.me.send_mail.post.assert_called_once()
@@ -365,7 +378,7 @@ class TestAttachToDraft:
             mock_client,
             draft_id="AAMkAG123=",
             attachment_paths=[str(small_file)],
-            config=_CFG,
+            config=Config(client_id="test", attachments_dir=str(tmp_path)),
         )
 
         assert result["status"] == "attached"
@@ -396,7 +409,7 @@ class TestAttachToDraft:
                 mock_client,
                 draft_id="AAMkAG123=",
                 attachment_paths=[str(large_file)],
-                config=_CFG,
+                config=Config(client_id="test", attachments_dir=str(tmp_path)),
             )
 
         assert result["status"] == "attached"
@@ -431,7 +444,7 @@ class TestAttachToDraft:
                 mock_client,
                 draft_id="AAMkAG123=",
                 attachment_paths=[str(small), str(big)],
-                config=_CFG,
+                config=Config(client_id="test", attachments_dir=str(tmp_path)),
             )
 
         assert result["attachment_count"] == 2
@@ -449,18 +462,21 @@ class TestAttachToDraft:
                 mock_client,
                 draft_id="bad id with spaces!",
                 attachment_paths=[str(f)],
-                config=_CFG,
+                config=Config(client_id="test", attachments_dir=str(tmp_path)),
             )
 
-    async def test_attach_raises_on_missing_file(self):
-        """attach_to_draft raises FileNotFoundError when a path does not exist."""
+    async def test_attach_raises_on_missing_file(self, tmp_path):
+        """attach_to_draft raises FileNotFoundError when a path does not exist.
+
+        Inside the permitted directory — outside it the path is refused earlier.
+        """
         mock_client = MagicMock()
         with pytest.raises(FileNotFoundError):
             await attach_to_draft(
                 mock_client,
                 draft_id="AAMkAG123=",
-                attachment_paths=["/nonexistent/file.txt"],
-                config=_CFG,
+                attachment_paths=["nonexistent.txt"],
+                config=Config(client_id="test", attachments_dir=str(tmp_path)),
             )
 
     async def test_attach_raises_read_only(self, tmp_path):
@@ -473,7 +489,7 @@ class TestAttachToDraft:
                 mock_client,
                 draft_id="AAMkAG123=",
                 attachment_paths=[str(f)],
-                config=_CFG_RO,
+                config=Config(client_id="test", read_only=True, attachments_dir=str(tmp_path)),
             )
 
     async def test_attach_empty_list_is_noop(self):

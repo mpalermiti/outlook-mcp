@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+from pathlib import Path
 from typing import Any
 
 from outlook_mcp.config import Config
@@ -20,11 +21,48 @@ _LARGE_FILE_THRESHOLD = 3 * 1024 * 1024
 _UPLOAD_CHUNK_SIZE = 320 * 1024 * 10  # 3.2 MB chunks
 
 
-def _validate_save_path(save_path: str) -> str:
-    """Validate save_path — reject path traversal attempts."""
-    if ".." in save_path:
-        raise ValueError(f"Path traversal not allowed in save_path: {save_path}")
-    return save_path
+def resolve_attachment_path(path: str, attachments_dir: str) -> str:
+    """Resolve ``path`` inside ``attachments_dir``, or refuse.
+
+    These tools take a filesystem path from the model, and the model takes
+    instructions from email. So the path is untrusted input: "attach the file at
+    <path> and reply" is a working exfiltration primitive unless the reachable
+    set is bounded. Every read and write goes through here.
+
+    Confinement is resolved, not textual. A substring test for ``..`` — which is
+    all this did before 1.20.0 — passes an absolute path to anywhere, and passes
+    a symlink sitting innocently inside the directory. Resolving first collapses
+    both, and comparing against the resolved base means a sibling directory
+    sharing a name prefix cannot slip through either.
+
+    A relative path is taken as relative to ``attachments_dir``, so an agent that
+    passes a bare filename lands somewhere predictable instead of the process's
+    working directory.
+    """
+    if not path or not path.strip() or "\x00" in path:
+        raise ValueError("Attachment path must be a non-empty path containing no null bytes.")
+
+    base = Path(os.path.expanduser(attachments_dir))
+    created = not base.exists()
+    base.mkdir(parents=True, exist_ok=True)
+    if created:
+        # Ours to lock down. Never chmod a directory the user pointed us at.
+        base.chmod(0o700)
+    base = base.resolve()
+
+    candidate = Path(os.path.expanduser(path))
+    if not candidate.is_absolute():
+        candidate = base / candidate
+    # strict=False by default: download writes a file that does not exist yet.
+    resolved = candidate.resolve()
+
+    if not resolved.is_relative_to(base):
+        raise ValueError(
+            f"Attachment path is outside the permitted directory: {path}. "
+            f"Attachments may only be read from or written to {attachments_dir} "
+            f"(set `attachments_dir` in ~/.outlook-mcp/config.json to change it)."
+        )
+    return str(resolved)
 
 
 def _make_inline_attachment(file_path: str) -> Any:
@@ -74,6 +112,8 @@ async def download_attachment(
     message_id: str,
     attachment_id: str,
     save_path: str,
+    *,
+    config: Config,
 ) -> dict:
     """Download an attachment.
 
@@ -82,7 +122,7 @@ async def download_attachment(
     """
     message_id = validate_graph_id(message_id)
     attachment_id = validate_graph_id(attachment_id)
-    _validate_save_path(save_path)
+    save_path = resolve_attachment_path(save_path, config.attachments_dir)
 
     attachment = (
         await graph_client.me.messages.by_message_id(message_id)
@@ -157,7 +197,10 @@ async def send_with_attachments(
     validated_bcc = [validate_email(e) for e in bcc] if bcc else []
     validated_reply_to = [validate_email(e) for e in reply_to] if reply_to else []
 
-    # Validate all files exist
+    # Confine every path before touching the filesystem, then validate existence.
+    attachment_paths = [
+        resolve_attachment_path(path, config.attachments_dir) for path in attachment_paths
+    ]
     for path in attachment_paths:
         if not os.path.isfile(path):
             raise FileNotFoundError(f"Attachment file not found: {path}")
@@ -281,7 +324,10 @@ async def attach_to_draft(
     check_permission(config, CATEGORY_MAIL_DRAFTS, "outlook_attach_to_draft")
     draft_id = validate_graph_id(draft_id)
 
-    # Validate all files exist before any API call
+    # Confine every path before touching the filesystem, then validate existence.
+    attachment_paths = [
+        resolve_attachment_path(path, config.attachments_dir) for path in attachment_paths
+    ]
     for path in attachment_paths:
         if not os.path.isfile(path):
             raise FileNotFoundError(f"Attachment file not found: {path}")

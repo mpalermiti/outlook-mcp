@@ -36,6 +36,14 @@ class Config(BaseModel):
         ),
     )
     timezone: str = Field(default="UTC", description="IANA timezone for relative date computations")
+    attachments_dir: str = Field(
+        default="~/.outlook-mcp/attachments",
+        description=(
+            "The only directory the attachment tools may read from or write to. "
+            "Point it somewhere else to widen the surface; every path an agent "
+            "supplies is resolved and must land inside it."
+        ),
+    )
     accounts: list[AccountConfig] = Field(default_factory=list)
     default_account: str | None = Field(default=None)
 
