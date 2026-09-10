@@ -13,7 +13,7 @@ from mcp.server.mcpserver import Context, MCPServer
 from outlook_mcp import __version__, toolsets
 from outlook_mcp.auth import AuthManager
 from outlook_mcp.config import load_config
-from outlook_mcp.errors import OutlookMCPError, wrap_graph_error
+from outlook_mcp.errors import OutlookMCPError, ToolInputError, wrap_graph_error
 from outlook_mcp.graph import GraphClient
 from outlook_mcp.tools import (
     admin,
@@ -94,11 +94,14 @@ def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap an async tool function to translate Graph SDK errors.
 
     - Pass through ``OutlookMCPError`` subclasses (already structured).
-    - Pass through ``ValueError`` (validation errors carry useful messages).
+    - Re-raise ``ValueError`` as ``ToolInputError`` — same message, but now an
+      anticipated failure, so the SDK forwards the text to the model instead of
+      withholding it as a crash. Still a ``ValueError`` for existing callers.
     - Convert Graph SDK errors (``ODataError`` / ``APIError``) into
       ``GraphAPIError`` via :func:`wrap_graph_error` so agents see
       ``{code, message, action}`` instead of raw SDK exception text.
-    - Re-raise anything else unchanged.
+    - Re-raise anything else unchanged: a crash is not something we saw coming,
+      and its text stays on the server.
     """
 
     @functools.wraps(func)
@@ -107,8 +110,8 @@ def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
             return await func(*args, **kwargs)
         except OutlookMCPError:
             raise
-        except ValueError:
-            raise
+        except ValueError as exc:
+            raise ToolInputError(str(exc)) from exc
         except Exception as exc:
             try:
                 raise wrap_graph_error(exc) from exc

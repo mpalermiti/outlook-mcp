@@ -2,15 +2,33 @@
 
 from __future__ import annotations
 
+from mcp.server.mcpserver.exceptions import ToolError
 
-class OutlookMCPError(Exception):
-    """Base exception for all outlook-mcp errors."""
+
+class OutlookMCPError(ToolError):
+    """Base exception for all outlook-mcp errors.
+
+    Subclasses ``ToolError`` — the SDK's "anticipated failure" — because that is
+    what decides whether the model reads our message or a bare ``Error executing
+    tool <name>``. Every error in this module is a condition we saw coming and
+    wrote a recovery hint for, so every one of them belongs on that side of the
+    line. A genuine crash must keep inheriting from ``Exception`` and stay
+    generic to the client. Guarded by ``tests/test_error_text_reaches_client.py``.
+    """
 
     def __init__(self, code: str, message: str, action: str | None = None):
         self.code = code
         self.message = message
         self.action = action
         super().__init__(message)
+
+    def __str__(self) -> str:
+        """Message plus recovery hint — this string is what the model reads.
+
+        ``action`` exists to tell an agent what to do next, so it has to be in
+        the text the client receives, not only on the attribute.
+        """
+        return f"{self.message} {self.action}" if self.action else self.message
 
 
 class AuthRequiredError(OutlookMCPError):
@@ -20,7 +38,7 @@ class AuthRequiredError(OutlookMCPError):
         super().__init__(
             "auth_required",
             "Not authenticated. No valid credential found.",
-            "Call outlook_login to authenticate with your Microsoft account.",
+            "Run `outlook-mcp auth` on the host to authenticate.",
         )
 
 
@@ -83,7 +101,7 @@ class GraphAPIError(OutlookMCPError):
             # Legacy behavior: derive action from status_code only.
             action = None
             if status_code == 401:
-                action = "Token may have expired. Try outlook_login to re-authenticate."
+                action = "Token may have expired — run `outlook-mcp auth` on the host."
             elif status_code == 429:
                 action = "Rate limited by Microsoft Graph. Wait a moment and retry."
         super().__init__(
@@ -93,6 +111,19 @@ class GraphAPIError(OutlookMCPError):
         )
         self.status_code = status_code
         self.error_code = error_code
+
+
+class ToolInputError(OutlookMCPError, ValueError):
+    """A tool argument the caller can fix, raised as an anticipated failure.
+
+    Tool modules raise plain ``ValueError`` for bad input and the server's
+    ``_wrap_tool_errors`` converts it here, so the message reaches the model
+    (SEP-1303: input validation errors are tool execution errors, not protocol
+    errors). Still a ``ValueError``, so callers catching that are unaffected.
+    """
+
+    def __init__(self, message: str):
+        super().__init__("invalid_input", message, None)
 
 
 # ── Graph error wrapper ────────────────────────────────────
