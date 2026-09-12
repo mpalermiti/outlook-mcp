@@ -143,8 +143,18 @@ class AuthManager:
         self,
         prompt_callback=None,
         auth_record: AuthenticationRecord | None = None,
+        *,
+        silent: bool = False,
     ) -> DeviceCodeCredential:
-        """Create a DeviceCodeCredential with persistent cache."""
+        """Create a DeviceCodeCredential with persistent cache.
+
+        ``silent=True`` forbids the interactive device-code flow. azure-identity
+        defaults to allowing it, so a *cache miss* on what is supposed to be a
+        silent refresh does not fail — it prints a code and polls for a human
+        until ``timeout`` (900s). On the startup path that is a fifteen-minute
+        hang where the honest answer is "not authenticated"; `get_token` raises
+        ``AuthenticationRequiredError`` instead when this is set.
+        """
         global _warned_unencrypted_fallback
         opted_in = self.config.allow_unencrypted_token_cache
         cache_options = TokenCachePersistenceOptions(
@@ -176,6 +186,8 @@ class AuthManager:
             "cache_persistence_options": cache_options,
             "timeout": 900,
         }
+        if silent:
+            kwargs["disable_automatic_authentication"] = True
         if prompt_callback:
             kwargs["prompt_callback"] = prompt_callback
         if auth_record:
@@ -236,7 +248,7 @@ class AuthManager:
             return False
 
         try:
-            cred = self._make_credential(auth_record=record)
+            cred = self._make_credential(auth_record=record, silent=True)
             cred.get_token(*self.get_token_scopes())
             self.credential = cred
             return True

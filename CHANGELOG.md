@@ -50,6 +50,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Startup no longer blocks for fifteen minutes on an expired token.**
+  `try_cached_token` promises a token "without user interaction", but built its
+  credential with azure-identity's default
+  `disable_automatic_authentication=False`. A cache miss therefore did not
+  return False — it opened a device-code flow and polled for a human until
+  `timeout` (900s), inside `lifespan`, on server startup. The silent path now
+  forbids the interactive flow and reports failure, which is the answer the
+  caller was always documented to get. `outlook-mcp auth` is unaffected; the
+  prompt belongs to it.
+
+  This also explains why `uv run pytest` — documented as the offline unit
+  suite — hung on developer machines while passing in CI: the tests build the
+  real server, whose lifespan authenticates for real, and CI has no
+  `~/.outlook-mcp/auth_record.json` to authenticate with. Three test files that
+  could not complete locally now run in seconds.
+
 - **The server still boots when the token cache is unwritable.** Refusing to
   write plaintext is right; dying in `lifespan` on the way up is not — the
   client sees a dead process and the one line the operator needs never leaves
