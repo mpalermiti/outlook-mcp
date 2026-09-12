@@ -2,17 +2,53 @@
 
 from __future__ import annotations
 
+import importlib.util
 from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.tools._recurrence import serialize_recurrence
 from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
 
+_UTC_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
 
 def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
+
+
+def _resolve_timezone(name: str) -> ZoneInfo:
+    """Return the ``ZoneInfo`` for ``name``, or say why it would not load.
+
+    ``name`` is server configuration rather than a tool argument, but an
+    unhandled ``ZoneInfoNotFoundError`` reaches the model as a message-free
+    ``Error executing tool outlook_list_events`` — ``_wrap_tool_errors`` keeps
+    the text of an *unexpected* exception on the server, which is right for a
+    crash and wrong for a misconfiguration. Raising ``ValueError`` routes it
+    through ``ToolInputError`` instead, so the message survives the trip. This
+    is what ``validate_datetime`` already does with the same config value.
+
+    The two ways the lookup fails need different fixes, so they get different
+    messages: a name no database contains is a typo in ``config.json``, while
+    no database at all is a broken install — ``tzdata`` is a dependency exactly
+    so that Windows and slim Linux images have one.
+    """
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError as exc:
+        if importlib.util.find_spec("tzdata") is None:
+            raise ValueError(
+                f"Invalid timezone: {name[:50]} — this host has no IANA time zone "
+                "database and the `tzdata` package is missing, so no zone name "
+                "would resolve. Reinstall outlook-mcp to pick it up."
+            ) from exc
+        raise ValueError(
+            f"Invalid timezone: {name[:50]} — not a zone name the IANA database "
+            "contains. Set `timezone` in ~/.outlook-mcp/config.json to a name "
+            "like America/Los_Angeles or UTC."
+        ) from exc
 
 
 def _compute_calendar_range(
@@ -26,20 +62,14 @@ def _compute_calendar_range(
     Uses explicit after/before if provided, otherwise computes
     relative to "now" in the configured timezone.
     """
-    tz = ZoneInfo(timezone)
+    tz = _resolve_timezone(timezone)
 
-    if after:
-        start_utc = validate_datetime(after, timezone)
-    else:
-        now_local = datetime.now(tz)
-        start_utc = now_local.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
+    def _now_plus(days_ahead: int) -> str:
+        moment = datetime.now(tz) + timedelta(days=days_ahead)
+        return moment.astimezone(dt_timezone.utc).strftime(_UTC_FORMAT)
 
-    if before:
-        end_utc = validate_datetime(before, timezone)
-    else:
-        now_local = datetime.now(tz)
-        end_local = now_local + timedelta(days=days)
-        end_utc = end_local.astimezone(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ")
+    start_utc = validate_datetime(after, timezone) if after else _now_plus(0)
+    end_utc = validate_datetime(before, timezone) if before else _now_plus(days)
 
     return start_utc, end_utc
 
