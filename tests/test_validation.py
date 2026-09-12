@@ -1,6 +1,7 @@
 """Tests for input validation — ported from olkcli patterns."""
 
 import itertools
+import time
 
 import pytest
 
@@ -106,22 +107,43 @@ class TestZonelessDatetimeInterpretation:
     def test_bare_date_defaults_to_utc(self):
         assert validate_datetime("2026-10-22") == "2026-10-22T00:00:00Z"
 
+    # The same zoneless string read twice: once with no zone (UTC), once with an
+    # explicit one. Both readings are host-independent, which is the property
+    # under test — kept in one place so the portable check and the POSIX-only
+    # invariance check cannot drift apart.
+    ZONELESS = "2026-10-22T12:30:00"
+    EXPECTED = {"2026-10-22T12:30:00Z", "2026-10-22T10:30:00Z"}
+
+    @classmethod
+    def _both_readings(cls) -> set[str]:
+        return {
+            validate_datetime(cls.ZONELESS),
+            validate_datetime(cls.ZONELESS, tz="Europe/Berlin"),
+        }
+
+    def test_naive_input_is_interpreted_in_the_given_zone(self):
+        """The answer itself, asserted everywhere — no process timezone needed."""
+        assert self._both_readings() == self.EXPECTED
+
+    @pytest.mark.skipif(
+        not hasattr(time, "tzset"),
+        reason="time.tzset() is POSIX-only — a process cannot rebind its own zone "
+        "on Windows, so there is no host clock to flip. The reading itself is "
+        "still asserted by test_naive_input_is_interpreted_in_the_given_zone.",
+    )
     def test_naive_input_ignores_the_host_clock(self, monkeypatch):
         """The regression guard: flip the process timezone, get the same answer."""
-        import time
-
         results = set()
         try:
             for zone in ("UTC", "America/Los_Angeles", "Europe/Berlin", "Asia/Tokyo"):
                 monkeypatch.setenv("TZ", zone)
                 time.tzset()
-                results.add(validate_datetime("2026-10-22T12:30:00"))
-                results.add(validate_datetime("2026-10-22T12:30:00", tz="Europe/Berlin"))
+                results |= self._both_readings()
         finally:
             monkeypatch.delenv("TZ", raising=False)
             time.tzset()
 
-        assert results == {"2026-10-22T12:30:00Z", "2026-10-22T10:30:00Z"}
+        assert results == self.EXPECTED
 
     def test_offset_input_is_unaffected_by_the_zone_argument(self):
         """An explicit offset already pins the instant — tz must not second-guess it."""
