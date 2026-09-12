@@ -4,6 +4,19 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+
+- **`read_only` is documented as what it is: a tool gate, not a token scope.** It blocks
+  this server's write tools; it does not narrow the OAuth token, which is acquired with
+  `.default` and carries whatever the Azure app was consented for. A `read_only` server
+  still holds a write-capable Graph token, and the setting is a line in `config.json` rather
+  than something Microsoft enforces. README gains a section spelling this out, SECURITY.md
+  names it in the design list, and ROADMAP carries the real fix (a separately consented
+  read-only app). Raised by the ClawHub scanner as `[T05]`; predates v1 and is not a
+  regression.
+
 ## [1.21.0] — 2026-09-11
 
 ### Security

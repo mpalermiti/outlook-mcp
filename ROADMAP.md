@@ -13,6 +13,31 @@ Programmatic management of Outlook inbox rules via `/me/mailFolders/inbox/messag
 
 **Status: blocked for this project's target audience.** Graph's docs list personal-MSA support for `/me/mailFolders/inbox/messageRules`, but the live API returns `403 ErrorAccessDenied` on real outlook.com/hotmail.com mailboxes regardless of granted scopes (including `MailboxSettings.ReadWrite`) — verified against the live API. See "Investigated and not viable" for the full write-up, including a MAPI/COM (desktop Outlook automation) workaround that partially works but hits its own, narrower wall. Worth re-confirming before investing further engineering here.
 
+### Read-only that Microsoft enforces
+
+`read_only: true` gates this server's write tools. It does not narrow the token:
+`get_token_scopes()` returns `.default`, so the credential carries whatever the Azure app
+was consented for. A `read_only` server still holds a write-capable Graph token, and the
+setting is a line in `config.json` rather than anything Microsoft checks. Documented
+honestly in README and SECURITY.md as of 2026-09-12; this entry is about closing it for
+real.
+
+**Shape:** let the read-only path use a *separately consented* Azure app. Either a second
+`client_id` in config (`read_only_client_id`), or documentation plus a preflight check that
+warns when `read_only: true` is paired with an app holding write consent. The token cache is
+keyed per client id, so the two coexist without interfering.
+
+**Why it is not just done:** it pushes a second app registration onto the user, and the
+five-minute Azure setup is already the steepest part of onboarding. Most people will skip it
+and end up where they are today, so the documentation fix carries most of the practical
+value. Worth doing if a deployment ever needs a genuinely least-privilege credential —
+a shared or multi-user host, say, where "the agent is well-behaved" is not a sufficient
+argument.
+
+**Raised by:** the ClawHub scanner (`[T05]`, 2026-09-11), which called it accurately:
+"read_only and allow_categories only gate the MCP tools locally and do not reduce token
+authority." Predates v1; not a regression.
+
 ---
 
 ## Performance & efficiency

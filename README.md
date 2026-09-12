@@ -81,7 +81,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 - **Zero telemetry** -- no analytics, no local caching, no third-party calls.
 - **Token storage** -- OS keyring via `azure-identity` (macOS Keychain, Windows Credential Store, Linux Secret Service).
 - **Input validation** -- all inputs validated (email, Graph IDs, OData, KQL, datetimes) before any API call.
-- **Read-only mode** -- set `read_only: true` in config to block all write operations.
+- **Read-only mode** -- set `read_only: true` in config to block all write operations. Note this limits the *tools*, not the *token* -- see [What `read_only` does and does not do](#what-read_only-does-and-does-not-do).
 - **Soft delete** -- delete moves to Deleted Items by default. Hard delete requires explicit `permanent: true`.
 - **Timezone-aware** -- calendar operations respect your configured IANA timezone.
 - **Relative dates** -- every datetime parameter takes ISO 8601 or an offset: `7d` is seven days ago, `+7d` is seven days from now, `now` is this moment. Units: `m`, `h`, `d`, `w`.
@@ -424,7 +424,7 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions).
 | `client_id` | `string` | `null` | Azure AD application (client) ID. Required for auth. |
 | `tenant_id` | `string` | `"consumers"` | Azure AD tenant. Use `"consumers"` for personal Microsoft accounts. |
 | `timezone` | `string` | `"UTC"` | IANA timezone (e.g. `"America/New_York"`). Used for relative date computations in calendar tools. |
-| `read_only` | `bool` | `false` | When `true`, all write tools (send, reply, move, delete, create, update, RSVP) return an error. |
+| `read_only` | `bool` | `false` | When `true`, all write tools (send, reply, move, delete, create, update, RSVP) return an error. Gates the tools, not the Microsoft token -- see below. |
 | `attachments_dir` | `string` | `"~/.outlook-mcp/attachments"` | The only directory the attachment tools may read from or write to. Every path an agent supplies is resolved and must land inside it — a symlink out or a `..` is refused. Widen it only if you understand that anything reachable can be emailed. |
 | `allow_categories` | `list[string]` | `[]` | Optional. Restrict write tools to specific categories (see below). Empty list = all writes allowed when `read_only: false`. |
 | `allow_unencrypted_token_cache` | `bool` | `false` | Permit the OAuth token cache to be written in cleartext when the platform has no encrypted store (Linux without libsecret). Off by default: authentication stops with an explanation rather than silently persisting a reusable Graph token in plaintext. macOS and Windows always encrypt and are unaffected. |
@@ -439,6 +439,30 @@ OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"
 ```
 
 Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`. Unset (the default) loads everything — fully backward compatible. This only affects which tools are advertised; enabled tools behave identically.
+
+### What `read_only` does and does not do
+
+`read_only: true` stops outlook-mcp's write tools from running. Ask it to send mail and it
+refuses.
+
+**It does not make your Microsoft credential read-only.** When outlook-mcp signs in it
+requests the `.default` scope -- "everything this Azure app has been approved for." If you
+consented the app to `Mail.ReadWrite` and `Mail.Send` (which the setup steps above tell you
+to), the stored token can send mail whether `read_only` is on or off.
+
+Two consequences worth understanding:
+
+- `read_only` is a line in a text file. Anything able to edit `~/.outlook-mcp/config.json`
+  turns it off and has write access immediately -- no re-authentication, no new consent
+  prompt.
+- The enforcement lives in this server's Python code. Any other process holding the cached
+  token is unaffected by it.
+
+So treat `read_only` as a guardrail against an agent doing something rash, **not as a
+security boundary**. If you want a credential that genuinely cannot write, register a
+second Azure app consented only to the read scopes (`Mail.Read`, `Calendars.Read`,
+`Contacts.Read`, `Tasks.Read`, `User.Read`) and point `client_id` at that one. Then
+Microsoft enforces it rather than us.
 
 ### Granular Write Permissions (optional)
 

@@ -48,6 +48,12 @@ outlook-mcp is designed with security in mind:
   untrusted input. Every URL that receives a Graph bearer token — the cursor and
   each `@odata.nextLink` — is parsed and required to be https on
   `graph.microsoft.com`.
+- **Read-only mode is a tool gate, not a token scope.** `read_only: true` blocks this
+  server's write tools. It does not narrow the OAuth token, which is acquired with
+  `.default` and carries whatever the Azure app was consented for. A `read_only` server
+  still holds a write-capable Graph token, and the setting is a config-file value rather
+  than anything Microsoft enforces. For a credential that genuinely cannot write, consent a
+  separate Azure app to the read scopes only.
 - **Input validation:** All Graph IDs, emails, dates, KQL queries, and folder names are validated before use
 - **Atomic writes:** Config files are written atomically to prevent corruption
 - **Symlink rejection:** Config loader refuses symlinked files
