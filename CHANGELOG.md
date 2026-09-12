@@ -4,7 +4,29 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.22.0] — 2026-09-12
+
+### Fixed
+
+- **Runs on hosts with no IANA time zone database.** `zoneinfo` resolves zone names against
+  the host's database; Windows ships none and slim Linux images (Alpine, distroless) often
+  omit `/usr/share/zoneinfo`. Every calendar read called `ZoneInfo(config.timezone)`, so on
+  those hosts every calendar tool failed — and failed *silently*, because
+  `ZoneInfoNotFoundError` is an unexpected exception to `_wrap_tool_errors`, which withholds
+  its text. The agent saw a bare `Error executing tool outlook_list_events` for a condition
+  with a one-line fix. `tzdata` is now a dependency (unconditional: a container without the
+  system database hits the identical failure, and it is inert where one exists), and an
+  unresolvable zone raises `ValueError` — the anticipated-failure channel — with separate
+  messages for "no database at all" and "not a zone name", since those need different fixes.
+
+  Thanks to **@neilbrencode**, who reported it with a reproduction and fixed it (#53, #54).
+
+- **The calendar window no longer opens an hour early during a DST fall-back.** PEP 495 makes
+  arithmetic on an aware datetime reset `fold` to 0, so `datetime.now(tz) + timedelta(days=0)`
+  is not the identity: in the repeated hour it silently selects the first pass. Events that
+  had already ended were returned as upcoming. Caught in review of #54 and fixed there, with
+  a frozen-clock regression test — shape assertions cannot see it, because the two datetimes
+  compare equal (PEP 495 has intra-zone comparison ignore `fold` as well).
 
 ### Documentation
 
