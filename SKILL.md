@@ -10,9 +10,9 @@ metadata:
     install:
       - id: uv
         kind: shell
-        command: "git clone https://github.com/mpalermiti/outlook-mcp.git && cd outlook-mcp && uv sync"
+        command: "uv tool install outlook-graph-mcp"
         bins: ["outlook-mcp"]
-        label: "Clone and install (uv)"
+        label: "Install from PyPI (uv)"
 ---
 
 # outlook-mcp
@@ -46,16 +46,26 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
      "attachments_dir": "~/.outlook-mcp/attachments"
    }
    ```
-4. **Register with OpenClaw** (writes to `mcp.servers` in `~/.openclaw/openclaw.json`):
+4. **Install:**
    ```bash
-   openclaw mcp set outlook '{"command":"uv","args":["--directory","/path/to/outlook-mcp","run","outlook-mcp"]}'
+   uv tool install outlook-graph-mcp
+   ```
+   Installs the released wheel from PyPI and puts `outlook-mcp` on your PATH. Upgrade later
+   with `uv tool upgrade outlook-graph-mcp`.
+5. **Register with OpenClaw** (writes to `mcp.servers` in `~/.openclaw/openclaw.json`):
+   ```bash
+   openclaw mcp set outlook '{"command":"outlook-mcp"}'
    openclaw mcp list   # verify
    ```
-5. **Authenticate on the host:**
+6. **Authenticate on the host:**
    ```bash
-   cd /path/to/outlook-mcp && uv run outlook-mcp auth
+   outlook-mcp auth
    ```
-6. **Restart the gateway:** `openclaw gateway restart`
+7. **Restart the gateway:** `openclaw gateway restart`
+
+> Working on outlook-mcp itself? Clone the repo and use
+> `uv run --directory /path/to/outlook-mcp outlook-mcp` as the command instead — see the
+> README. The PyPI install above is the right one for using it.
 
 ## Prompts (3)
 

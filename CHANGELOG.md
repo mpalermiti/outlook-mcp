@@ -4,6 +4,23 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **SKILL.md installs from PyPI instead of cloning `main`.** The OpenClaw install manifest
+  ran `git clone … && uv sync`, which fetches whatever is on the default branch at install
+  time — unpinned, unversioned, and not what any release was tested as. It now runs
+  `uv tool install outlook-graph-mcp`: the released wheel, hash-pinned by the index, which
+  exposes the same `outlook-mcp` binary the manifest declares. The setup steps moved with it,
+  so registration is `openclaw mcp set outlook '{"command":"outlook-mcp"}'` and auth is plain
+  `outlook-mcp auth` with no clone path to substitute. Contributors get a pointer to the
+  source workflow instead.
+
+  README already recommended the PyPI install as Option A, so SKILL.md was the outlier.
+  Flagged by the ClawHub scanner against 1.22.0: *"its OpenClaw install command fetches
+  mutable source code from GitHub."*
+
 ## [1.22.0] — 2026-09-12
 
 ### Fixed
