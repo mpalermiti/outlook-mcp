@@ -25,6 +25,11 @@ dependencies = [
     "msgraph-sdk>=1.55",
     "azure-identity>=1.25",
     "pydantic>=2.0",
+    # zoneinfo reads the host's IANA time zone database. Windows ships none at
+    # all and slim Linux images (python:*-slim, Alpine) routinely omit
+    # /usr/share/zoneinfo, so without this every relative-date path raises
+    # ZoneInfoNotFoundError for a perfectly valid zone name.
+    "tzdata",
 ]
 
 [project.urls]
