@@ -156,7 +156,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 ## Privacy
 - Zero telemetry, zero local caching
 - Only connects to `login.microsoftonline.com` and `graph.microsoft.com`
-- Tokens stored in OS keyring (macOS Keychain, Windows Credential Store)
+- Tokens stored in the OS keyring (macOS Keychain, Windows Credential Store, libsecret on Linux). Without an encrypted store the server refuses to persist them unless `allow_unencrypted_token_cache` is set.
 - BYOID: you register your own Azure AD app — no shared client ID
 
 ## Notes

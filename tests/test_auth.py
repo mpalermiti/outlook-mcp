@@ -8,7 +8,7 @@ import pytest
 from outlook_mcp import auth as auth_module
 from outlook_mcp.auth import AuthManager, _unencrypted_fallback_will_be_used
 from outlook_mcp.config import Config
-from outlook_mcp.errors import AuthRequiredError
+from outlook_mcp.errors import AuthRequiredError, UnencryptedTokenCacheError
 
 
 @pytest.fixture(autouse=True)
@@ -116,7 +116,7 @@ class TestUnencryptedFallbackWarning:
 
     def test_warning_fires_once_when_fallback_active(self, caplog):
         """A single warning is logged on the first credential build."""
-        config = Config(client_id="test-id")
+        config = Config(client_id="test-id", allow_unencrypted_token_cache=True)
         auth = AuthManager(config)
 
         with (
@@ -149,3 +149,86 @@ class TestUnencryptedFallbackWarning:
 
         fallback_warnings = [r for r in caplog.records if "unencrypted" in r.getMessage().lower()]
         assert fallback_warnings == []
+
+
+class TestUnencryptedCacheIsOptIn:
+    """Plaintext token caching must be a choice, never a silent fallback.
+
+    ``allow_unencrypted_storage=True`` was unconditional, so on Linux without
+    libsecret a reusable Microsoft Graph refresh token landed on disk in
+    cleartext with nothing but a log line to say so — while SECURITY.md told
+    readers tokens were "never in plain files". Either the storage is encrypted
+    or the operator said in writing that it need not be.
+    """
+
+    def _options_used(self, auth):
+        """Build a credential and return the TokenCachePersistenceOptions."""
+        with patch("outlook_mcp.auth.DeviceCodeCredential") as cred_cls:
+            auth._make_credential()
+        return cred_cls.call_args.kwargs["cache_persistence_options"]
+
+    def test_encrypted_storage_is_the_default(self):
+        auth = AuthManager(Config(client_id="test-id"))
+        with patch(
+            "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False
+        ):
+            assert self._options_used(auth).allow_unencrypted_storage is False
+
+    def test_refuses_to_build_a_credential_that_would_write_plaintext(self):
+        auth = AuthManager(Config(client_id="test-id"))
+        with (
+            patch(
+                "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True
+            ),
+            pytest.raises(UnencryptedTokenCacheError) as exc,
+        ):
+            auth._make_credential()
+        # Must name both ways out, or the operator is just stuck.
+        assert "libsecret" in str(exc.value)
+        assert "allow_unencrypted_token_cache" in str(exc.value)
+
+    def test_opting_in_permits_the_plaintext_fallback(self):
+        auth = AuthManager(
+            Config(client_id="test-id", allow_unencrypted_token_cache=True)
+        )
+        with patch(
+            "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True
+        ):
+            assert self._options_used(auth).allow_unencrypted_storage is True
+
+    def test_opting_in_still_warns(self, caplog):
+        auth = AuthManager(
+            Config(client_id="test-id", allow_unencrypted_token_cache=True)
+        )
+        with (
+            caplog.at_level(logging.WARNING, logger="outlook_mcp.auth"),
+            patch(
+                "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True
+            ),
+        ):
+            auth._make_credential()
+        assert [r for r in caplog.records if "unencrypted" in r.getMessage().lower()]
+
+    def test_no_refusal_on_a_platform_that_encrypts(self):
+        """macOS/Windows must be unaffected — this is a Linux-only failure mode."""
+        auth = AuthManager(Config(client_id="test-id"))
+        with patch.object(auth_module.sys, "platform", "darwin"):
+            auth._make_credential()  # must not raise
+
+    def test_cached_token_path_surfaces_the_config_error(self):
+        """A misconfiguration must not read as an expired token.
+
+        ``try_cached_token`` swallows refresh failures and returns False, which
+        is right for a stale token and wrong for "this box cannot store one
+        safely" — that loops the operator through `outlook-mcp auth` with no
+        idea why.
+        """
+        auth = AuthManager(Config(client_id="test-id"))
+        with (
+            patch("outlook_mcp.auth._load_auth_record", return_value=object()),
+            patch(
+                "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True
+            ),
+            pytest.raises(UnencryptedTokenCacheError),
+        ):
+            auth.try_cached_token()

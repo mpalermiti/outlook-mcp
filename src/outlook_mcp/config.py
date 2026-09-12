@@ -44,6 +44,15 @@ class Config(BaseModel):
             "supplies is resolved and must land inside it."
         ),
     )
+    allow_unencrypted_token_cache: bool = Field(
+        default=False,
+        description=(
+            "Permit the OAuth token cache to be written in cleartext when no "
+            "encrypted store is available (Linux without libsecret). Off by "
+            "default: without it, authentication stops rather than silently "
+            "persisting a reusable Graph token in plaintext."
+        ),
+    )
     accounts: list[AccountConfig] = Field(default_factory=list)
     default_account: str | None = Field(default=None)
 

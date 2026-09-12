@@ -4,6 +4,68 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **A delta cursor can no longer redirect your mailbox token.** `fetch_delta_pages`
+  used its `delta_token` argument as the request URL verbatim and attached
+  `Authorization: Bearer <Graph token>` to it, with no check on scheme or host;
+  `@odata.nextLink` values read back out of a response body were followed the same
+  way. `_delta.py` deliberately does not persist cursors — "that's the caller's
+  job" — so the cursor is agent-held state, and an agent takes instructions from
+  the mail it reads. A string like `https://evil.example/collect` arriving in a
+  message body was therefore enough to send a live, full-mailbox access token to
+  a stranger. Every URL that would carry the token is now parsed and required to
+  be https on `graph.microsoft.com` (`require_graph_url`), including the
+  `deltaLink` handed back as the next cursor, so a poisoned link is never stored
+  and replayed either.
+
+  Parsed, not string-matched, for the same reason `resolve_attachment_path`
+  resolves instead of comparing prefixes: `startswith("https://graph.microsoft.com")`
+  accepts `https://graph.microsoft.com@evil.example/` — whose real host is
+  `evil.example` — and `https://graph.microsoft.com.evil.example/`.
+
+  Reported by the ClawHub security scanner (`[T09]`) against 1.19.0.
+
+- **The token cache is no longer written in cleartext without being asked.**
+  `allow_unencrypted_storage=True` was unconditional, so on Linux without
+  libsecret a reusable Graph refresh token was persisted to disk in plaintext
+  with only a log line to mark it. It is now opt-in via
+  `allow_unencrypted_token_cache` (default `false`); without it, authentication
+  stops and explains the two ways forward instead. macOS and Windows always had
+  an encrypted store and are unaffected.
+
+  **Breaking** on Linux hosts without libsecret that relied on the silent
+  fallback: set `allow_unencrypted_token_cache: true`, or install
+  `gnome-keyring libsecret-1-0 python3-gi` and re-create the venv with
+  `--system-site-packages`.
+
+### Fixed
+
+- `try_cached_token` no longer reports a token-storage misconfiguration as an
+  expired token. It caught every exception and returned `False`, which is right
+  for a stale token and wrong for "this host cannot store one safely" — that
+  looped the operator back through `outlook-mcp auth` with no idea what to change.
+
+### Changed
+
+- **Dependency lock refreshed.** `pip-audit` reported 34 advisories across
+  `click`, `cryptography` (including GHSA-537c-gmf6-5ccf), `h2`, `pyjwt`,
+  `python-multipart`, `starlette`, and `urllib3`; all had published fixes. Now
+  clean. Notable jumps: `starlette` 1.0.0 → 1.6.0, `mcp` 2.1.1 → 2.2.0,
+  `pydantic` 2.12.5 → 2.13.5.
+
+### Documentation
+
+- **SECURITY.md said tokens were "never in plain files", which was not true**
+  on Linux without libsecret. Corrected, alongside the same overstatement in
+  SKILL.md and README's feature list. The delta-cursor boundary is now documented
+  next to the attachment one.
+- Private vulnerability reporting is enabled on the repository, so the
+  `/security/advisories/new` link in SECURITY.md now works for outside reporters
+  (#52).
+
 ## [1.20.0] — 2026-09-10
 
 Security, and the first release shaped by what agents actually did rather than by

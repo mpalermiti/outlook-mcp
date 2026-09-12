@@ -77,3 +77,8 @@ def test_load_missing_config_returns_defaults(tmp_path):
     loaded = load_config(config_dir=config_dir)
     assert loaded.client_id is None
     assert loaded.tenant_id == "consumers"
+
+
+def test_unencrypted_token_cache_is_off_unless_asked_for():
+    """The secure default has to survive a config file that never mentions it."""
+    assert Config().allow_unencrypted_token_cache is False

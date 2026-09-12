@@ -38,7 +38,16 @@ The following are in scope for security reports:
 
 outlook-mcp is designed with security in mind:
 
-- **Tokens:** Stored in OS keyring via azure-identity (never in plain files)
+- **Tokens:** Stored in the OS keyring via azure-identity — macOS Keychain,
+  Windows Credential Store, and libsecret/gnome-keyring on Linux. Where no
+  encrypted store is available (Linux without libsecret), the server refuses to
+  persist the cache rather than fall back to cleartext; set
+  `allow_unencrypted_token_cache: true` in `~/.outlook-mcp/config.json` to
+  accept plaintext storage instead.
+- **Delta cursors:** `delta_token` is caller-held state and is treated as
+  untrusted input. Every URL that receives a Graph bearer token — the cursor and
+  each `@odata.nextLink` — is parsed and required to be https on
+  `graph.microsoft.com`.
 - **Input validation:** All Graph IDs, emails, dates, KQL queries, and folder names are validated before use
 - **Atomic writes:** Config files are written atomically to prevent corruption
 - **Symlink rejection:** Config loader refuses symlinked files

@@ -93,7 +93,7 @@ class TestFormatEventDelta:
 async def test_first_call_uses_prefer_header_and_window():
     body = {
         "value": [_raw_event(id="e1"), _raw_event(id="e2")],
-        "@odata.deltaLink": "https://graph/cal-delta",
+        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/cal-delta",
     }
     patch_client, fake_client, fake_get = _async_client_with([_http_response(body)])
     with patch_client:
@@ -105,7 +105,7 @@ async def test_first_call_uses_prefer_header_and_window():
         )
 
     assert len(result["events"]) == 2
-    assert result["delta_token"] == "https://graph/cal-delta"
+    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/cal-delta"
     assert result["has_more"] is False
 
     # Prefer header should carry the maxpagesize
@@ -126,9 +126,9 @@ async def test_first_call_uses_prefer_header_and_window():
 async def test_subsequent_call_uses_delta_token_url_verbatim():
     body = {
         "value": [_raw_event(id="changed")],
-        "@odata.deltaLink": "https://graph/cal-delta-new",
+        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/cal-delta-new",
     }
-    prior = "https://graph/cal-delta-prior"
+    prior = "https://graph.microsoft.com/v1.0/cal-delta-prior"
     patch_client, fake_client, fake_get = _async_client_with([_http_response(body)])
     with patch_client:
         result = await list_events_delta(
@@ -139,7 +139,7 @@ async def test_subsequent_call_uses_delta_token_url_verbatim():
         )
 
     assert fake_get.last_call["url"] == prior
-    assert result["delta_token"] == "https://graph/cal-delta-new"
+    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/cal-delta-new"
 
 
 # ── Missing window on first call ─────────────────────────────────────
@@ -167,10 +167,10 @@ async def test_cap_reached_returns_nextlink_and_has_more():
         "@odata.nextLink": link,
     }
     responses = [
-        _http_response(page(0, "https://graph/p2")),
-        _http_response(page(1, "https://graph/p3")),
-        _http_response(page(2, "https://graph/p4")),
-        _http_response(page(3, "https://graph/p5")),
+        _http_response(page(0, "https://graph.microsoft.com/v1.0/p2")),
+        _http_response(page(1, "https://graph.microsoft.com/v1.0/p3")),
+        _http_response(page(2, "https://graph.microsoft.com/v1.0/p4")),
+        _http_response(page(3, "https://graph.microsoft.com/v1.0/p5")),
     ]
     patch_client, fake_client, _ = _async_client_with(responses)
     with patch_client:
@@ -183,7 +183,7 @@ async def test_cap_reached_returns_nextlink_and_has_more():
 
     assert len(result["events"]) == 200
     assert result["has_more"] is True
-    assert result["delta_token"] == "https://graph/p5"
+    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/p5"
 
 
 # ── Final page reached ───────────────────────────────────────────────
@@ -194,11 +194,11 @@ async def test_follows_nextlink_until_deltalink():
     responses = [
         _http_response({
             "value": [_raw_event(id="e1")],
-            "@odata.nextLink": "https://graph/p2",
+            "@odata.nextLink": "https://graph.microsoft.com/v1.0/p2",
         }),
         _http_response({
             "value": [_raw_event(id="e2")],
-            "@odata.deltaLink": "https://graph/cal-delta-final",
+            "@odata.deltaLink": "https://graph.microsoft.com/v1.0/cal-delta-final",
         }),
     ]
     patch_client, fake_client, _ = _async_client_with(responses)
@@ -210,7 +210,7 @@ async def test_follows_nextlink_until_deltalink():
         )
 
     assert len(result["events"]) == 2
-    assert result["delta_token"] == "https://graph/cal-delta-final"
+    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/cal-delta-final"
     assert result["has_more"] is False
 
 
@@ -224,7 +224,7 @@ async def test_removed_event_collapses_to_id_only():
             _raw_event(id="e1"),
             {"id": "e2-deleted", "@removed": {"reason": "deleted"}},
         ],
-        "@odata.deltaLink": "https://graph/cal-delta",
+        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/cal-delta",
     }
     patch_client, _, _ = _async_client_with([_http_response(body)])
     with patch_client:
@@ -245,16 +245,16 @@ async def test_removed_event_collapses_to_id_only():
 
 @pytest.mark.asyncio
 async def test_no_changes_returns_empty_list_and_delta_token():
-    body = {"value": [], "@odata.deltaLink": "https://graph/cal-delta-same"}
+    body = {"value": [], "@odata.deltaLink": "https://graph.microsoft.com/v1.0/cal-delta-same"}
     patch_client, _, _ = _async_client_with([_http_response(body)])
     with patch_client:
         result = await list_events_delta(
             _mock_graph_client(),
             start=None,
             end=None,
-            delta_token="https://graph/cal-delta-prior",
+            delta_token="https://graph.microsoft.com/v1.0/cal-delta-prior",
         )
 
     assert result["events"] == []
-    assert result["delta_token"] == "https://graph/cal-delta-same"
+    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/cal-delta-same"
     assert result["has_more"] is False

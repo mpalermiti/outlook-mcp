@@ -14,7 +14,7 @@ from azure.identity import (
 )
 
 from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config
-from outlook_mcp.errors import AuthRequiredError
+from outlook_mcp.errors import AuthRequiredError, UnencryptedTokenCacheError
 
 logger = logging.getLogger(__name__)
 
@@ -117,17 +117,24 @@ class AuthManager:
     ) -> DeviceCodeCredential:
         """Create a DeviceCodeCredential with persistent cache."""
         global _warned_unencrypted_fallback
+        opted_in = self.config.allow_unencrypted_token_cache
         cache_options = TokenCachePersistenceOptions(
             name=CACHE_NAME,
-            allow_unencrypted_storage=True,
+            allow_unencrypted_storage=opted_in,
         )
+        if _unencrypted_fallback_will_be_used() and not opted_in:
+            # Stop here rather than hand msal_extensions a credential it can
+            # only persist in cleartext. Silently doing it is what made
+            # SECURITY.md's "never in plain files" untrue.
+            raise UnencryptedTokenCacheError()
         if not _warned_unencrypted_fallback and _unencrypted_fallback_will_be_used():
             logger.warning(
-                "Token cache will be stored unencrypted on disk because "
+                "Token cache will be stored unencrypted on disk: "
+                "allow_unencrypted_token_cache is set and "
                 "PyGObject/libsecret is not importable in this Python "
                 "environment (common with `uv tool install` on Linux — "
                 "the tool's isolated venv can't see system PyGObject). "
-                "To enable encrypted caching via libsecret/gnome-keyring, "
+                "To get encrypted caching via libsecret/gnome-keyring, "
                 "install the system packages "
                 "(apt: `gnome-keyring libsecret-1-0 python3-gi`) and "
                 "re-create the venv with `--system-site-packages`. See "
@@ -199,6 +206,11 @@ class AuthManager:
             cred.get_token(*self.get_token_scopes())
             self.credential = cred
             return True
+        except UnencryptedTokenCacheError:
+            # Not a stale token — the environment cannot store one safely.
+            # Swallowing it here sends the operator round the `outlook-mcp auth`
+            # loop with no idea what to change.
+            raise
         except Exception:
             logger.warning("Cached token refresh failed — re-run `outlook-mcp auth`.")
             return False
