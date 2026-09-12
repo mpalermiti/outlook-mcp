@@ -20,6 +20,44 @@ def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
 
 
+# Every field _format_contact_summary reads, and nothing it does not. A $select
+# narrower than the formatter silently blanks whatever it leaves out, and a
+# wider one pays for bytes nobody reads. (givenName, surname and title were the
+# latter: selected since forever, never read by the summary shape.)
+_SUMMARY_SELECT = (
+    "id,displayName,emailAddresses,mobilePhone,homePhones,businessPhones,companyName"
+)
+
+# Only the listing asks for categories. Graph's $search on contacts does not
+# return them — verified against live Graph, empty under a narrow $select, a
+# wide one, and no $select at all — so a search result carrying the key would
+# report every contact as uncategorised, which is exactly the "empty means
+# absent" confusion this module is trying to stop telling. The listing gets the
+# field; the search omits the key rather than lying about it.
+_LIST_SELECT = _SUMMARY_SELECT + ",categories"
+
+# get_contact deliberately sends no $select: Graph then returns the full
+# contact, which is what the detail formatter needs. The data was never the
+# problem there — the formatter simply did not read these.
+_ADDRESS_FIELDS = ("street", "city", "state", "postal_code", "country_or_region")
+
+
+def _format_address(address: Any) -> dict | None:
+    """Flatten a Graph ``physicalAddress``, or ``None`` when it holds nothing.
+
+    Graph hands back an empty address object rather than null for addresses the
+    contact does not have, so an emptiness check is what distinguishes "no home
+    address" from "a home address whose street we failed to read".
+    """
+    if address is None:
+        return None
+    parts = {
+        field: sanitize_output(getattr(address, field, "") or "")
+        for field in _ADDRESS_FIELDS
+    }
+    return parts if any(parts.values()) else None
+
+
 def _primary_phone(contact: Any) -> str:
     """Pick the most representative phone from the consumer-Graph contact fields.
 
@@ -37,20 +75,29 @@ def _primary_phone(contact: Any) -> str:
     return ""
 
 
-def _format_contact_summary(contact: Any) -> dict:
-    """Convert Graph SDK contact to summary dict."""
+def _format_contact_summary(contact: Any, *, with_categories: bool = False) -> dict:
+    """Convert Graph SDK contact to summary dict.
+
+    ``with_categories`` is opt-in because only the listing path can honour it;
+    see ``_LIST_SELECT``.
+    """
     email = ""
     if contact.email_addresses:
         first_email = contact.email_addresses[0]
         email = getattr(first_email, "address", "") or ""
 
-    return {
+    summary = {
         "id": contact.id,
         "display_name": sanitize_output(contact.display_name or ""),
         "email": email,
         "phone": _primary_phone(contact),
         "company": sanitize_output(contact.company_name or ""),
     }
+    if with_categories:
+        summary["categories"] = [
+            sanitize_output(c) for c in (getattr(contact, "categories", None) or [])
+        ]
+    return summary
 
 
 def _format_contact_detail(contact: Any) -> dict:
@@ -77,6 +124,11 @@ def _format_contact_detail(contact: Any) -> dict:
         "title": sanitize_output(contact.title or ""),
         "department": sanitize_output(getattr(contact, "department", "") or ""),
         "birthday": str(contact.birthday) if contact.birthday else None,
+        "home_address": _format_address(getattr(contact, "home_address", None)),
+        "business_address": _format_address(getattr(contact, "business_address", None)),
+        "other_address": _format_address(getattr(contact, "other_address", None)),
+        "categories": [sanitize_output(c) for c in (getattr(contact, "categories", None) or [])],
+        "personal_notes": sanitize_output(getattr(contact, "personal_notes", "") or ""),
     }
 
 
@@ -88,10 +140,7 @@ async def list_contacts(
     """List contacts with pagination."""
     query_params: dict[str, Any] = {
         "$orderby": "displayName",
-        "$select": (
-            "id,displayName,givenName,surname,emailAddresses,"
-            "mobilePhone,homePhones,businessPhones,companyName,title"
-        ),
+        "$select": _LIST_SELECT,
     }
     query_params = apply_pagination(query_params, count, cursor)
 
@@ -104,7 +153,7 @@ async def list_contacts(
     )
     response = await graph_client.me.contacts.get(request_configuration=req_config)
 
-    contacts = [_format_contact_summary(c) for c in (response.value or [])]
+    contacts = [_format_contact_summary(c, with_categories=True) for c in (response.value or [])]
     next_cursor = wrap_nextlink(response.odata_next_link)
 
     return {
@@ -127,10 +176,7 @@ async def search_contacts(
     query_params: dict[str, Any] = {
         "$top": count,
         "$search": safe_query,
-        "$select": (
-            "id,displayName,givenName,surname,emailAddresses,"
-            "mobilePhone,homePhones,businessPhones,companyName,title"
-        ),
+        "$select": _SUMMARY_SELECT,
     }
 
     from msgraph.generated.users.item.contacts.contacts_request_builder import (

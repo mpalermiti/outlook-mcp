@@ -8,6 +8,10 @@ from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.pagination import encode_cursor
 from outlook_mcp.tools.contacts import (
+    _LIST_SELECT,
+    _SUMMARY_SELECT,
+    _format_contact_detail,
+    _format_contact_summary,
     create_contact,
     delete_contact,
     get_contact,
@@ -30,6 +34,8 @@ def _make_mock_contact(**overrides):
         "id", "display_name", "given_name", "surname",
         "company_name", "title", "department", "birthday",
         "email_addresses", "mobile_phone", "home_phones", "business_phones",
+        "home_address", "business_address", "other_address",
+        "categories", "personal_notes",
     ])
     contact.id = overrides.get("id", "contact123")
     contact.display_name = overrides.get("display_name", "John Doe")
@@ -49,7 +55,23 @@ def _make_mock_contact(**overrides):
     contact.home_phones = overrides.get("home_phones", [])
     contact.business_phones = overrides.get("business_phones", [])
 
+    # Graph returns an empty address object, not null, for an address the
+    # contact does not have — so the default here is what the SDK really hands
+    # back for a contact with no addresses at all.
+    for field in ("home_address", "business_address", "other_address"):
+        setattr(contact, field, overrides.get(field, _make_mock_address()))
+    contact.categories = overrides.get("categories", [])
+    contact.personal_notes = overrides.get("personal_notes", "")
+
     return contact
+
+
+def _make_mock_address(**fields):
+    """Factory for a Graph physicalAddress; empty by default, as Graph sends it."""
+    address = MagicMock(spec=["street", "city", "state", "postal_code", "country_or_region"])
+    for field in ("street", "city", "state", "postal_code", "country_or_region"):
+        setattr(address, field, fields.get(field, ""))
+    return address
 
 
 def _make_contacts_mock(contacts, next_link=None):
@@ -343,3 +365,114 @@ class TestDeleteContact:
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await delete_contact(mock_client, "contact123", config=_CFG_RO)
+
+
+class TestContactDetailCarriesEverythingStored:
+    """The detail formatter used to drop fields Graph had already returned.
+
+    `get_contact` sends no `$select`, so Graph returns the whole contact — the
+    addresses, categories and notes were arriving and being discarded on the
+    way out. A contact with a home address and two categories read back as
+    having neither, which is indistinguishable from not having them.
+    """
+
+    def _detail(self, **overrides):
+        return _format_contact_detail(_make_mock_contact(**overrides))
+
+    def test_home_address_is_returned_field_by_field(self):
+        detail = self._detail(
+            home_address=_make_mock_address(
+                street="693 7th St S",
+                city="Kirkland",
+                state="WA",
+                postal_code="98033",
+                country_or_region="USA",
+            )
+        )
+        assert detail["home_address"] == {
+            "street": "693 7th St S",
+            "city": "Kirkland",
+            "state": "WA",
+            "postal_code": "98033",
+            "country_or_region": "USA",
+        }
+
+    def test_an_empty_address_object_reads_as_no_address(self):
+        """Graph sends an empty object, not null — that must not become an empty dict."""
+        assert self._detail()["home_address"] is None
+
+    def test_a_partial_address_keeps_the_parts_it_has(self):
+        detail = self._detail(business_address=_make_mock_address(city="Seattle"))
+        assert detail["business_address"] == {
+            "street": "",
+            "city": "Seattle",
+            "state": "",
+            "postal_code": "",
+            "country_or_region": "",
+        }
+
+    def test_all_three_address_slots_are_carried(self):
+        detail = self._detail(
+            home_address=_make_mock_address(city="Kirkland"),
+            business_address=_make_mock_address(city="Redmond"),
+            other_address=_make_mock_address(city="Bellevue"),
+        )
+        assert [detail[f"{slot}_address"]["city"] for slot in ("home", "business", "other")] == [
+            "Kirkland",
+            "Redmond",
+            "Bellevue",
+        ]
+
+    def test_categories_are_returned(self):
+        detail = self._detail(categories=["Christmas Card", "Microsoft Party"])
+        assert detail["categories"] == ["Christmas Card", "Microsoft Party"]
+
+    def test_no_categories_is_an_empty_list_not_none(self):
+        assert self._detail()["categories"] == []
+
+    def test_personal_notes_are_returned(self):
+        assert self._detail(personal_notes="Met at the 2025 offsite")["personal_notes"] == (
+            "Met at the 2025 offsite"
+        )
+
+    def test_address_content_is_sanitized_like_every_other_echoed_field(self):
+        """A contact is attacker-influenced text; sanitize_output strips ANSI and
+        control characters from it, exactly as it does for every other field here."""
+        detail = self._detail(
+            home_address=_make_mock_address(street="693 7th[31m St S")
+        )
+        assert detail["home_address"]["street"] == "693 7th St S"
+
+
+class TestSummarySelectMatchesTheSummaryFormatter:
+    """A $select narrower than the formatter silently blanks the difference."""
+
+    def test_every_field_the_summary_reads_is_selected(self):
+        assert {
+            "id",
+            "displayName",
+            "emailAddresses",
+            "mobilePhone",
+            "homePhones",
+            "businessPhones",
+            "companyName",
+        } <= set(_SUMMARY_SELECT.split(","))
+
+    def test_nothing_is_selected_that_the_summary_never_reads(self):
+        """Over-selection is bytes nobody reads; givenName/surname/title were that."""
+        assert {"givenName", "surname", "title"}.isdisjoint(set(_SUMMARY_SELECT.split(",")))
+
+    def test_only_the_listing_select_asks_for_categories(self):
+        assert "categories" in _LIST_SELECT.split(",")
+        assert "categories" not in _SUMMARY_SELECT.split(",")
+
+    def test_listing_summaries_carry_categories(self):
+        summary = _format_contact_summary(
+            _make_mock_contact(categories=["Christmas Card"]), with_categories=True
+        )
+        assert summary["categories"] == ["Christmas Card"]
+
+    def test_search_summaries_omit_the_key_rather_than_report_it_empty(self):
+        """Graph's $search never returns categories, so an empty list would be a lie."""
+        summary = _format_contact_summary(_make_mock_contact(categories=["Christmas Card"]))
+        assert "categories" not in summary
