@@ -4,7 +4,7 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.21.0] — 2026-09-11
 
 ### Security
 
@@ -25,6 +25,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   resolves instead of comparing prefixes: `startswith("https://graph.microsoft.com")`
   accepts `https://graph.microsoft.com@evil.example/` — whose real host is
   `evil.example` — and `https://graph.microsoft.com.evil.example/`.
+
+  Guarded live: `tests/test_live_delta_cursors.py` drives a real delta round
+  against Graph and replays the returned cursor through the guard, plus pins
+  that a real `deltaLink` carries no port and no userinfo — the two assumptions
+  the `netloc` equality rests on. The mocked suite cannot check this, because
+  its cursors are ones we wrote; preflight only checks that the delta endpoints
+  answer, and never routes a cursor through `fetch_delta_pages`.
 
   Hardened further after review: the validator refuses control and space
   characters outright (`urlsplit` deletes tab/CR/LF before parsing while an
