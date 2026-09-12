@@ -28,6 +28,7 @@ receive the token is checked against ``graph.microsoft.com`` first.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -41,6 +42,10 @@ GRAPH_TOKEN_SCOPE = "https://graph.microsoft.com/.default"
 
 # The only host that may ever receive a Graph bearer token.
 GRAPH_HOST = "graph.microsoft.com"
+
+# Control characters and spaces: the set that different URL parsers disagree
+# about. A real Graph cursor contains none of them.
+_FORBIDDEN_URL_CHARS = re.compile(r"[\x00-\x20\x7f-\xa0]")
 
 # Safety cap multiplier — bound a single tool call to at most this many
 # items even when Graph keeps handing us more ``@odata.nextLink`` pages
@@ -69,8 +74,14 @@ def require_graph_url(url: str, *, source: str) -> str:
     ``startswith`` test on the Graph prefix passes
     ``https://graph.microsoft.com@evil.example/`` (whose real host is
     ``evil.example``) and ``https://graph.microsoft.com.evil.example/``.
-    ``urlsplit().hostname`` collapses both, drops any userinfo, and lowercases
-    the result.
+
+    Parsing alone is not enough either, because parsers disagree. ``urlsplit``
+    deletes tab/CR/LF before parsing while an HTTP client does not, so the two
+    can read different hosts out of one string. The characters that cause the
+    disagreement are refused outright, and the comparison is against the whole
+    ``netloc`` rather than ``hostname`` so userinfo and an explicit port — the
+    other two classic sources of parser differentials — are refused with it.
+    Graph emits neither in a deltaLink.
 
     ``source`` names where the URL came from so the refusal says which cursor to
     throw away.
@@ -79,10 +90,29 @@ def require_graph_url(url: str, *, source: str) -> str:
     if not candidate:
         raise UntrustedURLError(source, url)
 
-    parsed = urlsplit(candidate)
-    if parsed.scheme.lower() != "https" or (parsed.hostname or "").lower() != GRAPH_HOST:
+    # ``urlsplit`` silently deletes tab, CR and LF before parsing, so
+    # ``https://evil.example\t@graph.microsoft.com/x`` reads as Graph here and
+    # as something else to an HTTP client. Rather than try to agree with every
+    # parser, refuse the characters that make them disagree.
+    if _FORBIDDEN_URL_CHARS.search(candidate):
         raise UntrustedURLError(source, url)
-    return url
+
+    try:
+        parsed = urlsplit(candidate)
+    except ValueError as exc:
+        # A host urlsplit cannot parse is not a host we are willing to send a
+        # token to.
+        raise UntrustedURLError(source, url) from exc
+
+    # ``netloc``, not ``hostname``: equality also rules out userinfo and an
+    # explicit port, neither of which Graph puts in a deltaLink, and both of
+    # which are classic ways to make two parsers read different hosts.
+    if parsed.scheme.lower() != "https" or parsed.netloc.lower() != GRAPH_HOST:
+        raise UntrustedURLError(source, url)
+
+    # Return what was checked, not what was passed in — validating one string
+    # and sending another is how a check gets bypassed.
+    return candidate
 
 
 def format_delta_item(raw: dict, normal_formatter) -> dict:

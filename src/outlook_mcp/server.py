@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import logging
 import os
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -14,7 +15,12 @@ from mcp.server.mcpserver import Context, MCPServer
 from outlook_mcp import __version__, toolsets
 from outlook_mcp.auth import AuthManager
 from outlook_mcp.config import load_config
-from outlook_mcp.errors import OutlookMCPError, ToolInputError, wrap_graph_error
+from outlook_mcp.errors import (
+    OutlookMCPError,
+    ToolInputError,
+    UnencryptedTokenCacheError,
+    wrap_graph_error,
+)
 from outlook_mcp.graph import GraphClient
 from outlook_mcp.tools import (
     admin,
@@ -38,6 +44,8 @@ from outlook_mcp.tools import (
     user,
 )
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(server):
@@ -46,7 +54,16 @@ async def lifespan(server):
     auth = AuthManager(config)
     # Try to load cached token silently — if this fails, tools will
     # return an error telling the user to run `outlook-mcp auth`.
-    auth.try_cached_token()
+    try:
+        auth.try_cached_token()
+    except UnencryptedTokenCacheError as exc:
+        # This host cannot store a token safely. That is worth refusing, but
+        # not worth killing the server over: dying here shows the client a
+        # dead process and leaves the one-line fix on stderr, where no agent
+        # reads it. Boot unauthenticated and let every tool call carry the
+        # remedy instead.
+        logger.warning("%s %s", exc.message, exc.action)
+        auth.startup_error = exc
     yield {"config": config, "auth": auth}
 
 
@@ -172,7 +189,14 @@ async def outlook_auth_status(ctx: Context) -> dict:
         "read_only": auth.config.read_only,
     }
     if not auth.is_authenticated():
-        result["action_required"] = "Run `outlook-mcp auth` on the host to authenticate."
+        if auth.startup_error is not None:
+            # Re-running auth would fail identically; say what actually needs
+            # changing.
+            result["action_required"] = str(auth.startup_error)
+        else:
+            result["action_required"] = (
+                "Run `outlook-mcp auth` on the host to authenticate."
+            )
     return result
 
 

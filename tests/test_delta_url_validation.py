@@ -217,3 +217,55 @@ async def test_a_legitimate_graph_cursor_is_still_followed():
     assert token == GRAPH_DELTA
     assert has_more is False
     assert sent[0][0] == resume
+
+
+class TestParserDifferentials:
+    """Agreeing with ``urlsplit`` is not the same as agreeing with httpx.
+
+    ``urlsplit`` silently deletes tab, CR and LF before parsing, so a string it
+    reads as Graph can be read as a different host by an HTTP client. Rather
+    than try to match every parser, refuse anything with a control or space
+    character in it and compare the whole netloc.
+    """
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param(
+                "https://evil.example\t@graph.microsoft.com/x", id="tab-smuggled"
+            ),
+            pytest.param(
+                "https://evil.example\n@graph.microsoft.com/x", id="lf-smuggled"
+            ),
+            pytest.param(
+                "https://evil.example\r@graph.microsoft.com/x", id="cr-smuggled"
+            ),
+            pytest.param("\x01https://graph.microsoft.com/x", id="leading-control"),
+            pytest.param("https://graph.microsoft.com\x00.evil/x", id="null-byte"),
+            pytest.param("https://graph.microsoft.com/x\ty", id="tab-in-path"),
+        ],
+    )
+    def test_control_characters_are_refused_outright(self, url):
+        with pytest.raises(OutlookMCPError):
+            require_graph_url(url, source="delta_token")
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param("https://graph.microsoft.com:evil/x", id="junk-port"),
+            pytest.param("https://graph.microsoft.com:443/x", id="explicit-port"),
+            pytest.param("https://user:pw@graph.microsoft.com/x", id="userinfo"),
+            pytest.param(
+                "https://evil.example[graph.microsoft.com]/x", id="bracketed-host"
+            ),
+        ],
+    )
+    def test_netloc_must_match_exactly(self, url):
+        """Graph emits neither userinfo nor a port, so equality is safe here."""
+        with pytest.raises(OutlookMCPError):
+            require_graph_url(url, source="delta_token")
+
+    def test_returns_the_string_it_actually_validated(self):
+        """Validating one string and sending another is how checks get bypassed."""
+        padded = f"  {GRAPH_DELTA}  "
+        assert require_graph_url(padded, source="delta_token") == GRAPH_DELTA

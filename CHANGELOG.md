@@ -26,6 +26,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   accepts `https://graph.microsoft.com@evil.example/` — whose real host is
   `evil.example` — and `https://graph.microsoft.com.evil.example/`.
 
+  Hardened further after review: the validator refuses control and space
+  characters outright (`urlsplit` deletes tab/CR/LF before parsing while an
+  HTTP client does not, so one string could read as two different hosts),
+  compares the whole `netloc` rather than `hostname` so userinfo and an
+  explicit port are refused with it, and returns the string it actually
+  checked rather than the one passed in.
+
   Reported by the ClawHub security scanner (`[T09]`) against 1.19.0.
 
 - **The token cache is no longer written in cleartext without being asked.**
@@ -43,6 +50,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The server still boots when the token cache is unwritable.** Refusing to
+  write plaintext is right; dying in `lifespan` on the way up is not — the
+  client sees a dead process and the one line the operator needs never leaves
+  stderr. It now starts unauthenticated and every tool call carries the real
+  remedy, which `outlook_auth_status` reports too. "Run `outlook-mcp auth`" is
+  specifically the wrong advice here, because it fails the same way.
+
+- **The second Linux failure mode is recognised.** The eager
+  `find_spec("gi")` check only sees a *missing* libsecret. When libsecret is
+  importable but unusable — no running Secret Service, as in a display-less
+  SSH session or a container — azure-identity refuses lazily at first token
+  use, with a `ValueError` naming its own `allow_unencrypted_storage` kwarg
+  rather than the config key. That is now translated, so both halves of the
+  condition give the same answer.
+
 - `try_cached_token` no longer reports a token-storage misconfiguration as an
   expired token. It caught every exception and returned `False`, which is right
   for a stale token and wrong for "this host cannot store one safely" — that
@@ -50,11 +72,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
-- **Dependency lock refreshed.** `pip-audit` reported 34 advisories across
-  `click`, `cryptography` (including GHSA-537c-gmf6-5ccf), `h2`, `pyjwt`,
-  `python-multipart`, `starlette`, and `urllib3`; all had published fixes. Now
-  clean. Notable jumps: `starlette` 1.0.0 → 1.6.0, `mcp` 2.1.1 → 2.2.0,
-  `pydantic` 2.12.5 → 2.13.5.
+- **Dependency lock refreshed.** `pip-audit` reported advisories across
+  `aiohttp`, `click`, `cryptography` (including GHSA-537c-gmf6-5ccf), `h2`,
+  `pyjwt`, `python-multipart`, `starlette`, and `urllib3`; all had published
+  fixes. Now clean. Notable jumps: `starlette` 1.0.0 → 1.6.0, `mcp` 2.1.1 →
+  2.2.0, `pydantic` 2.12.5 → 2.13.5, `aiohttp` 3.13.5 → 3.14.3.
 
 ### Documentation
 

@@ -1,7 +1,7 @@
 """Tests for auth module."""
 
 import logging
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -232,3 +232,54 @@ class TestUnencryptedCacheIsOptIn:
             pytest.raises(UnencryptedTokenCacheError),
         ):
             auth.try_cached_token()
+
+    # azure-identity's own text, from _persistent_cache.py — raised lazily at
+    # first token use, not at credential construction.
+    AZURE_REFUSAL = ValueError(
+        "Cache encryption is impossible because libsecret dependencies are not "
+        "installed or are unusable, for example because no display is available "
+        '(as in an SSH session). The chained exception has more information. '
+        'Specify "allow_unencrypted_storage=True" to store the cache unencrypted '
+        "instead of raising this exception."
+    )
+
+    def test_libsecret_installed_but_unusable_is_the_same_condition(self):
+        """gi importable + no Secret Service: our eager check cannot see this.
+
+        A display-less SSH session or a container hits azure's lazy refusal at
+        ``get_token``. Left untranslated it surfaces as a generic failure naming
+        azure's kwarg, not the config key the operator actually sets.
+        """
+        auth = AuthManager(Config(client_id="test-id"))
+        cred = MagicMock()
+        cred.get_token = MagicMock(side_effect=self.AZURE_REFUSAL)
+
+        with (
+            patch("outlook_mcp.auth._load_auth_record", return_value=object()),
+            patch.object(AuthManager, "_make_credential", return_value=cred),
+            pytest.raises(UnencryptedTokenCacheError) as exc,
+        ):
+            auth.try_cached_token()
+        assert "allow_unencrypted_token_cache" in str(exc.value)
+
+    def test_the_cli_auth_path_translates_it_too(self):
+        auth = AuthManager(Config(client_id="test-id"))
+        cred = MagicMock()
+        cred.get_token = MagicMock(side_effect=self.AZURE_REFUSAL)
+
+        with (
+            patch.object(AuthManager, "_make_credential", return_value=cred),
+            pytest.raises(UnencryptedTokenCacheError),
+        ):
+            auth.login_interactive()
+
+    def test_an_unrelated_valueerror_is_not_swallowed_as_this(self):
+        auth = AuthManager(Config(client_id="test-id"))
+        cred = MagicMock()
+        cred.get_token = MagicMock(side_effect=ValueError("something else"))
+
+        with (
+            patch("outlook_mcp.auth._load_auth_record", return_value=object()),
+            patch.object(AuthManager, "_make_credential", return_value=cred),
+        ):
+            assert auth.try_cached_token() is False
