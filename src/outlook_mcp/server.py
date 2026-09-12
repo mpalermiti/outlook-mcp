@@ -870,8 +870,17 @@ async def outlook_update_contact(
     last_name: str | None = None,
     email: str | None = None,
     phone: str | None = None,
+    home_street: str | None = None,
+    home_city: str | None = None,
+    home_state: str | None = None,
+    home_postal_code: str | None = None,
+    home_country: str | None = None,
 ) -> dict:
-    """Update an existing contact (partial patch — only provided fields change)."""
+    """Update an existing contact (partial patch — only provided fields change).
+
+    The home_* parts REPLACE the whole home address — pass every part you want to keep
+    (outlook_get_contact returns them), or none of them to leave it untouched.
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await contacts.update_contact(
@@ -881,6 +890,11 @@ async def outlook_update_contact(
         last_name,
         email,
         phone,
+        home_street,
+        home_city,
+        home_state,
+        home_postal_code,
+        home_country,
         config=config,
     )
 

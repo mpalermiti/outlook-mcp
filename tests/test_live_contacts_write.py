@@ -109,3 +109,127 @@ class TestUpdateContactRoundTrip:
             assert got["first_name"] == LIVE_WRITE_NAME
             assert got["mobile_phone"] == "+15555550196"
             assert got["company"] == "Keep Me"
+
+
+class TestHomeAddressRoundTrip:
+    """The address half of the same question, and the one that 400'd.
+
+    A partial address is the case this feature exists for — someone knows the
+    city and not the street — and it was the case that failed: the omitted parts
+    were assigned ``None``, the backing store emitted them onto the *contact*
+    under their Python names, and Graph answered ``400 The property
+    'country_or_region' does not exist on type 'microsoft.graph.contact'``. The
+    full five-part write returned 200 throughout, so nothing short of this tier
+    saw it.
+    """
+
+    async def test_every_home_address_part_persists(self, real_graph_client, live_write_config):
+        async with _temporary_contact(
+            real_graph_client,
+            live_write_config,
+            first_name=LIVE_WRITE_NAME,
+            last_name="Address",
+        ) as contact_id:
+            await update_contact(
+                real_graph_client.sdk_client,
+                contact_id=contact_id,
+                home_street="2821 252nd Ave SE",
+                home_city="Sammamish",
+                home_state="WA",
+                home_postal_code="98075",
+                home_country="USA",
+                config=live_write_config,
+            )
+
+            got = await get_contact(real_graph_client.sdk_client, contact_id)
+            assert got["home_address"] == {
+                "street": "2821 252nd Ave SE",
+                "city": "Sammamish",
+                "state": "WA",
+                "postal_code": "98075",
+                "country_or_region": "USA",
+            }
+
+    async def test_a_partial_address_is_accepted(self, real_graph_client, live_write_config):
+        """The 400 regression: a city-only patch must reach Graph and be stored."""
+        async with _temporary_contact(
+            real_graph_client,
+            live_write_config,
+            first_name=LIVE_WRITE_NAME,
+            last_name="PartialAddress",
+        ) as contact_id:
+            await update_contact(
+                real_graph_client.sdk_client,
+                contact_id=contact_id,
+                home_city="Bothell",
+                config=live_write_config,
+            )
+
+            got = await get_contact(real_graph_client.sdk_client, contact_id)
+            assert got["home_address"]["city"] == "Bothell"
+
+    async def test_graph_replaces_the_address_rather_than_merging_it(
+        self, real_graph_client, live_write_config
+    ):
+        """Why the docstring says REPLACES: this is Graph's behaviour, not ours.
+
+        If Graph ever starts merging, this fails and the warning the model reads
+        can be softened — which is the only way anyone would find out.
+        """
+        async with _temporary_contact(
+            real_graph_client,
+            live_write_config,
+            first_name=LIVE_WRITE_NAME,
+            last_name="ReplacedAddress",
+        ) as contact_id:
+            await update_contact(
+                real_graph_client.sdk_client,
+                contact_id=contact_id,
+                home_street="2821 252nd Ave SE",
+                home_city="Sammamish",
+                home_state="WA",
+                home_postal_code="98075",
+                home_country="USA",
+                config=live_write_config,
+            )
+            await update_contact(
+                real_graph_client.sdk_client,
+                contact_id=contact_id,
+                home_city="Bothell",
+                config=live_write_config,
+            )
+
+            got = await get_contact(real_graph_client.sdk_client, contact_id)
+            assert got["home_address"]["city"] == "Bothell"
+            assert got["home_address"]["street"] == ""
+            assert got["home_address"]["postal_code"] == ""
+
+    async def test_a_name_only_update_leaves_the_address_alone(
+        self, real_graph_client, live_write_config
+    ):
+        """Partial-patch semantics hold at the tool's own level: no home_* part
+        supplied means the stored address is not touched at all."""
+        async with _temporary_contact(
+            real_graph_client,
+            live_write_config,
+            first_name=LIVE_WRITE_NAME,
+            last_name="KeepsAddress",
+        ) as contact_id:
+            await update_contact(
+                real_graph_client.sdk_client,
+                contact_id=contact_id,
+                home_street="693 7th St S",
+                home_city="Kirkland",
+                config=live_write_config,
+            )
+            await update_contact(
+                real_graph_client.sdk_client,
+                contact_id=contact_id,
+                last_name="StillKeepsAddress",
+                config=live_write_config,
+            )
+
+            got = await get_contact(real_graph_client.sdk_client, contact_id)
+            assert got["last_name"] == "StillKeepsAddress"
+            assert got["home_address"]["street"] == "693 7th St S"
+            assert got["home_address"]["city"] == "Kirkland"

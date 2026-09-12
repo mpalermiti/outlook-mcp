@@ -24,9 +24,7 @@ def _clamp(value: int, low: int, high: int) -> int:
 # narrower than the formatter silently blanks whatever it leaves out, and a
 # wider one pays for bytes nobody reads. (givenName, surname and title were the
 # latter: selected since forever, never read by the summary shape.)
-_SUMMARY_SELECT = (
-    "id,displayName,emailAddresses,mobilePhone,homePhones,businessPhones,companyName"
-)
+_SUMMARY_SELECT = "id,displayName,emailAddresses,mobilePhone,homePhones,businessPhones,companyName"
 
 # Only the listing asks for categories. Graph's $search on contacts does not
 # return them — verified against live Graph, empty under a narrow $select, a
@@ -36,9 +34,9 @@ _SUMMARY_SELECT = (
 # field; the search omits the key rather than lying about it.
 _LIST_SELECT = _SUMMARY_SELECT + ",categories"
 
-# get_contact deliberately sends no $select: Graph then returns the full
-# contact, which is what the detail formatter needs. The data was never the
-# problem there — the formatter simply did not read these.
+# get_contact sends no $select at all, so Graph returns the whole contact and
+# the detail formatter can read whatever it likes: the data was never the
+# problem there, the formatter simply did not read these five.
 _ADDRESS_FIELDS = ("street", "city", "state", "postal_code", "country_or_region")
 
 
@@ -51,11 +49,61 @@ def _format_address(address: Any) -> dict | None:
     """
     if address is None:
         return None
-    parts = {
-        field: sanitize_output(getattr(address, field, "") or "")
-        for field in _ADDRESS_FIELDS
-    }
+    parts = {field: sanitize_output(getattr(address, field, "") or "") for field in _ADDRESS_FIELDS}
     return parts if any(parts.values()) else None
+
+
+def _build_address(
+    street: str | None,
+    city: str | None,
+    state: str | None,
+    postal_code: str | None,
+    country: str | None,
+) -> Any | None:
+    """A Graph ``physicalAddress`` from loose parts, or None when all are empty.
+
+    The mirror of :func:`_format_address`, and deliberately the same five
+    fields: a write path that cannot express what the read path returns is how
+    an address ends up readable but not settable.
+
+    A part that was not supplied is **left unset**, never assigned ``None``.
+    Graph's request adapter serializes through the backing store, which emits a
+    field that was explicitly set to ``None`` — and for a nested model it emits
+    it onto the *parent*, under its Python name. A city-only address therefore
+    went out as ``{"country_or_region": null, ..., "homeAddress": {"city": …}}``
+    and Graph answered ``400 The property 'country_or_region' does not exist on
+    type 'microsoft.graph.contact'``. Assigning only what we were given is the
+    whole fix; ``TestPartialAddressDoesNotLeakNulls`` pins it.
+    """
+    from msgraph.generated.models.physical_address import PhysicalAddress
+
+    parts = {
+        "street": street,
+        "city": city,
+        "state": state,
+        "postal_code": postal_code,
+        "country_or_region": country,
+    }
+    present = {field: value.strip() for field, value in parts.items() if value and value.strip()}
+    if not present:
+        return None
+
+    # Assigned field by field rather than through a `setattr` loop: an attribute
+    # that is not a real SDK field is a silent no-op (#41's shape), and the
+    # static guard that catches those — test_sdk_fields_exist — reads
+    # `<var>.<attr> = ...` and cannot see `setattr`.
+    address = PhysicalAddress()
+    if "street" in present:
+        address.street = present["street"]
+    if "city" in present:
+        address.city = present["city"]
+    if "state" in present:
+        address.state = present["state"]
+    if "postal_code" in present:
+        address.postal_code = present["postal_code"]
+    if "country_or_region" in present:
+        address.country_or_region = present["country_or_region"]
+    return address
 
 
 def _primary_phone(contact: Any) -> str:
@@ -263,10 +311,21 @@ async def update_contact(
     last_name: str | None = None,
     email: str | None = None,
     phone: str | None = None,
+    home_street: str | None = None,
+    home_city: str | None = None,
+    home_state: str | None = None,
+    home_postal_code: str | None = None,
+    home_country: str | None = None,
     *,
     config: Config,
 ) -> dict:
-    """Update an existing contact (partial patch)."""
+    """Update an existing contact (partial patch).
+
+    The ``home_*`` parts are one ``homeAddress``, and Graph **replaces** the
+    whole address object: parts not supplied come back empty, not preserved.
+    Pass every part you intend to keep — :func:`get_contact` returns them — or
+    omit them all to leave the stored address untouched.
+    """
     check_permission(config, CATEGORY_CONTACTS_WRITE, "outlook_update_contact")
     contact_id = validate_graph_id(contact_id)
 
@@ -289,6 +348,12 @@ async def update_contact(
         patch_body.email_addresses = [ea]
     if phone is not None:
         patch_body.mobile_phone = phone
+
+    home_address = _build_address(
+        home_street, home_city, home_state, home_postal_code, home_country
+    )
+    if home_address is not None:
+        patch_body.home_address = home_address
 
     await graph_client.me.contacts.by_contact_id(contact_id).patch(patch_body)
 

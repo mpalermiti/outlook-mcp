@@ -3,6 +3,10 @@
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from kiota_abstractions.store import BackingStoreSerializationWriterProxyFactory
+from kiota_serialization_json.json_serialization_writer_factory import (
+    JsonSerializationWriterFactory,
+)
 
 from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
@@ -10,6 +14,8 @@ from outlook_mcp.pagination import encode_cursor
 from outlook_mcp.tools.contacts import (
     _LIST_SELECT,
     _SUMMARY_SELECT,
+    _build_address,
+    _format_address,
     _format_contact_detail,
     _format_contact_summary,
     create_contact,
@@ -476,3 +482,165 @@ class TestSummarySelectMatchesTheSummaryFormatter:
         """Graph's $search never returns categories, so an empty list would be a lie."""
         summary = _format_contact_summary(_make_mock_contact(categories=["Christmas Card"]))
         assert "categories" not in summary
+
+
+class TestUpdateContactWritesTheAddressItCanRead:
+    """The write-side twin of TestContactDetailCarriesEverythingStored.
+
+    A home address that `get_contact` returns but `update_contact` cannot set is
+    only half a fix: the field is readable and not correctable. These pin that
+    the two sides speak the same five fields.
+    """
+
+    @staticmethod
+    def _patched(mock_client):
+        """The Contact body handed to Graph."""
+        contact_obj = mock_client.me.contacts.by_contact_id.return_value
+        contact_obj.patch.assert_called_once()
+        return contact_obj.patch.call_args[0][0]
+
+    async def test_home_address_reaches_the_patch_body(self):
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(
+            mock_client,
+            contact_id="contact123",
+            home_street="2821 252nd Ave SE",
+            home_city="Sammamish",
+            home_state="WA",
+            home_postal_code="98075",
+            home_country="USA",
+            config=_CFG,
+        )
+        address = self._patched(mock_client).home_address
+        assert address.street == "2821 252nd Ave SE"
+        assert address.city == "Sammamish"
+        assert address.state == "WA"
+        assert address.postal_code == "98075"
+        assert address.country_or_region == "USA"
+
+    async def test_a_partial_address_is_still_written(self):
+        """Someone may know the city and not the street.
+
+        Graph replaces the whole address rather than merging, so the parts not
+        supplied come back empty — verified live. That belongs in the docstring
+        the model reads, not in a silent difference between what was asked for
+        and what was stored.
+        """
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(
+            mock_client, contact_id="contact123", home_city="Bothell", config=_CFG,
+        )
+        address = self._patched(mock_client).home_address
+        assert address.city == "Bothell"
+        assert address.street is None
+
+    async def test_omitting_every_part_leaves_the_address_alone(self):
+        """Partial patch: a name-only update must not blank a stored address."""
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(
+            mock_client, contact_id="contact123", first_name="Jane", config=_CFG,
+        )
+        assert self._patched(mock_client).home_address is None
+
+    async def test_whitespace_only_parts_count_as_omitted(self):
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(
+            mock_client, contact_id="contact123", home_street="   ", config=_CFG,
+        )
+        assert self._patched(mock_client).home_address is None
+
+    async def test_values_are_stripped(self):
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(
+            mock_client, contact_id="contact123", home_city="  Kirkland  ", config=_CFG,
+        )
+        assert self._patched(mock_client).home_address.city == "Kirkland"
+
+    async def test_read_and_write_agree_on_the_same_five_fields(self):
+        """Round-trip: what _build_address writes, _format_address reads back."""
+        parts = {
+            "street": "693 7th St S",
+            "city": "Kirkland",
+            "state": "WA",
+            "postal_code": "98033",
+            "country_or_region": "USA",
+        }
+        built = _build_address(
+            parts["street"], parts["city"], parts["state"],
+            parts["postal_code"], parts["country_or_region"],
+        )
+        assert _format_address(built) == parts
+
+    async def test_read_only_mode_refuses_the_write(self):
+        """The new parameters must not open a path around the read-only gate."""
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        with pytest.raises(ReadOnlyError):
+            await update_contact(
+                mock_client, contact_id="contact123", home_city="Bothell", config=_CFG_RO,
+            )
+        mock_client.me.contacts.by_contact_id.return_value.patch.assert_not_called()
+
+
+def _adapter_wire(model) -> str:
+    """The JSON the Graph request adapter would actually send for this model.
+
+    Deliberately not a bare ``JsonSerializationWriter``: the adapter serializes
+    through the backing-store proxy, and only that path emits a field that was
+    explicitly assigned ``None``. ``tests/test_write_payloads_reach_the_wire.py``
+    asserts values are *present*, which the bare writer answers correctly; this
+    helper exists for the opposite question — what got in that we never asked for.
+    """
+    factory = BackingStoreSerializationWriterProxyFactory(JsonSerializationWriterFactory())
+    writer = factory.get_serialization_writer("application/json")
+    writer.write_object_value(None, model)
+    return writer.get_serialized_content().decode()
+
+
+class TestPartialAddressDoesNotLeakNulls:
+    """A part we were not given must be left unset, never assigned ``None``.
+
+    Assigning ``None`` to the omitted parts looked equivalent and was not: the
+    backing store emits an explicitly-``None`` field, and for a nested model it
+    emits it onto the **parent**, under its Python name. Every partial address
+    went out as::
+
+        {"country_or_region": null, "postal_code": null, "state": null,
+         "street": null, "homeAddress": {"city": "Bothell"}}
+
+    which Graph rejects — ``400 The property 'country_or_region' does not exist
+    on type 'microsoft.graph.contact'``. The full five-part write returned 200,
+    so the tool worked for the case anyone would test by hand and failed for
+    the one it was written for. Only the live tier and this serializer see it.
+    """
+
+    async def test_a_city_only_patch_sends_the_city_and_nothing_else(self):
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(
+            mock_client, contact_id="contact123", home_city="Bothell", config=_CFG,
+        )
+        body = _adapter_wire(
+            mock_client.me.contacts.by_contact_id.return_value.patch.call_args[0][0]
+        )
+
+        assert '"homeAddress": {"city": "Bothell"}' in body
+        assert "null" not in body, f"a part we were never given reached the wire: {body}"
+        for python_name in ("country_or_region", "postal_code"):
+            assert python_name not in body
+
+    async def test_the_serializer_this_uses_is_the_one_that_can_see_it(self):
+        """Pin why the helper is not a plain JsonSerializationWriter.
+
+        If kiota ever stops emitting explicitly-``None`` fields, this fails and
+        the distinction above can be dropped.
+        """
+        from msgraph.generated.models.contact import Contact
+        from msgraph.generated.models.physical_address import PhysicalAddress
+
+        address = PhysicalAddress()
+        address.city = "Bothell"
+        address.street = None
+        contact = Contact()
+        contact.home_address = address
+
+        assert '"street": null' in _adapter_wire(contact)
+
