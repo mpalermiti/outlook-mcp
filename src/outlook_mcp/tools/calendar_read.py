@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
 from typing import Any
@@ -17,6 +16,21 @@ _UTC_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
+
+
+def _has_time_zone_database() -> bool:
+    """Whether *any* IANA database is reachable, asked by resolving a key that
+    every database has.
+
+    Importability of ``tzdata`` is a proxy for this, not the thing itself: a
+    POSIX host with ``/usr/share/zoneinfo`` and no ``tzdata`` installed has a
+    database, and would have been told its install was broken.
+    """
+    try:
+        ZoneInfo("UTC")
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    return True
 
 
 def _resolve_timezone(name: str) -> ZoneInfo:
@@ -34,15 +48,20 @@ def _resolve_timezone(name: str) -> ZoneInfo:
     messages: a name no database contains is a typo in ``config.json``, while
     no database at all is a broken install — ``tzdata`` is a dependency exactly
     so that Windows and slim Linux images have one.
+
+    ``ValueError`` is caught alongside ``ZoneInfoNotFoundError`` because zoneinfo
+    raises it, not the subclass, for a path-shaped key: ``/etc/localtime`` is a
+    plausible thing to put in a config file and would otherwise escape both the
+    truncation and the hint. ``validate_datetime`` already catches both.
     """
     try:
         return ZoneInfo(name)
-    except ZoneInfoNotFoundError as exc:
-        if importlib.util.find_spec("tzdata") is None:
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        if not _has_time_zone_database():
             raise ValueError(
                 f"Invalid timezone: {name[:50]} — this host has no IANA time zone "
-                "database and the `tzdata` package is missing, so no zone name "
-                "would resolve. Reinstall outlook-mcp to pick it up."
+                "database, so no zone name would resolve. Reinstall "
+                "outlook-graph-mcp to pick up its `tzdata` dependency."
             ) from exc
         raise ValueError(
             f"Invalid timezone: {name[:50]} — not a zone name the IANA database "
@@ -65,7 +84,15 @@ def _compute_calendar_range(
     tz = _resolve_timezone(timezone)
 
     def _now_plus(days_ahead: int) -> str:
-        moment = datetime.now(tz) + timedelta(days=days_ahead)
+        # The guard is load-bearing, not a micro-optimisation. PEP 495 makes
+        # arithmetic on an aware datetime ignore ``fold`` and return fold=0, so
+        # ``+ timedelta(days=0)`` is NOT the identity: during the repeated hour
+        # after a DST fall-back it silently picks the first pass, moving the
+        # window an hour early. ``start`` must keep the fold ``datetime.now``
+        # gave it. (``end`` resets fold too, as it did before this refactor.)
+        moment = datetime.now(tz)
+        if days_ahead:
+            moment += timedelta(days=days_ahead)
         return moment.astimezone(dt_timezone.utc).strftime(_UTC_FORMAT)
 
     start_utc = validate_datetime(after, timezone) if after else _now_plus(0)

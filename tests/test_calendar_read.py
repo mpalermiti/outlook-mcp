@@ -1,13 +1,16 @@
 """Tests for calendar read tools."""
 
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from unittest.mock import AsyncMock, MagicMock
-from zoneinfo import ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
 from outlook_mcp.tools.calendar_read import (
     _compute_calendar_range,
     _format_event_summary,
+    _has_time_zone_database,
     _resolve_timezone,
     get_event,
     list_events,
@@ -280,10 +283,7 @@ class TestTimezoneResolution:
         assert "config.json" in message
 
     def test_a_missing_database_blames_the_install_not_the_config(self, monkeypatch):
-        monkeypatch.setattr(
-            "outlook_mcp.tools.calendar_read.importlib.util.find_spec",
-            lambda name: None,
-        )
+        """No database at all: the fix is the install, not the config value."""
         monkeypatch.setattr(
             "outlook_mcp.tools.calendar_read.ZoneInfo",
             MagicMock(side_effect=ZoneInfoNotFoundError("no such key")),
@@ -292,7 +292,19 @@ class TestTimezoneResolution:
             _resolve_timezone("America/Los_Angeles")
         message = str(excinfo.value)
         assert "tzdata" in message
+        # The installable is outlook-graph-mcp; outlook-mcp is only the command.
+        assert "outlook-graph-mcp" in message
         assert "config.json" not in message
+
+    def test_a_path_shaped_key_is_refused_like_any_other_bad_zone(self):
+        """zoneinfo raises plain ValueError, not the subclass, for these."""
+        for key in ("/etc/localtime", "../../etc/passwd"):
+            with pytest.raises(ValueError) as excinfo:
+                _resolve_timezone(key)
+            assert "Invalid timezone" in str(excinfo.value)
+
+    def test_the_database_probe_sees_a_real_database(self):
+        assert _has_time_zone_database() is True
 
     def test_the_message_survives_the_wrapper_the_model_sees(self):
         """ValueError is the anticipated-failure channel, so the text reaches the caller."""
@@ -319,3 +331,61 @@ class TestCalendarRangeWithoutBounds:
         # Midnight Pacific on a DST date is 07:00Z.
         assert start == "2026-09-11T07:00:00Z"
         assert end == "2026-09-12T07:00:00Z"
+
+
+class TestAmbiguousHourKeepsItsFold:
+    """The defaulted `start` must survive a DST fall-back unchanged.
+
+    PEP 495: arithmetic on an aware datetime ignores `fold` and yields fold=0.
+    `datetime.now(tz) + timedelta(days=0)` therefore preserves every visible
+    field and resets the invisible one, and `.astimezone()` reads exactly that
+    field to choose the offset — so during the repeated hour the window opened
+    an hour early and reported ended events as upcoming.
+
+    Shape assertions cannot see this: `start < end` stays true, and the two
+    datetimes even compare EQUAL to each other, because PEP 495 has intra-zone
+    comparison ignore fold as well. Only the UTC value pins it.
+    """
+
+    ZONE = "America/Los_Angeles"
+    # 09:30Z on 2026-11-01 is the SECOND pass through 01:30 local (fold=1).
+    AMBIGUOUS_UTC = datetime(2026, 11, 1, 9, 30, tzinfo=dt_timezone.utc)
+
+    @pytest.fixture
+    def frozen_now(self, monkeypatch):
+        """Freeze `datetime.now(tz)` inside the repeated hour, with fold intact."""
+        real = datetime
+
+        class FrozenDatetime(real):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    return real.fromtimestamp(self.AMBIGUOUS_UTC.timestamp())
+                return real.fromtimestamp(self.AMBIGUOUS_UTC.timestamp(), tz)
+
+        monkeypatch.setattr("outlook_mcp.tools.calendar_read.datetime", FrozenDatetime)
+
+    def test_the_frozen_moment_really_is_ambiguous(self):
+        """Guard the premise: if fold were 0 the test below would prove nothing."""
+        now = datetime.fromtimestamp(self.AMBIGUOUS_UTC.timestamp(), ZoneInfo(self.ZONE))
+        assert now.fold == 1, "this instant is no longer in the repeated hour"
+        assert now.hour == 1 and now.minute == 30
+
+    def test_start_is_the_second_pass_not_the_first(self, frozen_now):
+        start, _ = _compute_calendar_range(7, None, None, self.ZONE)
+        assert start == "2026-11-01T09:30:00Z"   # 08:30Z would be the first pass
+
+    def test_window_is_still_the_requested_length(self, frozen_now):
+        """Fixing start must not shorten the window; end keeps local-day arithmetic."""
+        start, end = _compute_calendar_range(7, None, None, self.ZONE)
+        assert start < end
+        # 7 local days across a fall-back is 7*24 + 1 hours.
+        delta = datetime.strptime(end, "%Y-%m-%dT%H:%M:%SZ") - datetime.strptime(
+            start, "%Y-%m-%dT%H:%M:%SZ"
+        )
+        assert delta == timedelta(days=7)
+
+    def test_explicit_after_is_unaffected(self, frozen_now):
+        """Only the defaulted path reads the clock at all."""
+        start, _ = _compute_calendar_range(7, "2026-11-01T00:00:00", None, self.ZONE)
+        assert start == "2026-11-01T07:00:00Z"
