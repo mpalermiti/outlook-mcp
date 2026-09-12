@@ -28,6 +28,21 @@ def _kwargs_of(cred_cls):
     return cred_cls.call_args.kwargs
 
 
+@pytest.fixture(autouse=True)
+def _assume_an_encrypted_store():
+    """Isolate the variable under test.
+
+    These tests are about the interactive-flow flag, not about whether the host
+    can encrypt. Left real, they fail on any Linux box without libsecret --
+    including the GitHub runner -- for a reason that has nothing to do with what
+    they assert.
+    """
+    with patch(
+        "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False
+    ):
+        yield
+
+
 def test_the_silent_path_disables_automatic_authentication():
     auth = AuthManager(Config(client_id="x"))
     with (
