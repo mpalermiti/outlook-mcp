@@ -26,6 +26,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   accepts `https://graph.microsoft.com@evil.example/` — whose real host is
   `evil.example` — and `https://graph.microsoft.com.evil.example/`.
 
+  Guarded live: `tests/test_live_delta_cursors.py` drives a real delta round
+  against Graph and replays the returned cursor through the guard, plus pins
+  that a real `deltaLink` carries no port and no userinfo — the two assumptions
+  the `netloc` equality rests on. The mocked suite cannot check this, because
+  its cursors are ones we wrote; preflight only checks that the delta endpoints
+  answer, and never routes a cursor through `fetch_delta_pages`.
+
   Hardened further after review: the validator refuses control and space
   characters outright (`urlsplit` deletes tab/CR/LF before parsing while an
   HTTP client does not, so one string could read as two different hosts),
