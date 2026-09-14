@@ -194,9 +194,7 @@ async def outlook_auth_status(ctx: Context) -> dict:
             # changing.
             result["action_required"] = str(auth.startup_error)
         else:
-            result["action_required"] = (
-                "Run `outlook-mcp auth` on the host to authenticate."
-            )
+            result["action_required"] = "Run `outlook-mcp auth` on the host to authenticate."
     return result
 
 
@@ -606,6 +604,7 @@ async def outlook_list_events(
     count: int = 50,
     cursor: str | None = None,
     concise: bool = False,
+    calendar: str | None = None,
 ) -> dict:
     """List calendar events in a date range (expands recurring instances).
 
@@ -613,6 +612,10 @@ async def outlook_list_events(
 
     Pass concise=True to drop large fields (body, attendees, organizer, categories) — ~10x fewer
     tokens for day-at-a-glance scans.
+
+    `calendar` selects which calendar to read: omit (or "primary") for the default calendar;
+    otherwise a display name (e.g. "Work") or a Graph calendar ID from outlook_list_calendars.
+    Without it, secondary calendars are unreachable.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -625,6 +628,7 @@ async def outlook_list_events(
         config.timezone,
         cursor=cursor,
         concise=concise,
+        calendar=calendar,
     )
 
 
