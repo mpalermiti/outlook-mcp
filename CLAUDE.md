@@ -29,6 +29,8 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 - `src/outlook_mcp/server.py` — `MCPServer` entry point, lifespan context
 - `src/outlook_mcp/auth.py` — Device code OAuth2 via azure-identity
 - `src/outlook_mcp/graph.py` — Graph client factory
+- `src/outlook_mcp/routing.py` — capability routing: tool name -> capability -> account (`_get_graph_client` consults it)
+- `src/outlook_mcp/aggregation.py` — multi-account fan-out reads (`outlook_list_*_all`, gated by `allow_aggregate`)
 - `src/outlook_mcp/config.py` — Config file management (~/.outlook-mcp/)
 - `src/outlook_mcp/validation.py` — Input validation (OData, KQL, IDs, datetimes)
 - `src/outlook_mcp/errors.py` — Exception hierarchy. `OutlookMCPError` inherits the SDK's `ToolError`; this is load-bearing, not cosmetic (see Conventions)
@@ -78,7 +80,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 - Anything taking a host filesystem path routes through `resolve_attachment_path`. Paths come
   from the model, and the model reads email — treat them as untrusted input, and confine by
   resolving, never by string comparison
-- Tool schemas are a per-turn cost with a measured baseline (~8,644 tokens for 62 tools).
+- Tool schemas are a per-turn cost with a measured baseline (~8,644 tokens for 62 tools; 65 with the aggregate reads).
   Metadata that is correct but inert — `openWorldHint`, which is `true` by default anyway, or
   titles that restate the tool name — is not free. `test_tool_surface_budget.py` holds the line
 - Datetimes: UTC in responses, config timezone for input interpretation

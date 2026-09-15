@@ -9,62 +9,121 @@ from outlook_mcp.config import load_config
 
 
 def _print_usage() -> None:
-    print("Usage: outlook-mcp <command>")
+    print("Usage: outlook-mcp <command> [account]")
     print()
     print("Commands:")
     print("  serve    Start the MCP server (default, used by OpenClaw)")
     print("  auth     Authenticate with Microsoft (device code flow)")
-    print("  status   Check authentication status")
+    print("           Optional account name when 'accounts' is configured:")
+    print("           outlook-mcp auth net")
+    print("  status   Check authentication status (all accounts)")
     print("  logout   Clear cached credentials")
+    print("           Optional account name: outlook-mcp logout net")
 
 
-def cmd_auth() -> None:
+def _resolve_account_arg(config, arg: str | None) -> str | None:
+    """Validate an account argument against the config, or exit with help."""
+    if arg is None:
+        return None
+    names = [acc.name for acc in config.accounts]
+    if not names:
+        print("Error: no 'accounts' configured in ~/.outlook-mcp/config.json —")
+        print("single-account installs authenticate without an account name.")
+        sys.exit(1)
+    if arg not in names:
+        print(f"Error: unknown account '{arg}'. Configured accounts: {', '.join(names)}")
+        sys.exit(1)
+    return arg
+
+
+def cmd_auth(account: str | None = None) -> None:
     """Interactive device code auth — run this in a terminal."""
     config = load_config()
-    if not config.client_id:
+    if config.accounts:
+        account = account or config.default_account
+    account = _resolve_account_arg(config, account)  # exits with an explanation
+    if account is None:
+        client_id = config.client_id
+    else:
+        client_id = next(a.client_id for a in config.accounts if a.name == account)
+    if not client_id:
         print("Error: client_id not configured.")
         print("Set client_id in ~/.outlook-mcp/config.json")
         sys.exit(1)
 
     auth = AuthManager(config)
     mode = "read-only" if config.read_only else "read-write"
-    print(f"Authenticating with {mode} scopes...")
+    target = f"account '{account}'" if account else "default account"
+    print(f"Authenticating {target} with {mode} scopes...")
+    if account:
+        print("Sign in to THIS account's identity in the browser when prompted.")
     print()
 
-    auth.login_interactive()
+    auth.login_interactive(account)
     print()
     print("Done. The MCP server will use this cached token automatically.")
 
 
 def cmd_status() -> None:
-    """Check if a cached token exists and is usable."""
+    """Check if cached tokens exist and are usable."""
     config = load_config()
-    if not config.client_id:
+    if not config.client_id and not config.accounts:
         print("Not configured — set client_id in ~/.outlook-mcp/config.json")
         sys.exit(1)
 
     auth = AuthManager(config)
+    mode = "read-only" if config.read_only else "read-write"
 
-    print(f"Client ID: {config.client_id[:8]}...")
-    print(f"Tenant:    {config.tenant_id}")
-    print(f"Mode:      {'read-only' if config.read_only else 'read-write'}")
+    print(f"Mode:      {mode}")
+    if config.capability_accounts:
+        print("Routing:")
+        for capability, name in sorted(config.capability_accounts.items()):
+            print(f"  {capability:<10} -> {name}")
+        print(f"  {'(other)':<10} -> {config.default_account}")
     print()
 
-    if auth.try_cached_token():
-        print("Status: authenticated (cached token valid)")
-    else:
-        print("Status: not authenticated")
-        print("Run: outlook-mcp auth")
+    if not config.accounts:
+        print(f"Client ID: {config.client_id[:8]}...")
+        print(f"Tenant:    {config.tenant_id}")
+        print()
+        if auth.try_cached_token():
+            print("Status: authenticated (cached token valid)")
+        else:
+            print("Status: not authenticated")
+            print("Run: outlook-mcp auth")
+        return
+
+    ok = auth.try_cached_token()
+    for acc in config.accounts:
+        status = "authenticated" if acc.name in auth._credentials else "not authenticated"
+        marker = " (default)" if acc.name == config.default_account else ""
+        print(f"  {acc.name}: {status}{marker}")
+    if not ok:
+        print()
+        print("Run: outlook-mcp auth <account> for each account you need.")
 
 
-def cmd_logout() -> None:
+def cmd_logout(account: str | None = None) -> None:
     """Clear cached credentials."""
-    # Token cache is in the system keychain under "outlook-mcp".
-    # DeviceCodeCredential doesn't expose a cache-clear API, so we
-    # just inform the user.
-    print("To fully clear cached tokens, remove 'outlook-mcp' from")
-    print("Keychain Access (macOS) or the credential store on your OS.")
+    config = load_config()
+    if account:
+        _resolve_account_arg(config, account)
+    # Token caches live in the system keychain/DPAPI, one entry per account
+    # name ("outlook-mcp", "outlook-mcp-<account>"). DeviceCodeCredential
+    # doesn't expose a cache-clear API, so we inform the user.
+    cache_names = ["outlook-mcp"]
+    if account:
+        cache_names = [f"outlook-mcp-{account}"]
+    elif config.accounts:
+        cache_names = [f"outlook-mcp-{acc.name}" for acc in config.accounts]
+    print("To fully clear cached tokens, remove these entries from Keychain")
+    print("Access (macOS) or the credential store on your OS:")
+    for name in cache_names:
+        print(f"  {name}")
     print()
+    auth = AuthManager(config)
+    result = auth.logout(account)
+    print(result["message"])
     print("The MCP server will require re-authentication on next start.")
 
 
@@ -82,11 +141,11 @@ def main() -> None:
     if not args or args[0] == "serve":
         cmd_serve()
     elif args[0] == "auth":
-        cmd_auth()
+        cmd_auth(args[1] if len(args) > 1 else None)
     elif args[0] == "status":
         cmd_status()
     elif args[0] == "logout":
-        cmd_logout()
+        cmd_logout(args[1] if len(args) > 1 else None)
     elif args[0] in ("-h", "--help", "help"):
         _print_usage()
     else:

@@ -50,6 +50,10 @@ TOOL_GROUPS: dict[str, str] = {
     "outlook_copy_message": "mail",
     "outlook_batch_triage": "mail",
     "outlook_list_thread": "mail",
+    # aggregate reads live with their per-account counterparts, so a
+    # OUTLOOK_MCP_TOOLSETS consumer that loads "mail" gets the mail aggregator
+    # too. They don't route like the others — see routing.py / aggregation.py.
+    "outlook_list_inbox_all": "mail",
     # drafts
     "outlook_list_drafts": "drafts",
     "outlook_create_draft": "drafts",
@@ -70,6 +74,7 @@ TOOL_GROUPS: dict[str, str] = {
     "outlook_delete_event": "calendar",
     "outlook_rsvp": "calendar",
     "outlook_list_calendars": "calendar",
+    "outlook_list_events_all": "calendar",
     # contacts
     "outlook_list_contacts": "contacts",
     "outlook_get_contact": "contacts",
@@ -84,6 +89,7 @@ TOOL_GROUPS: dict[str, str] = {
     "outlook_update_task": "todo",
     "outlook_complete_task": "todo",
     "outlook_delete_task": "todo",
+    "outlook_list_tasks_all": "todo",
     # folders
     "outlook_list_folders": "folders",
     "outlook_create_folder": "folders",
@@ -125,6 +131,9 @@ READ_ONLY: set[str] = {
     "outlook_search_contacts",
     "outlook_list_task_lists",
     "outlook_list_tasks",
+    "outlook_list_inbox_all",
+    "outlook_list_events_all",
+    "outlook_list_tasks_all",
     "outlook_list_folders",
     "outlook_changes_since",
     "outlook_list_inbox_delta",

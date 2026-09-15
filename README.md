@@ -2,6 +2,8 @@
 
 # outlook-mcp
 
+English | [简体中文](README_CN.md)
+
 MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 
 [![PyPI](https://img.shields.io/pypi/v/outlook-graph-mcp.svg)](https://pypi.org/project/outlook-graph-mcp/)
@@ -24,7 +26,7 @@ You'll like this if you're:
 - Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
 - Security-conscious: tokens in the OS keyring (Keychain on macOS, libsecret on Linux -- never cleartext unless you opt in), granular `allow_categories`, optional `read_only` mode, zero telemetry
 
-This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 62 tools — way more than you need for "read my inbox").
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 65 tools — way more than you need for "read my inbox").
 
 ### How it differs from other Outlook tools you'll find
 
@@ -44,7 +46,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 62 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 65 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -59,7 +61,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 ## Features
 
-**62 tools** across 13 categories:
+**65 tools** across 13 categories:
 
 - **Auth (1)** -- auth status check (login is via CLI)
 - **Mail Read (7)** -- list inbox (with Focused Inbox and uncategorized filters), read message, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
@@ -229,6 +231,43 @@ uv run outlook-mcp logout   # Clear credentials
 uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude)
 ```
 
+### Multiple accounts (per-capability routing)
+
+`accounts` was configuration scaffolding in earlier releases — listed, never used. It now routes **capabilities** to accounts, so one Microsoft identity per concern: mail on the account that receives notifications, To Do on the one that holds the task lists.
+
+```json
+{
+  "accounts": [
+    {"name": "net",  "client_id": "<same-or-per-account app id>"},
+    {"name": "neko", "client_id": "<app id>"}
+  ],
+  "default_account": "net",
+  "capability_accounts": {"mail": "net", "calendar": "net", "todo": "neko"},
+  "allow_cross_account": false
+}
+```
+
+Authenticate each account separately — the device-code flow signs in whatever identity the browser offers, so make sure you pick the right one:
+
+```bash
+uv run outlook-mcp auth net    # sign in as net's identity in the browser
+uv run outlook-mcp auth neko   # then as neko's
+uv run outlook-mcp status      # per-account status + the routing table
+```
+
+Each account gets its own token cache (`outlook-mcp-<name>`) and auth record. Single-account installs (top-level `client_id`, no `accounts`) behave exactly as before.
+
+**Routing**: every tool serves the account configured for its capability — mail-centric groups (mail, drafts, attachments, folders, admin) fold into `mail`; `calendar`, `contacts`, `todo` map 1:1; the delta tools split by name; identity tools (`outlook_whoami` & co.) follow the active account. `outlook_changes_since` spans three capabilities and refuses when they don't all route to the same account — use the individual delta tools then.
+
+**`allow_cross_account`** is the master switch for everything beyond the configured routing:
+
+- `false` (default): the agent sees **one merged account**. `outlook_switch_account` refuses (before validating any name, so refusals leak nothing), `outlook_list_accounts` collapses to the active identity, and no tool takes an account parameter — there is no path to another account's non-default content.
+- `true`: `outlook_switch_account("neko")` moves the active account; `outlook_switch_account("neko", capability="todo")` re-routes one capability. Configured routings still win over the active account — switching identity doesn't drag routed capabilities along.
+
+**`allow_aggregate`** is a separate switch for the aggregated read tools (`outlook_list_inbox_all`, `outlook_list_events_all`, `outlook_list_tasks_all`): they fan out concurrently to *every* authenticated account and return one merged, account-tagged listing — newest-first mail, soonest-first events, all task lists flattened. One account's failure lands in `errors` without losing the others; unauthenticated accounts are listed in `skipped_unauthenticated`. Orthogonal to `allow_cross_account`: cross gates deliberately switching routing, aggregate gates bulk cross-account reads. Default off — the tools refuse with the remedy in the error.
+
+One caveat worth knowing: session-level switches (and only those) are lost when the server restarts.
+
 ---
 
 ## Troubleshooting
@@ -274,6 +313,7 @@ configured `timezone`; responses are always UTC.
 | Tool | Description |
 |------|-------------|
 | `outlook_list_inbox` | List messages in a folder. `folder` accepts display names, well-known names, or Graph IDs. Filter by read status, sender, date range, Focused Inbox classification. Pagination via `skip`. |
+| `outlook_list_inbox_all` | Aggregated inbox across every authenticated account (needs `allow_aggregate`). Each message tagged `account`; newest first; per-account failures isolated into `errors`. |
 | `outlook_read_message` | Get full message by ID. Format: `text`, `html`, or `full` (both). Pass `include_deferred_send=True` to also surface the draft's scheduled delivery time. |
 | `outlook_read_messages` | Bulk read up to 20 messages by ID via Graph `$batch` in one round-trip. Per-message shape matches `outlook_read_message` byte-for-byte for the same `(format, concise, include_deferred_send)`. Partial-failure tolerant: 404s on some IDs surface in `failures[]` without failing the whole call. Use NOT N `outlook_read_message` calls. |
 | `outlook_search_mail` | Search mail using KQL query. Optionally scope to a folder by name or ID. |
@@ -308,6 +348,7 @@ configured `timezone`; responses are always UTC.
 | Tool | Description |
 |------|-------------|
 | `outlook_list_events` | List events in a date range. Expands recurring events. Each event carries `type`, so a series master is distinguishable from a one-off. Configurable via `days`, `after`, `before`. |
+| `outlook_list_events_all` | Aggregated events across every authenticated account (needs `allow_aggregate`), soonest first, each tagged `account`. |
 | `outlook_get_event` | Get full event details: attendees, body, online meeting URL, recurrence, `type` (`singleInstance` / `seriesMaster` / `occurrence` / `exception`). |
 | `outlook_list_events_delta` | List only event changes inside a window since the last call. `start` and `end` (ISO 8601) required on the first call (Graph constraint — no whole-calendar sync). Deletes come back as `{id, is_deleted: True}`. Cursor is stateless. |
 
@@ -338,6 +379,7 @@ configured `timezone`; responses are always UTC.
 |------|-------------|
 | `outlook_list_task_lists` | List To Do lists. |
 | `outlook_list_tasks` | List tasks with status filter and pagination. |
+| `outlook_list_tasks_all` | Aggregated tasks across every authenticated account and every task list (needs `allow_aggregate`), each tagged `account` and `list`. |
 | `outlook_create_task` | Create task with due date, importance, recurrence. |
 | `outlook_update_task` | Update task fields. |
 | `outlook_complete_task` | Mark task as completed. |
@@ -431,7 +473,7 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions).
 
 ### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`
 
-All 62 tool schemas load into the client's context every turn (~8.6k tokens). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
+All 65 tool schemas load into the client's context every turn (~8.6k tokens). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
 
 ```bash
 # e.g. a recurring mail + calendar agent: ~30 tools instead of 62 (~52% fewer tool tokens/turn)

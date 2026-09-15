@@ -69,7 +69,7 @@ For the population installing this from the MCP registry, not for Neo. stdio sta
 - **Stateless Streamable-HTTP deployment** — the 2026-07-28 spec RC removed `Mcp-Session-Id`, so a remote server can scale behind a plain round-robin LB with no session store. Optional remote transport alongside stdio.
 - **OAuth discovery hardening** — OIDC Discovery, RFC 9728 Protected-Resource-Metadata, incremental scope consent (SEP-835), Client ID Metadata Documents (SEP-991). Load-bearing only when exposed as a remote OAuth resource.
 - ~~**`tools/list` caching** — SEP-2549 `ttlMs` / `cacheScope`~~ — ✅ shipped in v1.20.0. The precondition landed: `mcp` 2.1.1 emits both fields and `MCPServer(cache_hints=...)` sets them. Five minutes, private.
-- **Cross-provider / multi-account** — a competing server already unifies M365 + Outlook.com + Google in one MCP. The unused `config.accounts` array is the hook. Real but new; secondary to Tier 0.
+- **Cross-provider / multi-account** — a competing server already unifies M365 + Outlook.com + Google in one MCP. The (now-wired) `config.accounts` array is the hook. Real but new; secondary to Tier 0.
 
 **Caveat:** several Tier-1 surfaces are release-candidate / draft spec (statelessness RC, SEP-2549) — don't build against them until Claude / Cursor / OpenClaw actually honor them.
 
@@ -88,7 +88,7 @@ For the population installing this from the MCP registry, not for Neo. stdio sta
 - **Shared / delegated mailboxes** — `/users/{id}/messages` path for delegated access
 - **Calendar find-meeting-times** — `/me/findMeetingTimes` for availability queries
 - **Category CRUD with colors** — first-class category management, not just assignment
-- **Multi-account support** — `config.accounts` array already exists but is unused; wire up account-scoped tool calls
+- ~~**Multi-account support**~~ — ✅ implemented: per-capability account routing (`capability_accounts`), a cross-account gate (`allow_cross_account`), and aggregate fan-out reads (`allow_aggregate`). The `config.accounts` array was scaffolding until now — see README "Multiple accounts"
 
 ---
 

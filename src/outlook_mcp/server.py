@@ -12,16 +12,22 @@ from typing import Any
 from mcp.server.caching import CacheHint
 from mcp.server.mcpserver import Context, MCPServer
 
-from outlook_mcp import __version__, toolsets
+from outlook_mcp import __version__, aggregation, toolsets
 from outlook_mcp.auth import AuthManager
 from outlook_mcp.config import load_config
 from outlook_mcp.errors import (
+    AuthRequiredError,
     OutlookMCPError,
     ToolInputError,
     UnencryptedTokenCacheError,
     wrap_graph_error,
 )
 from outlook_mcp.graph import GraphClient
+from outlook_mcp.routing import (
+    COMPOSED_DIGEST_CAPABILITIES,
+    capability_for,
+    composed_digest_conflict,
+)
 from outlook_mcp.tools import (
     admin,
     batch,
@@ -81,6 +87,12 @@ Working rules, each of which saves a round trip:
 - You are already signed in. Do not call outlook_whoami, outlook_list_accounts or
   outlook_auth_status to check before doing something — just call the tool you need. If a call
   does fail on authentication, its error says exactly what to run.
+- This install may merge several accounts by capability (mail, calendar, contacts and todo
+  each route to a configured account). whoami shows the active identity, which is not
+  necessarily the account behind every capability — that is the configured shape, not a bug.
+- The outlook_list_*_all tools fan out to every authenticated account at once and tag each
+  item with its account. They refuse unless allow_aggregate is set in config — the refusal
+  error says exactly that.
 - Folder parameters take display names directly ("Junk Email", "Purchases"), as well as
   well-known names ("inbox", "drafts") and Graph IDs. Do not list folders first to find an ID.
   Call outlook_list_folders only when you genuinely need to discover what folders exist.
@@ -124,24 +136,90 @@ def _get_config(ctx: Context):
     return ctx.request_context.lifespan_context["config"]
 
 
-def _get_graph_client(ctx: Context) -> GraphClient:
-    """Return a Graph client, reused across tool calls for the same credential.
+def _calling_tool_name(ctx: Context) -> str | None:
+    """Name of the tool currently executing, when the SDK exposes it.
 
-    Building a ``GraphServiceClient`` (auth provider, request adapter, TLS
-    connection pool) on every tool call is wasteful on recurring agent loops.
-    Cache one in the lifespan context and reuse it while the credential is
-    unchanged. A ``switch_account`` / re-auth swaps ``AuthManager.credential``
-    for a different object, so an identity check rebuilds the client
-    automatically — no explicit invalidation needed.
+    Account routing reads this to pick the account for the call's capability,
+    so the 60-odd tool bodies never mention accounts themselves. Defensive
+    getattrs: tests drive tools with fake contexts that skip the plumbing.
+    """
+    rc = getattr(ctx, "request_context", None)
+    if rc is None:
+        return None
+    # mcp 2.x hands the inbound call's params as a plain dict
+    # ({name, arguments}) on ServerRequestContext, with `request` left None
+    # on this path; older layouts nested an object under request.params.
+    params = getattr(rc, "params", None)
+    if isinstance(params, dict):
+        name = params.get("name")
+        if isinstance(name, str):
+            return name
+    for holder in (params, getattr(rc, "request", None)):
+        name = getattr(getattr(holder, "params", None), "name", None)
+        if isinstance(name, str):
+            return name
+    return None
+
+
+def _get_graph_client(ctx: Context) -> GraphClient:
+    """Return a Graph client for the calling tool's account, cached per account.
+
+    Multi-account configs route capabilities (mail / calendar / contacts /
+    todo) to accounts: the calling tool's name decides the capability, the
+    AuthManager decides the account, and one GraphServiceClient is cached per
+    account in the lifespan context. Single-account installs route everything
+    to the one credential, exactly as before.
     """
     auth = _get_auth(ctx)
-    credential = auth.get_credential()  # raises AuthRequiredError if unauthenticated
+    account = auth.resolve_capability_account(capability_for(_calling_tool_name(ctx)))
+    credential = auth.get_account_credential(account)  # raises AuthRequiredError if unauthenticated
     lifespan_ctx = ctx.request_context.lifespan_context
-    cached = lifespan_ctx.get("graph_client")
+    clients: dict = lifespan_ctx.setdefault("graph_clients", {})
+    cached = clients.get(account)
     if cached is None or cached.credential is not credential:
         cached = GraphClient(credential)
-        lifespan_ctx["graph_client"] = cached
+        clients[account] = cached
     return cached
+
+
+def _authenticated_account_clients(ctx: Context) -> tuple[dict[str | None, GraphClient], list[str]]:
+    """Graph clients for every authenticated account, cached per account.
+
+    The fan-out counterpart of _get_graph_client: instead of routing one
+    capability to one account, hand the aggregate tools one client per
+    authenticated account (plus the names of those skipped for missing
+    tokens, so the merged result can say what it left out). Shares the same
+    lifespan cache dict, so routed and aggregate views of the same account
+    reuse one GraphServiceClient.
+    """
+    auth = _get_auth(ctx)
+    config = _get_config(ctx)
+    cache: dict = ctx.request_context.lifespan_context.setdefault("graph_clients", {})
+
+    def _client_for(account: str | None, credential: Any) -> GraphClient:
+        cached = cache.get(account)
+        if cached is None or cached.credential is not credential:
+            cached = GraphClient(credential)
+            cache[account] = cached
+        return cached
+
+    if not config.accounts:
+        # Single-account install: the aggregate shape over the one credential,
+        # so the tool's contract doesn't change when accounts get added later.
+        return {None: _client_for(None, auth.get_credential())}, []
+
+    out: dict[str | None, GraphClient] = {}
+    skipped: list[str] = []
+    for acc in config.accounts:
+        try:
+            credential = auth.get_account_credential(acc.name)
+        except AuthRequiredError:
+            skipped.append(acc.name)
+            continue
+        out[acc.name] = _client_for(acc.name, credential)
+    if not out:
+        raise AuthRequiredError()
+    return out, skipped
 
 
 def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -194,9 +272,7 @@ async def outlook_auth_status(ctx: Context) -> dict:
             # changing.
             result["action_required"] = str(auth.startup_error)
         else:
-            result["action_required"] = (
-                "Run `outlook-mcp auth` on the host to authenticate."
-            )
+            result["action_required"] = "Run `outlook-mcp auth` on the host to authenticate."
     return result
 
 
@@ -940,7 +1016,18 @@ async def outlook_changes_since(
     Calendar `modified[]` is reserved for future use — modified events surface in `new[]`
     today (Graph delta doesn't distinguish them). Calendar `organizer_email` is also
     currently empty (the v1.9.0 delta formatter surfaces the organizer name only).
+
+    With per-capability account routing that splits mail/calendar/contacts across
+    accounts, this tool refuses — one call runs all three deltas against one
+    account. Use the individual delta tools, which each route correctly.
     """
+    auth = _get_auth(ctx)
+    if _get_config(ctx).accounts:
+        conflict = composed_digest_conflict(
+            {cap: auth.resolve_capability_account(cap) for cap in COMPOSED_DIGEST_CAPABILITIES}
+        )
+        if conflict:
+            raise ValueError(conflict)
     client = _get_graph_client(ctx)
     return await digest.changes_since(client, delta_tokens, fallback_window_hours)
 
@@ -1068,6 +1155,90 @@ async def outlook_delete_task(
         task_id,
         list_id,
         config=config,
+    )
+
+
+# ── Aggregate (Multi-Account) Read Tools ───────────────
+# Fan-out reads across every authenticated account, gated by allow_aggregate.
+# These deliberately bypass per-capability routing — their contract is "all
+# accounts", and session routing overrides don't apply.
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_list_inbox_all(
+    ctx: Context,
+    folder: str = "inbox",
+    count: int = 25,
+    unread_only: bool = False,
+    concise: bool = False,
+) -> dict:
+    """Inbox across every authenticated account, newest first, each message tagged `account`.
+
+    Requires allow_aggregate=true. One account failing lands in `errors`;
+    unauthenticated ones in `skipped_unauthenticated`. No cross-account cursor —
+    deep pagination is what outlook_list_inbox is for.
+    """
+    config = _get_config(ctx)
+    aggregation.require_aggregate(config)
+    clients, skipped = _authenticated_account_clients(ctx)
+    return await aggregation.list_inbox_all(
+        clients,
+        skipped,
+        config.timezone,
+        folder=folder,
+        count=count,
+        unread_only=unread_only,
+        concise=concise,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_list_events_all(
+    ctx: Context,
+    days: int = 7,
+    count: int = 50,
+    concise: bool = True,
+) -> dict:
+    """Events across every authenticated account, soonest first, each tagged `account`.
+
+    Requires allow_aggregate=true. Same error/skip semantics as
+    outlook_list_inbox_all.
+    """
+    config = _get_config(ctx)
+    aggregation.require_aggregate(config)
+    clients, skipped = _authenticated_account_clients(ctx)
+    return await aggregation.list_events_all(
+        clients,
+        skipped,
+        config.timezone,
+        days=days,
+        count=count,
+        concise=concise,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_list_tasks_all(
+    ctx: Context,
+    status: str | None = None,
+    count: int = 25,
+) -> dict:
+    """Tasks across every authenticated account and task list, newest first.
+
+    Each task carries `account` and its `list`. Requires allow_aggregate=true.
+    Same error/skip semantics as outlook_list_inbox_all.
+    """
+    config = _get_config(ctx)
+    aggregation.require_aggregate(config)
+    clients, skipped = _authenticated_account_clients(ctx)
+    return await aggregation.list_tasks_all(
+        clients,
+        skipped,
+        status=status,
+        count=count,
     )
 
 
@@ -1472,10 +1643,17 @@ async def outlook_list_accounts(ctx: Context) -> dict:
 
 @mcp.tool()
 @_wrap_tool_errors
-async def outlook_switch_account(ctx: Context, name: str) -> dict:
-    """Switch the active Outlook account by configured `name` (from outlook_list_accounts)."""
+async def outlook_switch_account(ctx: Context, name: str, capability: str | None = None) -> dict:
+    """Switch the active Outlook account, or one capability's routing, by configured `name`.
+
+    Without `capability`, switches the active account (identity tools and any
+    unrouted capability). With `capability` ("mail", "calendar", "contacts",
+    "todo"), re-routes just that capability to `name`. Both forms require
+    `allow_cross_account: true` in config — otherwise the per-capability
+    routing is fixed and this tool refuses.
+    """
     auth = _get_auth(ctx)
-    return auth.switch_account(name)
+    return auth.switch_account(name, capability)
 
 
 # ── Annotations + config-gated toolsets ───────────────────────────────

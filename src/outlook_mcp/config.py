@@ -1,16 +1,24 @@
 """Config file management for outlook-mcp."""
 
 import os
+import re
 import stat
 import tempfile
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from outlook_mcp.permissions import VALID_CATEGORIES
 
 DEFAULT_TENANT_ID = "consumers"
 DEFAULT_CONFIG_DIR = os.path.expanduser("~/.outlook-mcp")
+
+# Capabilities an account routing decision can be made for. Derived from the
+# toolset groups: mail-centric groups (drafts/attachments/folders/admin/digest)
+# fold into "mail"; "account" tools follow the active account, not a capability.
+ROUTING_CAPABILITIES = {"mail", "calendar", "contacts", "todo"}
+
+_ACCOUNT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
 
 
 class AccountConfig(BaseModel):
@@ -19,6 +27,21 @@ class AccountConfig(BaseModel):
     name: str
     client_id: str
     tenant_id: str = DEFAULT_TENANT_ID
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        """Account names become keyring/cache filenames and CLI arguments.
+
+        Keep them short and filesystem-safe rather than accepting anything and
+        discovering the exotic cases as OSError deep inside msal_extensions.
+        """
+        if not _ACCOUNT_NAME_RE.match(value):
+            raise ValueError(
+                f"Account name '{value[:30]}' must be 1-32 chars of letters, "
+                "digits, '-' or '_', starting with a letter or digit."
+            )
+        return value
 
 
 class Config(BaseModel):
@@ -54,7 +77,38 @@ class Config(BaseModel):
         ),
     )
     accounts: list[AccountConfig] = Field(default_factory=list)
-    default_account: str | None = Field(default=None)
+    default_account: str | None = Field(
+        default=None,
+        description="Fallback account for capabilities without an explicit routing.",
+    )
+    capability_accounts: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            'Per-capability account routing, e.g. {"mail": "net", "todo": "neko"}. '
+            "A tool routes to the account named for its capability; capabilities "
+            "not listed fall back to default_account."
+        ),
+    )
+    allow_cross_account: bool = Field(
+        default=False,
+        description=(
+            "Master switch for cross-account access. False (default): the agent "
+            "sees one merged account and cannot address any other account's "
+            "content — outlook_switch_account refuses. True: the agent may "
+            "switch routing to query non-default content."
+        ),
+    )
+    allow_aggregate: bool = Field(
+        default=False,
+        description=(
+            "Master switch for the aggregated read tools (outlook_list_inbox_all, "
+            "outlook_list_events_all, outlook_list_tasks_all). False (default): "
+            "they refuse. True: they fan out concurrently to every authenticated "
+            "account and return one merged, per-item account-tagged listing. "
+            "Orthogonal to allow_cross_account: cross gates deliberately "
+            "switching routing; aggregate gates bulk cross-account reads."
+        ),
+    )
 
     @field_validator("allow_categories")
     @classmethod
@@ -67,6 +121,52 @@ class Config(BaseModel):
                 f"Unknown permission categories: {unknown}. Valid categories: {valid_list}"
             )
         return value
+
+    @model_validator(mode="after")
+    def _validate_accounts(self) -> "Config":
+        """Cross-field account validation, at load time where the fix is cheap.
+
+        - capability_accounts keys must be real capabilities and values must
+          name configured accounts — a typo here would otherwise surface as a
+          confusing AuthRequiredError on the first tool call.
+        - default_account / capability values must exist.
+        - default_account defaults to the first configured account.
+        """
+        if not self.accounts:
+            if self.capability_accounts:
+                raise ValueError(
+                    "capability_accounts is set but 'accounts' is empty — define "
+                    "the accounts first."
+                )
+            if self.default_account is not None:
+                raise ValueError(
+                    f"default_account '{self.default_account}' is set but 'accounts' is empty."
+                )
+            return self
+
+        names = [acc.name for acc in self.accounts]
+        if len(names) != len(set(names)):
+            raise ValueError(f"Duplicate account names in 'accounts': {names}")
+
+        unknown_caps = [c for c in self.capability_accounts if c not in ROUTING_CAPABILITIES]
+        if unknown_caps:
+            raise ValueError(
+                f"Unknown capabilities in capability_accounts: {unknown_caps}. "
+                f"Valid capabilities: {sorted(ROUTING_CAPABILITIES)}"
+            )
+        unknown_accounts = [a for a in self.capability_accounts.values() if a not in names]
+        if unknown_accounts:
+            raise ValueError(
+                f"capability_accounts references unknown accounts: {unknown_accounts}. "
+                f"Configured accounts: {names}"
+            )
+        if self.default_account is None:
+            self.default_account = names[0]
+        elif self.default_account not in names:
+            raise ValueError(
+                f"default_account '{self.default_account}' not in configured accounts: {names}"
+            )
+        return self
 
 
 def _ensure_dir(dir_path: str) -> Path:

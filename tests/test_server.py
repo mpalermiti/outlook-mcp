@@ -58,6 +58,10 @@ EXPECTED_TOOLS = [
     "outlook_update_task",
     "outlook_complete_task",
     "outlook_delete_task",
+    # Aggregate multi-account reads (3)
+    "outlook_list_inbox_all",
+    "outlook_list_events_all",
+    "outlook_list_tasks_all",
     # Mail drafts (5)
     "outlook_list_drafts",
     "outlook_create_draft",
@@ -94,7 +98,7 @@ EXPECTED_TOOLS = [
 def test_tool_count():
     """All 62 tools are registered (auth is CLI-only now)."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 62
+    assert len(registered) == 65
 
 
 def test_all_tools_registered():

@@ -73,13 +73,14 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `triage_folder(folder="inbox", count=50)` — one scan, sorted, applied in a single batch call
 - `catch_up(since="24h")` — what changed, via the delta path
 
-## Tools (62)
+## Tools (65)
 
 ### Auth
 - `outlook_auth_status` — Check authentication status and read-only mode
 
 ### Mail — Read
 - `outlook_list_inbox` — List messages with filters (folder, unread, sender, date, category, Focused class)
+- `outlook_list_inbox_all` — Aggregated inbox across every authenticated account (needs allow_aggregate), each message tagged `account`
 - `outlook_read_message` — Get full message by ID
 - `outlook_read_messages` — Bulk read up to 20 messages by ID in one `$batch` round-trip (use NOT N read_message calls)
 - `outlook_search_mail` — Search mail using KQL query
@@ -104,6 +105,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 
 ### Calendar
 - `outlook_list_events` — List events in date range (expands recurring); each carries `type` (seriesMaster vs one-off)
+- `outlook_list_events_all` — Aggregated events across every authenticated account (needs allow_aggregate), soonest first
 - `outlook_get_event` — Get event details, incl. `recurrence` and `type` (`seriesMaster` etc.)
 - `outlook_list_events_delta` — List only event changes since last call within a window (massive token savings for recurring agent jobs)
 - `outlook_create_event` — Create event with attendees, online meeting; `recurrence` (shorthand or Graph object) creates a series
@@ -126,6 +128,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 ### To Do
 - `outlook_list_task_lists` — List To Do lists
 - `outlook_list_tasks` — List tasks with status filter and pagination
+- `outlook_list_tasks_all` — Aggregated tasks across every account and task list (needs allow_aggregate)
 - `outlook_create_task` — Create with due date, importance, recurrence
 - `outlook_update_task` — Update
 - `outlook_complete_task` — Mark completed

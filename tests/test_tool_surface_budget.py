@@ -28,10 +28,12 @@ from outlook_mcp.server import mcp
 # itself, which is all a drift guard needs.
 CHARS_PER_TOKEN = 4
 
-# Ceiling for the full 62-tool surface. Measured at 11,206 on 1.20.0, with ~7%
-# headroom: enough for a docstring fix or another annotation, not enough for a
-# field added to all 62 or a batch of new tools.
-TOOL_SURFACE_CEILING = 12_000
+# Ceiling for the full tool surface. Measured at 11,206 on 1.20.0 with a
+# 12,000 ceiling; raised to 12,500 (measured 12,043) for the three aggregate
+# multi-account reads (outlook_list_*_all, gated by allow_aggregate) — a
+# deliberate "a new tool has to go somewhere" raise, not drift. Headroom is
+# back to ~3.5%: room for a docstring fix, not for another batch.
+TOOL_SURFACE_CEILING = 12_500
 
 # `prompts/list` is the cheap half of the bargain struck in 1.20.0: workflow
 # guidance costs a name and one line here until someone invokes it. If that ever
