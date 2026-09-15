@@ -8,7 +8,9 @@ import pytest
 from outlook_mcp.pagination import (
     apply_pagination,
     decode_cursor,
+    decode_cursor_payload,
     encode_cursor,
+    encode_cursor_payload,
     wrap_nextlink,
 )
 
@@ -78,3 +80,30 @@ class TestApplyPagination:
     def test_invalid_cursor_raises(self):
         with pytest.raises(ValueError):
             apply_pagination({}, count=25, cursor="garbage")
+
+    def test_malformed_base64_is_reported_as_an_invalid_cursor(self):
+        """Not base64's own 'Incorrect padding' — the agent needs to know it is the cursor."""
+        with pytest.raises(ValueError, match="Invalid pagination cursor"):
+            apply_pagination({}, count=25, cursor="garbage")
+
+    def test_reads_skip_from_a_payload_carrying_extra_keys(self):
+        """Tools may stamp their own scope into the cursor; paging ignores what it doesn't own."""
+        cursor = encode_cursor_payload({"skip": 10, "calendar": "WORK456="})
+        assert apply_pagination({}, count=25, cursor=cursor)["$skip"] == 10
+
+
+class TestCursorPayload:
+    """The cursor is an opaque JSON object; tools can carry more than a skip in it."""
+
+    def test_roundtrip_keeps_extra_keys(self):
+        cursor = encode_cursor_payload({"skip": 10, "calendar": "WORK456="})
+        assert decode_cursor_payload(cursor) == {"skip": 10, "calendar": "WORK456="}
+
+    def test_malformed_base64_is_an_invalid_cursor(self):
+        with pytest.raises(ValueError, match="Invalid pagination cursor"):
+            decode_cursor_payload("garbage")
+
+    def test_a_non_object_payload_is_an_invalid_cursor(self):
+        cursor = base64.urlsafe_b64encode(b"[1, 2]").decode()
+        with pytest.raises(ValueError, match="Invalid pagination cursor"):
+            decode_cursor_payload(cursor)

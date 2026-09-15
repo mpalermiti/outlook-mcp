@@ -103,7 +103,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_delete_inbox_override` — Delete an override by ID
 
 ### Calendar
-- `outlook_list_events` — List events in date range (expands recurring); each carries `type` (seriesMaster vs one-off) `calendar` param reads secondary calendars (name or Graph ID; default calendar when omitted)
+- `outlook_list_events` — List events in date range (expands recurring); each carries `type` (seriesMaster vs one-off); `calendar` reads a secondary calendar by name or ID (default calendar when omitted); a cursor continues the same calendar
 - `outlook_get_event` — Get event details, incl. `recurrence` and `type` (`seriesMaster` etc.)
 - `outlook_list_events_delta` — List only event changes since last call within a window (massive token savings for recurring agent jobs)
 - `outlook_create_event` — Create event with attendees, online meeting; `recurrence` (shorthand or Graph object) creates a series

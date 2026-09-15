@@ -6,6 +6,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **`outlook_list_events(calendar=…)` reads secondary calendars.** Every calendar read went to
+  the default calendar, so events in a class schedule or a shared team calendar were
+  unreachable — an empty listing with no hint why. `calendar` takes a display name
+  (case-insensitive) or an ID from `outlook_list_calendars`; omit it, or pass `"primary"`, for
+  the default calendar and the unchanged single round-trip. Names are matched before anything
+  is assumed about IDs — "Kids + School" and "Calendar - Jane Smith (…)" are names, however
+  ID-like they look — and an ID that is not one of the user's calendars is refused with the
+  real list rather than sent to Graph. A listing is resolved once: the cursor carries the
+  calendar, so a later page neither re-lists `/me/calendars` nor drifts to the default calendar
+  when `calendar` is omitted. `/me/calendars` is now read in full (paged) here and in
+  `outlook_list_calendars`.
+
+  Thanks to **@Nyaecho** for the feature (#62).
+
 ### Changed
 
 - **SKILL.md installs from PyPI instead of cloning `main`.** The OpenClaw install manifest

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from outlook_mcp.calendar_resolver import fetch_all_calendars
 from outlook_mcp.validation import sanitize_output
 
 
@@ -29,10 +30,8 @@ async def list_calendars(graph_client: Any) -> dict:
 
     Returns calendars with id, name, color, is_default, and can_edit.
     """
-    response = await graph_client.me.calendars.get()
-
     calendars = []
-    for cal in response.value or []:
+    for cal in await fetch_all_calendars(graph_client):
         color = ""
         if cal.color and hasattr(cal.color, "value"):
             color = cal.color.value
