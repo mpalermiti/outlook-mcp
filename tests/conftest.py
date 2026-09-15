@@ -64,7 +64,9 @@ def real_config():
     from outlook_mcp.config import load_config
 
     config = load_config()
-    if not config.client_id:
+    # Multi-account installs carry client_id per account, not at the top
+    # level; AuthManager handles those, so either shape counts as configured.
+    if not config.client_id and not config.accounts:
         pytest.skip("No client_id configured — run the Azure AD app setup first")
     return config
 

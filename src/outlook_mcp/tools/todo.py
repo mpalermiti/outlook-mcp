@@ -126,6 +126,33 @@ def _format_task(task: Any) -> dict:
     }
 
 
+def _format_checklist_item(item: Any) -> dict:
+    """Convert a Graph SDK ChecklistItem to a clean dict."""
+    checked_at = None
+    if item.checked_date_time:
+        checked_at = str(item.checked_date_time)
+
+    return {
+        "id": item.id,
+        "display_name": sanitize_output(item.display_name or ""),
+        "is_checked": bool(item.is_checked),
+        "checked_at": checked_at,
+        "created": str(item.created_date_time or ""),
+    }
+
+
+def _checked_last(items: list[dict]) -> list[dict]:
+    """Order checklist items unchecked-first, matching the To Do client.
+
+    Graph returns expanded checklistItems in no guaranteed order (it hands
+    back whatever the backing store produced), while every To Do client
+    surface shows open steps above completed ones. An agent reporting task
+    progress reads the first unchecked item as "the next step", so the order
+    we emit is load-bearing, not cosmetic.
+    """
+    return sorted(items, key=lambda i: i["is_checked"])
+
+
 async def list_task_lists(graph_client: Any) -> dict:
     """List all To Do task lists.
 
@@ -209,6 +236,40 @@ async def list_tasks(
         "has_more": next_cursor is not None,
         "next_cursor": next_cursor,
     }
+
+
+async def get_task(
+    graph_client: Any,
+    task_id: str,
+    list_id: str | None = None,
+) -> dict:
+    """Get full task details: notes (body), checklist items, recurrence flag.
+
+    GET /me/todo/lists/{id}/tasks/{taskId}?$expand=checklistItems
+    """
+    task_id = validate_graph_id(task_id)
+    resolved_id = await _resolve_list_id(graph_client, list_id)
+
+    from msgraph.generated.users.item.todo.lists.item.tasks.item.todo_task_item_request_builder import (  # noqa: E501
+        TodoTaskItemRequestBuilder,
+    )
+
+    req_config = build_request_config(
+        TodoTaskItemRequestBuilder.TodoTaskItemRequestBuilderGetQueryParameters,
+        {"$expand": "checklistItems"},
+    )
+    task = await (
+        graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
+        .tasks.by_todo_task_id(task_id)
+        .get(request_configuration=req_config)
+    )
+
+    result = _format_task(task)
+    raw_items = getattr(task, "checklist_items", None)
+    items = [_format_checklist_item(i) for i in (raw_items.value if raw_items else [])]
+    result["checklist_items"] = _checked_last(items)
+    result["checklist_count"] = len(items)
+    return result
 
 
 async def create_task(
@@ -386,4 +447,126 @@ async def delete_task(
     return {
         "status": "deleted",
         "task_id": task_id,
+    }
+
+
+def _validated_display_name(display_name: str) -> str:
+    """Reject an empty/whitespace checklist label before it reaches Graph."""
+    name = (display_name or "").strip()
+    if not name:
+        raise ValueError("display_name must be a non-empty string")
+    return name
+
+
+async def add_checklist_item(
+    graph_client: Any,
+    task_id: str,
+    display_name: str,
+    list_id: str | None = None,
+    *,
+    config: Config,
+) -> dict:
+    """Add a checklist item (sub-step) to a task.
+
+    POST /me/todo/lists/{id}/tasks/{taskId}/checklistItems
+    """
+    check_permission(config, CATEGORY_TODO_WRITE, "outlook_add_checklist_item")
+    task_id = validate_graph_id(task_id)
+    name = _validated_display_name(display_name)
+    resolved_id = await _resolve_list_id(graph_client, list_id)
+
+    from msgraph.generated.models.checklist_item import ChecklistItem
+
+    item = ChecklistItem()
+    item.display_name = name
+
+    response = await (
+        graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
+        .tasks.by_todo_task_id(task_id)
+        .checklist_items.post(item)
+    )
+
+    return {
+        "status": "added",
+        "task_id": task_id,
+        "checklist_item_id": response.id,
+        "display_name": sanitize_output(response.display_name or ""),
+    }
+
+
+async def update_checklist_item(
+    graph_client: Any,
+    task_id: str,
+    checklist_item_id: str,
+    display_name: str | None = None,
+    is_checked: bool | None = None,
+    list_id: str | None = None,
+    *,
+    config: Config,
+) -> dict:
+    """Update a checklist item (partial patch — only provided fields change).
+
+    PATCH /me/todo/lists/{id}/tasks/{taskId}/checklistItems/{checklistItemId}
+    checkedDateTime is maintained server-side from isChecked; sending it
+    ourselves would race the server's own bookkeeping.
+    """
+    check_permission(config, CATEGORY_TODO_WRITE, "outlook_update_checklist_item")
+    task_id = validate_graph_id(task_id)
+    checklist_item_id = validate_graph_id(checklist_item_id)
+
+    if display_name is None and is_checked is None:
+        raise ValueError("Provide at least one of display_name or is_checked")
+
+    resolved_id = await _resolve_list_id(graph_client, list_id)
+
+    from msgraph.generated.models.checklist_item import ChecklistItem
+
+    patch_body = ChecklistItem()
+    if display_name is not None:
+        patch_body.display_name = _validated_display_name(display_name)
+    if is_checked is not None:
+        patch_body.is_checked = is_checked
+
+    await (
+        graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
+        .tasks.by_todo_task_id(task_id)
+        .checklist_items.by_checklist_item_id(checklist_item_id)
+        .patch(patch_body)
+    )
+
+    return {
+        "status": "updated",
+        "task_id": task_id,
+        "checklist_item_id": checklist_item_id,
+    }
+
+
+async def delete_checklist_item(
+    graph_client: Any,
+    task_id: str,
+    checklist_item_id: str,
+    list_id: str | None = None,
+    *,
+    config: Config,
+) -> dict:
+    """Delete a checklist item from a task.
+
+    DELETE /me/todo/lists/{id}/tasks/{taskId}/checklistItems/{checklistItemId}
+    """
+    check_permission(config, CATEGORY_TODO_WRITE, "outlook_delete_checklist_item")
+    task_id = validate_graph_id(task_id)
+    checklist_item_id = validate_graph_id(checklist_item_id)
+    resolved_id = await _resolve_list_id(graph_client, list_id)
+
+    await (
+        graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
+        .tasks.by_todo_task_id(task_id)
+        .checklist_items.by_checklist_item_id(checklist_item_id)
+        .delete()
+    )
+
+    return {
+        "status": "deleted",
+        "task_id": task_id,
+        "checklist_item_id": checklist_item_id,
     }
