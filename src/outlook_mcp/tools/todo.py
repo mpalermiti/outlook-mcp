@@ -265,8 +265,12 @@ async def get_task(
     )
 
     result = _format_task(task)
-    raw_items = getattr(task, "checklist_items", None)
-    items = [_format_checklist_item(i) for i in (raw_items.value if raw_items else [])]
+    # The SDK model types checklist_items as a plain list[ChecklistItem] — with
+    # $expand Graph fills that list directly, and an empty expansion is [].
+    # There is no collection response to unwrap (verified live: every task
+    # carrying sub-steps crashed on a phantom `.value`).
+    raw_items = getattr(task, "checklist_items", None) or []
+    items = [_format_checklist_item(i) for i in raw_items]
     result["checklist_items"] = _checked_last(items)
     result["checklist_count"] = len(items)
     return result

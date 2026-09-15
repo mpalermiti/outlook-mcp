@@ -61,9 +61,11 @@ def _mock_task(
 ):
     """Helper to build a mock task.
 
-    `checklist_items` must stay an explicit MagicMock-or-None: a bare MagicMock
-    auto-vivifies `task.checklist_items.value` into something truthy-but-fake,
-    which is exactly the class of silent lie the repo guards against.
+    `checklist_items` must be a real list or None — the SDK model types it as
+    plain list[ChecklistItem] (no `.value` to unwrap), and a MagicMock here
+    auto-vivifies into something truthy-but-fake. Shipped 1.22.0 with a mock
+    that faked a `.value` collection and every task carrying sub-steps crashed
+    on the real wire shape.
     """
     mock = MagicMock()
     mock.id = task_id
@@ -581,7 +583,7 @@ class TestGetTask:
         """get_task requests $expand=checklistItems — the only way the
         sub-steps come back on a single-task read."""
         task = _mock_task(
-            checklist_items=MagicMock(value=[_mock_checklist_item()]),
+            checklist_items=[_mock_checklist_item()],
         )
         client = _build_mock_client(tasks=[task])
 
@@ -592,17 +594,18 @@ class TestGetTask:
         assert qp.expand == ["checklistItems"]
 
     async def test_get_task_formats_checklist_items(self):
-        items = MagicMock(
-            value=[
-                _mock_checklist_item(
-                    item_id="ci1",
-                    display_name="Draft outline",
-                    is_checked=True,
-                    checked="2026-09-15T09:00:00Z",
-                ),
-                _mock_checklist_item(item_id="ci2", display_name="Send for review"),
-            ]
-        )
+        """Sub-steps come back on the wire as a plain list — the SDK model has
+        no `.value` collection to unwrap (regression: 1.22.0 crashed on every
+        task that actually had sub-steps)."""
+        items = [
+            _mock_checklist_item(
+                item_id="ci1",
+                display_name="Draft outline",
+                is_checked=True,
+                checked="2026-09-15T09:00:00Z",
+            ),
+            _mock_checklist_item(item_id="ci2", display_name="Send for review"),
+        ]
         task = _mock_task(body_content="project notes", checklist_items=items)
         client = _build_mock_client(tasks=[task])
 
@@ -620,13 +623,15 @@ class TestGetTask:
         assert formatted["checked_at"] == "2026-09-15T09:00:00Z"
 
     async def test_get_task_without_checklist_items(self):
-        """A task with no sub-steps (checklist_items=None) reads back empty."""
-        client = _build_mock_client(tasks=[_mock_task(checklist_items=None)])
+        """A task with no sub-steps reads back empty — None and [] both occur
+        on the wire depending on whether Graph emitted the expanded property."""
+        for empty in (None, []):
+            client = _build_mock_client(tasks=[_mock_task(checklist_items=empty)])
 
-        result = await get_task(client, task_id="task1")
+            result = await get_task(client, task_id="task1")
 
-        assert result["checklist_items"] == []
-        assert result["checklist_count"] == 0
+            assert result["checklist_items"] == []
+            assert result["checklist_count"] == 0
 
     async def test_get_task_validates_id(self):
         client = _build_mock_client()
