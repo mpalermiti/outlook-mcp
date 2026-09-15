@@ -81,9 +81,10 @@ Working rules, each of which saves a round trip:
 - You are already signed in. Do not call outlook_whoami, outlook_list_accounts or
   outlook_auth_status to check before doing something — just call the tool you need. If a call
   does fail on authentication, its error says exactly what to run.
-- Folder parameters take display names directly ("Junk Email", "Purchases"), as well as
-  well-known names ("inbox", "drafts") and Graph IDs. Do not list folders first to find an ID.
-  Call outlook_list_folders only when you genuinely need to discover what folders exist.
+- Folder and calendar parameters take display names directly ("Junk Email", "Purchases",
+  "Work"), as well as well-known folder names ("inbox", "drafts") and Graph IDs. Do not list
+  folders or calendars first to find an ID. Call outlook_list_folders / outlook_list_calendars
+  only when you genuinely need to discover what exists.
 - Dates accept ISO 8601 (2026-10-22, or 2026-10-22T14:30:00Z) or a relative offset: `7d` is
   seven days ago, `+7d` is seven days from now, `now` is this moment. Units: m, h, d, w.
 - Scanning mail or events? Pass concise=True — roughly ten times fewer tokens. To read several
@@ -194,9 +195,7 @@ async def outlook_auth_status(ctx: Context) -> dict:
             # changing.
             result["action_required"] = str(auth.startup_error)
         else:
-            result["action_required"] = (
-                "Run `outlook-mcp auth` on the host to authenticate."
-            )
+            result["action_required"] = "Run `outlook-mcp auth` on the host to authenticate."
     return result
 
 
@@ -606,6 +605,7 @@ async def outlook_list_events(
     count: int = 50,
     cursor: str | None = None,
     concise: bool = False,
+    calendar: str | None = None,
 ) -> dict:
     """List calendar events in a date range (expands recurring instances).
 
@@ -613,6 +613,9 @@ async def outlook_list_events(
 
     Pass concise=True to drop large fields (body, attendees, organizer, categories) — ~10x fewer
     tokens for day-at-a-glance scans.
+
+    `calendar`: a display name or an ID from outlook_list_calendars; omit for the default calendar.
+    A cursor continues the listing it came from.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -625,6 +628,7 @@ async def outlook_list_events(
         config.timezone,
         cursor=cursor,
         concise=concise,
+        calendar=calendar,
     )
 
 

@@ -307,7 +307,7 @@ configured `timezone`; responses are always UTC.
 
 | Tool | Description |
 |------|-------------|
-| `outlook_list_events` | List events in a date range. Expands recurring events. Each event carries `type`, so a series master is distinguishable from a one-off. Configurable via `days`, `after`, `before`. |
+| `outlook_list_events` | List events in a date range. Expands recurring events. Each event carries `type`, so a series master is distinguishable from a one-off. Configurable via `days`, `after`, `before`. `calendar` selects which calendar to read: omit (or `"primary"`) for the default, otherwise a display name (case-insensitive; not-found and ambiguous errors name what exists) or an ID from `outlook_list_calendars`. A `cursor` continues the listing it came from, so later pages need neither `calendar` nor a second lookup. |
 | `outlook_get_event` | Get full event details: attendees, body, online meeting URL, recurrence, `type` (`singleInstance` / `seriesMaster` / `occurrence` / `exception`). |
 | `outlook_list_events_delta` | List only event changes inside a window since the last call. `start` and `end` (ISO 8601) required on the first call (Graph constraint — no whole-calendar sync). Deletes come back as `{id, is_deleted: True}`. Cursor is stateless. |
 

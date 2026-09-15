@@ -88,3 +88,28 @@ class TestListCalendars:
         result = await list_calendars(mock_client)
         assert result["count"] == 0
         assert result["calendars"] == []
+
+    @pytest.mark.asyncio
+    async def test_list_calendars_follows_pagination(self):
+        """Every page of /me/calendars is read, with a page size asked for up front."""
+        first, second = MagicMock(), MagicMock()
+        first.id, first.name = "cal1", "Calendar"
+        second.id, second.name = "cal2", "Work"
+        for cal in (first, second):
+            cal.color = MagicMock(value="auto")
+            cal.is_default_calendar = False
+            cal.can_edit = True
+        next_link = "https://graph.microsoft.com/v1.0/me/calendars?$skip=1"
+        page_one = MagicMock(value=[first], odata_next_link=next_link)
+        page_two = MagicMock(value=[second], odata_next_link=None)
+
+        mock_client = MagicMock()
+        mock_client.me.calendars.get = AsyncMock(return_value=page_one)
+        mock_client.me.calendars.with_url.return_value.get = AsyncMock(return_value=page_two)
+
+        result = await list_calendars(mock_client)
+
+        assert [c["id"] for c in result["calendars"]] == ["cal1", "cal2"]
+        mock_client.me.calendars.with_url.assert_called_once_with(next_link)
+        sent = mock_client.me.calendars.get.call_args.kwargs["request_configuration"]
+        assert sent.query_parameters.top == 100

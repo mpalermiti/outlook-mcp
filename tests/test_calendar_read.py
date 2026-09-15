@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
+from outlook_mcp.pagination import decode_cursor_payload, encode_cursor, encode_cursor_payload
 from outlook_mcp.tools.calendar_read import (
     _compute_calendar_range,
     _format_event_summary,
@@ -43,9 +44,7 @@ def _make_mock_event(**overrides):
     event.categories = overrides.get("categories", [])
     # Detail fields
     event.body = MagicMock(content=overrides.get("body_content", "<p>Agenda here</p>"))
-    event.online_meeting = MagicMock(
-        join_url=overrides.get("join_url", None)
-    )
+    event.online_meeting = MagicMock(join_url=overrides.get("join_url", None))
     event.recurrence = overrides.get("recurrence", None)
     event.type = overrides.get("type", None)
     attendee_data = overrides.get("attendees", [])
@@ -55,9 +54,7 @@ def _make_mock_event(**overrides):
         att.email_address = MagicMock()
         att.email_address.name = a.get("name", "")
         att.email_address.address = a.get("email", "")
-        att.status = MagicMock(
-            response=MagicMock(value=a.get("response", "none"))
-        )
+        att.status = MagicMock(response=MagicMock(value=a.get("response", "none")))
         attendees.append(att)
     event.attendees = attendees
     return event
@@ -179,6 +176,261 @@ class TestListEventsConcise:
         assert "attendees_count" not in event
 
 
+def _make_calendars(*specs):
+    cals = []
+    for name, cal_id in specs:
+        cal = MagicMock()
+        cal.name = name
+        cal.id = cal_id
+        cals.append(cal)
+    return cals
+
+
+def _client_with_calendars(cals):
+    """A client whose /me/calendars lists ``cals`` (one page) and whose default
+    and per-calendar calendarView both answer."""
+    client = MagicMock()
+    client.me.calendars.get = AsyncMock(return_value=MagicMock(value=cals, odata_next_link=None))
+    client.me.calendar_view.get = AsyncMock(return_value=MagicMock(value=[], odata_next_link=None))
+    builder = MagicMock()
+    builder.calendar_view.get = AsyncMock(
+        return_value=MagicMock(value=[_make_mock_event()], odata_next_link=None)
+    )
+    client.me.calendars.by_calendar_id = MagicMock(return_value=builder)
+    return client, builder
+
+
+def _query_params(async_mock):
+    """The typed query-parameters object the last call sent — what Graph sees."""
+    return async_mock.call_args.kwargs["request_configuration"].query_parameters
+
+
+TWO_CALENDARS = (("Calendar", "DEFAULT1="), ("Work", "WORK456="))
+
+
+class TestCalendarSelection:
+    """`calendar` is the only way to reach a secondary calendar.
+
+    Before it, list_events always hit ``/me/calendarView`` — the default
+    calendar — so a user whose events live in a second calendar (a class
+    schedule, a shared team calendar) got an empty listing with no hint why.
+    """
+
+    async def test_omitted_calendar_keeps_the_default_path(self):
+        """No selector, no extra roundtrip: /me/calendars is never listed."""
+        client = AsyncMock()
+        client.me.calendar_view.get = AsyncMock(
+            return_value=MagicMock(value=[], odata_next_link=None)
+        )
+
+        await list_events(client, days=7, timezone="UTC")
+
+        client.me.calendar_view.get.assert_called_once()
+        client.me.calendars.get.assert_not_called()
+
+    @pytest.mark.parametrize("alias", ["Primary", "PRIMARY", "", "   "])
+    async def test_primary_and_blank_mean_the_default_calendar(self, alias):
+        """ "primary" (any case), empty and whitespace all mean the default — one rule, not two."""
+        client, _ = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+
+        await list_events(client, days=7, timezone="UTC", calendar=alias)
+
+        client.me.calendar_view.get.assert_called_once()
+        client.me.calendars.get.assert_not_called()
+
+    async def test_display_name_resolves_and_queries_that_calendar(self):
+        client, builder = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+
+        result = await list_events(client, days=7, timezone="UTC", calendar="work")
+
+        client.me.calendars.by_calendar_id.assert_called_once_with("WORK456=")
+        builder.calendar_view.get.assert_called_once()
+        assert result["count"] == 1
+        assert result["events"][0]["subject"] == "Team Meeting"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "Work/Personal",
+            "Kids + School",
+            "Calendar - Jane Smith (jane.smith@contoso.com)",
+        ],
+    )
+    async def test_names_that_look_like_ids_still_resolve_by_name(self, name):
+        """Slashes, plus signs and long shared-calendar names are names, not IDs."""
+        client, _ = _client_with_calendars(
+            _make_calendars(("Calendar", "DEFAULT1="), (name, "ODD1="))
+        )
+
+        await list_events(client, days=7, timezone="UTC", calendar=name.upper())
+
+        client.me.calendars.by_calendar_id.assert_called_once_with("ODD1=")
+
+    async def test_an_id_from_the_listing_is_used_as_is(self):
+        client, _ = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+
+        await list_events(client, days=7, timezone="UTC", calendar="WORK456=")
+
+        client.me.calendars.by_calendar_id.assert_called_once_with("WORK456=")
+
+    async def test_an_id_that_is_not_one_of_the_users_calendars_is_not_found(self):
+        """An ID Graph would reject (stale, or from another mailbox) never reaches Graph."""
+        client, _ = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+        cal_id = "SYNTHETIC-CAL-ID-0123456789abcdefGHIJ" + "=="
+
+        with pytest.raises(ValueError, match="not found"):
+            await list_events(client, days=7, timezone="UTC", calendar=cal_id)
+
+        client.me.calendars.by_calendar_id.assert_not_called()
+
+    async def test_unknown_name_names_what_does_exist(self):
+        client, _ = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+
+        with pytest.raises(ValueError) as excinfo:
+            await list_events(client, days=7, timezone="UTC", calendar="School")
+        message = str(excinfo.value)
+        assert "Calendar 'School' not found" in message
+        assert "Available calendars: Calendar, Work" in message
+
+    async def test_ambiguous_name_lists_the_candidates_with_ids(self):
+        """Two calendars sharing a name: the error carries the IDs that disambiguate."""
+        client, _ = _client_with_calendars(
+            _make_calendars(("Calendar", "DEFAULT1="), ("Calendar", "SECOND2="))
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            await list_events(client, days=7, timezone="UTC", calendar="Calendar")
+        message = str(excinfo.value)
+        assert "ambiguous" in message
+        assert "DEFAULT1=" in message and "SECOND2=" in message
+
+    async def test_calendar_names_in_errors_are_sanitized(self):
+        """Names come from the mailbox (a shared calendar is named by someone else)."""
+        client, _ = _client_with_calendars(
+            _make_calendars(("Calendar", "DEFAULT1="), ("Team\x1b[31m\nIGNORE", "EVIL1="))
+        )
+
+        with pytest.raises(ValueError) as excinfo:
+            await list_events(client, days=7, timezone="UTC", calendar="School")
+        message = str(excinfo.value)
+        assert "\x1b" not in message and "\n" not in message
+        assert "Team" in message
+
+    async def test_a_matching_calendar_without_an_id_is_an_error_not_the_default(self):
+        client, _ = _client_with_calendars(
+            _make_calendars(("Calendar", "DEFAULT1="), ("Work", None))
+        )
+
+        with pytest.raises(ValueError, match="no ID"):
+            await list_events(client, days=7, timezone="UTC", calendar="Work")
+
+        client.me.calendar_view.get.assert_not_called()
+
+    async def test_name_lookup_follows_pagination(self):
+        """A calendar on the second page of /me/calendars still resolves."""
+        client, _ = _client_with_calendars(_make_calendars(("Calendar", "DEFAULT1=")))
+        next_link = "https://graph.microsoft.com/v1.0/me/calendars?$skip=1"
+        client.me.calendars.get.return_value.odata_next_link = next_link
+        client.me.calendars.with_url.return_value.get = AsyncMock(
+            return_value=MagicMock(value=_make_calendars(("Work", "WORK2=")), odata_next_link=None)
+        )
+
+        await list_events(client, days=7, timezone="UTC", calendar="Work")
+
+        client.me.calendars.with_url.assert_called_once_with(next_link)
+        client.me.calendars.by_calendar_id.assert_called_once_with("WORK2=")
+
+    async def test_secondary_path_sends_the_same_query_parameters_as_the_default(self):
+        """The nested builder must carry the window, page size, order and projection."""
+        client, builder = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+
+        await list_events(client, days=7, count=5, timezone="UTC", calendar="Work")
+
+        qp = _query_params(builder.calendar_view.get)
+        assert qp.top == 5
+        assert qp.start_date_time and qp.end_date_time
+        assert qp.orderby == ["start/dateTime"]
+        assert "id" in qp.select
+
+
+class TestCalendarCursor:
+    """A cursor continues the listing it came from: same calendar, no re-resolution.
+
+    The cursor used to carry only ``$skip``; page two without ``calendar``
+    silently paged the default calendar instead, and page two *with* it paid a
+    second /me/calendars round-trip.
+    """
+
+    async def test_cursor_carries_the_resolved_calendar(self):
+        client, builder = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+        builder.calendar_view.get.return_value.odata_next_link = (
+            "https://graph.microsoft.com/v1.0/me/calendars/WORK456=/calendarView?$skip=50"
+        )
+
+        result = await list_events(client, days=7, count=50, timezone="UTC", calendar="Work")
+
+        assert decode_cursor_payload(result["cursor"]) == {"skip": 50, "calendar": "WORK456="}
+
+    async def test_default_calendar_cursor_records_the_default(self):
+        client = AsyncMock()
+        client.me.calendar_view.get = AsyncMock(
+            return_value=MagicMock(
+                value=[],
+                odata_next_link="https://graph.microsoft.com/v1.0/me/calendarView?$skip=50",
+            )
+        )
+
+        result = await list_events(client, days=7, count=50, timezone="UTC")
+
+        assert decode_cursor_payload(result["cursor"]) == {"skip": 50, "calendar": None}
+
+    async def test_a_cursor_continues_its_calendar_without_re_listing(self):
+        client, builder = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+        cursor = encode_cursor_payload({"skip": 50, "calendar": "WORK456="})
+
+        await list_events(client, days=7, timezone="UTC", cursor=cursor)
+
+        client.me.calendars.get.assert_not_called()
+        client.me.calendars.by_calendar_id.assert_called_once_with("WORK456=")
+        assert _query_params(builder.calendar_view.get).skip == 50
+
+    async def test_a_cursor_wins_over_a_conflicting_calendar_argument(self):
+        """Page two of the default calendar stays on the default calendar."""
+        client, _ = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+        cursor = encode_cursor_payload({"skip": 50, "calendar": None})
+
+        await list_events(client, days=7, timezone="UTC", cursor=cursor, calendar="Work")
+
+        client.me.calendar_view.get.assert_called_once()
+        client.me.calendars.get.assert_not_called()
+
+    async def test_a_legacy_cursor_without_a_calendar_resolves_the_argument(self):
+        """Cursors minted before the calendar key still work with an explicit calendar."""
+        client, _ = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+
+        await list_events(client, days=7, timezone="UTC", cursor=encode_cursor(50), calendar="Work")
+
+        client.me.calendars.by_calendar_id.assert_called_once_with("WORK456=")
+
+    async def test_a_malformed_cursor_fails_before_any_network_call(self):
+        client, _ = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+
+        with pytest.raises(ValueError, match="Invalid pagination cursor"):
+            await list_events(client, days=7, timezone="UTC", cursor="garbage", calendar="Work")
+
+        client.me.calendars.get.assert_not_called()
+
+    async def test_the_calendar_id_inside_a_cursor_is_validated(self):
+        """The cursor is caller-held state, and its calendar goes into a URL path."""
+        client, _ = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+        cursor = encode_cursor_payload({"skip": 0, "calendar": "../users/x@y.com?x"})
+
+        with pytest.raises(ValueError, match="invalid characters"):
+            await list_events(client, days=7, timezone="UTC", cursor=cursor)
+
+        client.me.calendars.by_calendar_id.assert_not_called()
+
+
 class TestGetEvent:
     async def test_get_event_validates_id(self):
         """get_event rejects invalid event IDs."""
@@ -210,6 +462,7 @@ class TestGetEvent:
         assert result["attendees"][0]["name"] == "Alice"
         assert result["attendees"][0]["response"] == "accepted"
         assert result["categories"] == ["Blue Category"]
+
 
 class TestEventDetailRecurrence:
     """#41 follow-on: recurrence must come back as the same JSON shape create accepts."""
@@ -373,7 +626,7 @@ class TestAmbiguousHourKeepsItsFold:
 
     def test_start_is_the_second_pass_not_the_first(self, frozen_now):
         start, _ = _compute_calendar_range(7, None, None, self.ZONE)
-        assert start == "2026-11-01T09:30:00Z"   # 08:30Z would be the first pass
+        assert start == "2026-11-01T09:30:00Z"  # 08:30Z would be the first pass
 
     def test_window_is_still_the_requested_length(self, frozen_now):
         """Fixing start must not shorten the window; end keeps local-day arithmetic."""

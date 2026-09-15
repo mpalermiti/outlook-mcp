@@ -10,10 +10,36 @@ from urllib.parse import parse_qs, urlparse
 from kiota_abstractions.base_request_configuration import RequestConfiguration
 
 
+def encode_cursor_payload(data: dict[str, Any]) -> str:
+    """Encode a cursor payload dict as an opaque base64 cursor.
+
+    Paging owns ``skip`` / ``skiptoken``; a tool may add its own keys to pin
+    the scope a listing was made in (``calendar_read`` stores the calendar), so
+    a follow-up page cannot drift to a different scope.
+    """
+    return base64.urlsafe_b64encode(json.dumps(data).encode()).decode()
+
+
+def decode_cursor_payload(cursor: str) -> dict[str, Any]:
+    """Decode an opaque cursor back to its payload dict.
+
+    Raises ValueError("Invalid pagination cursor") for anything that is not a
+    base64-encoded JSON object — including base64's own padding errors, which
+    are ValueErrors with a message ("Incorrect padding") that tells an agent
+    nothing about which argument was wrong.
+    """
+    try:
+        data = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+    except (ValueError, UnicodeDecodeError) as e:  # binascii.Error is a ValueError
+        raise ValueError("Invalid pagination cursor") from e
+    if not isinstance(data, dict):
+        raise ValueError("Invalid pagination cursor")
+    return data
+
+
 def encode_cursor(skip: int) -> str:
     """Encode a skip value into an opaque base64 cursor."""
-    payload = json.dumps({"skip": skip})
-    return base64.urlsafe_b64encode(payload.encode()).decode()
+    return encode_cursor_payload({"skip": skip})
 
 
 def decode_cursor(cursor: str) -> int:
@@ -80,15 +106,11 @@ def apply_pagination(
     query_params["$top"] = count
 
     if cursor:
-        try:
-            payload = base64.urlsafe_b64decode(cursor.encode()).decode()
-            data = json.loads(payload)
-            if "skip" in data:
-                query_params["$skip"] = data["skip"]
-            elif "skiptoken" in data:
-                query_params["$skiptoken"] = data["skiptoken"]
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            raise ValueError("Invalid pagination cursor") from e
+        data = decode_cursor_payload(cursor)
+        if "skip" in data:
+            query_params["$skip"] = data["skip"]
+        elif "skiptoken" in data:
+            query_params["$skiptoken"] = data["skiptoken"]
 
     return query_params
 

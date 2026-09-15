@@ -7,7 +7,14 @@ from datetime import timezone as dt_timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
+from outlook_mcp.calendar_resolver import resolve_calendar_id
+from outlook_mcp.pagination import (
+    apply_pagination,
+    build_request_config,
+    decode_cursor_payload,
+    encode_cursor_payload,
+    wrap_nextlink,
+)
 from outlook_mcp.tools._recurrence import serialize_recurrence
 from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
 
@@ -231,8 +238,9 @@ async def list_events(
     timezone: str = "UTC",
     cursor: str | None = None,
     concise: bool = False,
+    calendar: str | None = None,
 ) -> dict:
-    """List calendar events using calendarView.
+    """List calendar events in a date range (expands recurring instances).
 
     The calendarView endpoint requires startDateTime and endDateTime.
     If after/before are not provided, they are computed from `days`
@@ -241,9 +249,28 @@ async def list_events(
     concise: when True, return a compact event shape — drops ``organizer``,
     ``response_status``, ``categories``; adds ``is_organizer`` and
     ``attendees_count``. Default False preserves the existing shape.
+
+    calendar: which calendar to read. None, blank or "primary" keeps the
+    default calendar's ``/me/calendarView``; otherwise a display name or ID
+    resolved via ``calendar_resolver.resolve_calendar_id`` — the only way to
+    reach secondary calendars. A cursor continues the listing it came from:
+    the calendar is stored in it, so a later page neither re-resolves the
+    name nor drifts to a different calendar when the argument is omitted.
     """
     count = _clamp(count, 1, 100)
     start_utc, end_utc = _compute_calendar_range(days, after, before, timezone)
+    # Decode before any network call, so a bad cursor is refused for free.
+    payload = decode_cursor_payload(cursor) if cursor else {}
+
+    if "calendar" in payload:
+        # Caller-held state that goes into a URL path: validate, never trust.
+        calendar_id = payload["calendar"]
+        if calendar_id is not None:
+            if not isinstance(calendar_id, str):
+                raise ValueError("Invalid pagination cursor")
+            calendar_id = validate_graph_id(calendar_id)
+    else:
+        calendar_id = await resolve_calendar_id(graph_client, calendar)
 
     query_params = apply_pagination({}, count, cursor)
     query_params["start_date_time"] = start_utc
@@ -253,8 +280,7 @@ async def list_events(
         # We need attendees + isOrganizer to compute the concise fields.
         # Keep the select tight to avoid pulling full event bodies.
         query_params["$select"] = (
-            "id,subject,start,end,location,isAllDay,"
-            "isOrganizer,isOnlineMeeting,attendees"
+            "id,subject,start,end,location,isAllDay,isOrganizer,isOnlineMeeting,attendees"
         )
     else:
         query_params["$select"] = (
@@ -266,21 +292,38 @@ async def list_events(
         CalendarViewRequestBuilder,
     )
 
+    # The per-calendar view has its own request-builder class in the SDK, but
+    # its query-parameters dataclass is field-for-field the same and kiota
+    # reads the parameters off the object, not the class — one import serves
+    # both paths.
+    if calendar_id is None:
+        view = graph_client.me.calendar_view
+    else:
+        view = graph_client.me.calendars.by_calendar_id(calendar_id).calendar_view
+
     req_config = build_request_config(
         CalendarViewRequestBuilder.CalendarViewRequestBuilderGetQueryParameters, query_params
     )
-    response = await graph_client.me.calendar_view.get(request_configuration=req_config)
+    response = await view.get(request_configuration=req_config)
 
     if concise:
         events = [_format_event_concise(e) for e in (response.value or [])]
     else:
         events = [_format_event_summary(e) for e in (response.value or [])]
 
+    next_cursor = wrap_nextlink(response.odata_next_link)
+    if next_cursor is not None:
+        # Pin the calendar into the cursor (None = the default calendar), so
+        # the next page is unambiguously a continuation of this listing.
+        next_cursor = encode_cursor_payload(
+            {**decode_cursor_payload(next_cursor), "calendar": calendar_id}
+        )
+
     return {
         "events": events,
         "count": len(events),
         "has_more": response.odata_next_link is not None,
-        "cursor": wrap_nextlink(response.odata_next_link),
+        "cursor": next_cursor,
     }
 
 
