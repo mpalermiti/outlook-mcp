@@ -24,7 +24,7 @@ You'll like this if you're:
 - Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
 - Security-conscious: tokens in the OS keyring (Keychain on macOS, libsecret on Linux -- never cleartext unless you opt in), granular `allow_categories`, optional `read_only` mode, zero telemetry
 
-This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 62 tools — way more than you need for "read my inbox").
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 70 tools — way more than you need for "read my inbox").
 
 ### How it differs from other Outlook tools you'll find
 
@@ -44,7 +44,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 62 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 70 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -59,7 +59,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 ## Features
 
-**62 tools** across 13 categories:
+**70 tools** across 13 categories:
 
 - **Auth (1)** -- auth status check (login is via CLI)
 - **Mail Read (7)** -- list inbox (with Focused Inbox and uncategorized filters), read message, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
@@ -68,7 +68,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 - **Calendar Read (3)** -- list events (with recurring expansion), get event details, delta-sync event changes
 - **Calendar Write (4)** -- create, update, delete, RSVP (accept/decline/tentative)
 - **Contacts (7)** -- list, search, get, create, update, delete, delta-sync changes
-- **To Do (6)** -- list task lists, list/create/update/complete/delete tasks
+- **To Do (14)** -- task lists, tasks (list/get/create/update/complete/delete), checklist items (add/update/delete), task attachments (list/download/upload/delete)
 - **Drafts (5)** -- list, create, update, send, delete
 - **Attachments (5)** -- list, download, send-with-attachments, attach-to-draft, remove-draft-attachment
 - **Folder Management (3)** -- create, rename, delete mail folders
@@ -338,10 +338,18 @@ configured `timezone`; responses are always UTC.
 |------|-------------|
 | `outlook_list_task_lists` | List To Do lists. |
 | `outlook_list_tasks` | List tasks with status filter and pagination. |
+| `outlook_get_task` | Get full task details: notes (`body`), checklist items (ordered unchecked-first), due, recurrence flag. |
 | `outlook_create_task` | Create task with due date, importance, recurrence. |
 | `outlook_update_task` | Update task fields. |
 | `outlook_complete_task` | Mark task as completed. |
 | `outlook_delete_task` | Delete a task. |
+| `outlook_add_checklist_item` | Add a checklist item (sub-step) to a task. |
+| `outlook_update_checklist_item` | Update a checklist item — mark done (`is_checked`) or rename (partial patch). |
+| `outlook_delete_checklist_item` | Delete a checklist item from a task. |
+| `outlook_list_task_attachments` | List attachments on a To Do task (id, name, size, content_type). |
+| `outlook_download_task_attachment` | Download a task attachment's content to a local file (confined to `attachments_dir`). |
+| `outlook_upload_task_attachment` | Attach a local file to a task via upload session (0–25 MB). |
+| `outlook_delete_task_attachment` | Remove an attachment from a To Do task. |
 
 ### Drafts
 
@@ -431,10 +439,10 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions).
 
 ### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`
 
-All 62 tool schemas load into the client's context every turn (~8.6k tokens). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
+All 70 tool schemas load into the client's context every turn (~8.6k tokens). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
 
 ```bash
-# e.g. a recurring mail + calendar agent: ~30 tools instead of 62 (~52% fewer tool tokens/turn)
+# e.g. a recurring mail + calendar agent: ~30 tools instead of 70 (~57% fewer tool tokens/turn)
 OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"
 ```
 
@@ -550,7 +558,6 @@ uv run outlook-mcp
 - **Inbox Rules** -- list, create, delete rules
 - **Advanced mail** -- raw MIME export, internet message headers
 - **Calendar** -- cancel event (with attendee notification)
-- **Checklists** -- checklist items on To Do tasks
 - **Enterprise (Entra ID)** -- work/school account support
 
 ---

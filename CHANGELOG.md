@@ -134,6 +134,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
   Thanks to **@Nyaecho** for the feature (#62).
 
+- **To Do tasks grew sub-steps, detail reads, and attachments (8 new tools).**
+  `outlook_get_task` reads one task in full — notes, due, recurrence flag, and its checklist
+  items via `$expand=checklistItems`, ordered unchecked-first so the first open item reads as
+  "the next step". `outlook_add_checklist_item`, `outlook_update_checklist_item` (partial
+  patch: `is_checked` or rename) and `outlook_delete_checklist_item` manage those sub-steps.
+  Task attachments are their own resource, not mail FileAttachments: content comes back from
+  `.../attachments/{id}/$value` and creation only works through an upload session, so
+  `outlook_list_task_attachments`, `outlook_download_task_attachment`,
+  `outlook_upload_task_attachment` (0–25 MB) and `outlook_delete_task_attachment` follow those
+  shapes; downloads and uploads are confined to `attachments_dir`, same as mail attachments.
+  Tool count: 62 → 70.
+
 ### Changed
 
 - **SKILL.md installs from PyPI instead of cloning `main`.** The OpenClaw install manifest

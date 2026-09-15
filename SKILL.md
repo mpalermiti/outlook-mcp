@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 62 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 70 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -73,7 +73,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `triage_folder(folder="inbox", count=50)` — one scan, sorted, applied in a single batch call
 - `catch_up(since="24h")` — what changed, via the delta path
 
-## Tools (62)
+## Tools (70)
 
 ### Auth
 - `outlook_auth_status` — Check authentication status and read-only mode
@@ -126,10 +126,18 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 ### To Do
 - `outlook_list_task_lists` — List To Do lists
 - `outlook_list_tasks` — List tasks with status filter and pagination
+- `outlook_get_task` — Get one task's details: notes (body), checklist items (unchecked first), recurrence flag
 - `outlook_create_task` — Create with due date, importance, recurrence
 - `outlook_update_task` — Update
 - `outlook_complete_task` — Mark completed
 - `outlook_delete_task` — Delete
+- `outlook_add_checklist_item` — Add a sub-step (checklist item) to a task
+- `outlook_update_checklist_item` — Check off or rename a sub-step (partial patch)
+- `outlook_delete_checklist_item` — Delete a sub-step
+- `outlook_list_task_attachments` — List a task's attachments (id, name, size, content_type)
+- `outlook_download_task_attachment` — Download task attachment content to attachments_dir
+- `outlook_upload_task_attachment` — Attach a local file to a task via upload session (0–25 MB)
+- `outlook_delete_task_attachment` — Remove a task attachment
 
 ### Drafts
 - `outlook_list_drafts` — List with pagination
@@ -178,4 +186,4 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - Mail search uses KQL syntax
 - Start with `read_only: true`, flip when comfortable
 - **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 7 categories and example policies.
-- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context; unset loads all 62. Tools carry read-only / destructive annotations so clients can auto-approve reads.
+- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context; unset loads all 70. Tools carry read-only / destructive annotations so clients can auto-approve reads.

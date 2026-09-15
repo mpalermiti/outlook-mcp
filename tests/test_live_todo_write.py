@@ -4,8 +4,8 @@ Tier 3 of the silent-no-op audit — see test_live_contacts_write.py for the
 rationale. Tasks have no outward side effect. Everything created is deleted
 in a `finally` and titled with LIVE_WRITE_NAME.
 
-There is no get_task tool; read-back goes through list_tasks and finds the
-task by id. The default list is scanned up to 100 entries.
+Read-back goes through get_task (single task, $expand=checklistItems) or
+list_tasks (overview shape). The default list is scanned up to 100 entries.
 
     OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write -v
 """
@@ -14,10 +14,26 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
-from outlook_mcp.tools.todo import create_task, delete_task, list_tasks, update_task
+from outlook_mcp.tools.todo import (
+    add_checklist_item,
+    create_task,
+    delete_checklist_item,
+    delete_task,
+    get_task,
+    list_tasks,
+    update_checklist_item,
+    update_task,
+)
+from outlook_mcp.tools.todo_attachments import (
+    delete_task_attachment,
+    download_task_attachment,
+    list_task_attachments,
+    upload_task_attachment,
+)
 from tests.conftest import LIVE_WRITE_NAME
 
 pytestmark = [pytest.mark.live_write, pytest.mark.asyncio]
@@ -115,3 +131,113 @@ class TestUpdateTaskRoundTrip:
             assert got["title"] == f"{LIVE_WRITE_NAME} renamed"
             assert got["importance"] == "high"
             assert "keep me" in (got["body"] or "")
+
+
+class TestChecklistRoundTrip:
+    async def test_checklist_items_survive_a_round_trip(self, real_graph_client, live_write_config):
+        async with _temporary_task(
+            real_graph_client,
+            live_write_config,
+            title=f"{LIVE_WRITE_NAME} checklist",
+        ) as task_id:
+            first = await add_checklist_item(
+                real_graph_client.sdk_client,
+                task_id=task_id,
+                display_name="step one",
+                config=live_write_config,
+            )
+            await add_checklist_item(
+                real_graph_client.sdk_client,
+                task_id=task_id,
+                display_name="step two",
+                config=live_write_config,
+            )
+
+            got = await get_task(real_graph_client.sdk_client, task_id)
+            assert [i["display_name"] for i in got["checklist_items"]] == [
+                "step one",
+                "step two",
+            ]
+
+            await update_checklist_item(
+                real_graph_client.sdk_client,
+                task_id=task_id,
+                checklist_item_id=first["checklist_item_id"],
+                is_checked=True,
+                config=live_write_config,
+            )
+
+            got = await get_task(real_graph_client.sdk_client, task_id)
+            # Unchecked first after re-sorting
+            assert [i["id"] for i in got["checklist_items"]] != []
+            flags = [i["is_checked"] for i in got["checklist_items"]]
+            assert flags == sorted(flags)
+            checked = next(i for i in got["checklist_items"] if i["is_checked"])
+            assert checked["id"] == first["checklist_item_id"]
+            # checkedDateTime is server-maintained from isChecked
+            assert checked["checked_at"] is not None
+
+            await delete_checklist_item(
+                real_graph_client.sdk_client,
+                task_id=task_id,
+                checklist_item_id=first["checklist_item_id"],
+                config=live_write_config,
+            )
+            got = await get_task(real_graph_client.sdk_client, task_id)
+            assert got["checklist_count"] == 1
+            assert got["checklist_items"][0]["display_name"] == "step two"
+
+
+class TestAttachmentRoundTrip:
+    """The upload-session + raw-PUT path is the one thing mocks cannot vouch for."""
+
+    async def test_attachment_survives_upload_download_delete(
+        self, real_graph_client, live_write_config
+    ):
+        payload = bytes(range(256)) * 400  # 102,400 bytes, non-trivially binary
+        base = Path(live_write_config.attachments_dir)
+        src = base / f"{LIVE_WRITE_NAME}-src.bin"
+        dst = base / f"{LIVE_WRITE_NAME}-dst.bin"
+        base.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(payload)
+        try:
+            async with _temporary_task(
+                real_graph_client,
+                live_write_config,
+                title=f"{LIVE_WRITE_NAME} attachment",
+            ) as task_id:
+                up = await upload_task_attachment(
+                    real_graph_client.sdk_client,
+                    task_id=task_id,
+                    file_path=str(src),
+                    config=live_write_config,
+                )
+                assert up["size"] == len(payload)
+                assert up["name"] == src.name
+
+                listing = await list_task_attachments(real_graph_client.sdk_client, task_id)
+                assert listing["count"] == 1
+                att = listing["attachments"][0]
+                assert att["name"] == src.name
+                assert att["size"] == len(payload)
+
+                await download_task_attachment(
+                    real_graph_client.sdk_client,
+                    task_id=task_id,
+                    attachment_id=att["id"],
+                    save_path=str(dst),
+                    config=live_write_config,
+                )
+                assert dst.read_bytes() == payload
+
+                await delete_task_attachment(
+                    real_graph_client.sdk_client,
+                    task_id=task_id,
+                    attachment_id=att["id"],
+                    config=live_write_config,
+                )
+                listing = await list_task_attachments(real_graph_client.sdk_client, task_id)
+                assert listing["count"] == 0
+        finally:
+            src.unlink(missing_ok=True)
+            dst.unlink(missing_ok=True)

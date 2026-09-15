@@ -41,6 +41,7 @@ from outlook_mcp.tools import (
     mail_triage,
     mail_write,
     todo,
+    todo_attachments,
     user,
 )
 
@@ -1010,6 +1011,23 @@ async def outlook_list_tasks(
 
 @mcp.tool()
 @_wrap_tool_errors
+async def outlook_get_task(
+    ctx: Context,
+    task_id: str,
+    list_id: str | None = None,
+) -> dict:
+    """Get full To Do task details: notes (`body`), checklist items, due, recurrence flag.
+
+    Use this for one task's sub-steps and notes; use outlook_list_tasks for
+    overviews. `checklist_items` are ordered unchecked-first, matching the To Do
+    client. `list_id` is only needed when the task lives in a non-default list.
+    """
+    client = _get_graph_client(ctx)
+    return await todo.get_task(client.sdk_client, task_id, list_id)
+
+
+@mcp.tool()
+@_wrap_tool_errors
 async def outlook_create_task(
     ctx: Context,
     title: str,
@@ -1101,6 +1119,157 @@ async def outlook_delete_task(
     return await todo.delete_task(
         client.sdk_client,
         task_id,
+        list_id,
+        config=config,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_add_checklist_item(
+    ctx: Context,
+    task_id: str,
+    display_name: str,
+    list_id: str | None = None,
+) -> dict:
+    """Add a checklist item (sub-step) to a To Do task."""
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await todo.add_checklist_item(
+        client.sdk_client,
+        task_id,
+        display_name,
+        list_id,
+        config=config,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_update_checklist_item(
+    ctx: Context,
+    task_id: str,
+    checklist_item_id: str,
+    display_name: str | None = None,
+    is_checked: bool | None = None,
+    list_id: str | None = None,
+) -> dict:
+    """Update a checklist item (partial patch — only provided fields change).
+
+    `is_checked=True` marks a sub-step done; Graph maintains the checked
+    timestamp from it. Renaming passes `display_name`.
+    """
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await todo.update_checklist_item(
+        client.sdk_client,
+        task_id,
+        checklist_item_id,
+        display_name,
+        is_checked,
+        list_id,
+        config=config,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_delete_checklist_item(
+    ctx: Context,
+    task_id: str,
+    checklist_item_id: str,
+    list_id: str | None = None,
+) -> dict:
+    """Delete a checklist item from a To Do task."""
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await todo.delete_checklist_item(
+        client.sdk_client,
+        task_id,
+        checklist_item_id,
+        list_id,
+        config=config,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_list_task_attachments(
+    ctx: Context,
+    task_id: str,
+    list_id: str | None = None,
+) -> dict:
+    """List attachments on a To Do task (id, name, size, content_type).
+
+    Use `outlook_download_task_attachment` with an id from here to save the content.
+    """
+    client = _get_graph_client(ctx)
+    return await todo_attachments.list_task_attachments(client.sdk_client, task_id, list_id)
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_download_task_attachment(
+    ctx: Context,
+    task_id: str,
+    attachment_id: str,
+    save_path: str,
+    list_id: str | None = None,
+) -> dict:
+    """Download a To Do task attachment's content to a local file.
+
+    `save_path` resolves inside the configured attachments directory.
+    """
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await todo_attachments.download_task_attachment(
+        client.sdk_client,
+        task_id,
+        attachment_id,
+        save_path,
+        list_id,
+        config=config,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_upload_task_attachment(
+    ctx: Context,
+    task_id: str,
+    file_path: str,
+    list_id: str | None = None,
+) -> dict:
+    """Attach a local file to a To Do task (upload session, 0–25 MB).
+
+    `file_path` resolves inside the configured attachments directory.
+    """
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await todo_attachments.upload_task_attachment(
+        client.sdk_client,
+        task_id,
+        file_path,
+        list_id,
+        config=config,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_delete_task_attachment(
+    ctx: Context,
+    task_id: str,
+    attachment_id: str,
+    list_id: str | None = None,
+) -> dict:
+    """Remove an attachment from a To Do task."""
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await todo_attachments.delete_task_attachment(
+        client.sdk_client,
+        task_id,
+        attachment_id,
         list_id,
         config=config,
     )
@@ -1517,7 +1686,7 @@ async def outlook_switch_account(ctx: Context, name: str) -> dict:
 # Applied once, after every @mcp.tool above has registered. Sets read-only /
 # destructive annotations on all tools, and — when OUTLOOK_MCP_TOOLSETS is set
 # (e.g. "mail,calendar,digest,delta") — loads only those groups so clients that
-# don't need all 62 tools don't pay the per-turn context cost. Unset = all.
+# don't need all 70 tools don't pay the per-turn context cost. Unset = all.
 toolsets.configure(mcp, toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")))
 
 
@@ -1531,7 +1700,7 @@ if __name__ == "__main__":
 
 # ── Workflow prompts ────────────────────────────────────
 #
-# Sequencing guidance is not per-tool knowledge, so it does not belong in 62
+# Sequencing guidance is not per-tool knowledge, so it does not belong in 70
 # docstrings that every client pays for on every turn. A prompt costs one line
 # in `prompts/list` until it is invoked — and unlike a SKILL.md, which is not
 # even shipped in the wheel, it reaches every MCP client. These three are the
