@@ -154,10 +154,11 @@ class TestChecklistRoundTrip:
             )
 
             got = await get_task(real_graph_client.sdk_client, task_id)
-            assert [i["display_name"] for i in got["checklist_items"]] == [
+            # Graph does not promise an expansion order; compare as sets.
+            assert {i["display_name"] for i in got["checklist_items"]} == {
                 "step one",
                 "step two",
-            ]
+            }
 
             await update_checklist_item(
                 real_graph_client.sdk_client,
@@ -169,13 +170,14 @@ class TestChecklistRoundTrip:
 
             got = await get_task(real_graph_client.sdk_client, task_id)
             # Unchecked first after re-sorting
-            assert [i["id"] for i in got["checklist_items"]] != []
             flags = [i["is_checked"] for i in got["checklist_items"]]
             assert flags == sorted(flags)
             checked = next(i for i in got["checklist_items"] if i["is_checked"])
             assert checked["id"] == first["checklist_item_id"]
-            # checkedDateTime is server-maintained from isChecked
+            # checkedDateTime is server-maintained from isChecked, and comes
+            # back as a real datetime — must be emitted as ISO 8601.
             assert checked["checked_at"] is not None
+            assert "T" in checked["checked_at"], checked["checked_at"]
 
             await delete_checklist_item(
                 real_graph_client.sdk_client,
@@ -189,12 +191,14 @@ class TestChecklistRoundTrip:
 
 
 class TestAttachmentRoundTrip:
-    """The upload-session + raw-PUT path is the one thing mocks cannot vouch for."""
+    """The inline base64 POST is the one thing mocks cannot vouch for."""
 
     async def test_attachment_survives_upload_download_delete(
         self, real_graph_client, live_write_config
     ):
-        payload = bytes(range(256)) * 400  # 102,400 bytes, non-trivially binary
+        # 512 KiB, non-trivially binary — well inside the 20 MiB inline
+        # ceiling, far past the point where encoding bugs could hide.
+        payload = bytes(range(256)) * 2048
         base = Path(live_write_config.attachments_dir)
         src = base / f"{LIVE_WRITE_NAME}-src.bin"
         dst = base / f"{LIVE_WRITE_NAME}-dst.bin"
@@ -214,6 +218,7 @@ class TestAttachmentRoundTrip:
                 )
                 assert up["size"] == len(payload)
                 assert up["name"] == src.name
+                assert up["attachment_id"]
 
                 listing = await list_task_attachments(real_graph_client.sdk_client, task_id)
                 assert listing["count"] == 1

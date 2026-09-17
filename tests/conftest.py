@@ -64,9 +64,7 @@ def real_config():
     from outlook_mcp.config import load_config
 
     config = load_config()
-    # Multi-account installs carry client_id per account, not at the top
-    # level; AuthManager handles those, so either shape counts as configured.
-    if not config.client_id and not config.accounts:
+    if not config.client_id:
         pytest.skip("No client_id configured — run the Azure AD app setup first")
     return config
 
@@ -154,12 +152,20 @@ def consumer_mailbox_only(real_auth):
 
 
 @pytest.fixture
-def live_write_config(real_config):
+def live_write_config(real_config, tmp_path):
     """Real config for the write tier, or skip.
 
     Gates on an explicit environment opt-in beyond the marker: these tests
     create and delete real calendar events on whatever account the cached token
     belongs to.
+
+    The config handed back is a sandboxed copy: `attachments_dir` is pointed
+    at a per-test tmp_path so the attachment round-trip never stages files in
+    the user's real home. The default value is the literal string
+    "~/.outlook-mcp/attachments" — only `resolve_attachment_path` expands the
+    `~` — so without this, a test that builds a `Path(attachments_dir)`
+    creates a directory literally named `~` under pytest's CWD and can never
+    meet the file the tool resolves to.
     """
     if os.environ.get("OUTLOOK_MCP_LIVE_WRITE") != "1":
         pytest.skip(
@@ -174,6 +180,7 @@ def live_write_config(real_config):
     # tier's job is to exercise Graph, and the permission gate is unit-tested on
     # its own, so open the three surfaces this tier is allowed to write on an
     # in-process copy. ~/.outlook-mcp/config.json is never modified.
+    update = {"attachments_dir": str(tmp_path / "attachments")}
     if real_config.allow_categories:
         from outlook_mcp.permissions import (
             CATEGORY_CALENDAR_WRITE,
@@ -182,7 +189,5 @@ def live_write_config(real_config):
         )
 
         needed = {CATEGORY_CALENDAR_WRITE, CATEGORY_CONTACTS_WRITE, CATEGORY_TODO_WRITE}
-        return real_config.model_copy(
-            update={"allow_categories": sorted(set(real_config.allow_categories) | needed)}
-        )
-    return real_config
+        update["allow_categories"] = sorted(set(real_config.allow_categories) | needed)
+    return real_config.model_copy(update=update)

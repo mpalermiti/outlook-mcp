@@ -423,16 +423,33 @@ async def test_get_task_checklist_expand_is_accepted(real_graph_client):
     The mock suite can only assert we write "checklistItems" into the query
     configuration; only Graph decides whether the expansion is legal on this
     endpoint and actually populates task.checklistItems.
+
+    This tier is read-only, so it cannot create sub-steps; it scans the
+    default list for a task that already has some and skips (loudly) when
+    there is none — an unconditional pass against an empty checklist was the
+    condition that let the 1.22.0 `.value` crash ship.
     """
-    page = await list_tasks(real_graph_client.sdk_client, count=5)
-    if not page["tasks"]:
-        pytest.skip("Default To Do list is empty — no task to expand")
+    page = await list_tasks(real_graph_client.sdk_client, count=10)
+    detail = None
+    for task in page["tasks"]:
+        candidate = await get_task(real_graph_client.sdk_client, task["id"])
+        if candidate["checklist_count"] > 0:
+            detail = candidate
+            break
+    if detail is None:
+        pytest.skip(
+            "no task in the first 10 of the default list has checklist items — "
+            "the write tier (TestChecklistRoundTrip) owns the guarantee instead"
+        )
 
-    detail = await get_task(real_graph_client.sdk_client, page["tasks"][0]["id"])
-
-    assert detail["id"] == page["tasks"][0]["id"]
-    assert isinstance(detail["checklist_items"], list)
+    assert detail["checklist_count"] > 0
+    for item in detail["checklist_items"]:
+        assert item["id"]
+        assert isinstance(item["display_name"], str)
+        assert isinstance(item["is_checked"], bool)
     # Unchecked-first ordering is part of the tool's contract: an agent reads
-    # the first unchecked item as "the next step".
-    flags = [item["is_checked"] for item in detail["checklist_items"]]
-    assert flags == sorted(flags), f"checked items sorted ahead of unchecked ones: {flags}"
+    # the first unchecked item as "the next step" — and the order within each
+    # group must be the deterministic (is_checked, created) key, not whatever
+    # Graph happened to return.
+    keys = [(i["is_checked"], i["created"]) for i in detail["checklist_items"]]
+    assert keys == sorted(keys), f"checklist order broke the (is_checked, created) key: {keys}"
