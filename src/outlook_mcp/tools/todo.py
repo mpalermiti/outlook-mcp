@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
@@ -50,35 +51,96 @@ def _text_body(content: str) -> Any:
     return ib
 
 
+def _iso_datetime(value: Any) -> str:
+    """Normalize an SDK datetime field to ISO 8601, or ``""`` when absent.
+
+    kiota deserializes ``createdDateTime`` / ``checkedDateTime`` into real
+    ``datetime`` objects, and ``str(datetime)`` is ``"2026-09-15 09:00:00+00:00"``
+    — space separator, no ``T``, no ``Z`` — while Graph's own DateTimeTimeZone
+    strings (``due``) are already ISO. One response, two incompatible formats.
+    Strings pass through untouched, so a mock (or a Graph field that stays a
+    string) is not reformatted.
+    """
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value or "")
+
+
+# Default-list resolution per GraphServiceClient — see _resolve_list_id. A
+# WeakKeyDictionary so a retired client's entry goes with it, and so tests that
+# build a fresh mock client per case never share one.
+_DEFAULT_LIST_BY_CLIENT: WeakKeyDictionary = WeakKeyDictionary()
+
+
 async def _resolve_list_id(graph_client: Any, list_id: str | None) -> str:
     """Resolve list_id — use provided value or find the default list.
 
-    Default list: isOwner=True and wellknownListName="defaultList".
-    Falls back to the first list if no explicit default is found.
+    Default list: isOwner=True and wellknownListName="defaultList". Falls back
+    to the first list if no explicit default is found.
+
+    ``None`` means "the default list"; anything else — including the empty
+    string, which optional-string schemas hand us — is validated as a Graph id
+    rather than silently retargeting the default list.
+
+    The default-list lookup is cached per GraphServiceClient: every one of the
+    To Do tools resolves on each call, which doubled the request count of a
+    normal checklist flow. The cache lives as long as the client does — the
+    server rebuilds the client on an account switch, so a different mailbox
+    starts cold. The trade-off is a stale id if the user deletes their default
+    list mid-session; Graph answers 404 with a "re-list" hint, and nothing in
+    this surface creates or deletes lists.
     """
-    if list_id:
-        return list_id
+    if list_id is not None:
+        if not list_id.strip():
+            raise ValueError(
+                "list_id must be a task-list id, or omitted (None) for the "
+                "default list — an empty string would silently target the "
+                "default list"
+            )
+        return validate_graph_id(list_id)
 
-    response = await graph_client.me.todo.lists.get()
-    lists = response.value or []
+    cached = _DEFAULT_LIST_BY_CLIENT.get(graph_client)
+    if cached is not None:
+        return cached
 
-    if not lists:
+    from msgraph.generated.users.item.todo.lists.lists_request_builder import (
+        ListsRequestBuilder,
+    )
+
+    first_list_id: str | None = None
+    params: dict[str, Any] = {"$top": 100}
+    while True:
+        req_config = build_request_config(
+            ListsRequestBuilder.ListsRequestBuilderGetQueryParameters,
+            params,
+        )
+        response = await graph_client.me.todo.lists.get(request_configuration=req_config)
+        for lst in response.value or []:
+            if first_list_id is None:
+                first_list_id = lst.id
+            wellknown = ""
+            if lst.wellknown_list_name:
+                wellknown = (
+                    lst.wellknown_list_name.value
+                    if hasattr(lst.wellknown_list_name, "value")
+                    else str(lst.wellknown_list_name)
+                )
+            if lst.is_owner and wellknown == "defaultList":
+                _DEFAULT_LIST_BY_CLIENT[graph_client] = lst.id
+                return lst.id
+        # The default list can sit past the first page; keep walking until
+        # Graph stops handing us a nextLink.
+        next_cursor = wrap_nextlink(response.odata_next_link)
+        if next_cursor is None:
+            break
+        params = apply_pagination(params, 100, next_cursor)
+
+    if first_list_id is None:
         raise ValueError("No task lists found. Create a list in Microsoft To Do first.")
 
-    # Prefer the default list
-    for lst in lists:
-        wellknown = ""
-        if lst.wellknown_list_name:
-            wellknown = (
-                lst.wellknown_list_name.value
-                if hasattr(lst.wellknown_list_name, "value")
-                else str(lst.wellknown_list_name)
-            )
-        if lst.is_owner and wellknown == "defaultList":
-            return lst.id
-
     # Fallback: first list
-    return lists[0].id
+    _DEFAULT_LIST_BY_CLIENT[graph_client] = first_list_id
+    return first_list_id
 
 
 def _format_task(task: Any) -> dict:
@@ -119,7 +181,7 @@ def _format_task(task: Any) -> dict:
         "importance": importance,
         "due": due,
         "completed": completed,
-        "created": str(task.created_date_time or ""),
+        "created": _iso_datetime(task.created_date_time),
         "is_reminder_on": bool(task.is_reminder_on),
         "body": body_content,
         "has_recurrence": task.recurrence is not None,
@@ -128,29 +190,31 @@ def _format_task(task: Any) -> dict:
 
 def _format_checklist_item(item: Any) -> dict:
     """Convert a Graph SDK ChecklistItem to a clean dict."""
-    checked_at = None
-    if item.checked_date_time:
-        checked_at = str(item.checked_date_time)
-
     return {
         "id": item.id,
         "display_name": sanitize_output(item.display_name or ""),
         "is_checked": bool(item.is_checked),
-        "checked_at": checked_at,
-        "created": str(item.created_date_time or ""),
+        "checked_at": _iso_datetime(item.checked_date_time),
+        "created": _iso_datetime(item.created_date_time),
     }
 
 
 def _checked_last(items: list[dict]) -> list[dict]:
-    """Order checklist items unchecked-first, matching the To Do client.
+    """Order checklist items unchecked-first, then by creation time.
 
     Graph returns expanded checklistItems in no guaranteed order (it hands
     back whatever the backing store produced), while every To Do client
     surface shows open steps above completed ones. An agent reporting task
     progress reads the first unchecked item as "the next step", so the order
-    we emit is load-bearing, not cosmetic.
+    we emit is load-bearing, not cosmetic — and it has to be *deterministic*,
+    not just unchecked-first: sorting on the boolean alone leaves the order
+    inside each group as whatever Graph returned, so two identical calls on an
+    unchanged task could name a different "next step". ``created`` (emitted by
+    ``_format_checklist_item``, ISO so it sorts chronologically) is the
+    tiebreak. ISO strings sort correctly; the ``""`` for a missing created
+    sorts first, harmlessly.
     """
-    return sorted(items, key=lambda i: i["is_checked"])
+    return sorted(items, key=lambda i: (i["is_checked"], i["created"]))
 
 
 async def list_task_lists(graph_client: Any) -> dict:
@@ -263,6 +327,13 @@ async def get_task(
         .tasks.by_todo_task_id(task_id)
         .get(request_configuration=req_config)
     )
+    if task is None or task.id is None:
+        # Optional[Task] on the SDK side: an empty 200/204 used to crash in
+        # _format_task with an AttributeError whose text never reached the model.
+        raise ValueError(
+            f"Graph returned no task for id {task_id} — the id may be stale; "
+            "re-list with outlook_list_tasks for current ids"
+        )
 
     result = _format_task(task)
     # The SDK model types checklist_items as a plain list[ChecklistItem] — with
@@ -331,6 +402,16 @@ async def create_task(
     response = await graph_client.me.todo.lists.by_todo_task_list_id(resolved_id).tasks.post(
         task_body
     )
+
+    if response is None or response.id is None:
+        # Optional[TodoTask] on the SDK side; an empty 201/204 used to raise
+        # AttributeError here. The task exists server-side at this point, so
+        # say that rather than let an agent's retry create a duplicate.
+        raise ValueError(
+            "Task was created but Graph returned no id for it — do not retry "
+            "blindly (that would create a duplicate); find it with "
+            "outlook_list_tasks instead"
+        )
 
     return {
         "status": "created",
@@ -490,6 +571,16 @@ async def add_checklist_item(
         .checklist_items.post(item)
     )
 
+    if response is None or response.id is None:
+        # Optional[ChecklistItem] on the SDK side; an empty 201/204 used to
+        # raise AttributeError *after* the sub-step was created, and the
+        # agent's natural retry doubled it.
+        raise ValueError(
+            "Checklist item was added but Graph returned no id for it — do "
+            "not retry blindly (that would create a duplicate); read the "
+            "task back with outlook_get_task instead"
+        )
+
     return {
         "status": "added",
         "task_id": task_id,
@@ -521,13 +612,19 @@ async def update_checklist_item(
     if display_name is None and is_checked is None:
         raise ValueError("Provide at least one of display_name or is_checked")
 
+    # Validate every caller input before the network round trip, matching
+    # add_checklist_item — a blank rename is a caller fix, not a Graph call.
+    checked_name: str | None = None
+    if display_name is not None:
+        checked_name = _validated_display_name(display_name)
+
     resolved_id = await _resolve_list_id(graph_client, list_id)
 
     from msgraph.generated.models.checklist_item import ChecklistItem
 
     patch_body = ChecklistItem()
-    if display_name is not None:
-        patch_body.display_name = _validated_display_name(display_name)
+    if checked_name is not None:
+        patch_body.display_name = checked_name
     if is_checked is not None:
         patch_body.is_checked = is_checked
 
