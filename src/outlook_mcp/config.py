@@ -10,7 +10,14 @@ from pydantic import BaseModel, Field, field_validator
 from outlook_mcp.permissions import VALID_CATEGORIES
 
 DEFAULT_TENANT_ID = "consumers"
-DEFAULT_CONFIG_DIR = os.path.expanduser("~/.outlook-mcp")
+# One process, one account. Overriding this (and ONLY this) is how you run a
+# second instance against a different mailbox: the MSAL signal file stays at
+# ~/.IdentityService/, so both processes still share the lock-and-merge path
+# into the one Keychain item. Moving HOME instead would give each its own
+# signal file and they would clobber each other's token.
+DEFAULT_CONFIG_DIR = os.path.expanduser(
+    os.environ.get("OUTLOOK_MCP_CONFIG_DIR") or "~/.outlook-mcp"
+)
 
 
 class AccountConfig(BaseModel):
