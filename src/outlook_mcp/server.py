@@ -1198,13 +1198,18 @@ async def outlook_list_task_attachments(
     ctx: Context,
     task_id: str,
     list_id: str | None = None,
+    count: int = 25,
+    cursor: str | None = None,
 ) -> dict:
-    """List attachments on a To Do task (id, name, size, content_type).
+    """List attachments on a To Do task (id, name, size, content_type) with pagination.
 
     Use `outlook_download_task_attachment` with an id from here to save the content.
+    has_more=True means pass next_cursor back for the next page.
     """
     client = _get_graph_client(ctx)
-    return await todo_attachments.list_task_attachments(client.sdk_client, task_id, list_id)
+    return await todo_attachments.list_task_attachments(
+        client.sdk_client, task_id, list_id, count, cursor=cursor
+    )
 
 
 @mcp.tool()
@@ -1218,7 +1223,9 @@ async def outlook_download_task_attachment(
 ) -> dict:
     """Download a To Do task attachment's content to a local file.
 
-    `save_path` resolves inside the configured attachments directory.
+    `save_path` resolves inside the configured attachments directory; the
+    write is atomic (temp file + replace), so a failed download never
+    truncates a file already staged there.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -1240,9 +1247,11 @@ async def outlook_upload_task_attachment(
     file_path: str,
     list_id: str | None = None,
 ) -> dict:
-    """Attach a local file to a To Do task (upload session, 0–25 MB).
+    """Attach a local file to a To Do task via inline base64 POST (1 byte – 20 MiB).
 
-    `file_path` resolves inside the configured attachments directory.
+    `file_path` resolves inside the configured attachments directory. Larger
+    files are refused up front: Graph caps the request body at 30 MB and base64
+    inflates the file 4/3, so 20 MiB is the honest ceiling.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
