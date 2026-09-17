@@ -47,6 +47,14 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0/"
 # below, and ``$batch`` is just transport, so the surface is exercised
 # indirectly. Refactor to support POST rows if a $batch-specific
 # regression ever needs catching at preflight time.
+#
+# The same caveat applies to the To Do attachment *write* path: the inline
+# base64 POST to ``.../tasks/{id}/attachments`` mutates the task, so it
+# stays out of this read-only script; the GET rows that ``_todo_task_rows``
+# adds cover the same resource family (a 403/501 "not supported for this
+# account type" shows up on the GETs too). The upload-session route is
+# deliberately not probed: it 404s on consumer mailboxes (verified live),
+# which is why the tools never use it.
 ENDPOINTS: list[tuple[str, str]] = [
     ("me", "Auth / whoami"),
     ("me/messages?$top=1", "Mail read / search"),
@@ -66,6 +74,54 @@ ENDPOINTS: list[tuple[str, str]] = [
     ),
     ("me/contacts/delta", "Contacts delta"),
 ]
+
+
+def _todo_task_rows(headers: dict[str, str]) -> list[tuple[str, str]]:
+    """Probe rows for the To Do checklist/attachment families.
+
+    Unlike every static row above, these need a real task id — the endpoints
+    live under ``.../tasks/{taskId}/…`` and a made-up id 404s for the wrong
+    reason (missing resource, not unsupported family). So this harvests the
+    first task list, then its first task, with plain GETs, and returns rows
+    against that task. Read-only throughout: the checklist and attachment
+    listings plus one ``$value`` download.
+    """
+    rows: list[tuple[str, str]] = []
+    try:
+        r = httpx.get(
+            "https://graph.microsoft.com/v1.0/me/todo/lists?$top=1",
+            headers=headers,
+            timeout=20,
+        )
+        if r.status_code != 200 or not r.json().get("value"):
+            raise RuntimeError(f"no task list (GET me/todo/lists?$top=1 -> {r.status_code})")
+        list_id = r.json()["value"][0]["id"]
+
+        r = httpx.get(
+            f"https://graph.microsoft.com/v1.0/me/todo/lists/{list_id}/tasks?$top=1",
+            headers=headers,
+            timeout=20,
+        )
+        if r.status_code != 200 or not r.json().get("value"):
+            raise RuntimeError(f"no task in first list (GET .../tasks?$top=1 -> {r.status_code})")
+        task_id = r.json()["value"][0]["id"]
+        task_path = f"me/todo/lists/{list_id}/tasks/{task_id}"
+
+        rows.append((f"{task_path}/checklistItems?$top=1", "To Do checklist items"))
+        rows.append((f"{task_path}/attachments?$top=1", "To Do task attachments"))
+
+        r = httpx.get(f"{GRAPH_BASE}{task_path}/attachments?$top=1", headers=headers, timeout=20)
+        att = (r.json().get("value") or [{}])[0] if r.status_code == 200 else {}
+        if att.get("id"):
+            rows.append((f"{task_path}/attachments/{att['id']}/$value", "To Do attachment $value"))
+        else:
+            print(
+                "SKIP  To Do attachment $value        (first task has no "
+                "attachment to fetch — add one to widen this probe)"
+            )
+    except Exception as exc:
+        print(f"SKIP  {'To Do task families':30s} could not provision a live task: {exc}")
+    return rows
 
 
 def classify(status_code: int) -> str:
@@ -104,7 +160,9 @@ def run() -> int:
     headers = {"Authorization": f"Bearer {token}"}
     failures: list[str] = []
 
-    for path, label in ENDPOINTS:
+    endpoints = ENDPOINTS + _todo_task_rows(headers)
+
+    for path, label in endpoints:
         url = urljoin(GRAPH_BASE, path)
         try:
             r = httpx.get(url, headers=headers, timeout=20)
@@ -135,7 +193,7 @@ def run() -> int:
             "Do not release until resolved."
         )
         return 1
-    print(f"All {len(ENDPOINTS)} endpoints reachable. Safe to tag.")
+    print(f"All {len(endpoints)} endpoints reachable. Safe to tag.")
     return 0
 
 

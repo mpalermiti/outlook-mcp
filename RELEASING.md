@@ -73,6 +73,7 @@ Update in lockstep:
 
 - `pyproject.toml` — `version = "X.Y.Z"`
 - `server.json` — both `version` fields + `description` (tool count if it changed)
+- `.github/workflows/ci.yml` — the `published-install` tool-count assert (it pins the count of the **PyPI-latest** release, so it is only correct until the next publish; leaving it stale turns the weekly canary permanently red the day the release lands)
 - `CHANGELOG.md` — new `## [X.Y.Z] — YYYY-MM-DD` entry
 - `SKILL.md` — `## Tools (N)` heading + frontmatter `description` if count changed
 - `README.md` — counts and tables if they changed

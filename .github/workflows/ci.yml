@@ -104,6 +104,11 @@ jobs:
           "$RUNNER_TEMP/pypi/bin/python" - <<'PY'
           import outlook_mcp.server as s
           tools = [a for a in dir(s) if a.startswith("outlook_")]
+          # This asserts the count in the *published* release, not this branch's.
+          # Bump at release time to whatever PyPI is serving (62 while 1.22.0 is
+          # latest; 70 from 1.23.0) — this file is in RELEASING.md §3's lockstep
+          # list precisely so the weekly canary doesn't go permanently red the
+          # moment a release publishes.
           assert len(tools) == 62, f"expected 62 tools, got {len(tools)}"
           print(f"OK: published package imports, {len(tools)} tools registered")
           PY
