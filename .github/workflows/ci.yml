@@ -57,7 +57,7 @@ jobs:
           "$RUNNER_TEMP/fresh/bin/python" - <<'PY'
           import outlook_mcp.server as s
           tools = [a for a in dir(s) if a.startswith("outlook_")]
-          assert len(tools) == 62, f"expected 62 tools, got {len(tools)}"
+          assert len(tools) == 70, f"expected 70 tools, got {len(tools)}"
           print(f"OK: server imports, {len(tools)} tools registered")
           PY
       - name: CLI entrypoint must be wired and runnable
