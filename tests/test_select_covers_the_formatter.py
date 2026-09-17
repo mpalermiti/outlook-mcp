@@ -59,12 +59,24 @@ def _fields_read_from(func, _seen: frozenset[str] = frozenset()) -> set[str]:
     Nested reads (``msg.from_.email_address.address``) contribute only the
     outermost name, which is the one ``$select`` names.
 
-    Reads through a helper count as reads. ``_format_contact_summary`` gets its
-    phone from ``_primary_phone(contact)`` and its categories from
-    ``_categories(contact)``; without following those calls this guard would
-    report three selected fields as unread and miss the one that matters. So a
-    call to a function in the same module that is handed the model as its first
-    argument is followed into.
+    Reads through a helper count as reads: a call to a function in the same
+    module, handed the model as its first argument, is followed into.
+
+    ``_format_contact_summary`` gets its phone from ``_primary_phone(contact)``
+    and its categories from ``_categories(contact)``. Without following those
+    calls the guard does not go quiet — it fails, and points at the wrong fix::
+
+        contact summary: the $select asks for ['businessPhones', 'categories',
+        'homePhones', 'mobilePhone'], which _format_contact_summary never
+        reads. Drop them, or read them.
+
+    Do what that says and four fields leave the ``$select``: phone stops
+    resolving on the listing, and the ``categories`` gap that was the actual
+    bug is now "fixed" by no longer asking Graph for the field. Following the
+    helpers, the same broken ``$select`` reports the real defect instead —
+    ``_format_contact_summary reads ['categories'], which the $select never
+    asks Graph for``. A guard that misdirects the repair is worse than one that
+    stays silent, which is the argument for the extension.
     """
     tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
