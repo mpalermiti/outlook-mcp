@@ -40,6 +40,7 @@ maintainer's mailbox.
 
 import pytest
 
+from outlook_mcp.tools.contacts import list_contacts, search_contacts
 from outlook_mcp.tools.mail_read import list_inbox, search_mail
 from outlook_mcp.tools.mail_thread import list_thread
 
@@ -236,3 +237,69 @@ async def test_search_rejects_query_that_sanitizes_to_empty(real_graph_client):
     """A bare `*` sanitizes to empty; we reject it rather than send $search=""."""
     with pytest.raises(ValueError, match="empty after sanitization"):
         await search_mail(real_graph_client.sdk_client, query="*", count=5)
+
+
+# ── contacts: what $select actually brings back ──
+# A $select is the same class of string as a $filter — the mocked suite can only
+# assert we sent it. Whether Graph honours it, and on which endpoint, is a live
+# question, and the two contact listings deliberately answer differently.
+
+
+@pytest.fixture
+async def categorised_contact(real_graph_client):
+    """The first contact carrying a category, hunted across pages.
+
+    Contacts come back ordered by displayName, so "does this mailbox use
+    categories" is not a question page one can answer — a mailbox can have
+    hundreds of contacts and its categorised ones under S. Paging until one
+    turns up is the difference between a guard and a test that skips forever:
+    on the mailbox this was written against, page 1 of 100 has none.
+    """
+    cursor = None
+    for _ in range(10):  # 1,000 contacts, bounded
+        page = await list_contacts(real_graph_client.sdk_client, count=100, cursor=cursor)
+        assert all("categories" in c for c in page["contacts"]), (
+            "the listing's $select asks for categories, so every contact it "
+            "returns must carry the key"
+        )
+        found = next(
+            (c for c in page["contacts"] if c["categories"] and c["display_name"].strip()), None
+        )
+        if found:
+            return found
+        if not page["has_more"]:
+            break
+        cursor = page["cursor"]
+    pytest.skip("No categorised contact in this mailbox — nothing to tell honoured from ignored")
+
+
+async def test_the_contact_listing_returns_the_categories_it_selects(categorised_contact):
+    """`categories` is in the listing's $select, so it must come back populated.
+
+    Not merely "the key is present": a $select Graph ignores would leave every
+    contact looking uncategorised, which is indistinguishable from a mailbox
+    where nobody uses categories. The fixture asserts the key on every contact
+    of every page it walks; this asserts one of them is non-empty.
+    """
+    assert categorised_contact["categories"]
+    assert all(isinstance(c, str) for c in categorised_contact["categories"])
+
+
+async def test_contact_search_does_not_claim_to_know_categories(
+    real_graph_client, categorised_contact
+):
+    """Graph's $search over contacts returns no categories, under any $select.
+
+    That is why `_format_contact_summary` omits the key on this path instead of
+    reporting an empty list. The contact searched for is known to have
+    categories, so an empty list here would be a false statement rather than an
+    accurate one. If Graph ever starts returning them, this fails and the
+    asymmetry can go — which is the only way anyone would notice.
+    """
+    found = await search_contacts(
+        real_graph_client.sdk_client,
+        query=categorised_contact["display_name"].split()[0],
+        count=25,
+    )
+    assert found["contacts"], "search returned nothing for a name taken from the listing"
+    assert all("categories" not in c for c in found["contacts"])

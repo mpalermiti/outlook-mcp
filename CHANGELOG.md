@@ -48,6 +48,41 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Flagged by the ClawHub scanner against 1.22.0: *"its OpenClaw install command fetches
   mutable source code from GitHub."*
 
+### Fixed
+
+- **`outlook_get_contact` returns the addresses, categories and notes Graph was already sending.**
+  The tool sends no `$select`, so Graph returns the whole contact — and the detail formatter read
+  12 fields of it. A contact with a home address, two categories and a note read back as having
+  none of them, which from the caller's side is indistinguishable from a contact that genuinely
+  has none. Detail now carries `home_address`, `business_address`, `other_address`, `categories`
+  and `personal_notes`. Graph sends an empty `physicalAddress` object rather than null for an
+  address a contact does not have, so an empty one is reported as `None` instead of three blank
+  addresses.
+
+  The `$select` audit on the two listing paths found both ends of the same mistake: `givenName`,
+  `surname` and `title` were selected and never read; `categories` was read by nobody because it
+  was never selected. Both lists were duplicated verbatim and are one constant now. Categories are
+  on the listing only — Graph's `$search` over contacts does not return them (verified live under a
+  narrow `$select`, a wide one, and none at all), so the search path omits the key rather than
+  reporting every contact as uncategorised.
+
+### Added
+
+- **`outlook_update_contact` can write the home address it can now read** — `home_street`,
+  `home_city`, `home_state`, `home_postal_code`, `home_country`. Graph **replaces** the whole
+  `homeAddress` rather than merging into it, so the parts not supplied come back empty; the tool
+  docstring and README say so, and a live guard pins it. Supplying no part at all leaves the stored
+  address untouched.
+
+  A part that was not supplied is now left unset rather than assigned `None`: the Graph request
+  adapter serializes through the backing store, which emits an explicitly-`None` field — and for a
+  nested model emits it onto the *parent*, under its Python name. Every partial address therefore
+  went out as `{"country_or_region": null, …, "homeAddress": {…}}` and came back
+  `400 The property 'country_or_region' does not exist on type 'microsoft.graph.contact'`, while
+  the full five-part write returned 200. Caught by the live write tier; the offline guard that now
+  pins it has to serialize through the backing-store proxy, because the bare `JsonSerializationWriter`
+  cannot see the difference.
+
 ## [1.22.0] — 2026-09-12
 
 ### Fixed

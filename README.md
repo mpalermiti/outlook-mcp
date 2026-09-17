@@ -324,11 +324,11 @@ configured `timezone`; responses are always UTC.
 
 | Tool | Description |
 |------|-------------|
-| `outlook_list_contacts` | List contacts with cursor pagination. |
+| `outlook_list_contacts` | List contacts with cursor pagination. Summaries carry `categories`; `outlook_search_contacts` omits the key because Graph's `$search` does not return it. |
 | `outlook_search_contacts` | Search contacts by name or email. |
-| `outlook_get_contact` | Get full contact details by ID. |
+| `outlook_get_contact` | Get full contact details by ID, including home/business/other addresses, categories and personal notes. |
 | `outlook_create_contact` | Create a new contact. |
-| `outlook_update_contact` | Update contact fields. |
+| `outlook_update_contact` | Update contact fields. The `home_*` parts are one home address and **replace** it wholesale — pass every part you want to keep (`outlook_get_contact` returns them), or omit them all to leave it untouched. |
 | `outlook_delete_contact` | Delete a contact. |
 | `outlook_list_contacts_delta` | List only contact changes since the last call. Deletes come back as `{id, is_deleted: True}`. Cursor is stateless. |
 
