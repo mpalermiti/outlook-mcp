@@ -7,7 +7,7 @@ registered (see ``server.py``):
    (`ToolAnnotations`) so a client can auto-approve reads and gate destructive
    ops (delete mail, decline event) without a hardcoded allowlist.
 
-2. **Config-gated toolsets** — the 70 tool schemas cost ~8.6k tokens of client
+2. **Config-gated toolsets** — the 70 tool schemas cost ~12.9k tokens of client
    context every turn. A client that only needs mail + calendar can set
    ``OUTLOOK_MCP_TOOLSETS=mail,calendar`` and load just those groups (~half the
    tokens for a mail+calendar agent). Account/auth tools are always available.
@@ -206,6 +206,8 @@ IDEMPOTENT: set[str] = {
     "outlook_set_inbox_override",
     "outlook_switch_account",
     "outlook_download_attachment",
+    "outlook_download_task_attachment",
+    "outlook_update_checklist_item",
 }
 
 
