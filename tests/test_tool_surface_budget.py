@@ -1,15 +1,15 @@
 """The tool surface is a per-turn cost, so it gets a ceiling.
 
-Every client pays for all 62 tool schemas on every turn that includes them.
+Every client pays for all 70 tool schemas on every turn that includes them.
 ROADMAP records a measured baseline of ~8,644 tokens (o200k proxy, 2026-07), and
 that number is what makes the `OUTLOOK_MCP_TOOLSETS` gating worth having — but
 nothing stopped it drifting upward one well-meant docstring at a time.
 
 This is a budget, not a golden file. A golden snapshot of the schemas would fail
-on every wording change and get regenerated without being read, which teaches
+on every wording change and be regenerated without being read, which teaches
 nobody anything. A ceiling only fires when the surface gets materially more
 expensive, and that is the moment worth a conversation: adding a tool, or adding
-a field to all 62.
+a field to all 70.
 
 Raising the ceiling is a legitimate outcome — a new tool has to go somewhere. It
 just has to be deliberate, with the new number written down next to the reason.
@@ -28,10 +28,13 @@ from outlook_mcp.server import mcp
 # itself, which is all a drift guard needs.
 CHARS_PER_TOKEN = 4
 
-# Ceiling for the full 62-tool surface. Measured at 11,206 on 1.20.0, with ~7%
-# headroom: enough for a docstring fix or another annotation, not enough for a
-# field added to all 62 or a batch of new tools.
-TOOL_SURFACE_CEILING = 12_000
+# Ceiling for the full tool surface. Measured at 11,206 on 1.20.0 with a
+# 12,000 ceiling; raised to 13,500 (measured 12,712) for the eight To Do detail
+# tools (get_task, checklist-item CRUD, task attachments), then to 13,650
+# after the attachment rewrite (measured 12,855) — each a deliberate
+# "a new tool has to go somewhere" raise, not drift. Headroom is ~6%: room
+# for a docstring fix, not for another batch.
+TOOL_SURFACE_CEILING = 13_650
 
 # `prompts/list` is the cheap half of the bargain struck in 1.20.0: workflow
 # guidance costs a name and one line here until someone invokes it. If that ever
@@ -52,7 +55,7 @@ async def test_the_tool_surface_stays_within_budget():
     cost = _proxy_tokens([t.model_dump(exclude_none=True, by_alias=True) for t in tools])
 
     assert cost <= TOOL_SURFACE_CEILING, (
-        f"The 62-tool surface now costs ~{cost} proxy tokens per turn, over the "
+        f"The 70-tool surface now costs ~{cost} proxy tokens per turn, over the "
         f"{TOOL_SURFACE_CEILING} ceiling. Every client pays this on every turn. "
         f"Either trim it, or raise the ceiling deliberately and say why."
     )

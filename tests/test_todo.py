@@ -14,11 +14,15 @@ from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.todo import (
     _build_recurrence,
+    add_checklist_item,
     complete_task,
     create_task,
+    delete_checklist_item,
     delete_task,
+    get_task,
     list_task_lists,
     list_tasks,
+    update_checklist_item,
     update_task,
 )
 
@@ -53,8 +57,16 @@ def _mock_task(
     body_content="",
     body_type="text",
     recurrence=None,
+    checklist_items=None,
 ):
-    """Helper to build a mock task."""
+    """Helper to build a mock task.
+
+    `checklist_items` must be a real list or None — the SDK model types it as
+    plain list[ChecklistItem] (no `.value` to unwrap), and a MagicMock here
+    auto-vivifies into something truthy-but-fake. Shipped 1.22.0 with a mock
+    that faked a `.value` collection and every task carrying sub-steps crashed
+    on the real wire shape.
+    """
     mock = MagicMock()
     mock.id = task_id
     mock.title = title
@@ -66,25 +78,60 @@ def _mock_task(
     mock.completed_date_time = completed
     mock.body = MagicMock(content=body_content, content_type=MagicMock(value=body_type))
     mock.recurrence = recurrence
+    mock.checklist_items = checklist_items
     return mock
 
 
-def _build_mock_client(lists=None, tasks=None, odata_next_link=None):
+def _mock_checklist_item(
+    item_id="ci1",
+    display_name="Step 1",
+    is_checked=False,
+    created="2026-09-15T08:00:00Z",
+    checked=None,
+):
+    """Helper to build a mock checklist item."""
+    mock = MagicMock()
+    mock.id = item_id
+    mock.display_name = display_name
+    mock.is_checked = is_checked
+    mock.created_date_time = created
+    mock.checked_date_time = checked
+    return mock
+
+
+def _build_mock_client(lists=None, tasks=None, odata_next_link=None, checklist_post_result=None):
     """Build a fully-wired mock Graph client for To Do operations."""
     if lists is None:
         lists = [_mock_task_list()]
     if tasks is None:
         tasks = [_mock_task()]
+    if checklist_post_result is None:
+        checklist_post_result = _mock_checklist_item()
 
     mock_client = MagicMock()
 
-    # GET /me/todo/lists
-    mock_client.me.todo.lists.get = AsyncMock(return_value=MagicMock(value=lists))
+    # GET /me/todo/lists — odata_next_link spelled out because the real wire
+    # always carries the key (None when the page is the last), and a MagicMock
+    # auto-vivifies a truthy one that _resolve_list_id's pagination would chase.
+    mock_client.me.todo.lists.get = AsyncMock(
+        return_value=MagicMock(value=lists, odata_next_link=None)
+    )
+
+    # Checklist-item-level mocks (POST collection / PATCH+DELETE single item)
+    mock_checklist_item_item = MagicMock()
+    mock_checklist_item_item.patch = AsyncMock()
+    mock_checklist_item_item.delete = AsyncMock()
+
+    mock_checklist_items = MagicMock()
+    mock_checklist_items.post = AsyncMock(return_value=checklist_post_result)
+    mock_checklist_items.by_checklist_item_id = MagicMock(return_value=mock_checklist_item_item)
 
     # Task-level mocks
     mock_task_item = MagicMock()
+    mock_task_item.get = AsyncMock(return_value=tasks[0] if tasks else _mock_task())
     mock_task_item.patch = AsyncMock()
     mock_task_item.delete = AsyncMock()
+    mock_task_item.checklist_items = mock_checklist_items
 
     mock_tasks = MagicMock()
     mock_tasks.get = AsyncMock(return_value=MagicMock(value=tasks, odata_next_link=odata_next_link))
@@ -97,6 +144,67 @@ def _build_mock_client(lists=None, tasks=None, odata_next_link=None):
     mock_client.me.todo.lists.by_todo_task_list_id = MagicMock(return_value=mock_list_item)
 
     return mock_client
+
+
+# --- _resolve_list_id ---
+
+
+class TestResolveListId:
+    """The reviewer's three findings: truthiness gating, no id validation,
+    and an unpaginated default-list lookup — plus the per-client cache."""
+
+    async def test_empty_string_is_rejected_not_treated_as_default(self):
+        """list_id='' is a very common optional-string outcome from a schema
+        client; it used to silently retarget the default list."""
+        client = _build_mock_client()
+
+        with pytest.raises(ValueError, match="list_id"):
+            await list_tasks(client, list_id="")
+
+        client.me.todo.lists.get.assert_not_called()
+
+    async def test_list_id_goes_through_graph_id_validation(self):
+        """The only To Do-surface id that never hit validate_graph_id."""
+        client = _build_mock_client()
+
+        with pytest.raises(ValueError, match="invalid characters"):
+            await list_tasks(client, list_id="bad id;drop")
+
+        client.me.todo.lists.get.assert_not_called()
+
+    async def test_default_resolution_is_cached_per_client(self):
+        """13 tools each resolved the default list on every call — doubling
+        the requests of a normal checklist flow. One resolution per client."""
+        client = _build_mock_client()
+
+        await list_tasks(client)
+        await list_tasks(client)
+        await get_task(client, task_id="task1")
+
+        client.me.todo.lists.get.assert_called_once()
+
+    async def test_default_list_found_past_the_first_page(self):
+        """No $top/nextLink walking meant a user whose first page lacked the
+        defaultList entry got an arbitrary list."""
+        default_list = _mock_task_list("default9", "Tasks", True, "defaultList")
+        other = _mock_task_list("listA", "A", True, "none")
+        page1 = MagicMock(value=[other], odata_next_link=(
+            "https://graph.microsoft.com/v1.0/me/todo/lists?$skip=100"
+        ))
+        page2 = MagicMock(value=[default_list], odata_next_link=None)
+        client = _build_mock_client()
+        client.me.todo.lists.get = AsyncMock(side_effect=[page1, page2])
+
+        await list_tasks(client)
+
+        client.me.todo.lists.by_todo_task_list_id.assert_called_with("default9")
+        assert client.me.todo.lists.get.await_count == 2
+
+    async def test_no_lists_at_all_is_an_error(self):
+        client = _build_mock_client(lists=[])
+
+        with pytest.raises(ValueError, match="No task lists"):
+            await list_tasks(client)
 
 
 # --- list_task_lists ---
@@ -301,7 +409,10 @@ class TestUpdateTask:
         client = _build_mock_client()
 
         result = await update_task(
-            client, task_id="task1", title="Updated title", config=_CFG,
+            client,
+            task_id="task1",
+            title="Updated title",
+            config=_CFG,
         )
 
         assert result["status"] == "updated"
@@ -524,3 +635,270 @@ class TestReminderNeedsAnAnchor:
         payload = post.call_args.args[0]
         assert payload.is_reminder_on is False
         assert payload.reminder_date_time is None
+
+
+# --- get_task ---
+
+
+class TestGetTask:
+    def _task_item(self, client):
+        return client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+
+    async def test_get_task_expands_checklist_items(self):
+        """get_task requests $expand=checklistItems — the only way the
+        sub-steps come back on a single-task read."""
+        task = _mock_task(
+            checklist_items=[_mock_checklist_item()],
+        )
+        client = _build_mock_client(tasks=[task])
+
+        await get_task(client, task_id="task1")
+
+        call_kwargs = self._task_item(client).return_value.get.call_args
+        qp = call_kwargs.kwargs["request_configuration"].query_parameters
+        assert qp.expand == ["checklistItems"]
+
+    async def test_get_task_formats_checklist_items(self):
+        """Sub-steps come back on the wire as a plain list — the SDK model has
+        no `.value` collection to unwrap (regression: 1.22.0 crashed on every
+        task that actually had sub-steps)."""
+        items = [
+            _mock_checklist_item(
+                item_id="ci1",
+                display_name="Draft outline",
+                is_checked=True,
+                checked="2026-09-15T09:00:00Z",
+            ),
+            _mock_checklist_item(item_id="ci2", display_name="Send for review"),
+        ]
+        task = _mock_task(body_content="project notes", checklist_items=items)
+        client = _build_mock_client(tasks=[task])
+
+        result = await get_task(client, task_id="task1")
+
+        assert result["id"] == "task1"
+        assert result["body"] == "project notes"
+        assert result["checklist_count"] == 2
+        # Unchecked first — the To Do client's order, and what an agent reads
+        # as "the next step".
+        assert [i["id"] for i in result["checklist_items"]] == ["ci2", "ci1"]
+        formatted = result["checklist_items"][1]
+        assert formatted["display_name"] == "Draft outline"
+        assert formatted["is_checked"] is True
+        assert formatted["checked_at"] == "2026-09-15T09:00:00Z"
+
+    async def test_get_task_without_checklist_items(self):
+        """A task with no sub-steps reads back empty — None and [] both occur
+        on the wire depending on whether Graph emitted the expanded property."""
+        for empty in (None, []):
+            client = _build_mock_client(tasks=[_mock_task(checklist_items=empty)])
+
+            result = await get_task(client, task_id="task1")
+
+            assert result["checklist_items"] == []
+            assert result["checklist_count"] == 0
+
+    async def test_get_task_validates_id(self):
+        client = _build_mock_client()
+        with pytest.raises(ValueError):
+            await get_task(client, task_id="")
+
+    async def test_get_task_null_response_is_an_error_not_a_crash(self):
+        """SDK get() is Optional[TodoTask]; an empty 200/204 used to crash in
+        _format_task with an AttributeError the model never saw."""
+        client = _build_mock_client()
+        self._task_item(client).return_value.get = AsyncMock(return_value=None)
+
+        with pytest.raises(ValueError, match="no task"):
+            await get_task(client, task_id="task1")
+
+    async def test_checklist_datetimes_are_iso_not_str_datetime(self):
+        """kiota deserializes checkedDateTime/createdDateTime into datetime
+        objects; str() gives '2026-09-15 09:00:00+00:00' (space, no T/Z) in
+        the same response as Graph's raw ISO `due`. Both must come out ISO."""
+        from datetime import datetime, timezone
+
+        checked_at = datetime(2026, 9, 15, 9, 0, tzinfo=timezone.utc)
+        items = [
+            _mock_checklist_item(
+                item_id="ci1",
+                is_checked=True,
+                created=datetime(2026, 9, 15, 8, 0, tzinfo=timezone.utc),
+                checked=checked_at,
+            ),
+        ]
+        task = _mock_task(checklist_items=items)
+        client = _build_mock_client(tasks=[task])
+
+        result = await get_task(client, task_id="task1")
+
+        formatted = result["checklist_items"][0]
+        assert formatted["checked_at"] == "2026-09-15T09:00:00+00:00"
+        assert formatted["created"] == "2026-09-15T08:00:00+00:00"
+
+    async def test_checklist_order_is_deterministic_within_a_group(self):
+        """Sorting on is_checked alone left the order inside the unchecked
+        group as whatever Graph returned — two identical calls could name a
+        different 'next step'. created is the tiebreak."""
+        items = [
+            _mock_checklist_item(
+                item_id="late", display_name="late", created="2026-09-15T12:00:00Z"
+            ),
+            _mock_checklist_item(
+                item_id="early", display_name="early", created="2026-09-15T08:00:00Z"
+            ),
+        ]
+        task = _mock_task(checklist_items=items)
+        client = _build_mock_client(tasks=[task])
+
+        result = await get_task(client, task_id="task1")
+
+        assert [i["id"] for i in result["checklist_items"]] == ["early", "late"]
+
+
+# --- add_checklist_item ---
+
+
+class TestAddChecklistItem:
+    def _post(self, client):
+        return self._task_item(client).return_value.checklist_items.post
+
+    def _task_item(self, client):
+        return client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+
+    async def test_add_checklist_item(self):
+        client = _build_mock_client()
+
+        result = await add_checklist_item(
+            client, task_id="task1", display_name="Book venue", config=_CFG
+        )
+
+        assert result["status"] == "added"
+        assert result["task_id"] == "task1"
+        assert result["checklist_item_id"] == "ci1"
+        self._task_item(client).assert_called_with("task1")
+        self._post(client).assert_called_once()
+
+    async def test_add_checklist_item_passes_typed_model(self):
+        """add_checklist_item posts a ChecklistItem SDK model (not a dict)."""
+        from msgraph.generated.models.checklist_item import ChecklistItem
+
+        client = _build_mock_client()
+        await add_checklist_item(client, task_id="task1", display_name="Step", config=_CFG)
+
+        payload = self._post(client).call_args.args[0]
+        assert isinstance(payload, ChecklistItem), (
+            f"Graph SDK expects a typed ChecklistItem, got {type(payload).__name__}"
+        )
+        assert payload.display_name == "Step"
+
+    async def test_add_checklist_item_empty_name_rejected(self):
+        client = _build_mock_client()
+        with pytest.raises(ValueError, match="display_name"):
+            await add_checklist_item(client, task_id="task1", display_name="   ", config=_CFG)
+        self._post(client).assert_not_called()
+
+    async def test_add_checklist_item_read_only(self):
+        client = _build_mock_client()
+        with pytest.raises(ReadOnlyError):
+            await add_checklist_item(client, task_id="task1", display_name="No", config=_CFG_RO)
+
+    async def test_add_checklist_item_null_response_id_is_an_error(self):
+        """post() is Optional[ChecklistItem]; an empty 201/204 used to raise
+        AttributeError *after* the sub-step existed — the agent's retry then
+        doubled it. The error must say the item may already exist."""
+        client = _build_mock_client(checklist_post_result=MagicMock(id=None, display_name=None))
+
+        with pytest.raises(ValueError, match="do not retry"):
+            await add_checklist_item(client, task_id="task1", display_name="Step", config=_CFG)
+
+
+# --- update_checklist_item ---
+
+
+class TestUpdateChecklistItem:
+    def _item(self, client):
+        task_item = (
+            client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        )
+        return task_item.return_value.checklist_items.by_checklist_item_id
+
+    async def test_check_item(self):
+        client = _build_mock_client()
+
+        result = await update_checklist_item(
+            client, task_id="task1", checklist_item_id="ci1", is_checked=True, config=_CFG
+        )
+
+        assert result["status"] == "updated"
+        self._item(client).assert_called_with("ci1")
+        payload = self._item(client).return_value.patch.call_args.args[0]
+        assert payload.is_checked is True
+        # checkedDateTime is server-maintained; we must not send it.
+        assert payload.checked_date_time is None
+
+    async def test_rename_item(self):
+        client = _build_mock_client()
+
+        await update_checklist_item(
+            client, task_id="task1", checklist_item_id="ci1", display_name="New name", config=_CFG
+        )
+
+        payload = self._item(client).return_value.patch.call_args.args[0]
+        assert payload.display_name == "New name"
+        assert payload.is_checked is None
+
+    async def test_requires_at_least_one_field(self):
+        client = _build_mock_client()
+        with pytest.raises(ValueError, match="at least one"):
+            await update_checklist_item(
+                client, task_id="task1", checklist_item_id="ci1", config=_CFG
+            )
+
+    async def test_blank_rename_is_rejected_before_any_network_call(self):
+        """Validates every input before _resolve_list_id's round trip, same
+        as add_checklist_item — a blank name is a caller fix, not a Graph call."""
+        client = _build_mock_client()
+
+        with pytest.raises(ValueError, match="display_name"):
+            await update_checklist_item(
+                client, task_id="task1", checklist_item_id="ci1", display_name="  ", config=_CFG
+            )
+
+        client.me.todo.lists.get.assert_not_called()
+
+    async def test_update_read_only(self):
+        client = _build_mock_client()
+        with pytest.raises(ReadOnlyError):
+            await update_checklist_item(
+                client, task_id="task1", checklist_item_id="ci1", is_checked=True, config=_CFG_RO
+            )
+
+
+# --- delete_checklist_item ---
+
+
+class TestDeleteChecklistItem:
+    def _item(self, client):
+        task_item = (
+            client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        )
+        return task_item.return_value.checklist_items.by_checklist_item_id
+
+    async def test_delete_checklist_item(self):
+        client = _build_mock_client()
+
+        result = await delete_checklist_item(
+            client, task_id="task1", checklist_item_id="ci1", config=_CFG
+        )
+
+        assert result["status"] == "deleted"
+        self._item(client).assert_called_with("ci1")
+        self._item(client).return_value.delete.assert_called_once()
+
+    async def test_delete_read_only(self):
+        client = _build_mock_client()
+        with pytest.raises(ReadOnlyError):
+            await delete_checklist_item(
+                client, task_id="task1", checklist_item_id="ci1", config=_CFG_RO
+            )

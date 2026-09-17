@@ -51,13 +51,21 @@ EXPECTED_TOOLS = [
     "outlook_list_contacts_delta",
     # Digest (1)
     "outlook_changes_since",
-    # To Do (6)
+    # To Do (14)
     "outlook_list_task_lists",
     "outlook_list_tasks",
+    "outlook_get_task",
     "outlook_create_task",
     "outlook_update_task",
     "outlook_complete_task",
     "outlook_delete_task",
+    "outlook_add_checklist_item",
+    "outlook_update_checklist_item",
+    "outlook_delete_checklist_item",
+    "outlook_list_task_attachments",
+    "outlook_download_task_attachment",
+    "outlook_upload_task_attachment",
+    "outlook_delete_task_attachment",
     # Mail drafts (5)
     "outlook_list_drafts",
     "outlook_create_draft",
@@ -92,9 +100,9 @@ EXPECTED_TOOLS = [
 
 
 def test_tool_count():
-    """All 62 tools are registered (auth is CLI-only now)."""
+    """All 70 tools are registered (auth is CLI-only now)."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 62
+    assert len(registered) == 70
 
 
 def test_all_tools_registered():

@@ -7,7 +7,7 @@ registered (see ``server.py``):
    (`ToolAnnotations`) so a client can auto-approve reads and gate destructive
    ops (delete mail, decline event) without a hardcoded allowlist.
 
-2. **Config-gated toolsets** — the 62 tool schemas cost ~8.6k tokens of client
+2. **Config-gated toolsets** — the 70 tool schemas cost ~12.9k tokens of client
    context every turn. A client that only needs mail + calendar can set
    ``OUTLOOK_MCP_TOOLSETS=mail,calendar`` and load just those groups (~half the
    tokens for a mail+calendar agent). Account/auth tools are always available.
@@ -80,10 +80,18 @@ TOOL_GROUPS: dict[str, str] = {
     # todo
     "outlook_list_task_lists": "todo",
     "outlook_list_tasks": "todo",
+    "outlook_get_task": "todo",
     "outlook_create_task": "todo",
     "outlook_update_task": "todo",
     "outlook_complete_task": "todo",
     "outlook_delete_task": "todo",
+    "outlook_add_checklist_item": "todo",
+    "outlook_update_checklist_item": "todo",
+    "outlook_delete_checklist_item": "todo",
+    "outlook_list_task_attachments": "todo",
+    "outlook_download_task_attachment": "todo",
+    "outlook_upload_task_attachment": "todo",
+    "outlook_delete_task_attachment": "todo",
     # folders
     "outlook_list_folders": "folders",
     "outlook_create_folder": "folders",
@@ -125,6 +133,8 @@ READ_ONLY: set[str] = {
     "outlook_search_contacts",
     "outlook_list_task_lists",
     "outlook_list_tasks",
+    "outlook_get_task",
+    "outlook_list_task_attachments",
     "outlook_list_folders",
     "outlook_changes_since",
     "outlook_list_inbox_delta",
@@ -143,6 +153,8 @@ DESTRUCTIVE: set[str] = {
     "outlook_delete_event",
     "outlook_delete_contact",
     "outlook_delete_task",
+    "outlook_delete_checklist_item",
+    "outlook_delete_task_attachment",
     "outlook_delete_folder",
     "outlook_delete_inbox_override",
     "outlook_remove_draft_attachment",
@@ -185,7 +197,7 @@ def select_kept_tools(names: list[str], enabled: set[str] | None) -> set[str]:
 # and a wrong entry here sends a second email or re-issues an invitation. The
 # reasoning for every exclusion is in tests/test_idempotent_hints.py, which fails
 # if this set changes. `openWorldHint` is deliberately absent — it is true by
-# default in the schema and true for all 62, so stating it is pure token cost.
+# default in the schema and true for all 70, so stating it is pure token cost.
 IDEMPOTENT: set[str] = {
     "outlook_flag_message",
     "outlook_mark_read",
@@ -194,6 +206,8 @@ IDEMPOTENT: set[str] = {
     "outlook_set_inbox_override",
     "outlook_switch_account",
     "outlook_download_attachment",
+    "outlook_download_task_attachment",
+    "outlook_update_checklist_item",
 }
 
 

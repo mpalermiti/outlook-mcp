@@ -43,6 +43,7 @@ import pytest
 from outlook_mcp.tools.contacts import list_contacts, search_contacts
 from outlook_mcp.tools.mail_read import list_inbox, search_mail
 from outlook_mcp.tools.mail_thread import list_thread
+from outlook_mcp.tools.todo import get_task, list_tasks
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 
@@ -327,3 +328,42 @@ async def test_contact_search_does_not_claim_to_know_categories(real_graph_clien
     found = await search_contacts(real_graph_client.sdk_client, query=term, count=25)
     assert found["contacts"], f"search for {term!r} returned nothing, though it names a contact"
     assert all("categories" not in c for c in found["contacts"])
+# ── todo: $expand=checklistItems on a single-task GET ──
+
+
+async def test_get_task_checklist_expand_is_accepted(real_graph_client):
+    """get_task's $expand=checklistItems must come back, not 400 and not silently empty.
+
+    The mock suite can only assert we write "checklistItems" into the query
+    configuration; only Graph decides whether the expansion is legal on this
+    endpoint and actually populates task.checklistItems.
+
+    This tier is read-only, so it cannot create sub-steps; it scans the
+    default list for a task that already has some and skips (loudly) when
+    there is none — an unconditional pass against an empty checklist was the
+    condition that let the 1.22.0 `.value` crash ship.
+    """
+    page = await list_tasks(real_graph_client.sdk_client, count=10)
+    detail = None
+    for task in page["tasks"]:
+        candidate = await get_task(real_graph_client.sdk_client, task["id"])
+        if candidate["checklist_count"] > 0:
+            detail = candidate
+            break
+    if detail is None:
+        pytest.skip(
+            "no task in the first 10 of the default list has checklist items — "
+            "the write tier (TestChecklistRoundTrip) owns the guarantee instead"
+        )
+
+    assert detail["checklist_count"] > 0
+    for item in detail["checklist_items"]:
+        assert item["id"]
+        assert isinstance(item["display_name"], str)
+        assert isinstance(item["is_checked"], bool)
+    # Unchecked-first ordering is part of the tool's contract: an agent reads
+    # the first unchecked item as "the next step" — and the order within each
+    # group must be the deterministic (is_checked, created) key, not whatever
+    # Graph happened to return.
+    keys = [(i["is_checked"], i["created"]) for i in detail["checklist_items"]]
+    assert keys == sorted(keys), f"checklist order broke the (is_checked, created) key: {keys}"

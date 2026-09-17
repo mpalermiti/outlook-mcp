@@ -79,3 +79,71 @@ class TestEndpointsList:
         must continue exercising that endpoint."""
         paths = [p for p, _ in preflight.ENDPOINTS]
         assert any("inferenceClassification/overrides" in p for p in paths)
+
+
+class _Resp:
+    def __init__(self, status_code, body=None):
+        self.status_code = status_code
+        self._body = body or {}
+
+    def json(self):
+        return self._body
+
+
+class TestTodoTaskFamilies:
+    """The To Do checklist/attachment endpoints live under a real task id,
+    so their probe rows are provisioned at run time (see
+    ``_todo_task_rows``). These tests lock in that the families stay
+    covered — the attachment write itself is a POST and stays out of the
+    read-only script, but the GETs see the same 403/501 refusal signal."""
+
+    def _wire(self, monkeypatch, responses):
+        def fake_get(url, headers=None, timeout=None):
+            return responses[url]
+
+        monkeypatch.setattr(preflight.httpx, "get", fake_get)
+
+    def test_checklist_attachments_and_value_rows_are_provisioned(self, monkeypatch):
+        base = "https://graph.microsoft.com/v1.0/me/todo/lists"
+        self._wire(
+            monkeypatch,
+            {
+                f"{base}?$top=1": _Resp(200, {"value": [{"id": "L1"}]}),
+                f"{base}/L1/tasks?$top=1": _Resp(200, {"value": [{"id": "T1"}]}),
+                f"{base}/L1/tasks/T1/attachments?$top=1": _Resp(
+                    200, {"value": [{"id": "A1"}]}
+                ),
+            },
+        )
+
+        rows = preflight._todo_task_rows({"Authorization": "Bearer x"})
+
+        paths = [p for p, _ in rows]
+        assert any("checklistItems" in p for p in paths), paths
+        assert any(p.endswith("/attachments?$top=1") for p in paths), paths
+        assert any("$value" in p for p in paths), paths
+
+    def test_no_attachment_means_no_value_row_not_a_broken_one(self, monkeypatch):
+        """A $value row without a real attachment id would 404 for the wrong
+        reason; the row is skipped instead."""
+        base = "https://graph.microsoft.com/v1.0/me/todo/lists"
+        self._wire(
+            monkeypatch,
+            {
+                f"{base}?$top=1": _Resp(200, {"value": [{"id": "L1"}]}),
+                f"{base}/L1/tasks?$top=1": _Resp(200, {"value": [{"id": "T1"}]}),
+                f"{base}/L1/tasks/T1/attachments?$top=1": _Resp(200, {"value": []}),
+            },
+        )
+
+        rows = preflight._todo_task_rows({"Authorization": "Bearer x"})
+
+        paths = [p for p, _ in rows]
+        assert any("checklistItems" in p for p in paths)
+        assert not any("$value" in p for p in paths)
+
+    def test_no_task_provisioning_degrades_to_no_rows(self, monkeypatch):
+        base = "https://graph.microsoft.com/v1.0/me/todo/lists"
+        self._wire(monkeypatch, {f"{base}?$top=1": _Resp(200, {"value": []})})
+
+        assert preflight._todo_task_rows({"Authorization": "Bearer x"}) == []

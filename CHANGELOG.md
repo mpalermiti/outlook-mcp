@@ -33,6 +33,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
   Thanks to **@Nyaecho** for the feature (#62).
 
+- **To Do tasks grew sub-steps, detail reads, and attachments (8 new tools).**
+  `outlook_get_task` reads one task in full — notes, due, recurrence flag, and its checklist
+  items via `$expand=checklistItems`, ordered unchecked-first with creation time as the
+  tiebreak (deterministic, so the first open item stably reads as "the next step").
+  `outlook_add_checklist_item`, `outlook_update_checklist_item` (partial
+  patch: `is_checked` or rename) and `outlook_delete_checklist_item` manage those sub-steps.
+  Task attachments are their own resource, not mail FileAttachments: creation is an inline
+  base64 POST of a `taskFileAttachment` — verified live on a consumer outlook.com mailbox
+  from 64 bytes to 4 MB, while the upload-session endpoint answers 404 on those accounts,
+  so the session+chunked-PUT path was never an option there. The client-side ceiling is
+  **1 byte – 20 MiB**: Graph rejects request bodies over 30 MB and base64 inflates the file
+  4/3. Downloads read `contentBytes` off the attachment entity and write atomically (temp
+  file + replace), so a failed fetch can never truncate a file already staged in
+  `attachments_dir`. `outlook_list_task_attachments` paginates (`$top` + cursor) like every
+  other list tool; uploads and downloads are confined to `attachments_dir`, same as mail
+  attachments. Tool count: 62 → 70.
+
 ### Changed
 
 - **SKILL.md installs from PyPI instead of cloning `main`.** The OpenClaw install manifest
