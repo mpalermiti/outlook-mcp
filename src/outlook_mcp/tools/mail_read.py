@@ -44,6 +44,19 @@ def _concise_summary(summary: dict) -> dict:
     return {k: v for k, v in summary.items() if k not in _CONCISE_SUMMARY_DROP}
 
 
+# Every field ``_format_message_summary`` reads, in one place. It used to be
+# copy-pasted into each of the four call sites, and they drifted: only
+# ``list_inbox`` selected ``inferenceClassification``, so ``search_mail``,
+# ``list_drafts`` and ``get_thread`` returned ``"classification": ""`` for
+# every message no matter what Focused Inbox had decided. A $select narrower
+# than its formatter is a silent lie — the caller cannot tell "not classified"
+# from "we forgot to ask".
+SUMMARY_SELECT = (
+    "id,subject,from,receivedDateTime,isRead,importance,"
+    "bodyPreview,hasAttachments,categories,flag,conversationId,inferenceClassification"
+)
+
+
 def _format_message_summary(msg: Any) -> dict:
     """Convert Graph SDK message to summary dict.
 
@@ -138,10 +151,7 @@ async def list_inbox(
 
     query_params = apply_pagination({}, count, cursor)
     query_params["$orderby"] = "receivedDateTime desc"
-    query_params["$select"] = (
-        "id,subject,from,receivedDateTime,isRead,importance,"
-        "bodyPreview,hasAttachments,categories,flag,conversationId,inferenceClassification"
-    )
+    query_params["$select"] = SUMMARY_SELECT
 
     # If cursor provided, it already set $skip — ignore the manual skip param
     if not cursor and skip:
@@ -661,10 +671,7 @@ async def search_mail(
 
     query_params = apply_pagination({}, count, cursor)
     query_params["$search"] = safe_query
-    query_params["$select"] = (
-        "id,subject,from,receivedDateTime,isRead,importance,"
-        "bodyPreview,hasAttachments,categories,flag,conversationId"
-    )
+    query_params["$select"] = SUMMARY_SELECT
 
     if folder:
         folder = await resolve_folder_id(graph_client, folder)

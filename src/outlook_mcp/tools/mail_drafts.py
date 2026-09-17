@@ -7,7 +7,7 @@ from typing import Any
 from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.permissions import CATEGORY_MAIL_DRAFTS, CATEGORY_MAIL_SEND, check_permission
-from outlook_mcp.tools.mail_read import _format_message_summary
+from outlook_mcp.tools.mail_read import SUMMARY_SELECT, _format_message_summary
 from outlook_mcp.validation import validate_datetime, validate_email, validate_graph_id
 
 # MAPI tag PR_DEFERRED_SEND_TIME (0x3FEF, PtypTime) — the legacy extended
@@ -49,10 +49,7 @@ async def list_drafts(
     """
     query_params: dict[str, Any] = {
         "$orderby": "lastModifiedDateTime desc",
-        "$select": (
-            "id,subject,from,receivedDateTime,isRead,importance,"
-            "bodyPreview,hasAttachments,categories,flag,conversationId"
-        ),
+        "$select": SUMMARY_SELECT,
     }
     query_params = apply_pagination(query_params, count, cursor)
 

@@ -6,6 +6,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **`classification` was always empty outside the inbox listing.** `outlook_search_mail`,
+  `outlook_list_drafts` and `outlook_get_thread` share `list_inbox`'s summary formatter, which
+  reports Focused Inbox's verdict — but each had its own copy of the `$select`, and only
+  `list_inbox`'s copy asked Graph for `inferenceClassification`. The other three returned
+  `"classification": ""` for every message regardless of how it had actually been classified,
+  which is indistinguishable from a message Graph declined to classify. The field list is one
+  constant now, and a guard reads the formatter's source and fails if a `$select` is narrower
+  than the fields it feeds — or wider.
+
 ### Added
 
 - **`outlook_list_events(calendar=…)` reads secondary calendars.** Every calendar read went to
