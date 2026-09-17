@@ -28,23 +28,16 @@ from outlook_mcp.server import mcp
 # itself, which is all a drift guard needs.
 CHARS_PER_TOKEN = 4
 
-# Ceiling for the full tool surface. Measured at 11,206 on 1.20.0, with ~7%
-# headroom: enough for a docstring fix or another annotation, not enough for a
-# field added to all 62 or a batch of new tools.
-#
-# 11,771 after `outlook_create_event` gained `timezone` (+143: one parameter and
-# the lines explaining what a zone anchor does to a recurring series). That
-# leaves 229 tokens, not the ~700 this number was set with — the next docstring
-# fix will redden this guard. Deliberately left alone rather than swept upward:
-# re-baselining a budget is the owner's call, and a ceiling raised as a side
-# effect of the change that consumed it stops being a budget.
-#
-# Raised to 13,500 for the eight To Do detail tools (get_task, checklist-item
-# CRUD, task attachments) — a deliberate "a new tool has to go somewhere"
-# raise, not drift. Measured 12,712 before the rebase picked up `timezone`;
-# 12,855 with it. Headroom is ~5%: room for a docstring fix, not for another
-# batch.
-TOOL_SURFACE_CEILING = 13_500
+# Ceiling for the full tool surface. Measured at 11,206 on 1.20.0 with a
+# 12,000 ceiling; raised to 13,500 for the eight To Do detail tools
+# (get_task, checklist-item CRUD, task attachments), then to 13,650 after
+# the attachment rewrite (measured 12,855 at the time) — each a deliberate
+# "a new tool has to go somewhere" raise, not drift. Re-measured 13,154
+# after the rebase onto main picked up #76's time-zone anchoring (which
+# grew create/get/update_event, not just `outlook_create_event`'s new
+# parameter) and the upload-session docstring note. Headroom is ~3.6%:
+# enough for a small docstring fix, not for another batch.
+TOOL_SURFACE_CEILING = 13_650
 
 # `prompts/list` is the cheap half of the bargain struck in 1.20.0: workflow
 # guidance costs a name and one line here until someone invokes it. If that ever

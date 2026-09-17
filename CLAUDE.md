@@ -40,7 +40,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   - `calendar_read.py`, `calendar_write.py` — Tier 1
   - `contacts.py` — Contact CRUD
   - `todo.py` — To Do task management
-  - `todo_attachments.py` — To Do task attachments (upload sessions, $value downloads)
+  - `todo_attachments.py` — To Do task attachments (inline base64 uploads ≤20 MiB, contentBytes downloads)
   - `mail_drafts.py` — Draft management
   - `mail_attachments.py` — Attachment handling
   - `mail_folders.py` — Folder management
@@ -79,8 +79,8 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 - Anything taking a host filesystem path routes through `resolve_attachment_path`. Paths come
   from the model, and the model reads email — treat them as untrusted input, and confine by
   resolving, never by string comparison
-- Tool schemas are a per-turn cost with a measured baseline (~8,644 tokens for 62 tools; 70
-  with the To Do detail surface).
+- Tool schemas are a per-turn cost with a measured baseline (~8,644 tokens for 62 tools;
+  ~12.9k for 70 with the To Do detail surface).
   Metadata that is correct but inert — `openWorldHint`, which is `true` by default anyway, or
   titles that restate the tool name — is not free. `test_tool_surface_budget.py` holds the line
 - Datetimes: UTC in responses, config timezone for input interpretation

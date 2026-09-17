@@ -136,7 +136,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_delete_checklist_item` — Delete a sub-step
 - `outlook_list_task_attachments` — List a task's attachments (id, name, size, content_type)
 - `outlook_download_task_attachment` — Download task attachment content to attachments_dir
-- `outlook_upload_task_attachment` — Attach a local file to a task via upload session (0–25 MB)
+- `outlook_upload_task_attachment` — Attach a local file to a task via inline base64 POST (1 byte – 20 MiB)
 - `outlook_delete_task_attachment` — Remove a task attachment
 
 ### Drafts
