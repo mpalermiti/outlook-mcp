@@ -140,7 +140,7 @@ async def test_subsequent_call_uses_delta_token_url_verbatim():
 @pytest.mark.asyncio
 async def test_cap_reached_returns_nextlink_and_has_more():
     page = lambda i, link: {  # noqa: E731
-        "value": [_raw_contact(id=f"c{i*50 + n}") for n in range(50)],
+        "value": [_raw_contact(id=f"c{i * 50 + n}") for n in range(50)],
         "@odata.nextLink": link,
     }
     responses = [
@@ -164,14 +164,18 @@ async def test_cap_reached_returns_nextlink_and_has_more():
 @pytest.mark.asyncio
 async def test_follows_nextlink_until_deltalink():
     responses = [
-        _http_response({
-            "value": [_raw_contact(id="c1")],
-            "@odata.nextLink": "https://graph.microsoft.com/v1.0/p2",
-        }),
-        _http_response({
-            "value": [_raw_contact(id="c2")],
-            "@odata.deltaLink": "https://graph.microsoft.com/v1.0/contacts-delta-final",
-        }),
+        _http_response(
+            {
+                "value": [_raw_contact(id="c1")],
+                "@odata.nextLink": "https://graph.microsoft.com/v1.0/p2",
+            }
+        ),
+        _http_response(
+            {
+                "value": [_raw_contact(id="c2")],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/contacts-delta-final",
+            }
+        ),
     ]
     patch_client, _, _ = _async_client_with(responses)
     with patch_client:
@@ -220,3 +224,62 @@ async def test_no_changes_returns_empty_list_and_delta_token():
     assert result["contacts"] == []
     assert result["delta_token"] == "https://graph.microsoft.com/v1.0/contacts-delta-same"
     assert result["has_more"] is False
+
+
+class TestTheDeltaSummaryMirrorsTheListingSummary:
+    """The parity claim in `_format_contact_delta`'s docstring, as a test.
+
+    `SKILL.md` and `outlook_changes_since` both steer recurring work to the
+    delta tool, so an agent seeds from `outlook_list_contacts` and refreshes
+    from this one. A key on one side and not the other either raises KeyError
+    in the caller or has it report every changed contact as uncategorised —
+    the same "empty means absent" lie one module over.
+    """
+
+    @staticmethod
+    def _listing_summary(**fields):
+        from unittest.mock import MagicMock
+
+        from outlook_mcp.tools.contacts import _format_contact_summary
+
+        contact = MagicMock(
+            spec=[
+                "id",
+                "display_name",
+                "email_addresses",
+                "mobile_phone",
+                "home_phones",
+                "business_phones",
+                "company_name",
+                "categories",
+            ]
+        )
+        contact.id = fields.get("id", "AAA=")
+        contact.display_name = fields.get("display_name", "Ada Lovelace")
+        contact.email_addresses = []
+        contact.mobile_phone = fields.get("mobile_phone", "+15555550123")
+        contact.home_phones = []
+        contact.business_phones = []
+        contact.company_name = fields.get("company_name", "Analytical Engines")
+        contact.categories = fields.get("categories", ["Christmas Card"])
+        return _format_contact_summary(contact, with_categories=True)
+
+    def test_both_summaries_carry_the_same_keys(self):
+        assert set(_format_contact_delta(_raw_contact())) == set(self._listing_summary())
+
+    def test_the_delta_summary_carries_categories(self):
+        out = _format_contact_delta(_raw_contact(categories=["Christmas Card", "Family"]))
+        assert out["categories"] == ["Christmas Card", "Family"]
+
+    def test_no_categories_is_an_empty_list_not_a_missing_key(self):
+        """Absent and empty mean different things — but only one of them is honest here.
+
+        `/me/contacts/delta` takes no `$select`, so Graph always sends
+        `categories` when the contact has any. An empty list is therefore a
+        fact about the contact, not about the query.
+        """
+        assert _format_contact_delta(_raw_contact())["categories"] == []
+
+    def test_categories_are_sanitized_like_every_other_echoed_field(self):
+        out = _format_contact_delta(_raw_contact(categories=["Christmas\x1b[31m Card"]))
+        assert out["categories"] == ["Christmas Card"]

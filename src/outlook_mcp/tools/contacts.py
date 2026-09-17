@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import ToolInputError
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.permissions import CATEGORY_CONTACTS_WRITE, check_permission
 from outlook_mcp.validation import (
@@ -71,7 +70,10 @@ def _build_address(slot: str, parts: Any) -> Any:
 
     An unknown key is an error rather than a silent drop. The caller is a model
     reading a docstring, and a misspelt part that patched nothing would be the
-    #41 shape again — a call that succeeds and does nothing.
+    #41 shape again — a call that succeeds and does nothing. Raised as a plain
+    ``ValueError``, like every other tool module: ``_wrap_tool_errors`` turns it
+    into ``ToolInputError`` so the text reaches the model as an anticipated
+    failure rather than being withheld as a crash.
 
     A part that was not supplied is **left unset**, never assigned ``None``.
     Graph's request adapter serializes through the backing store, which emits a
@@ -85,14 +87,14 @@ def _build_address(slot: str, parts: Any) -> Any:
     from msgraph.generated.models.physical_address import PhysicalAddress
 
     if not isinstance(parts, dict):
-        raise ToolInputError(
+        raise ValueError(
             f"{slot}_address takes an object like "
             f"{{'street': '…', 'city': '…'}}, not {type(parts).__name__}. "
             f"Valid parts: {', '.join(_ADDRESS_FIELDS)}."
         )
     unknown = [key for key in parts if key not in _ADDRESS_FIELDS]
     if unknown:
-        raise ToolInputError(
+        raise ValueError(
             f"{slot}_address has unknown part(s): {', '.join(sorted(unknown))}. "
             f"Valid parts: {', '.join(_ADDRESS_FIELDS)} — the same keys "
             f"outlook_get_contact returns."
@@ -103,7 +105,7 @@ def _build_address(slot: str, parts: Any) -> Any:
         if value is None:
             continue
         if not isinstance(value, str):
-            raise ToolInputError(
+            raise ValueError(
                 f"{slot}_address['{field}'] must be a string, not {type(value).__name__}."
             )
         if value.strip():
@@ -113,7 +115,7 @@ def _build_address(slot: str, parts: Any) -> Any:
         # Reporting "updated" for a patch that carried nothing is the failure
         # this module exists to stop telling. Clearing an address is a separate
         # capability nobody has asked for yet; until then, say so.
-        raise ToolInputError(
+        raise ValueError(
             f"{slot}_address has no content. Omit it to leave the stored address "
             f"unchanged — this tool cannot clear an address."
         )
@@ -142,14 +144,22 @@ def _primary_phone(contact: Any) -> str:
     Consumer Outlook accounts expose mobilePhone (single), homePhones (list),
     and businessPhones (list) — not the unified ``phones`` collection. Prefer
     mobile, then first home, then first business.
+
+    Spelled out rather than looped over a tuple of names: a ``getattr`` whose
+    attribute is a variable is invisible to `test_select_covers_the_formatter`,
+    which reads this source to derive what the `$select` must ask for. A loop
+    here would take `homePhones` and `businessPhones` out from under the guard
+    that exists to keep a formatter and its `$select` in agreement.
     """
     mobile = getattr(contact, "mobile_phone", "") or ""
     if mobile:
         return mobile
-    for attr in ("home_phones", "business_phones"):
-        values = getattr(contact, attr, None) or []
-        if values:
-            return values[0]
+    home = getattr(contact, "home_phones", None) or []
+    if home:
+        return home[0]
+    business = getattr(contact, "business_phones", None) or []
+    if business:
+        return business[0]
     return ""
 
 

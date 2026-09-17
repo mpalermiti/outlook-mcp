@@ -4,13 +4,9 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from kiota_abstractions.store import BackingStoreSerializationWriterProxyFactory
-from kiota_serialization_json.json_serialization_writer_factory import (
-    JsonSerializationWriterFactory,
-)
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import ReadOnlyError, ToolInputError
+from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.pagination import encode_cursor
 from outlook_mcp.tools.contacts import (
     _ADDRESS_FIELDS,
@@ -27,6 +23,7 @@ from outlook_mcp.tools.contacts import (
     search_contacts,
     update_contact,
 )
+from tests.test_write_payloads_reach_the_wire import wire
 
 _CFG = Config(client_id="test")
 _CFG_RO = Config(client_id="test", read_only=True)
@@ -686,14 +683,14 @@ class TestAnAddressThatWouldPatchNothingIsRefused:
     )
     async def test_an_address_with_no_content_is_an_error(self, address):
         client = self._client()
-        with pytest.raises(ToolInputError, match="cannot clear an address"):
+        with pytest.raises(ValueError, match="cannot clear an address"):
             await update_contact(client, contact_id="contact123", home_address=address, config=_CFG)
         client.me.contacts.by_contact_id.return_value.patch.assert_not_called()
 
     async def test_an_unknown_part_is_an_error_naming_the_valid_ones(self):
         """A misspelt key that patched nothing would be #41's shape again."""
         client = self._client()
-        with pytest.raises(ToolInputError, match="country_or_region") as caught:
+        with pytest.raises(ValueError, match="country_or_region") as caught:
             await update_contact(
                 client,
                 contact_id="contact123",
@@ -705,7 +702,7 @@ class TestAnAddressThatWouldPatchNothingIsRefused:
 
     async def test_the_slot_is_named_in_the_error(self):
         client = self._client()
-        with pytest.raises(ToolInputError, match="business_address"):
+        with pytest.raises(ValueError, match="business_address"):
             await update_contact(
                 client, contact_id="contact123", business_address={"zip": "98011"}, config=_CFG
             )
@@ -713,12 +710,12 @@ class TestAnAddressThatWouldPatchNothingIsRefused:
     @pytest.mark.parametrize("address", ["693 7th St S", ["Kirkland"], 98033])
     async def test_an_address_that_is_not_an_object_is_an_error(self, address):
         client = self._client()
-        with pytest.raises(ToolInputError, match="takes an object"):
+        with pytest.raises(ValueError, match="takes an object"):
             await update_contact(client, contact_id="contact123", home_address=address, config=_CFG)
 
     async def test_a_part_that_is_not_a_string_is_an_error(self):
         client = self._client()
-        with pytest.raises(ToolInputError, match="must be a string"):
+        with pytest.raises(ValueError, match="must be a string"):
             await update_contact(
                 client, contact_id="contact123", home_address={"postal_code": 98033}, config=_CFG
             )
@@ -774,49 +771,6 @@ class TestTheReadAndWriteHalvesNameTheSameParts:
         assert _format_address(_make_mock_address(street="   ", city=" ")) is None
 
 
-def _adapter_wire(model) -> str:
-    """The JSON the Graph request adapter would actually send for this model.
-
-    Deliberately not a bare ``JsonSerializationWriter``: the adapter serializes
-    through the backing-store proxy, and only that path emits a field that was
-    explicitly assigned ``None``. ``tests/test_write_payloads_reach_the_wire.py``
-    asserts values are *present*, which the bare writer answers correctly; this
-    helper exists for the opposite question — what got in that we never asked for.
-
-    **Single use per model.** Serializing marks the backing store clean —
-    ``is_initialization_completed``'s setter rewrites every entry and recurses
-    into nested models — so a second call on the same object returns a payload
-    with the changes stripped, and every assertion made on it passes vacuously.
-    Build a fresh model for each call; ``test_the_helper_is_single_use`` pins it.
-    """
-    factory = BackingStoreSerializationWriterProxyFactory(JsonSerializationWriterFactory())
-    writer = factory.get_serialization_writer("application/json")
-    writer.write_object_value(None, model)
-    try:
-        return writer.get_serialized_content().decode()
-    except ValueError as exc:  # kiota: "Invalid Json output"
-        raise AssertionError(
-            "kiota cannot serialize this model through the backing-store proxy: a "
-            "top-level field assigned None puts a bare null on the root writer. "
-            "Assert on the model's backing store rather than on a payload — and do "
-            "not fall back to JsonSerializationWriter, which is the one serializer "
-            f"that cannot see the leak this helper exists to catch. ({exc})"
-        ) from exc
-
-
-def _contact_with_a_none_part():
-    """A contact whose nested address has one part explicitly assigned None."""
-    from msgraph.generated.models.contact import Contact
-    from msgraph.generated.models.physical_address import PhysicalAddress
-
-    address = PhysicalAddress()
-    address.city = "Bothell"
-    address.street = None
-    contact = Contact()
-    contact.home_address = address
-    return contact
-
-
 class TestPartialAddressDoesNotLeakNulls:
     """A part we were not given must be left unset, never assigned ``None``.
 
@@ -830,8 +784,12 @@ class TestPartialAddressDoesNotLeakNulls:
 
     which Graph rejects — ``400 The property 'country_or_region' does not exist
     on type 'microsoft.graph.contact'``. The full five-part write returned 200,
-    so the tool worked for the case anyone would test by hand and failed for
-    the one it was written for. Only the live tier and this serializer see it.
+    so the tool worked for the case anyone would test by hand and failed for the
+    one it was written for.
+
+    ``assert_on_wire`` now rejects leaked keys and stray nulls for every write
+    tool (#64), so this class keeps only what is specific to addresses: the
+    partial write, where the leak actually happened, asserted key by key.
     """
 
     async def test_a_city_only_patch_sends_the_city_and_nothing_else(self):
@@ -840,7 +798,7 @@ class TestPartialAddressDoesNotLeakNulls:
             mock_client, contact_id="contact123", home_address={"city": "Bothell"}, config=_CFG
         )
         body = json.loads(
-            _adapter_wire(mock_client.me.contacts.by_contact_id.return_value.patch.call_args[0][0])
+            wire(mock_client.me.contacts.by_contact_id.return_value.patch.call_args[0][0])
         )
 
         # By key, not by substring: a contact on Nullah Road fails `"null" not in
@@ -849,31 +807,64 @@ class TestPartialAddressDoesNotLeakNulls:
         assert set(body) == {"@odata.type", "homeAddress"}
         assert body["homeAddress"] == {"city": "Bothell"}
 
-    def test_the_serializer_this_uses_is_the_one_that_can_see_it(self):
-        """Pin why the helper is not a plain JsonSerializationWriter.
+    async def test_every_slot_patches_only_itself(self):
+        """Three addresses, three chances for a leak onto the parent."""
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(
+            mock_client,
+            contact_id="contact123",
+            business_address={"city": "Redmond", "postal_code": "98052"},
+            config=_CFG,
+        )
+        body = json.loads(
+            wire(mock_client.me.contacts.by_contact_id.return_value.patch.call_args[0][0])
+        )
 
-        If kiota ever stops emitting explicitly-``None`` fields, this fails and
-        the distinction above can be dropped.
-        """
-        assert '"street": null' in _adapter_wire(_contact_with_a_none_part())
+        assert set(body) == {"@odata.type", "businessAddress"}
+        assert body["businessAddress"] == {"city": "Redmond", "postalCode": "98052"}
 
-    def test_the_helper_is_single_use(self):
-        """Serializing cleans the backing store, so a reused model proves nothing."""
-        contact = _contact_with_a_none_part()
-        assert '"street": null' in _adapter_wire(contact)
-        assert '"street": null' not in _adapter_wire(contact)
 
-    def test_a_top_level_none_is_reported_as_an_assertion_not_a_kiota_error(self):
-        """For the next person who points this at a "clear this field" body.
+class TestGetContactAsksGraphForEverything:
+    """The contract that makes the detail formatter safe.
 
-        Without the guard they get ``ValueError: Invalid Json output`` where they
-        expected an assertion, and the obvious reaction — fall back to the bare
-        writer — deletes the only serializer that can see the leak.
-        """
-        from msgraph.generated.models.contact import Contact
+    `_format_contact_detail` reads seventeen fields, and the reason it can is
+    that `get_contact` sends no `$select` — Graph then returns the whole
+    contact. The listing paths pair a formatter with a `$select` and are
+    guarded by `test_select_covers_the_formatter`; this path has no `$select`
+    to guard, so what needs pinning is that it stays that way. Narrow it and
+    every field nobody thought to list comes back empty, which is
+    indistinguishable from genuinely empty.
+    """
 
-        contact = Contact()
-        contact.given_name = None
+    async def test_no_select_is_sent(self):
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await get_contact(mock_client, "contact123")
 
-        with pytest.raises(AssertionError, match="backing-store proxy"):
-            _adapter_wire(contact)
+        builder = mock_client.me.contacts.by_contact_id.return_value
+        builder.get.assert_awaited_once()
+        assert builder.get.call_args.args == ()
+        assert builder.get.call_args.kwargs == {}
+
+    async def test_every_field_the_detail_formatter_reads_survives_the_round_trip(self):
+        """A cheap structural echo of the guard the listing paths get for free."""
+        detail = await get_contact(_make_contact_by_id_mock(_make_mock_contact()), "contact123")
+
+        assert set(detail) == {
+            "id",
+            "first_name",
+            "last_name",
+            "display_name",
+            "email_addresses",
+            "mobile_phone",
+            "home_phones",
+            "business_phones",
+            "company",
+            "title",
+            "department",
+            "birthday",
+            "home_address",
+            "business_address",
+            "other_address",
+            "categories",
+            "personal_notes",
+        }

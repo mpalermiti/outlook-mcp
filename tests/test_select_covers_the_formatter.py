@@ -28,11 +28,17 @@ import textwrap
 
 import pytest
 
-from outlook_mcp.tools import mail_read
+from outlook_mcp.tools import contacts, mail_read
 
 # (label, formatter function, the $select string that feeds it)
+#
+# `_format_contact_summary` is paired with the listing's wider select: it is the
+# one that can reach every field the formatter reads. The search path sends
+# `_SUMMARY_SELECT`, which is deliberately narrower, and the formatter omits the
+# key it cannot honour rather than reporting it empty (`with_categories`).
 _PAIRS = [
     ("mail summary", mail_read._format_message_summary, mail_read.SUMMARY_SELECT),
+    ("contact summary", contacts._format_contact_summary, contacts._LIST_SELECT),
 ]
 
 # The SDK renames exactly one field to dodge the Python keyword.
@@ -47,15 +53,24 @@ def _graph_name(attr: str) -> str:
     return head + "".join(word.title() for word in rest)
 
 
-def _fields_read_from(func) -> set[str]:
-    """Every attribute the function reads directly off its first parameter.
+def _fields_read_from(func, _seen: frozenset[str] = frozenset()) -> set[str]:
+    """Every attribute the function reads off its first parameter.
 
     Nested reads (``msg.from_.email_address.address``) contribute only the
     outermost name, which is the one ``$select`` names.
+
+    Reads through a helper count as reads. ``_format_contact_summary`` gets its
+    phone from ``_primary_phone(contact)`` and its categories from
+    ``_categories(contact)``; without following those calls this guard would
+    report three selected fields as unread and miss the one that matters. So a
+    call to a function in the same module that is handed the model as its first
+    argument is followed into.
     """
     tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
     param = fn.args.args[0].arg
+    module = inspect.getmodule(func)
+    seen = _seen | {func.__qualname__}
 
     found: set[str] = set()
     for node in ast.walk(fn):
@@ -78,6 +93,21 @@ def _fields_read_from(func) -> set[str]:
             and isinstance(node.args[1].value, str)
         ):
             found.add(node.args[1].value)
+        # _primary_phone(contact) — a helper in this module, handed the model
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == param
+        ):
+            helper = getattr(module, node.func.id, None)
+            if (
+                callable(helper)
+                and inspect.getmodule(helper) is module
+                and helper.__qualname__ not in seen
+            ):
+                found |= _fields_read_from(helper, seen)
     return found
 
 
@@ -106,6 +136,19 @@ def test_the_select_asks_for_nothing_its_formatter_ignores(label, formatter, sel
         f"{label}: the $select asks for {unused}, which {formatter.__name__} never "
         f"reads. Drop them, or read them."
     )
+
+
+def test_a_field_read_through_a_helper_still_counts_as_read():
+    """The extension above, pinned.
+
+    Without it a formatter could move every read into a helper and this guard
+    would go quietly blind — passing both directions while selecting fields
+    nobody reads and reading fields nobody selected.
+    """
+    reads = _fields_read_from(contacts._format_contact_summary)
+    assert "mobile_phone" in reads, "read through _primary_phone"
+    assert "home_phones" in reads, "read through _primary_phone"
+    assert "categories" in reads, "read through _categories"
 
 
 def test_the_summary_select_is_spelled_in_exactly_one_place():

@@ -52,7 +52,13 @@ def _format_contact_delta(raw: dict) -> dict:
 
     Mirrors ``contacts._format_contact_summary`` field-for-field so
     callers don't have to branch on whether a given dict came from a
-    delta call or a regular list call.
+    delta call or a regular list call. That is a load-bearing claim: an
+    agent seeds from ``outlook_list_contacts`` and refreshes from this
+    tool, so a key on one side and not the other either raises KeyError
+    in the caller or — worse — reports every changed contact as
+    uncategorised. ``/me/contacts/delta`` takes no ``$select`` at all, so
+    Graph is already sending everything here; dropping a field is a
+    choice this formatter makes, not a limit of the endpoint.
     """
     email = ""
     emails = raw.get("emailAddresses") or []
@@ -65,6 +71,7 @@ def _format_contact_delta(raw: dict) -> dict:
         "email": email,
         "phone": _primary_phone_from_dict(raw),
         "company": sanitize_output(raw.get("companyName") or ""),
+        "categories": [sanitize_output(c) for c in (raw.get("categories") or [])],
     }
 
 

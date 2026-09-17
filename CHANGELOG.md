@@ -66,6 +66,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   narrow `$select`, a wide one, and none at all), so the search path omits the key rather than
   reporting every contact as uncategorised.
 
+- **`outlook_list_contacts_delta` carries `categories` too.** Its formatter's docstring claims
+  it mirrors the listing summary field-for-field, and both `SKILL.md` and `outlook_changes_since`
+  steer recurring work to the delta tool — so an agent seeds from `outlook_list_contacts` and
+  refreshes from the delta. Adding the field to one and not the other would have had that agent
+  either `KeyError` on the key or report every changed contact as uncategorised, which is the
+  same "empty means absent" lie this entry exists to fix, one module over.
+  `/me/contacts/delta` takes no `$select`, so Graph was already sending it.
+
 ### Added
 
 - **`outlook_update_contact` can write the addresses it can now read** — `home_address`,
