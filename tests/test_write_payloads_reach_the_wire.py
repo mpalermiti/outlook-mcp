@@ -46,7 +46,14 @@ from kiota_serialization_json.json_serialization_writer_factory import (
 )
 
 from outlook_mcp.config import Config
-from outlook_mcp.tools import calendar_write, contacts, mail_drafts, mail_write, todo
+from outlook_mcp.tools import (
+    calendar_write,
+    contacts,
+    mail_drafts,
+    mail_write,
+    todo,
+    todo_attachments,
+)
 
 _CFG = Config(client_id="test")
 
@@ -620,6 +627,81 @@ class TestTodo:
             "2026-11-06T17:00:00",
             "SENTINEL-BODY-d32",
             '"importance": "low"',
+        )
+
+    async def test_add_checklist_item_argument_reaches_the_wire(self):
+        from tests.test_todo import _build_mock_client
+
+        client = _build_mock_client()
+
+        await todo.add_checklist_item(
+            client,
+            task_id="task1",
+            display_name="SENTINEL-STEP-e41",
+            config=_CFG,
+        )
+
+        post = (
+            client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id.return_value.checklist_items.post
+        )
+        assert_on_wire(post.call_args.args[0], '"displayName": "SENTINEL-STEP-e41"')
+
+    async def test_update_checklist_item_partial_patch_sends_only_what_was_asked(self):
+        """The #63 leak shape: a partial PATCH where the caller picks the
+        fields. A rename must not carry isChecked or checkedDateTime — an
+        explicit null would clear server-side state the caller kept."""
+        from tests.test_todo import _build_mock_client
+
+        client = _build_mock_client()
+
+        await todo.update_checklist_item(
+            client,
+            task_id="task1",
+            checklist_item_id="ci1",
+            display_name="SENTINEL-RENAME-e42",
+            config=_CFG,
+        )
+
+        item = (
+            client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id.return_value.checklist_items.by_checklist_item_id.return_value
+        )
+        payload = item.patch.call_args.args[0]
+        assert_on_wire(payload, '"displayName": "SENTINEL-RENAME-e42"')
+
+        body = wire(payload)
+        assert '"isChecked"' not in body, body
+        assert "checkedDateTime" not in body, body
+
+    async def test_upload_task_attachment_argument_reaches_the_wire(self, tmp_path):
+        """The inline-POST payload: base64 contentBytes (not a filename, not
+        a session reference) plus the metadata Graph needs to rebuild it."""
+        import base64 as _b64
+
+        from tests.test_todo_attachments import _build_mock_client, _cfg
+
+        content = b"SENTINEL-UPLOAD-BYTES-e43"
+        src = tmp_path / "att" / "SENTINEL-UPLOAD-e43.bin"
+        src.parent.mkdir(parents=True)
+        src.write_bytes(content)
+
+        client = _build_mock_client()
+
+        await todo_attachments.upload_task_attachment(
+            client,
+            task_id="task1",
+            file_path=str(src),
+            config=_cfg(tmp_path),
+        )
+
+        post = (
+            client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id.return_value.attachments.post
+        )
+        assert_on_wire(
+            post.call_args.args[0],
+            '"@odata.type": "#microsoft.graph.taskFileAttachment"',
+            '"name": "SENTINEL-UPLOAD-e43.bin"',
+            f'"size": {len(content)}',
+            f'"contentBytes": "{_b64.b64encode(content).decode()}"',
         )
 
 
