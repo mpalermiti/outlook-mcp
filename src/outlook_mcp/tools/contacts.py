@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from outlook_mcp.config import Config
+from outlook_mcp.errors import ToolInputError
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.permissions import CATEGORY_CONTACTS_WRITE, check_permission
 from outlook_mcp.validation import (
@@ -37,6 +38,10 @@ _LIST_SELECT = _SUMMARY_SELECT + ",categories"
 # get_contact sends no $select at all, so Graph returns the whole contact and
 # the detail formatter can read whatever it likes: the data was never the
 # problem there, the formatter simply did not read these five.
+#
+# One tuple, read and write. The read path returns these keys and the write path
+# accepts them, so handing an address straight back — the documented way to keep
+# the parts you are not changing — is mechanical rather than a renaming exercise.
 _ADDRESS_FIELDS = ("street", "city", "state", "postal_code", "country_or_region")
 
 
@@ -45,26 +50,28 @@ def _format_address(address: Any) -> dict | None:
 
     Graph hands back an empty address object rather than null for addresses the
     contact does not have, so an emptiness check is what distinguishes "no home
-    address" from "a home address whose street we failed to read".
+    address" from "a home address whose street we failed to read". Whitespace is
+    not content — :func:`_build_address` refuses to write a blank part, so an
+    address of spaces reported here as real would be one this tool tells you to
+    hand back and then rejects.
     """
-    if address is None:
-        return None
-    parts = {field: sanitize_output(getattr(address, field, "") or "") for field in _ADDRESS_FIELDS}
-    return parts if any(parts.values()) else None
+    parts = {
+        field: sanitize_output(getattr(address, field, "") or "", multiline=True)
+        for field in _ADDRESS_FIELDS
+    }
+    return parts if any(value.strip() for value in parts.values()) else None
 
 
-def _build_address(
-    street: str | None,
-    city: str | None,
-    state: str | None,
-    postal_code: str | None,
-    country: str | None,
-) -> Any | None:
-    """A Graph ``physicalAddress`` from loose parts, or None when all are empty.
+def _build_address(slot: str, parts: Any) -> Any:
+    """A Graph ``physicalAddress`` from the shape :func:`_format_address` returns.
 
-    The mirror of :func:`_format_address`, and deliberately the same five
-    fields: a write path that cannot express what the read path returns is how
-    an address ends up readable but not settable.
+    The mirror of the read path, field for field: a write path that cannot
+    express what the read path returns is how an address ends up readable but
+    not correctable.
+
+    An unknown key is an error rather than a silent drop. The caller is a model
+    reading a docstring, and a misspelt part that patched nothing would be the
+    #41 shape again — a call that succeeds and does nothing.
 
     A part that was not supplied is **left unset**, never assigned ``None``.
     Graph's request adapter serializes through the backing store, which emits a
@@ -77,16 +84,39 @@ def _build_address(
     """
     from msgraph.generated.models.physical_address import PhysicalAddress
 
-    parts = {
-        "street": street,
-        "city": city,
-        "state": state,
-        "postal_code": postal_code,
-        "country_or_region": country,
-    }
-    present = {field: value.strip() for field, value in parts.items() if value and value.strip()}
+    if not isinstance(parts, dict):
+        raise ToolInputError(
+            f"{slot}_address takes an object like "
+            f"{{'street': '…', 'city': '…'}}, not {type(parts).__name__}. "
+            f"Valid parts: {', '.join(_ADDRESS_FIELDS)}."
+        )
+    unknown = [key for key in parts if key not in _ADDRESS_FIELDS]
+    if unknown:
+        raise ToolInputError(
+            f"{slot}_address has unknown part(s): {', '.join(sorted(unknown))}. "
+            f"Valid parts: {', '.join(_ADDRESS_FIELDS)} — the same keys "
+            f"outlook_get_contact returns."
+        )
+
+    present = {}
+    for field, value in parts.items():
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ToolInputError(
+                f"{slot}_address['{field}'] must be a string, not {type(value).__name__}."
+            )
+        if value.strip():
+            present[field] = value.strip()
+
     if not present:
-        return None
+        # Reporting "updated" for a patch that carried nothing is the failure
+        # this module exists to stop telling. Clearing an address is a separate
+        # capability nobody has asked for yet; until then, say so.
+        raise ToolInputError(
+            f"{slot}_address has no content. Omit it to leave the stored address "
+            f"unchanged — this tool cannot clear an address."
+        )
 
     # Assigned field by field rather than through a `setattr` loop: an attribute
     # that is not a real SDK field is a silent no-op (#41's shape), and the
@@ -123,6 +153,11 @@ def _primary_phone(contact: Any) -> str:
     return ""
 
 
+def _categories(contact: Any) -> list[str]:
+    """Graph's categories, sanitized. A contact's own text, so treat it as such."""
+    return [sanitize_output(c) for c in (getattr(contact, "categories", None) or [])]
+
+
 def _format_contact_summary(contact: Any, *, with_categories: bool = False) -> dict:
     """Convert Graph SDK contact to summary dict.
 
@@ -142,9 +177,7 @@ def _format_contact_summary(contact: Any, *, with_categories: bool = False) -> d
         "company": sanitize_output(contact.company_name or ""),
     }
     if with_categories:
-        summary["categories"] = [
-            sanitize_output(c) for c in (getattr(contact, "categories", None) or [])
-        ]
+        summary["categories"] = _categories(contact)
     return summary
 
 
@@ -175,8 +208,14 @@ def _format_contact_detail(contact: Any) -> dict:
         "home_address": _format_address(getattr(contact, "home_address", None)),
         "business_address": _format_address(getattr(contact, "business_address", None)),
         "other_address": _format_address(getattr(contact, "other_address", None)),
-        "categories": [sanitize_output(c) for c in (getattr(contact, "categories", None) or [])],
-        "personal_notes": sanitize_output(getattr(contact, "personal_notes", "") or ""),
+        "categories": _categories(contact),
+        # A note is body-shaped text: Outlook's box is multi-line, and every
+        # other body field in the repo keeps its line breaks. Flattened, a note
+        # comes back as one run-on line carrying a stray CR that a terminal
+        # client will use to overwrite whatever it already printed.
+        "personal_notes": sanitize_output(
+            getattr(contact, "personal_notes", "") or "", multiline=True
+        ),
     }
 
 
@@ -311,27 +350,30 @@ async def update_contact(
     last_name: str | None = None,
     email: str | None = None,
     phone: str | None = None,
-    home_street: str | None = None,
-    home_city: str | None = None,
-    home_state: str | None = None,
-    home_postal_code: str | None = None,
-    home_country: str | None = None,
+    home_address: dict | None = None,
+    business_address: dict | None = None,
+    other_address: dict | None = None,
     *,
     config: Config,
 ) -> dict:
     """Update an existing contact (partial patch).
 
-    The ``home_*`` parts are one ``homeAddress``, and Graph **replaces** the
-    whole address object: parts not supplied come back empty, not preserved.
-    Pass every part you intend to keep — :func:`get_contact` returns them — or
-    omit them all to leave the stored address untouched.
+    Each address takes the shape :func:`get_contact` returns — any subset of
+    ``street``, ``city``, ``state``, ``postal_code``, ``country_or_region`` —
+    and Graph **replaces** that whole address object rather than merging into
+    it: parts not supplied come back empty, not preserved. So pass back every
+    part you intend to keep, which is why the read and write halves name the
+    same five fields. Omit an address entirely to leave it untouched.
     """
     check_permission(config, CATEGORY_CONTACTS_WRITE, "outlook_update_contact")
     contact_id = validate_graph_id(contact_id)
 
-    if email:
+    # `is not None`, not truthiness: `email=""` is a caller asking for something
+    # this tool cannot do, and it used to skip validation and reach Graph as a
+    # blank address. One meaning for "provided" per argument.
+    if email is not None:
         validate_email(email)
-    if phone:
+    if phone is not None:
         validate_phone(phone)
 
     from msgraph.generated.models.contact import Contact
@@ -349,11 +391,12 @@ async def update_contact(
     if phone is not None:
         patch_body.mobile_phone = phone
 
-    home_address = _build_address(
-        home_street, home_city, home_state, home_postal_code, home_country
-    )
     if home_address is not None:
-        patch_body.home_address = home_address
+        patch_body.home_address = _build_address("home", home_address)
+    if business_address is not None:
+        patch_body.business_address = _build_address("business", business_address)
+    if other_address is not None:
+        patch_body.other_address = _build_address("other", other_address)
 
     await graph_client.me.contacts.by_contact_id(contact_id).patch(patch_body)
 

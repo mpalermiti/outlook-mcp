@@ -112,11 +112,11 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_rsvp` — Accept, decline, or tentatively accept
 
 ### Contacts
-- `outlook_list_contacts` — List with cursor pagination
-- `outlook_search_contacts` — Search by name or email
-- `outlook_get_contact` — Get full details
-- `outlook_create_contact` — Create
-- `outlook_update_contact` — Update
+- `outlook_list_contacts` — List with cursor pagination; summaries carry `categories`
+- `outlook_search_contacts` — Search by name or email; results omit `categories` (Graph's contact `$search` does not return them — read the contact back if you need them)
+- `outlook_get_contact` — Get full details incl. home/business/other addresses, categories, personal notes
+- `outlook_create_contact` — Create (no address: add one with `outlook_update_contact` afterwards)
+- `outlook_update_contact` — Update fields; `home_address`/`business_address`/`other_address` take `{street, city, state, postal_code, country_or_region}` (the shape `outlook_get_contact` returns) and **replace** that whole address, so pass back every part you want to keep
 - `outlook_delete_contact` — Delete
 - `outlook_list_contacts_delta` — List only contact changes since last call (massive token savings for recurring agent jobs)
 

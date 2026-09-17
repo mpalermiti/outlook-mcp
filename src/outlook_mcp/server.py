@@ -92,6 +92,11 @@ Working rules, each of which saves a round trip:
 - Polling on a schedule? The delta tools (outlook_list_inbox_delta and friends) return only what
   changed since the token they handed you last time, and outlook_changes_since composes all
   three into one digest.
+- Contact categories come back from outlook_list_contacts and outlook_get_contact, and are
+  absent — not empty — from outlook_search_contacts, because Graph's contact $search does not
+  return them. Never report a searched contact as uncategorised; read it back if you need to
+  know. Addresses are on outlook_get_contact only, and writing one replaces it wholesale, so
+  giving a new contact an address is create, then read, then update with every part.
 """
 
 # SEP-2549: tell the client how long `tools/list` stays fresh, so it can stop
@@ -870,16 +875,15 @@ async def outlook_update_contact(
     last_name: str | None = None,
     email: str | None = None,
     phone: str | None = None,
-    home_street: str | None = None,
-    home_city: str | None = None,
-    home_state: str | None = None,
-    home_postal_code: str | None = None,
-    home_country: str | None = None,
+    home_address: dict | None = None,
+    business_address: dict | None = None,
+    other_address: dict | None = None,
 ) -> dict:
     """Update an existing contact (partial patch — only provided fields change).
 
-    The home_* parts REPLACE the whole home address — pass every part you want to keep
-    (outlook_get_contact returns them), or none of them to leave it untouched.
+    An address takes the shape outlook_get_contact returns — any subset of
+    {"street", "city", "state", "postal_code", "country_or_region"} — and REPLACES that
+    whole address, so pass back every part you want to keep. Omit it to leave it untouched.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -890,11 +894,9 @@ async def outlook_update_contact(
         last_name,
         email,
         phone,
-        home_street,
-        home_city,
-        home_state,
-        home_postal_code,
-        home_country,
+        home_address,
+        business_address,
+        other_address,
         config=config,
     )
 

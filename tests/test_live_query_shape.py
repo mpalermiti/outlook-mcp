@@ -82,9 +82,7 @@ async def test_list_inbox_from_address_filter_is_accepted(real_graph_client, sam
     """from_address + $orderby returned 400 InefficientFilter in 1.12.0."""
     if not sample["sender"]:
         pytest.skip("No message with a sender address to filter on")
-    result = await list_inbox(
-        real_graph_client.sdk_client, from_address=sample["sender"], count=5
-    )
+    result = await list_inbox(real_graph_client.sdk_client, from_address=sample["sender"], count=5)
     assert isinstance(result["messages"], list)
     # Filter must actually be applied, not silently dropped.
     for message in result["messages"]:
@@ -93,9 +91,7 @@ async def test_list_inbox_from_address_filter_is_accepted(real_graph_client, sam
 
 async def test_list_inbox_classification_filter_is_accepted(real_graph_client):
     """classification + $orderby returned 400 InefficientFilter in 1.12.0."""
-    result = await list_inbox(
-        real_graph_client.sdk_client, classification="focused", count=5
-    )
+    result = await list_inbox(real_graph_client.sdk_client, classification="focused", count=5)
     assert isinstance(result["messages"], list)
     for message in result["messages"]:
         assert message["classification"] == "focused"
@@ -122,9 +118,7 @@ async def test_list_inbox_ordering_is_newest_first(real_graph_client):
     served the filter and is *ascending* for some — which would silently
     return the oldest mail with no error.
     """
-    result = await list_inbox(
-        real_graph_client.sdk_client, classification="focused", count=10
-    )
+    result = await list_inbox(real_graph_client.sdk_client, classification="focused", count=10)
     received = [m["received"] for m in result["messages"] if m["received"]]
     if len(received) < 2:
         pytest.skip("Need 2+ focused messages to assert ordering")
@@ -133,9 +127,7 @@ async def test_list_inbox_ordering_is_newest_first(real_graph_client):
 
 async def test_list_inbox_caller_date_filter_still_works(real_graph_client):
     """A caller-supplied `after` leads the filter and must not be double-floored."""
-    result = await list_inbox(
-        real_graph_client.sdk_client, after="2000-01-01", count=5
-    )
+    result = await list_inbox(real_graph_client.sdk_client, after="2000-01-01", count=5)
     assert isinstance(result["messages"], list)
 
 
@@ -244,50 +236,80 @@ async def test_search_rejects_query_that_sanitizes_to_empty(real_graph_client):
 # assert we sent it. Whether Graph honours it, and on which endpoint, is a live
 # question, and the two contact listings deliberately answer differently.
 
+# The walk below is the same for both tests and costs up to ten round trips, so
+# it is done once per session. `real_graph_client` is function-scoped on purpose
+# (conftest.py:88-100 — the transport binds to the event loop), so a
+# module-scoped fixture cannot depend on it; a module-level cache can.
+_CONTACT_WALK: dict = {}
 
-@pytest.fixture
-async def categorised_contact(real_graph_client):
-    """The first contact carrying a category, hunted across pages.
 
-    Contacts come back ordered by displayName, so "does this mailbox use
-    categories" is not a question page one can answer — a mailbox can have
-    hundreds of contacts and its categorised ones under S. Paging until one
-    turns up is the difference between a guard and a test that skips forever:
-    on the mailbox this was written against, page 1 of 100 has none.
+async def _walk_contacts_for_categories(client) -> dict:
+    """Harvest contacts until one carries a category, and report what was seen.
+
+    No assertions: a failed assertion inside a fixture is reported as a pytest
+    ERROR on every test that uses it, which reads as infrastructure breakage
+    rather than as the product regression it would be. The tests judge.
+
+    Contacts come back ordered by displayName, so page one cannot answer "does
+    this mailbox use categories" — on the mailbox this was written against the
+    first 100 have none, and a page-one guard would have skipped forever while
+    reading as covered.
     """
-    cursor = None
+    seen, categorised, cursor = 0, [], None
     for _ in range(10):  # 1,000 contacts, bounded
-        page = await list_contacts(real_graph_client.sdk_client, count=100, cursor=cursor)
-        assert all("categories" in c for c in page["contacts"]), (
-            "the listing's $select asks for categories, so every contact it "
-            "returns must carry the key"
-        )
-        found = next(
-            (c for c in page["contacts"] if c["categories"] and c["display_name"].strip()), None
-        )
-        if found:
-            return found
-        if not page["has_more"]:
+        page = await list_contacts(client, count=100, cursor=cursor)
+        seen += len(page["contacts"])
+        categorised.extend(c for c in page["contacts"] if c["categories"])
+        if categorised or not page["has_more"]:
             break
         cursor = page["cursor"]
-    pytest.skip("No categorised contact in this mailbox — nothing to tell honoured from ignored")
+    return {"seen": seen, "categorised": categorised}
 
 
-async def test_the_contact_listing_returns_the_categories_it_selects(categorised_contact):
+@pytest.fixture
+async def contact_walk(real_graph_client):
+    if not _CONTACT_WALK:
+        _CONTACT_WALK.update(await _walk_contacts_for_categories(real_graph_client.sdk_client))
+    return _CONTACT_WALK
+
+
+def _searchable(contact) -> str | None:
+    """A name fragment that survives `sanitize_kql`, or None.
+
+    `sanitize_kql` strips `" \\ & | ! *` and rejects a query that empties out, so
+    feeding it the first token of a display name errors on a contact called
+    `*Mom*` or `!Emergency` — for a reason that has nothing to do with categories.
+    """
+    for token in contact["display_name"].split():
+        cleaned = "".join(ch for ch in token if ch.isalnum())
+        if len(cleaned) >= 3:
+            return cleaned
+    return None
+
+
+async def test_the_contact_listing_returns_the_categories_it_selects(contact_walk):
     """`categories` is in the listing's $select, so it must come back populated.
 
-    Not merely "the key is present": a $select Graph ignores would leave every
-    contact looking uncategorised, which is indistinguishable from a mailbox
-    where nobody uses categories. The fixture asserts the key on every contact
-    of every page it walks; this asserts one of them is non-empty.
+    Not merely "the key is present" — the formatter writes that key
+    unconditionally, so asserting it proves nothing about Graph. A $select
+    quietly ignored would leave every contact looking uncategorised, which is
+    indistinguishable from a mailbox where nobody uses categories. Only a
+    non-empty list carries information.
     """
-    assert categorised_contact["categories"]
-    assert all(isinstance(c, str) for c in categorised_contact["categories"])
+    if not contact_walk["seen"]:
+        pytest.skip("No contacts in this mailbox")
+    if not contact_walk["categorised"]:
+        pytest.skip(
+            f"walked {contact_walk['seen']} contacts, none categorised — cannot tell "
+            f"an honoured $select from an ignored one"
+        )
+
+    for contact in contact_walk["categorised"]:
+        assert contact["categories"], "a contact was collected as categorised with no categories"
+        assert all(isinstance(name, str) and name for name in contact["categories"])
 
 
-async def test_contact_search_does_not_claim_to_know_categories(
-    real_graph_client, categorised_contact
-):
+async def test_contact_search_does_not_claim_to_know_categories(real_graph_client, contact_walk):
     """Graph's $search over contacts returns no categories, under any $select.
 
     That is why `_format_contact_summary` omits the key on this path instead of
@@ -296,10 +318,12 @@ async def test_contact_search_does_not_claim_to_know_categories(
     accurate one. If Graph ever starts returning them, this fails and the
     asymmetry can go — which is the only way anyone would notice.
     """
-    found = await search_contacts(
-        real_graph_client.sdk_client,
-        query=categorised_contact["display_name"].split()[0],
-        count=25,
-    )
-    assert found["contacts"], "search returned nothing for a name taken from the listing"
+    candidates = [(c, _searchable(c)) for c in contact_walk["categorised"]]
+    match = next(((c, term) for c, term in candidates if term), (None, None))
+    contact, term = match
+    if contact is None:
+        pytest.skip("No categorised contact with a KQL-safe name fragment to search for")
+
+    found = await search_contacts(real_graph_client.sdk_client, query=term, count=25)
+    assert found["contacts"], f"search for {term!r} returned nothing, though it names a contact"
     assert all("categories" not in c for c in found["contacts"])

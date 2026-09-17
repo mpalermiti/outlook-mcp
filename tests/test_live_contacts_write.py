@@ -111,7 +111,7 @@ class TestUpdateContactRoundTrip:
             assert got["company"] == "Keep Me"
 
 
-class TestHomeAddressRoundTrip:
+class TestAddressRoundTrip:
     """The address half of the same question, and the one that 400'd.
 
     A partial address is the case this feature exists for — someone knows the
@@ -123,7 +123,16 @@ class TestHomeAddressRoundTrip:
     saw it.
     """
 
-    async def test_every_home_address_part_persists(self, real_graph_client, live_write_config):
+    _FULL = {
+        "street": "2821 252nd Ave SE",
+        "city": "Sammamish",
+        "state": "WA",
+        "postal_code": "98075",
+        "country_or_region": "USA",
+    }
+
+    async def test_every_part_of_every_address_persists(self, real_graph_client, live_write_config):
+        """All three slots, because all three read back."""
         async with _temporary_contact(
             real_graph_client,
             live_write_config,
@@ -133,22 +142,52 @@ class TestHomeAddressRoundTrip:
             await update_contact(
                 real_graph_client.sdk_client,
                 contact_id=contact_id,
-                home_street="2821 252nd Ave SE",
-                home_city="Sammamish",
-                home_state="WA",
-                home_postal_code="98075",
-                home_country="USA",
+                home_address=self._FULL,
+                business_address={"street": "1 Microsoft Way", "city": "Redmond", "state": "WA"},
+                other_address={"city": "Bellevue", "country_or_region": "USA"},
                 config=live_write_config,
             )
 
             got = await get_contact(real_graph_client.sdk_client, contact_id)
-            assert got["home_address"] == {
-                "street": "2821 252nd Ave SE",
-                "city": "Sammamish",
-                "state": "WA",
-                "postal_code": "98075",
-                "country_or_region": "USA",
-            }
+            assert got["home_address"] == self._FULL
+            assert got["business_address"]["street"] == "1 Microsoft Way"
+            assert got["business_address"]["city"] == "Redmond"
+            assert got["other_address"]["city"] == "Bellevue"
+            assert got["other_address"]["country_or_region"] == "USA"
+
+    async def test_what_get_contact_returns_update_contact_accepts(
+        self, real_graph_client, live_write_config
+    ):
+        """The documented round trip, against Graph rather than against a mock.
+
+        Read an address back and hand it straight to the write path — the thing
+        the docstring tells the caller to do to keep the parts it is not
+        changing. Any disagreement about a field name between the two halves
+        fails here, on the real payload.
+        """
+        async with _temporary_contact(
+            real_graph_client,
+            live_write_config,
+            first_name=LIVE_WRITE_NAME,
+            last_name="RoundTripAddress",
+        ) as contact_id:
+            await update_contact(
+                real_graph_client.sdk_client,
+                contact_id=contact_id,
+                home_address=self._FULL,
+                config=live_write_config,
+            )
+            stored = (await get_contact(real_graph_client.sdk_client, contact_id))["home_address"]
+
+            await update_contact(
+                real_graph_client.sdk_client,
+                contact_id=contact_id,
+                home_address={**stored, "city": "Issaquah"},
+                config=live_write_config,
+            )
+
+            got = await get_contact(real_graph_client.sdk_client, contact_id)
+            assert got["home_address"] == {**self._FULL, "city": "Issaquah"}
 
     async def test_a_partial_address_is_accepted(self, real_graph_client, live_write_config):
         """The 400 regression: a city-only patch must reach Graph and be stored."""
@@ -161,7 +200,7 @@ class TestHomeAddressRoundTrip:
             await update_contact(
                 real_graph_client.sdk_client,
                 contact_id=contact_id,
-                home_city="Bothell",
+                home_address={"city": "Bothell"},
                 config=live_write_config,
             )
 
@@ -185,17 +224,13 @@ class TestHomeAddressRoundTrip:
             await update_contact(
                 real_graph_client.sdk_client,
                 contact_id=contact_id,
-                home_street="2821 252nd Ave SE",
-                home_city="Sammamish",
-                home_state="WA",
-                home_postal_code="98075",
-                home_country="USA",
+                home_address=self._FULL,
                 config=live_write_config,
             )
             await update_contact(
                 real_graph_client.sdk_client,
                 contact_id=contact_id,
-                home_city="Bothell",
+                home_address={"city": "Bothell"},
                 config=live_write_config,
             )
 
@@ -207,8 +242,8 @@ class TestHomeAddressRoundTrip:
     async def test_a_name_only_update_leaves_the_address_alone(
         self, real_graph_client, live_write_config
     ):
-        """Partial-patch semantics hold at the tool's own level: no home_* part
-        supplied means the stored address is not touched at all."""
+        """Partial-patch semantics hold at the tool's own level: no address
+        argument means the stored addresses are not touched at all."""
         async with _temporary_contact(
             real_graph_client,
             live_write_config,
@@ -218,8 +253,7 @@ class TestHomeAddressRoundTrip:
             await update_contact(
                 real_graph_client.sdk_client,
                 contact_id=contact_id,
-                home_street="693 7th St S",
-                home_city="Kirkland",
+                home_address={"street": "693 7th St S", "city": "Kirkland"},
                 config=live_write_config,
             )
             await update_contact(

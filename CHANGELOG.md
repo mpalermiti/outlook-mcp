@@ -68,11 +68,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
-- **`outlook_update_contact` can write the home address it can now read** — `home_street`,
-  `home_city`, `home_state`, `home_postal_code`, `home_country`. Graph **replaces** the whole
-  `homeAddress` rather than merging into it, so the parts not supplied come back empty; the tool
-  docstring and README say so, and a live guard pins it. Supplying no part at all leaves the stored
-  address untouched.
+- **`outlook_update_contact` can write the addresses it can now read** — `home_address`,
+  `business_address` and `other_address`, each taking the same shape `outlook_get_contact`
+  returns (any subset of `street`, `city`, `state`, `postal_code`, `country_or_region`). One
+  vocabulary for both halves, so keeping the parts you are not changing is handing the address
+  straight back rather than renaming five keys. Graph **replaces** the whole address object
+  rather than merging into it, so parts not supplied come back empty; the tool docstring, README
+  and SKILL.md say so, and a live guard pins it. Omitting an address leaves it untouched, and an
+  address that carries no content is an error rather than a PATCH that reports `updated` having
+  done nothing — this tool cannot clear an address.
 
   A part that was not supplied is now left unset rather than assigned `None`: the Graph request
   adapter serializes through the backing store, which emits an explicitly-`None` field — and for a

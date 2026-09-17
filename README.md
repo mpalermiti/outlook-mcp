@@ -328,7 +328,7 @@ configured `timezone`; responses are always UTC.
 | `outlook_search_contacts` | Search contacts by name or email. |
 | `outlook_get_contact` | Get full contact details by ID, including home/business/other addresses, categories and personal notes. |
 | `outlook_create_contact` | Create a new contact. |
-| `outlook_update_contact` | Update contact fields. The `home_*` parts are one home address and **replace** it wholesale — pass every part you want to keep (`outlook_get_contact` returns them), or omit them all to leave it untouched. |
+| `outlook_update_contact` | Update contact fields. `home_address`, `business_address` and `other_address` take the shape `outlook_get_contact` returns — any subset of `street`, `city`, `state`, `postal_code`, `country_or_region` — and **replace** that whole address, so pass back every part you want to keep. Omit one to leave it untouched. |
 | `outlook_delete_contact` | Delete a contact. |
 | `outlook_list_contacts_delta` | List only contact changes since the last call. Deletes come back as `{id, is_deleted: True}`. Cursor is stateless. |
 

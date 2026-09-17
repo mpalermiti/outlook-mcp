@@ -418,11 +418,15 @@ class TestContacts:
             last_name="SentinelLast2",
             email="sentinel.contact2@example.com",
             phone="+15555550101",
-            home_street="SentinelStreet2",
-            home_city="SentinelCity2",
-            home_state="SentinelState2",
-            home_postal_code="SentinelZip2",
-            home_country="SentinelCountry2",
+            home_address={
+                "street": "SentinelStreet2",
+                "city": "SentinelCity2",
+                "state": "SentinelState2",
+                "postal_code": "SentinelZip2",
+                "country_or_region": "SentinelCountry2",
+            },
+            business_address={"city": "SentinelBusinessCity2"},
+            other_address={"city": "SentinelOtherCity2"},
             config=_CFG,
         )
 
@@ -432,13 +436,16 @@ class TestContacts:
             "SentinelLast2",
             "sentinel.contact2@example.com",
             "+15555550101",
-            # The address is a nested model, so "reaches the wire" also means
-            # kiota serialized the child object under the right camelCase keys.
+            # An address is a nested model, so "reaches the wire" also means
+            # kiota serialized the child object under the right camelCase keys —
+            # and that each of the three slots landed in its own.
             '"street": "SentinelStreet2"',
             '"city": "SentinelCity2"',
             '"state": "SentinelState2"',
             '"postalCode": "SentinelZip2"',
             '"countryOrRegion": "SentinelCountry2"',
+            '"businessAddress": {"city": "SentinelBusinessCity2"}',
+            '"otherAddress": {"city": "SentinelOtherCity2"}',
         )
 
 

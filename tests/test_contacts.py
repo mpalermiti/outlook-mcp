@@ -1,5 +1,6 @@
 """Tests for contact tools."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,9 +10,10 @@ from kiota_serialization_json.json_serialization_writer_factory import (
 )
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.errors import ReadOnlyError, ToolInputError
 from outlook_mcp.pagination import encode_cursor
 from outlook_mcp.tools.contacts import (
+    _ADDRESS_FIELDS,
     _LIST_SELECT,
     _SUMMARY_SELECT,
     _build_address,
@@ -36,13 +38,27 @@ def _make_mock_contact(**overrides):
     Matches the consumer Outlook contact shape: ``mobile_phone`` (single
     string), ``home_phones`` (list[str]), ``business_phones`` (list[str]).
     """
-    contact = MagicMock(spec=[
-        "id", "display_name", "given_name", "surname",
-        "company_name", "title", "department", "birthday",
-        "email_addresses", "mobile_phone", "home_phones", "business_phones",
-        "home_address", "business_address", "other_address",
-        "categories", "personal_notes",
-    ])
+    contact = MagicMock(
+        spec=[
+            "id",
+            "display_name",
+            "given_name",
+            "surname",
+            "company_name",
+            "title",
+            "department",
+            "birthday",
+            "email_addresses",
+            "mobile_phone",
+            "home_phones",
+            "business_phones",
+            "home_address",
+            "business_address",
+            "other_address",
+            "categories",
+            "personal_notes",
+        ]
+    )
     contact.id = overrides.get("id", "contact123")
     contact.display_name = overrides.get("display_name", "John Doe")
     contact.given_name = overrides.get("given_name", "John")
@@ -138,7 +154,9 @@ class TestListContacts:
     async def test_list_summary_falls_back_to_business_phone(self):
         """When mobile and home are empty, falls back to first business phone."""
         contact = _make_mock_contact(
-            mobile_phone="", home_phones=[], business_phones=["+15553334444"],
+            mobile_phone="",
+            home_phones=[],
+            business_phones=["+15553334444"],
         )
         mock_client = _make_contacts_mock([contact])
 
@@ -237,7 +255,9 @@ class TestGetContact:
     async def test_get_handles_empty_phone_fields(self):
         """get_contact returns empty defaults when phone fields are missing."""
         mock_contact = _make_mock_contact(
-            mobile_phone="", home_phones=[], business_phones=[],
+            mobile_phone="",
+            home_phones=[],
+            business_phones=[],
         )
         mock_client = _make_contact_by_id_mock(mock_contact)
 
@@ -281,7 +301,10 @@ class TestCreateContact:
         mock_client.me.contacts.post = AsyncMock(return_value=_make_mock_contact())
 
         await create_contact(
-            mock_client, first_name="John", phone="+1234567890", config=_CFG,
+            mock_client,
+            first_name="John",
+            phone="+1234567890",
+            config=_CFG,
         )
 
         payload = mock_client.me.contacts.post.call_args.args[0]
@@ -294,7 +317,10 @@ class TestCreateContact:
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="Invalid email"):
             await create_contact(
-                mock_client, first_name="John", email="not-an-email", config=_CFG,
+                mock_client,
+                first_name="John",
+                email="not-an-email",
+                config=_CFG,
             )
 
     async def test_create_validates_phone(self):
@@ -302,7 +328,10 @@ class TestCreateContact:
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="Invalid phone"):
             await create_contact(
-                mock_client, first_name="John", phone="not a phone!!!", config=_CFG,
+                mock_client,
+                first_name="John",
+                phone="not a phone!!!",
+                config=_CFG,
             )
 
     async def test_create_raises_read_only(self):
@@ -318,7 +347,10 @@ class TestUpdateContact:
         mock_client = _make_contact_by_id_mock(_make_mock_contact())
 
         result = await update_contact(
-            mock_client, contact_id="contact123", first_name="Jane", config=_CFG,
+            mock_client,
+            contact_id="contact123",
+            first_name="Jane",
+            config=_CFG,
         )
         assert result["status"] == "updated"
 
@@ -331,7 +363,10 @@ class TestUpdateContact:
         mock_client = _make_contact_by_id_mock(_make_mock_contact())
 
         await update_contact(
-            mock_client, contact_id="contact123", phone="+19998887777", config=_CFG,
+            mock_client,
+            contact_id="contact123",
+            phone="+19998887777",
+            config=_CFG,
         )
         contact_obj = mock_client.me.contacts.by_contact_id.return_value
         payload = contact_obj.patch.call_args.args[0]
@@ -343,7 +378,10 @@ class TestUpdateContact:
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="invalid characters"):
             await update_contact(
-                mock_client, contact_id="bad id!", first_name="Jane", config=_CFG,
+                mock_client,
+                contact_id="bad id!",
+                first_name="Jane",
+                config=_CFG,
             )
 
     async def test_update_raises_read_only(self):
@@ -351,7 +389,10 @@ class TestUpdateContact:
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await update_contact(
-                mock_client, contact_id="contact123", first_name="Jane", config=_CFG_RO,
+                mock_client,
+                contact_id="contact123",
+                first_name="Jane",
+                config=_CFG_RO,
             )
 
 
@@ -441,12 +482,35 @@ class TestContactDetailCarriesEverythingStored:
             "Met at the 2025 offsite"
         )
 
+    def test_a_multi_line_note_keeps_its_line_breaks(self):
+        """A note is body-shaped text, and every other body field passes multiline=True.
+
+        Flattened it is one run-on line — and since `_CONTROL_CHARS` leaves
+        `\x0d` alone, one with a stray CR in it, which a terminal client will
+        use to overwrite whatever it has already printed.
+        """
+        note = "Met at the 2025 offsite.\r\nFollow up in Q3."
+        assert self._detail(personal_notes=note)["personal_notes"] == note
+
+    def test_a_multi_line_street_keeps_its_line_breaks(self):
+        """Outlook's Street box is multi-line, and here that is not cosmetic.
+
+        The docstring tells the caller to read the parts back and hand them in
+        to keep them, so whatever this returns is what lands in the mailbox.
+        """
+        street = "Apt 4\r\n693 7th St S"
+        detail = self._detail(home_address=_make_mock_address(street=street))
+        assert detail["home_address"]["street"] == street
+
+    def test_control_characters_are_still_stripped_from_a_note(self):
+        """multiline=True keeps line breaks; it does not stop sanitizing."""
+        noisy = "Met\x07 at\x1b[31m the offsite"
+        assert self._detail(personal_notes=noisy)["personal_notes"] == "Met at the offsite"
+
     def test_address_content_is_sanitized_like_every_other_echoed_field(self):
         """A contact is attacker-influenced text; sanitize_output strips ANSI and
         control characters from it, exactly as it does for every other field here."""
-        detail = self._detail(
-            home_address=_make_mock_address(street="693 7th[31m St S")
-        )
+        detail = self._detail(home_address=_make_mock_address(street="693 7th[31m St S"))
         assert detail["home_address"]["street"] == "693 7th St S"
 
 
@@ -484,12 +548,13 @@ class TestSummarySelectMatchesTheSummaryFormatter:
         assert "categories" not in summary
 
 
-class TestUpdateContactWritesTheAddressItCanRead:
+class TestUpdateContactWritesTheAddressesItCanRead:
     """The write-side twin of TestContactDetailCarriesEverythingStored.
 
-    A home address that `get_contact` returns but `update_contact` cannot set is
+    An address that `get_contact` returns but `update_contact` cannot set is
     only half a fix: the field is readable and not correctable. These pin that
-    the two sides speak the same five fields.
+    the two sides speak the same five field *names* — not merely five fields in
+    the same order, which is all a positional round-trip could prove.
     """
 
     @staticmethod
@@ -504,11 +569,13 @@ class TestUpdateContactWritesTheAddressItCanRead:
         await update_contact(
             mock_client,
             contact_id="contact123",
-            home_street="2821 252nd Ave SE",
-            home_city="Sammamish",
-            home_state="WA",
-            home_postal_code="98075",
-            home_country="USA",
+            home_address={
+                "street": "2821 252nd Ave SE",
+                "city": "Sammamish",
+                "state": "WA",
+                "postal_code": "98075",
+                "country_or_region": "USA",
+            },
             config=_CFG,
         )
         address = self._patched(mock_client).home_address
@@ -517,6 +584,29 @@ class TestUpdateContactWritesTheAddressItCanRead:
         assert address.state == "WA"
         assert address.postal_code == "98075"
         assert address.country_or_region == "USA"
+
+    @pytest.mark.parametrize("slot", ["home_address", "business_address", "other_address"])
+    async def test_every_slot_that_reads_back_is_writable(self, slot):
+        """All three come back from get_contact, so all three are settable."""
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(
+            mock_client, contact_id="contact123", config=_CFG, **{slot: {"city": "Kirkland"}}
+        )
+        assert getattr(self._patched(mock_client), slot).city == "Kirkland"
+
+    async def test_the_slots_do_not_bleed_into_each_other(self):
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(
+            mock_client,
+            contact_id="contact123",
+            home_address={"city": "Kirkland"},
+            other_address={"city": "Bellevue"},
+            config=_CFG,
+        )
+        patched = self._patched(mock_client)
+        assert patched.home_address.city == "Kirkland"
+        assert patched.other_address.city == "Bellevue"
+        assert patched.business_address is None
 
     async def test_a_partial_address_is_still_written(self):
         """Someone may know the city and not the street.
@@ -528,57 +618,160 @@ class TestUpdateContactWritesTheAddressItCanRead:
         """
         mock_client = _make_contact_by_id_mock(_make_mock_contact())
         await update_contact(
-            mock_client, contact_id="contact123", home_city="Bothell", config=_CFG,
+            mock_client, contact_id="contact123", home_address={"city": "Bothell"}, config=_CFG
         )
         address = self._patched(mock_client).home_address
         assert address.city == "Bothell"
         assert address.street is None
 
-    async def test_omitting_every_part_leaves_the_address_alone(self):
+    async def test_omitting_the_addresses_leaves_them_alone(self):
         """Partial patch: a name-only update must not blank a stored address."""
         mock_client = _make_contact_by_id_mock(_make_mock_contact())
-        await update_contact(
-            mock_client, contact_id="contact123", first_name="Jane", config=_CFG,
-        )
-        assert self._patched(mock_client).home_address is None
-
-    async def test_whitespace_only_parts_count_as_omitted(self):
-        mock_client = _make_contact_by_id_mock(_make_mock_contact())
-        await update_contact(
-            mock_client, contact_id="contact123", home_street="   ", config=_CFG,
-        )
-        assert self._patched(mock_client).home_address is None
+        await update_contact(mock_client, contact_id="contact123", first_name="Jane", config=_CFG)
+        patched = self._patched(mock_client)
+        assert patched.home_address is None
+        assert patched.business_address is None
+        assert patched.other_address is None
 
     async def test_values_are_stripped(self):
         mock_client = _make_contact_by_id_mock(_make_mock_contact())
         await update_contact(
-            mock_client, contact_id="contact123", home_city="  Kirkland  ", config=_CFG,
+            mock_client, contact_id="contact123", home_address={"city": "  Kirkland  "}, config=_CFG
         )
         assert self._patched(mock_client).home_address.city == "Kirkland"
 
-    async def test_read_and_write_agree_on_the_same_five_fields(self):
-        """Round-trip: what _build_address writes, _format_address reads back."""
-        parts = {
-            "street": "693 7th St S",
-            "city": "Kirkland",
-            "state": "WA",
-            "postal_code": "98033",
-            "country_or_region": "USA",
-        }
-        built = _build_address(
-            parts["street"], parts["city"], parts["state"],
-            parts["postal_code"], parts["country_or_region"],
+    async def test_a_part_that_is_only_whitespace_is_not_written(self):
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(
+            mock_client,
+            contact_id="contact123",
+            home_address={"city": "Bothell", "street": "   "},
+            config=_CFG,
         )
-        assert _format_address(built) == parts
+        address = self._patched(mock_client).home_address
+        assert address.city == "Bothell"
+        assert address.street is None
 
     async def test_read_only_mode_refuses_the_write(self):
         """The new parameters must not open a path around the read-only gate."""
         mock_client = _make_contact_by_id_mock(_make_mock_contact())
         with pytest.raises(ReadOnlyError):
             await update_contact(
-                mock_client, contact_id="contact123", home_city="Bothell", config=_CFG_RO,
+                mock_client,
+                contact_id="contact123",
+                home_address={"city": "Bothell"},
+                config=_CFG_RO,
             )
         mock_client.me.contacts.by_contact_id.return_value.patch.assert_not_called()
+
+
+class TestAnAddressThatWouldPatchNothingIsRefused:
+    """A status of "updated" has to mean something was updated.
+
+    An address that collapses to nothing — every part empty, every part
+    whitespace, or keys this tool does not know — would otherwise skip the
+    assignment, send a PATCH without it, and answer `{"status": "updated"}`.
+    That is the silent no-op this module exists to stop telling, and the caller
+    most likely to hit it is a model asked to clear an address.
+    """
+
+    @staticmethod
+    def _client():
+        return _make_contact_by_id_mock(_make_mock_contact())
+
+    @pytest.mark.parametrize(
+        "address",
+        [{}, {"street": ""}, {"street": "   ", "city": ""}, {"street": None, "city": None}],
+        ids=["empty-dict", "empty-value", "whitespace", "explicit-nulls"],
+    )
+    async def test_an_address_with_no_content_is_an_error(self, address):
+        client = self._client()
+        with pytest.raises(ToolInputError, match="cannot clear an address"):
+            await update_contact(client, contact_id="contact123", home_address=address, config=_CFG)
+        client.me.contacts.by_contact_id.return_value.patch.assert_not_called()
+
+    async def test_an_unknown_part_is_an_error_naming_the_valid_ones(self):
+        """A misspelt key that patched nothing would be #41's shape again."""
+        client = self._client()
+        with pytest.raises(ToolInputError, match="country_or_region") as caught:
+            await update_contact(
+                client,
+                contact_id="contact123",
+                home_address={"city": "Bothell", "country": "USA", "zip": "98011"},
+                config=_CFG,
+            )
+        assert "country" in str(caught.value) and "zip" in str(caught.value)
+        client.me.contacts.by_contact_id.return_value.patch.assert_not_called()
+
+    async def test_the_slot_is_named_in_the_error(self):
+        client = self._client()
+        with pytest.raises(ToolInputError, match="business_address"):
+            await update_contact(
+                client, contact_id="contact123", business_address={"zip": "98011"}, config=_CFG
+            )
+
+    @pytest.mark.parametrize("address", ["693 7th St S", ["Kirkland"], 98033])
+    async def test_an_address_that_is_not_an_object_is_an_error(self, address):
+        client = self._client()
+        with pytest.raises(ToolInputError, match="takes an object"):
+            await update_contact(client, contact_id="contact123", home_address=address, config=_CFG)
+
+    async def test_a_part_that_is_not_a_string_is_an_error(self):
+        client = self._client()
+        with pytest.raises(ToolInputError, match="must be a string"):
+            await update_contact(
+                client, contact_id="contact123", home_address={"postal_code": 98033}, config=_CFG
+            )
+
+    async def test_an_empty_email_is_rejected_rather_than_sent(self):
+        """`email=""` used to skip validation and reach Graph as a blank address."""
+        client = self._client()
+        with pytest.raises(ValueError, match="Invalid email"):
+            await update_contact(client, contact_id="contact123", email="", config=_CFG)
+        client.me.contacts.by_contact_id.return_value.patch.assert_not_called()
+
+
+class TestTheReadAndWriteHalvesNameTheSameParts:
+    """Not "five fields in the same order" — the same keys, by name.
+
+    The docstring tells the caller to hand an address straight back to keep the
+    parts it is not changing. That is one dict splat, and it resolves only if
+    every key the read path emits is a key the write path accepts. A positional
+    round-trip cannot see a rename on either side.
+    """
+
+    _PARTS = {
+        "street": "693 7th St S",
+        "city": "Kirkland",
+        "state": "WA",
+        "postal_code": "98033",
+        "country_or_region": "USA",
+    }
+
+    def test_what_the_write_path_stores_the_read_path_returns(self):
+        assert _format_address(_build_address("home", self._PARTS)) == self._PARTS
+
+    def test_the_detail_shape_is_accepted_verbatim_by_the_write_path(self):
+        """The documented round trip, performed literally."""
+        detail = _format_contact_detail(
+            _make_mock_contact(home_address=_make_mock_address(**self._PARTS))
+        )
+        assert _format_address(_build_address("home", detail["home_address"])) == self._PARTS
+
+    def test_the_read_path_emits_exactly_the_keys_the_write_path_accepts(self):
+        detail = _format_contact_detail(
+            _make_mock_contact(home_address=_make_mock_address(city="Kirkland"))
+        )
+        assert set(detail["home_address"]) == set(_ADDRESS_FIELDS)
+
+    def test_an_address_of_only_whitespace_reads_as_no_address(self):
+        """The two halves have to agree on what counts as content.
+
+        `_build_address` refuses a blank part, so a stored address of spaces
+        reported here as real would be one the docstring tells the caller to
+        hand back and the write path then rejects.
+        """
+        assert _format_address(_make_mock_address(street="   ", city=" ")) is None
 
 
 def _adapter_wire(model) -> str:
@@ -589,11 +782,39 @@ def _adapter_wire(model) -> str:
     explicitly assigned ``None``. ``tests/test_write_payloads_reach_the_wire.py``
     asserts values are *present*, which the bare writer answers correctly; this
     helper exists for the opposite question — what got in that we never asked for.
+
+    **Single use per model.** Serializing marks the backing store clean —
+    ``is_initialization_completed``'s setter rewrites every entry and recurses
+    into nested models — so a second call on the same object returns a payload
+    with the changes stripped, and every assertion made on it passes vacuously.
+    Build a fresh model for each call; ``test_the_helper_is_single_use`` pins it.
     """
     factory = BackingStoreSerializationWriterProxyFactory(JsonSerializationWriterFactory())
     writer = factory.get_serialization_writer("application/json")
     writer.write_object_value(None, model)
-    return writer.get_serialized_content().decode()
+    try:
+        return writer.get_serialized_content().decode()
+    except ValueError as exc:  # kiota: "Invalid Json output"
+        raise AssertionError(
+            "kiota cannot serialize this model through the backing-store proxy: a "
+            "top-level field assigned None puts a bare null on the root writer. "
+            "Assert on the model's backing store rather than on a payload — and do "
+            "not fall back to JsonSerializationWriter, which is the one serializer "
+            f"that cannot see the leak this helper exists to catch. ({exc})"
+        ) from exc
+
+
+def _contact_with_a_none_part():
+    """A contact whose nested address has one part explicitly assigned None."""
+    from msgraph.generated.models.contact import Contact
+    from msgraph.generated.models.physical_address import PhysicalAddress
+
+    address = PhysicalAddress()
+    address.city = "Bothell"
+    address.street = None
+    contact = Contact()
+    contact.home_address = address
+    return contact
 
 
 class TestPartialAddressDoesNotLeakNulls:
@@ -616,31 +837,43 @@ class TestPartialAddressDoesNotLeakNulls:
     async def test_a_city_only_patch_sends_the_city_and_nothing_else(self):
         mock_client = _make_contact_by_id_mock(_make_mock_contact())
         await update_contact(
-            mock_client, contact_id="contact123", home_city="Bothell", config=_CFG,
+            mock_client, contact_id="contact123", home_address={"city": "Bothell"}, config=_CFG
         )
-        body = _adapter_wire(
-            mock_client.me.contacts.by_contact_id.return_value.patch.call_args[0][0]
+        body = json.loads(
+            _adapter_wire(mock_client.me.contacts.by_contact_id.return_value.patch.call_args[0][0])
         )
 
-        assert '"homeAddress": {"city": "Bothell"}' in body
-        assert "null" not in body, f"a part we were never given reached the wire: {body}"
-        for python_name in ("country_or_region", "postal_code"):
-            assert python_name not in body
+        # By key, not by substring: a contact on Nullah Road fails `"null" not in
+        # body`, and comparing serialized text additionally rides on kiota's
+        # separators and key order.
+        assert set(body) == {"@odata.type", "homeAddress"}
+        assert body["homeAddress"] == {"city": "Bothell"}
 
-    async def test_the_serializer_this_uses_is_the_one_that_can_see_it(self):
+    def test_the_serializer_this_uses_is_the_one_that_can_see_it(self):
         """Pin why the helper is not a plain JsonSerializationWriter.
 
         If kiota ever stops emitting explicitly-``None`` fields, this fails and
         the distinction above can be dropped.
         """
-        from msgraph.generated.models.contact import Contact
-        from msgraph.generated.models.physical_address import PhysicalAddress
+        assert '"street": null' in _adapter_wire(_contact_with_a_none_part())
 
-        address = PhysicalAddress()
-        address.city = "Bothell"
-        address.street = None
-        contact = Contact()
-        contact.home_address = address
-
+    def test_the_helper_is_single_use(self):
+        """Serializing cleans the backing store, so a reused model proves nothing."""
+        contact = _contact_with_a_none_part()
         assert '"street": null' in _adapter_wire(contact)
+        assert '"street": null' not in _adapter_wire(contact)
 
+    def test_a_top_level_none_is_reported_as_an_assertion_not_a_kiota_error(self):
+        """For the next person who points this at a "clear this field" body.
+
+        Without the guard they get ``ValueError: Invalid Json output`` where they
+        expected an assertion, and the obvious reaction — fall back to the bare
+        writer — deletes the only serializer that can see the leak.
+        """
+        from msgraph.generated.models.contact import Contact
+
+        contact = Contact()
+        contact.given_name = None
+
+        with pytest.raises(AssertionError, match="backing-store proxy"):
+            _adapter_wire(contact)
