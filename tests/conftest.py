@@ -100,6 +100,57 @@ def real_graph_client(real_auth):
     return GraphClient(real_auth.get_credential())
 
 
+# Every personal Microsoft account lives in this one well-known tenant; a work
+# or school account carries its organisation's tenant instead. It is a public
+# constant published by Microsoft, not a secret.
+MSA_CONSUMER_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad"
+
+
+def consumer_skip_reason(record) -> str | None:
+    """Why this mailbox cannot answer a consumer-only assertion — None if it can.
+
+    Split out from the fixture so it can be tested without a real token.
+    """
+    if record is None:
+        return (
+            "No auth record on disk, so the account type is unknown — this assertion "
+            "is only meaningful on a personal Microsoft account"
+        )
+    if record.tenant_id != MSA_CONSUMER_TENANT:
+        return (
+            f"Work/school account (tenant {record.tenant_id}). This assertion is a claim "
+            f"about personal Microsoft accounts (tenant {MSA_CONSUMER_TENANT}); Graph may "
+            f"legitimately behave differently here, so a failure would say nothing about "
+            f"the behaviour under test"
+        )
+    return None
+
+
+@pytest.fixture(scope="session")
+def consumer_mailbox_only(real_auth):
+    """Skip unless the cached token belongs to a personal Microsoft account.
+
+    Some live assertions are claims about *consumer* mailbox behaviour — Graph
+    accepting a field and silently dropping it, say. On a work or school account
+    Graph may honour the very thing the test says is unsupported, so the test
+    fails correctly and tells us nothing about the claim.
+
+    That is not hypothetical. ``test_online_meeting_is_not_supported_on_personal_accounts``
+    reached two separate contributor PRs as a red test each author had to
+    explain was not theirs, while passing on the maintainer's mailbox
+    throughout. The tier already refuses to assume whose mailbox it is running
+    against; this extends that to what *kind* of mailbox it is.
+
+    The skip names the tenant it found, because a skip that does not say why it
+    skipped is indistinguishable from coverage.
+    """
+    from outlook_mcp.auth import _load_auth_record
+
+    reason = consumer_skip_reason(_load_auth_record())
+    if reason:
+        pytest.skip(reason)
+
+
 @pytest.fixture
 def live_write_config(real_config):
     """Real config for the write tier, or skip.

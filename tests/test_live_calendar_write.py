@@ -259,13 +259,20 @@ class TestPatchingEventFlags:
             assert after["is_all_day"] is False
 
     async def test_online_meeting_is_not_supported_on_personal_accounts(
-        self, real_graph_client, live_write_config
+        self, real_graph_client, live_write_config, consumer_mailbox_only
     ):
         """Pins the reason `is_online` is absent from update_event.
 
         Graph accepts isOnlineMeeting on a consumer mailbox and silently drops
         it. If Microsoft ever starts honouring it, this test fails and tells us
         the parameter is worth adding.
+
+        ``consumer_mailbox_only`` is load-bearing, not decoration. The assertion
+        is a claim about personal accounts and the name says so, but nothing
+        checked it until 2026-09-17 — so on a work or school account, where
+        Graph really does honour isOnlineMeeting, this failed correctly and
+        meant nothing. It did that on two contributor PRs before anyone ran it
+        against a consumer mailbox and found it green.
         """
         monday = _anchor_monday()
 
