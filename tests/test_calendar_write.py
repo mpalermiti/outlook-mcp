@@ -503,21 +503,30 @@ class TestUpdateEvent:
         builder.patch.call_args[0][0].serialize(writer)
         assert '"recurrence": null' in writer.get_serialized_content().decode()
 
-    async def test_setting_event_recurrence_none_would_not_have_worked(self):
-        """Pins why additional_data is used. If kiota ever starts serializing an
-        explicit None, this fails and the workaround can be simplified."""
-        from kiota_serialization_json.json_serialization_writer import (
-            JsonSerializationWriter,
-        )
+    async def test_setting_event_recurrence_none_is_unsendable(self):
+        """Pins why additional_data is used.
+
+        The previous version of this test serialized with a bare
+        ``JsonSerializationWriter`` and asserted the field was omitted. The
+        adapter does not use that writer — it goes through the backing-store
+        proxy, which emits the null — so the assertion described a serializer
+        this code never touches and the "if kiota ever changes" escape hatch
+        could never fire. Through the real path the plain assignment does not
+        silently drop the field; it makes the whole payload unserializable.
+
+        If kiota ever starts emitting a usable top-level null, this fails and
+        the additional_data workaround can be simplified.
+        """
         from msgraph.generated.models.event import Event
+
+        from tests.test_write_payloads_reach_the_wire import wire
 
         event = Event()
         event.subject = "x"
         event.recurrence = None
 
-        writer = JsonSerializationWriter()
-        event.serialize(writer)
-        assert "recurrence" not in writer.get_serialized_content().decode()
+        with pytest.raises(AssertionError, match="top-level field"):
+            wire(event)
 
     async def test_omitting_remove_recurrence_sends_no_recurrence_key(self):
         """A partial patch must not blank a series just because it edited the subject."""

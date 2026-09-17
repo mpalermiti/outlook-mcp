@@ -13,6 +13,20 @@ So these tests do not look at the model. They serialize the object handed to
 argument's value is present in that JSON. A parameter that is dropped by the
 handler *or* by the SDK fails here.
 
+``exactly as kiota would send it`` was not true until #63. This file used a
+bare ``JsonSerializationWriter``; the real client enables the backing store
+unconditionally, so every write actually goes out through
+``BackingStoreSerializationWriterProxyFactory``. The two disagree on one
+thing, and it is the thing that bites: a field explicitly assigned ``None``
+is silently omitted by the bare writer and *emitted* by the adapter — under
+its **Python** name, and for a nested model onto the **parent** object. A
+partial contact address went out carrying ``"country_or_region": null`` at
+the top level and Graph answered 400. Nothing here could see it.
+
+So ``wire()`` now serializes the way the adapter does, and ``assert_on_wire``
+asserts in both directions: every argument reached the payload, and nothing
+reached it that we never assigned.
+
 Every string argument gets a distinctive sentinel so a match is unambiguous.
 Booleans and enums are asserted by the wire key/value they must produce.
 
@@ -22,10 +36,14 @@ on personal accounts). That needs the live tier.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from kiota_serialization_json.json_serialization_writer import JsonSerializationWriter
+from kiota_abstractions.store import BackingStoreSerializationWriterProxyFactory
+from kiota_serialization_json.json_serialization_writer_factory import (
+    JsonSerializationWriterFactory,
+)
 
 from outlook_mcp.config import Config
 from outlook_mcp.tools import calendar_write, contacts, mail_drafts, mail_write, todo
@@ -34,19 +52,93 @@ _CFG = Config(client_id="test")
 
 
 def wire(model) -> str:
-    """The JSON kiota would put on the wire for this SDK model."""
-    writer = JsonSerializationWriter()
-    model.serialize(writer)
-    return writer.get_serialized_content().decode()
+    """The JSON the Graph request adapter would actually send for this model.
+
+    Deliberately not a bare ``JsonSerializationWriter``. ``BaseGraphServiceClient``
+    routes the adapter's writer factory through
+    ``enable_backing_store_for_serialization_writer_factory``, so the real client
+    always serializes through the backing-store proxy — and only that path emits
+    a field that was explicitly assigned ``None``. The bare writer drops those,
+    which is the whole difference between this guard seeing a leak and not.
+
+    **Destructive: build a fresh model for every call.** Serializing marks the
+    entire object graph clean — the proxy's ``on_after`` sets
+    ``is_initialization_completed``, whose setter rewrites every entry as
+    unchanged and recurses into nested models. A second call on the same object
+    reports no nulls no matter what was assigned to it.
+    """
+    factory = BackingStoreSerializationWriterProxyFactory(JsonSerializationWriterFactory())
+    writer = factory.get_serialization_writer("application/json")
+    writer.write_object_value(None, model)
+    try:
+        return writer.get_serialized_content().decode()
+    except ValueError as exc:
+        if "Invalid Json output" not in str(exc):
+            raise
+        # kiota writes a top-level null beside the object body rather than
+        # inside it, and then refuses to serialize the mixed document at all.
+        # Reported as an assertion because it is a bug in the caller, not here.
+        raise AssertionError(
+            "A top-level field was explicitly assigned None, so this payload "
+            "cannot be serialized and the request would fail before leaving the "
+            "process. Leave the field unset instead — or, if Graph genuinely "
+            "needs an explicit null, send it through additional_data (see "
+            "calendar_write.update_event's remove_recurrence)."
+        ) from exc
 
 
-def assert_on_wire(model, *needles: str) -> None:
+def _walk_keys(body: str):
+    """Every (key, value) pair in the payload, nested objects and arrays included."""
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                yield key, value
+                yield from walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                yield from walk(item)
+
+    return list(walk(json.loads(body)))
+
+
+def assert_on_wire(model, *needles: str, allow_null: bool = False) -> None:
+    """Assert every needle reached the payload, and that nothing else did.
+
+    ``allow_null`` opts out of the null check for the one shape that wants an
+    explicit null on the wire — ``remove_recurrence``, which sends it through
+    ``additional_data`` on purpose.
+    """
     body = wire(model)
+
     missing = [n for n in needles if n not in body]
     assert not missing, (
         f"Argument value(s) never reached the serialized payload: {missing}\n"
         f"Wire JSON was:\n{body}"
     )
+
+    pairs = _walk_keys(body)
+
+    # Graph properties are camelCase. A snake_case key can only be a Python
+    # attribute name the backing store emitted for a field assigned None —
+    # always a bug, and one Graph answers with a 400 or, when the name happens
+    # to collide with a real property, by silently clearing it.
+    leaked = sorted({key for key, _ in pairs if "_" in key and not key.startswith("@")})
+    assert not leaked, (
+        f"Python attribute name(s) reached the wire: {leaked}. A field was "
+        f"assigned None somewhere; leave it unset instead.\n"
+        f"Wire JSON was:\n{body}"
+    )
+
+    if not allow_null:
+        nulls = sorted({key for key, value in pairs if value is None})
+        assert not nulls, (
+            f"Field(s) we never assigned reached the wire as null: {nulls}. "
+            f"Graph treats an explicit null as 'clear this', so this would "
+            f"destroy data the caller did not ask to change. Pass "
+            f"allow_null=True if the null is deliberate.\n"
+            f"Wire JSON was:\n{body}"
+        )
 
 
 # ── calendar ──────────────────────────────────────────────────────────
@@ -128,7 +220,9 @@ class TestCalendarWrite:
             client, event_id="AAMkAG123=", remove_recurrence=True, config=_CFG
         )
 
-        assert_on_wire(builder.patch.call_args[0][0], '"recurrence": null')
+        assert_on_wire(
+            builder.patch.call_args[0][0], '"recurrence": null', allow_null=True
+        )
 
 
 # ── mail ──────────────────────────────────────────────────────────────
@@ -402,16 +496,84 @@ class TestTodo:
 
 
 def test_wire_helper_detects_a_dropped_field():
-    """Pin the reason this file exists: the SDK omits None-valued fields."""
+    """The original purpose: an argument the handler never set must fail here."""
+    from msgraph.generated.models.event import Event
+
+    event = Event()
+    event.subject = "kept"
+
+    assert '"subject": "kept"' in wire(event)
+
+    with pytest.raises(AssertionError, match="never reached"):
+        assert_on_wire(Event(subject="kept"), '"location"')
+
+
+def test_a_nested_none_is_emitted_onto_the_parent_under_its_python_name():
+    """The mechanism this file was blind to until #63.
+
+    A field assigned ``None`` on a *nested* model does not vanish and does not
+    stay nested — the backing store emits it on the **parent**, keyed by the
+    Python attribute name. ``country_or_region`` is not a Graph property, so
+    Graph answered 400; had the name been single-word it would have matched a
+    real property and Graph would have cleared it instead.
+
+    If kiota ever stops doing this, this test fails and the adapter-fidelity
+    serializer in ``wire()`` can go back to being a bare writer.
+    """
+    from msgraph.generated.models.contact import Contact
+    from msgraph.generated.models.physical_address import PhysicalAddress
+
+    def a_contact_with_a_half_assigned_address() -> Contact:
+        address = PhysicalAddress()
+        address.city = "Bothell"
+        address.country_or_region = None
+        contact = Contact()
+        contact.home_address = address
+        return contact
+
+    body = wire(a_contact_with_a_half_assigned_address())
+    assert '"country_or_region": null' in body, body
+
+    with pytest.raises(AssertionError, match="Python attribute name"):
+        assert_on_wire(a_contact_with_a_half_assigned_address(), '"city": "Bothell"')
+
+
+def test_a_top_level_none_is_reported_as_an_assertion_not_a_kiota_error():
+    """``event.recurrence = None`` cannot be serialized at all.
+
+    kiota writes the null beside the object body rather than inside it, then
+    refuses the mixed document with ``ValueError("Invalid Json output")``. That
+    is why ``update_event(remove_recurrence=True)`` routes the null through
+    ``additional_data`` — the plain assignment does not produce a null, it
+    produces an unsendable request. The bare writer showed neither, which is
+    how the workaround's comment came to describe the wrong mechanism.
+    """
     from msgraph.generated.models.event import Event
 
     event = Event()
     event.subject = "kept"
     event.recurrence = None
 
-    body = wire(event)
-    assert '"subject": "kept"' in body
-    assert "recurrence" not in body
+    with pytest.raises(AssertionError, match="top-level field"):
+        wire(event)
 
-    with pytest.raises(AssertionError, match="never reached"):
-        assert_on_wire(event, '"recurrence"')
+
+def test_serializing_twice_would_report_a_clean_payload():
+    """Pin the sharp edge documented on ``wire()``: the call mutates its model.
+
+    ``on_after`` completes initialization on the backing store, which marks
+    every entry — nested models included — unchanged. A guard that serialized
+    the same object twice would pass vacuously on the second look, so every
+    call has to build its own model.
+    """
+    from msgraph.generated.models.contact import Contact
+    from msgraph.generated.models.physical_address import PhysicalAddress
+
+    address = PhysicalAddress()
+    address.city = "Bothell"
+    address.country_or_region = None
+    contact = Contact()
+    contact.home_address = address
+
+    assert '"country_or_region": null' in wire(contact)
+    assert "country_or_region" not in wire(contact)

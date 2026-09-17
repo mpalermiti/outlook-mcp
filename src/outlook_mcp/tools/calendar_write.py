@@ -145,11 +145,14 @@ async def update_event(
     "leave alone", and the two are mutually exclusive.
 
     It has to go through ``additional_data``: Graph clears a series with an
-    explicit ``"recurrence": null``, but the SDK omits a field set to ``None``
-    from the payload entirely, so ``event.recurrence = None`` is a silent
-    no-op. ``test_setting_event_recurrence_none_would_not_have_worked`` pins
-    that; if kiota ever starts emitting explicit nulls, it fails and this can
-    be simplified.
+    explicit ``"recurrence": null``, and ``event.recurrence = None`` does not
+    produce one. The adapter serializes through the backing store, which writes
+    a top-level null *beside* the object body rather than inside it, and then
+    refuses the mixed document with ``ValueError("Invalid Json output")`` — so
+    the plain assignment is not a silent no-op, it is an unsendable request.
+    ``test_setting_event_recurrence_none_is_unsendable`` pins that; if kiota
+    ever starts emitting a usable top-level null, it fails and this can be
+    simplified.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_update_event")
     event_id = validate_graph_id(event_id)
@@ -215,8 +218,8 @@ async def update_event(
                 "Pass either recurrence or remove_recurrence, not both — they ask for "
                 "opposite things"
             )
-        # The SDK drops `event.recurrence = None`; additional_data survives
-        # serialization as an explicit JSON null, which is what Graph needs.
+        # `event.recurrence = None` does not serialize (see the docstring);
+        # additional_data survives as the explicit JSON null Graph needs.
         event.additional_data = {**(event.additional_data or {}), "recurrence": None}
 
     if recurrence is not None:
