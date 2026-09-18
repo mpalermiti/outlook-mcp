@@ -229,6 +229,45 @@ uv run outlook-mcp logout   # Clear credentials
 uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude)
 ```
 
+### Multiple accounts (per-capability routing)
+
+`accounts` was configuration scaffolding in earlier releases — listed, never used. It now routes **capabilities** to accounts, so one Microsoft identity per concern: mail on the account that receives notifications, To Do on the one that holds the task lists.
+
+```json
+{
+  "accounts": [
+    {"name": "net",  "client_id": "<same-or-per-account app id>"},
+    {"name": "neko", "client_id": "<app id>"}
+  ],
+  "default_account": "net",
+  "capability_accounts": {"mail": "net", "calendar": "net", "todo": "neko"},
+  "allow_cross_account": false
+}
+```
+
+Authenticate each account separately — the device-code flow signs in whatever identity the browser offers, so make sure you pick the right one:
+
+```bash
+uv run outlook-mcp auth net    # sign in as net's identity in the browser
+uv run outlook-mcp auth neko   # then as neko's
+uv run outlook-mcp status      # per-account status + the routing table
+```
+
+All accounts share one OS-level token cache (`outlook-mcp`); each account's **auth record** (`~/.outlook-mcp/auth_record-<name>.json`) pins which identity its credential serves. Single-account installs (top-level `client_id`, no `accounts`) behave exactly as before.
+
+**Routing**: every tool serves the account configured for its capability — mail-centric groups (mail, drafts, attachments, folders, admin) fold into `mail`; `calendar`, `contacts`, `todo` map 1:1; the delta tools split by name; identity tools (`outlook_whoami` & co.) follow the active account. `outlook_changes_since` spans three capabilities and refuses when they don't all route to the same account — use the individual delta tools then.
+
+**Fail-closed**: if an account's token is missing or expired at startup, tools routed to it raise an auth error naming that account (`outlook-mcp auth <name>` is the fix) — the server never silently serves one account's content with another's identity. Only identity tools may answer through another authenticated account when the default has no token, and that fallback is logged.
+
+**`allow_cross_account`** is the master switch for everything beyond the configured routing:
+
+- `false` (default): the agent sees **one merged account**. `outlook_switch_account` refuses (before validating any name, so refusals leak nothing), `outlook_list_accounts` collapses to the active identity, and no tool takes an account parameter — there is no path to another account's non-default content.
+- `true`: `outlook_switch_account("neko")` moves the active account; `outlook_switch_account("neko", capability="todo")` re-routes one capability. Configured routings still win over the active account — switching identity doesn't drag routed capabilities along.
+
+`logout` is per account: `outlook-mcp logout neko` deletes neko's auth record and leaves every other account untouched.
+
+One caveat worth knowing: session-level switches (and only those) are lost when the server restarts.
+
 ---
 
 ## Troubleshooting
@@ -394,7 +433,7 @@ configured `timezone`; responses are always UTC.
 | `outlook_list_categories` | List category definitions with colors. |
 | `outlook_get_mail_tips` | Pre-send check (OOF, delivery restrictions). |
 | `outlook_list_accounts` | List configured accounts. |
-| `outlook_switch_account` | Switch active account. |
+| `outlook_switch_account` | Switch active account, or re-route one capability (`capability` of mail/calendar/contacts/todo). Requires `allow_cross_account: true`; otherwise refuses. |
 
 ---
 
@@ -428,6 +467,10 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions).
 | `attachments_dir` | `string` | `"~/.outlook-mcp/attachments"` | The only directory the attachment tools may read from or write to. Every path an agent supplies is resolved and must land inside it — a symlink out or a `..` is refused. Widen it only if you understand that anything reachable can be emailed. |
 | `allow_categories` | `list[string]` | `[]` | Optional. Restrict write tools to specific categories (see below). Empty list = all writes allowed when `read_only: false`. |
 | `allow_unencrypted_token_cache` | `bool` | `false` | Permit the OAuth token cache to be written in cleartext when the platform has no encrypted store (Linux without libsecret). Off by default: authentication stops with an explanation rather than silently persisting a reusable Graph token in plaintext. macOS and Windows always encrypt and are unaffected. |
+| `accounts` | `list` | `[]` | Multi-account setup: `[{"name": "net", "client_id": "..."}]`. Routes capabilities to accounts (see Multiple accounts above); empty = single-account behavior. |
+| `default_account` | `string` | first account | Account serving capabilities without an explicit routing, and identity tools. |
+| `capability_accounts` | `object` | `{}` | Per-capability routing, e.g. `{"mail": "net", "todo": "neko"}`. Unlisted capabilities fall back to `default_account`. |
+| `allow_cross_account` | `bool` | `false` | Master switch for cross-account access. `false`: one merged account, `outlook_switch_account` refuses. `true`: the agent may switch the active account or one capability's routing. |
 
 ### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`
 

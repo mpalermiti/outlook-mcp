@@ -29,6 +29,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 - `src/outlook_mcp/server.py` — `MCPServer` entry point, lifespan context
 - `src/outlook_mcp/auth.py` — Device code OAuth2 via azure-identity
 - `src/outlook_mcp/graph.py` — Graph client factory
+- `src/outlook_mcp/routing.py` — capability routing: tool name -> capability -> account (`_get_graph_client` consults it; fails closed on multi-account installs when the tool name is unreadable)
 - `src/outlook_mcp/config.py` — Config file management (~/.outlook-mcp/)
 - `src/outlook_mcp/validation.py` — Input validation (OData, KQL, IDs, datetimes)
 - `src/outlook_mcp/errors.py` — Exception hierarchy. `OutlookMCPError` inherits the SDK's `ToolError`; this is load-bearing, not cosmetic (see Conventions)

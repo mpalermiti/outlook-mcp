@@ -33,7 +33,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
   Thanks to **@Nyaecho** for the feature (#62).
 
+- **Multi-account support: per-capability routing with a cross-account gate.** The `accounts`
+  config was scaffolding — listed, never used. Accounts are now real: `outlook-mcp auth <name>`
+  authenticates each one (one shared OS token cache; a per-account auth record pins the identity),
+  `capability_accounts` routes mail/calendar/contacts/todo to accounts, and every tool call serves
+  the account configured for its capability — identity tools follow `default_account`. Startup is
+  fail-closed: an account whose token is missing raises an auth error naming it; the server never
+  serves one account's content (reads *or* writes) with another's identity. `allow_cross_account`
+  (default `false`) is the master switch for everything beyond the configured routing: when off,
+  the agent sees one merged account and `outlook_switch_account` refuses; when on, it can switch
+  the active account or re-route a single capability. Config validation is accept-and-warn for
+  shapes 1.21 accepted, so upgrading a working install cannot brick it at startup — and an install
+  that had populated `accounts` on 1.21 keeps its login: the pre-multi-account `auth_record.json`
+  is adopted as the default account's record (with a warning) instead of being silently ignored.
+
 ### Changed
+
+- **`outlook-mcp logout` now deletes the auth record.** Previously it only printed instructions.
+  With `accounts` configured it is per-account (`outlook-mcp logout neko` deletes neko's record and
+  leaves other accounts working; the server fails closed for the logged-out account rather than
+  promoting another). The shared token-cache entry in the OS store still has to be removed by hand,
+  and the command says so.
 
 - **SKILL.md installs from PyPI instead of cloning `main`.** The OpenClaw install manifest
   ran `git clone … && uv sync`, which fetches whatever is on the default branch at install

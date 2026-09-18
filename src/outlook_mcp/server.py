@@ -5,12 +5,13 @@ from __future__ import annotations
 import functools
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.caching import CacheHint
 from mcp.server.mcpserver import Context, MCPServer
+from pydantic import ValidationError
 
 from outlook_mcp import __version__, toolsets
 from outlook_mcp.auth import AuthManager
@@ -22,6 +23,11 @@ from outlook_mcp.errors import (
     wrap_graph_error,
 )
 from outlook_mcp.graph import GraphClient
+from outlook_mcp.routing import (
+    COMPOSED_DIGEST_CAPABILITIES,
+    capability_for,
+    composed_digest_conflict,
+)
 from outlook_mcp.tools import (
     admin,
     batch,
@@ -50,7 +56,23 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(server):
     """Initialize server state: config, auth, and cached token."""
-    config = load_config()
+    try:
+        config = load_config()
+    except ValidationError as exc:
+        # Config shapes older versions accepted are handled inside the
+        # validators (accept-and-warn); reaching this means the file is
+        # genuinely unparseable. Dying is right — booting on default config
+        # would silently drop read_only/allow_categories — but die with the
+        # fix spelled out, not a bare traceback (review of #61).
+        fields = "; ".join(
+            f"{'.'.join(str(p) for p in e['loc']) or 'config'}: {e['msg']}" for e in exc.errors()
+        )
+        logger.error(
+            "Invalid ~/.outlook-mcp/config.json: %s. Fix the file and restart; "
+            "until then the server cannot start safely.",
+            fields,
+        )
+        raise RuntimeError(f"Invalid ~/.outlook-mcp/config.json: {fields}") from exc
     auth = AuthManager(config)
     # Try to load cached token silently — if this fails, tools will
     # return an error telling the user to run `outlook-mcp auth`.
@@ -130,23 +152,79 @@ def _get_config(ctx: Context):
     return ctx.request_context.lifespan_context["config"]
 
 
-def _get_graph_client(ctx: Context) -> GraphClient:
-    """Return a Graph client, reused across tool calls for the same credential.
+def _calling_tool_name(ctx: Context) -> str | None:
+    """Name of the tool currently executing, when the SDK exposes it.
 
-    Building a ``GraphServiceClient`` (auth provider, request adapter, TLS
-    connection pool) on every tool call is wasteful on recurring agent loops.
-    Cache one in the lifespan context and reuse it while the credential is
-    unchanged. A ``switch_account`` / re-auth swaps ``AuthManager.credential``
-    for a different object, so an identity check rebuilds the client
-    automatically — no explicit invalidation needed.
+    Account routing reads this to pick the account for the call's capability,
+    so the 60-odd tool bodies never mention accounts themselves. Defensive
+    getattrs: tests drive tools with fake contexts that skip the plumbing —
+    those get None and (single-account installs) route to the one credential.
+    On multi-account installs an unreadable name fails closed in
+    ``_get_graph_client`` instead of routing blindly.
+
+    The SDK types ``ServerRequestContext.params`` as a Mapping and carries the
+    call's ``{name, arguments}``` there (verified against mcp 2.2.0 by a test
+    that drives the real ``Client``); the attribute is provisional in the SDK,
+    hence the defensive reads rather than trusting one layout.
+    """
+    rc = getattr(ctx, "request_context", None)
+    if rc is None:
+        return None
+    params = getattr(rc, "params", None)
+    if isinstance(params, Mapping):
+        name = params.get("name")
+        if isinstance(name, str):
+            return name
+    for holder in (params, getattr(rc, "request", None)):
+        name = getattr(getattr(holder, "params", None), "name", None)
+        if isinstance(name, str):
+            return name
+    return None
+
+
+def _get_graph_client(ctx: Context) -> GraphClient:
+    """Return a Graph client for the calling tool's account, cached per account.
+
+    Multi-account configs route capabilities (mail / calendar / contacts /
+    todo) to accounts: the calling tool's name decides the capability, the
+    AuthManager decides the account, and one GraphServiceClient is cached per
+    account in the lifespan context. Single-account installs route everything
+    to the one credential, exactly as before.
+
+    Fail closed on multi-account installs when the tool's capability cannot
+    be resolved: an unreadable tool name or a tool missing from the routing
+    table must not quietly run on the active account — that is how unrouted
+    writes ran as the wrong identity with allow_cross_account=false (review
+    of #61).
     """
     auth = _get_auth(ctx)
-    credential = auth.get_credential()  # raises AuthRequiredError if unauthenticated
+    config = _get_config(ctx)
+    tool_name = _calling_tool_name(ctx)
+    if config.accounts:
+        if tool_name is None:
+            raise OutlookMCPError(
+                "routing_unavailable",
+                "Cannot read the calling tool's name from the request context; "
+                "refusing to route this call to an account blindly.",
+                "This is a bug in outlook-mcp or an MCP SDK change — please "
+                "report it at https://github.com/mpalermiti/outlook-mcp/issues.",
+            )
+        if capability_for(tool_name) is None and toolsets.TOOL_GROUPS.get(tool_name) != "account":
+            raise OutlookMCPError(
+                "routing_unavailable",
+                f"Tool '{tool_name}' has no capability routing and is not an identity tool.",
+                "This is a bug in outlook-mcp (a tool was registered without a "
+                "routing decision) — please report it at "
+                "https://github.com/mpalermiti/outlook-mcp/issues.",
+            )
+    account = auth.resolve_capability_account(capability_for(tool_name))
+    credential = auth.get_account_credential(account)  # raises AuthRequiredError naming the account
     lifespan_ctx = ctx.request_context.lifespan_context
-    cached = lifespan_ctx.get("graph_client")
+    clients: dict = lifespan_ctx.setdefault("graph_clients", {})
+    cached = clients.get(account)
     if cached is None or cached.credential is not credential:
         cached = GraphClient(credential)
-        lifespan_ctx["graph_client"] = cached
+        clients[account] = cached
     return cached
 
 
@@ -199,6 +277,13 @@ async def outlook_auth_status(ctx: Context) -> dict:
             # Re-running auth would fail identically; say what actually needs
             # changing.
             result["action_required"] = str(auth.startup_error)
+        elif auth.config.accounts and auth.active_account:
+            # Status reflects the ACTIVE account only (review of #61): name
+            # it, so the remedy says which auth command to run.
+            result["action_required"] = (
+                f"Run `outlook-mcp auth {auth.active_account}` on the host to "
+                "authenticate the active account."
+            )
         else:
             result["action_required"] = "Run `outlook-mcp auth` on the host to authenticate."
     return result
@@ -960,7 +1045,18 @@ async def outlook_changes_since(
     Calendar `modified[]` is reserved for future use — modified events surface in `new[]`
     today (Graph delta doesn't distinguish them). Calendar `organizer_email` is also
     currently empty (the v1.9.0 delta formatter surfaces the organizer name only).
+
+    With per-capability account routing that splits mail/calendar/contacts across
+    accounts, this tool refuses — one call runs all three deltas against one
+    account. Use the individual delta tools, which each route correctly.
     """
+    auth = _get_auth(ctx)
+    if _get_config(ctx).accounts:
+        conflict = composed_digest_conflict(
+            {cap: auth.resolve_capability_account(cap) for cap in COMPOSED_DIGEST_CAPABILITIES}
+        )
+        if conflict:
+            raise ValueError(conflict)
     client = _get_graph_client(ctx)
     return await digest.changes_since(client, delta_tokens, fallback_window_hours)
 
@@ -1492,10 +1588,17 @@ async def outlook_list_accounts(ctx: Context) -> dict:
 
 @mcp.tool()
 @_wrap_tool_errors
-async def outlook_switch_account(ctx: Context, name: str) -> dict:
-    """Switch the active Outlook account by configured `name` (from outlook_list_accounts)."""
+async def outlook_switch_account(ctx: Context, name: str, capability: str | None = None) -> dict:
+    """Switch the active Outlook account, or one capability's routing, by configured `name`.
+
+    Without `capability`, switches the active account (identity tools and any
+    unrouted capability). With `capability` ("mail", "calendar", "contacts",
+    "todo"), re-routes just that capability to `name`. Both forms require
+    `allow_cross_account: true` in config — otherwise the per-capability
+    routing is fixed and this tool refuses.
+    """
     auth = _get_auth(ctx)
-    return auth.switch_account(name)
+    return auth.switch_account(name, capability)
 
 
 # ── Annotations + config-gated toolsets ───────────────────────────────

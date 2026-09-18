@@ -32,14 +32,25 @@ class OutlookMCPError(ToolError):
 
 
 class AuthRequiredError(OutlookMCPError):
-    """Raised when a tool is called without authentication."""
+    """Raised when a tool is called without authentication.
 
-    def __init__(self):
-        super().__init__(
-            "auth_required",
-            "Not authenticated. No valid credential found.",
-            "Run `outlook-mcp auth` on the host to authenticate.",
-        )
+    ``account`` names the account that needs authenticating on multi-account
+    installs, so the remedy says which `outlook-mcp auth <name>` to run.
+    """
+
+    def __init__(self, account: str | None = None):
+        if account:
+            super().__init__(
+                "auth_required",
+                f"Not authenticated for account '{account}'. No valid credential found.",
+                f"Run `outlook-mcp auth {account}` on the host to authenticate.",
+            )
+        else:
+            super().__init__(
+                "auth_required",
+                "Not authenticated. No valid credential found.",
+                "Run `outlook-mcp auth` on the host to authenticate.",
+            )
 
 
 class ReadOnlyError(OutlookMCPError):
@@ -191,12 +202,9 @@ _HINT_TABLE: dict[tuple[int, str | None], str] = {
         "Resource not found. The ID may be stale — re-list to get current IDs."
     ),
     (429, None): (
-        "Rate limited by Microsoft Graph. "
-        "Back off and retry; respect any Retry-After header."
+        "Rate limited by Microsoft Graph. Back off and retry; respect any Retry-After header."
     ),
-    (503, None): (
-        "Microsoft Graph is temporarily unavailable. Retry after a short delay."
-    ),
+    (503, None): ("Microsoft Graph is temporarily unavailable. Retry after a short delay."),
 }
 
 
@@ -233,14 +241,13 @@ def wrap_graph_error(exc: Exception) -> GraphAPIError:
         from msgraph.generated.models.o_data_errors.o_data_error import (
             ODataError as _ODataError,
         )
+
         graph_types: tuple[type, ...] = (APIError, _ODataError)
     except ImportError:  # pragma: no cover — defensive
         graph_types = (APIError,)
 
     if not isinstance(exc, graph_types):
-        raise TypeError(
-            f"wrap_graph_error: not a Graph SDK error: {type(exc).__name__}"
-        )
+        raise TypeError(f"wrap_graph_error: not a Graph SDK error: {type(exc).__name__}")
 
     status_code: int | None = getattr(exc, "response_status_code", None)
 
