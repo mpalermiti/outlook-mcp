@@ -162,6 +162,7 @@ class TestCalendarWrite:
                 "pattern": {"type": "weekly", "interval": 2, "daysOfWeek": ["monday"]},
                 "range": {"type": "numbered", "numberOfOccurrences": 3},
             },
+            show_as="tentative",
             config=_CFG,
         )
 
@@ -177,6 +178,9 @@ class TestCalendarWrite:
             '"type": "weekly"',
             '"interval": 2',
             '"numberOfOccurrences": 3',
+            # camelCase `showAs`, not the Python `show_as`. An enum assigned to
+            # an SDK field is only as good as what kiota emits for it.
+            '"showAs": "tentative"',
         )
 
     async def test_create_event_puts_the_anchor_zone_on_the_wire(self):
@@ -236,6 +240,7 @@ class TestCalendarWrite:
             recurrence="weekly",
             attendees=["sentinel.guest@example.com"],
             is_all_day=True,
+            show_as="workingElsewhere",
             config=_CFG,
         )
 
@@ -253,6 +258,7 @@ class TestCalendarWrite:
             '"timeZone": "UTC"',
             '"isAllDay": true',
             '"daysOfWeek": ["thursday"]',  # 2026-10-22 is a Thursday
+            '"showAs": "workingElsewhere"',
         )
 
     async def test_update_event_puts_the_preserved_anchor_on_the_wire(self):
@@ -290,6 +296,31 @@ class TestCalendarWrite:
             '"timeZone": "America/New_York"',
             '"dateTime": "2026-10-22T09:00:00"',
         )
+    async def test_update_event_show_as_alone_patches_nothing_else(self):
+        """The shape a partial patch has to have: one field in, one field out.
+
+        The null check is the half that matters here — a `show_as`-only PATCH
+        that also carried ``"start": null`` would clear the event's start, and
+        the model-level assertion (``patched.start is None``) passes either way
+        because that is exactly what the leak looks like on the model.
+        """
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await calendar_write.update_event(client, event_id="AAMkAG123=", show_as="oof", config=_CFG)
+
+        # One serialization, both assertions: wire() is destructive, so a second
+        # call on the same model reports a clean payload no matter what leaked.
+        body = json.loads(wire(builder.patch.call_args[0][0]))
+
+        assert body["showAs"] == "oof"
+        # Key-set equality rather than assert_on_wire: it subsumes both of that
+        # helper's checks here — a snake_case leak or an unasked-for null would
+        # each show up as an extra key — and additionally pins that no other
+        # field was sent at all.
+        assert set(body) == {"@odata.type", "showAs"}
 
     async def test_update_event_remove_recurrence_is_an_explicit_null(self):
         builder = MagicMock()

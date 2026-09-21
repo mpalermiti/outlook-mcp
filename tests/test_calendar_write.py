@@ -433,6 +433,7 @@ class TestUpdateEvent:
         assert patched.attendees is None
         assert patched.is_all_day is None
         assert patched.is_online_meeting is None
+        assert patched.show_as is None
 
     async def test_update_event_replaces_attendees(self):
         """Graph replaces the whole collection — we send exactly what the caller gave."""
@@ -1396,3 +1397,123 @@ class TestEventTimezone:
 
         patched = builder.patch.call_args[0][0]
         assert patched.start.time_zone == "Europe/London"
+
+
+class TestShowAs:
+    """``show_as`` is Graph's ``freeBusyStatus`` — Outlook's "Show as" field.
+
+    Graph honours all six values on both POST and PATCH for a consumer mailbox;
+    that claim belongs to the live tier and is pinned there, not here. These
+    assert the half a mock can see: the argument becomes a typed enum member on
+    the model, and omitting it leaves the field untouched rather than writing a
+    default of our own.
+    """
+
+    @pytest.mark.parametrize(
+        ("supplied", "expected"),
+        [
+            ("free", "free"),
+            ("tentative", "tentative"),
+            ("busy", "busy"),
+            ("oof", "oof"),
+            ("workingElsewhere", "workingElsewhere"),
+            ("unknown", "unknown"),
+            # Case and separator normalisation.
+            ("Tentative", "tentative"),
+            ("WORKINGELSEWHERE", "workingElsewhere"),
+            # Aliases for the two values whose Graph names don't match the
+            # labels Outlook shows, which is what an agent reads off the UI.
+            ("out_of_office", "oof"),
+            ("Out of office", "oof"),
+            ("outofoffice", "oof"),
+            ("working_elsewhere", "workingElsewhere"),
+            ("working elsewhere", "workingElsewhere"),
+            ("working-elsewhere", "workingElsewhere"),
+        ],
+    )
+    async def test_create_event_maps_show_as_to_the_sdk_enum(self, supplied, expected):
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
+
+        await create_event(
+            mock_client,
+            subject="Standup",
+            start="2026-09-07T12:30:00Z",
+            end="2026-09-07T13:00:00Z",
+            show_as=supplied,
+            config=_CFG,
+        )
+
+        # The enum member, not the string it came from: a raw string serializes
+        # fine for the values that happen to match Graph's spelling and silently
+        # does not for the ones that don't.
+        assert _posted(mock_client).show_as.value == expected
+
+    async def test_create_event_leaves_show_as_unset_when_omitted(self):
+        """Graph's own default is `busy`; sending one would take that decision."""
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
+
+        await create_event(
+            mock_client,
+            subject="Standup",
+            start="2026-09-07T12:30:00Z",
+            end="2026-09-07T13:00:00Z",
+            config=_CFG,
+        )
+
+        assert _posted(mock_client).show_as is None
+
+    async def test_update_event_patches_show_as_alone(self):
+        """Unlike is_all_day, showAs needs nothing resent alongside it."""
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client, event_id="AAMkAG123=", show_as="workingElsewhere", config=_CFG
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.show_as.value == "workingElsewhere"
+        assert patched.start is None
+        assert patched.end is None
+
+    @pytest.mark.parametrize("bogus", ["maybe", "Out to lunch", "", "   ", "0", "oof!"])
+    async def test_invalid_show_as_is_refused_naming_what_is_valid(self, bogus):
+        """A bogus value must not reach Graph, and the refusal must be actionable.
+
+        Graph answers a bad showAs with a 400 whose text does not list the
+        alternatives. The caller here is a model choosing from a menu it cannot
+        see, so the message carries the menu.
+        """
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
+
+        with pytest.raises(ValueError) as excinfo:
+            await create_event(
+                mock_client,
+                subject="Standup",
+                start="2026-09-07T12:30:00Z",
+                end="2026-09-07T13:00:00Z",
+                show_as=bogus,
+                config=_CFG,
+            )
+
+        message = str(excinfo.value)
+        for value in ("free", "tentative", "busy", "oof", "workingElsewhere"):
+            assert value in message, f"refusal does not name {value!r}: {message}"
+        mock_client.me.events.post.assert_not_called()
+
+    async def test_invalid_show_as_on_update_never_reaches_graph(self):
+        """The same gate on the write sibling — #1's lesson, checked not assumed."""
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError, match="show_as"):
+            await update_event(mock_client, event_id="AAMkAG123=", show_as="maybe", config=_CFG)
+
+        builder.patch.assert_not_called()

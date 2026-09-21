@@ -296,3 +296,87 @@ async def test_wrap_tool_errors_end_to_end_via_mocked_implementation():
     assert exc_info.value.error_code == "TooManyRequests"
     assert exc_info.value.action is not None
     assert "retry" in exc_info.value.action.lower()
+
+
+class TestCalendarWriteArgumentOrder:
+    """`server.py` hands both calendar write tools their arguments positionally.
+
+    A tool-level test cannot see a mis-ordered positional: it patches the
+    implementation and asserts on what it was handed, which is the same thing
+    twice. These run the *real* handler behind the *real* server wrapper and
+    assert on the Graph model that comes out the other end, so a `show_as`
+    landing in `recurrence`'s slot fails here rather than at a user's mailbox.
+    """
+
+    @staticmethod
+    def _ctx():
+        from outlook_mcp.config import Config
+
+        ctx = MagicMock()
+        ctx.request_context.lifespan_context = {
+            "auth": MagicMock(),
+            "config": Config(client_id="test"),
+        }
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_create_event_arguments_land_in_the_right_slots(self):
+        from unittest.mock import AsyncMock
+
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        sdk = AsyncMock()
+        sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        client = MagicMock()
+        client.sdk_client = sdk
+
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=Config(client_id="test")),
+        ):
+            await server_mod.outlook_create_event(
+                self._ctx(),
+                subject="Review",
+                start="2026-09-07T12:30:00Z",
+                end="2026-09-07T13:00:00Z",
+                location="Room 101",
+                show_as="tentative",
+            )
+
+        event = sdk.me.events.post.call_args[0][0]
+        assert event.subject == "Review"
+        assert event.location.display_name == "Room 101"
+        assert event.show_as.value == "tentative"
+        assert event.recurrence is None
+
+    @pytest.mark.asyncio
+    async def test_update_event_arguments_land_in_the_right_slots(self):
+        from unittest.mock import AsyncMock
+
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        sdk = MagicMock()
+        sdk.me.events.by_event_id = MagicMock(return_value=builder)
+        client = MagicMock()
+        client.sdk_client = sdk
+
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=Config(client_id="test")),
+        ):
+            await server_mod.outlook_update_event(
+                self._ctx(),
+                event_id="AAMkAG123=",
+                subject="Review",
+                show_as="oof",
+            )
+
+        event = builder.patch.call_args[0][0]
+        assert event.subject == "Review"
+        assert event.show_as.value == "oof"
+        # The slot next to show_as in the call, and the one a swap would hit.
+        assert event.is_all_day is None

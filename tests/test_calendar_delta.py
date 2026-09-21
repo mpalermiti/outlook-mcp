@@ -21,6 +21,7 @@ def _raw_event(**overrides) -> dict:
         "organizer": {"emailAddress": {"address": "lead@test.com", "name": "Lead"}},
         "responseStatus": {"response": "accepted"},
         "isOnlineMeeting": True,
+        "showAs": "busy",
     }
     base.update(overrides)
     return base
@@ -84,6 +85,48 @@ class TestFormatEventDelta:
         )
         assert out["subject"] == "(no subject)"
         assert out["organizer"] == ""
+
+    def test_carries_show_as(self):
+        """Delta sends no $select, so showAs is already in the raw JSON.
+
+        Confirmed against a live mailbox: `showAs` is present on every item
+        /me/calendarView/delta returns. The formatter dropping it was the only
+        thing standing between the caller and the field.
+        """
+        out = _format_event_delta(_raw_event(showAs="workingElsewhere"))
+        assert out["show_as"] == "workingElsewhere"
+
+    def test_absent_show_as_is_empty_string(self):
+        """Matches calendar_read's convention, so one response has one shape."""
+        raw = _raw_event()
+        del raw["showAs"]
+
+        assert _format_event_delta(raw)["show_as"] == ""
+
+    def test_show_as_matches_the_listing_formatter(self):
+        """A parity claim should be a test, not a docstring sentence (#63).
+
+        Scoped to the field this change adds rather than the whole key set:
+        the two shapes also differ on `type`, which is issue #69 and not this
+        change's to fix. When #69 lands, this becomes a full key-set
+        comparison and the scoping note goes away.
+        """
+        from outlook_mcp.tools.calendar_read import _format_event_summary
+
+        sdk_event = MagicMock()
+        sdk_event.subject = "Standup"
+        sdk_event.location = MagicMock(display_name="Online")
+        sdk_event.organizer = None
+        sdk_event.response_status = None
+        sdk_event.start = None
+        sdk_event.end = None
+        sdk_event.type = None
+        sdk_event.show_as = MagicMock(value="oof")
+
+        summary = _format_event_summary(sdk_event)
+        delta = _format_event_delta(_raw_event(showAs="oof"))
+
+        assert summary["show_as"] == delta["show_as"] == "oof"
 
 
 # ── First call ───────────────────────────────────────────────────────

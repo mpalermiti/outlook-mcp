@@ -30,9 +30,16 @@ def _clamp(value: int, low: int, high: int) -> int:
 def _format_event_delta(raw: dict) -> dict:
     """Build the wire-shape event summary from a raw Graph JSON event.
 
-    Mirrors ``calendar_read._format_event_summary`` field-for-field so
-    callers don't have to branch on whether a given dict came from a
-    delta call or a regular list call.
+    Tracks ``calendar_read._format_event_summary`` so callers don't have to
+    branch on whether a given dict came from a delta call or a regular list
+    call. It is **not** field-for-field today: that formatter also emits
+    ``type``, which this one has never carried. The docstring claimed parity
+    until the gap was reported as issue #69 — the claim is corrected here
+    rather than left standing, and belongs as a key-set test once #69 lands.
+
+    ``show_as`` needs no ``$select`` change on this path: the delta endpoint is
+    called without one, so Graph returns every property and ``showAs`` is
+    already in the raw JSON.
     """
     start_node = raw.get("start") or {}
     end_node = raw.get("end") or {}
@@ -57,6 +64,7 @@ def _format_event_delta(raw: dict) -> dict:
         "organizer": sanitize_output(organizer_node.get("name") or ""),
         "response_status": response_node.get("response") or "",
         "is_online": bool(raw.get("isOnlineMeeting")),
+        "show_as": raw.get("showAs") or "",
     }
 
 

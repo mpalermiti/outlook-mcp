@@ -695,8 +695,9 @@ async def outlook_create_event(
     is_online: bool = False,
     recurrence: dict | str | None = None,
     timezone: str | None = None,
+    show_as: str | None = None,
 ) -> dict:
-    """Create a calendar event with optional attendees, recurrence, and Teams online meeting.
+    """Create a calendar event with optional attendees, recurrence, busy status, online meeting.
 
     Example: outlook_create_event(subject="Q3 review", start="2026-08-15T14:00:00Z",
     end="2026-08-15T15:00:00Z", attendees=["alice@acme.com"])
@@ -715,6 +716,8 @@ async def outlook_create_event(
     `timezone` is the IANA zone the event is anchored in, which is what a recurring
     series is expanded against (default: the configured zone). A zone name like
     America/Los_Angeles, never an abbreviation like PDT.
+    `show_as` is Outlook's "Show as": "free", "tentative", "busy", "oof" (out of office),
+    "workingElsewhere", or "unknown". Omitted, Graph defaults the event to busy.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -730,6 +733,7 @@ async def outlook_create_event(
         is_online,
         recurrence,
         timezone,
+        show_as,
         config=config,
     )
 
@@ -748,6 +752,7 @@ async def outlook_update_event(
     remove_recurrence: bool = False,
     attendees: list[str] | None = None,
     is_all_day: bool | None = None,
+    show_as: str | None = None,
 ) -> dict:
     """Update fields on an existing event (partial patch — only provided fields change).
 
@@ -761,6 +766,8 @@ async def outlook_update_event(
     call, both on midnight boundaries. Patching a time keeps the zone the event is
     anchored in. Omitting an argument leaves it unchanged, so False and [] are
     instructions, not absences.
+    `show_as` is Outlook's "Show as" — same values as outlook_create_event — and patches
+    on its own; unlike is_all_day it needs nothing resent alongside it.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -776,6 +783,7 @@ async def outlook_update_event(
         remove_recurrence,
         attendees,
         is_all_day,
+        show_as,
         config=config,
     )
 

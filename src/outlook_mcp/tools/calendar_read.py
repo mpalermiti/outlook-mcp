@@ -90,6 +90,13 @@ def _format_event_summary(event: Any) -> dict:
     if event.type is not None:
         event_type = event.type.value if hasattr(event.type, "value") else str(event.type)
 
+    # Graph's `showAs` — what Outlook labels "Show as". Every event carries one
+    # (Graph defaults it to `busy`), so an empty string here means the field was
+    # not fetched rather than that the event has no status.
+    show_as = ""
+    if event.show_as is not None:
+        show_as = event.show_as.value if hasattr(event.show_as, "value") else str(event.show_as)
+
     return {
         "id": event.id,
         "subject": sanitize_output(event.subject or "(no subject)"),
@@ -103,6 +110,7 @@ def _format_event_summary(event: Any) -> dict:
         "response_status": response,
         "is_online": bool(event.is_online_meeting),
         "type": event_type,
+        "show_as": show_as,
     }
 
 
@@ -165,9 +173,14 @@ def _format_event_concise(event: Any) -> dict:
 
     Keeps: id, subject, start, end, location, is_all_day, is_organizer,
     is_online_meeting, attendees_count. Drops: body, organizer (object),
-    response_status, categories, full attendees list, and `type` — concise
-    mode is for day-at-a-glance scans where the series/one-off distinction
-    isn't worth the tokens; use the normal listing when it is.
+    response_status, categories, full attendees list, `type`, and `show_as` —
+    concise mode is for day-at-a-glance scans where the series/one-off
+    distinction isn't worth the tokens; use the normal listing when it is.
+
+    `show_as` is dropped for the same reason and on the same terms as
+    `response_status`: both are status fields this shape has always traded
+    away, and adding one to the highest-volume listing is a token cost every
+    caller pays on every scan. The normal listing carries it.
     """
     start_str = ""
     if event.start:
@@ -210,8 +223,8 @@ async def list_events(
     relative to "now" in the configured timezone.
 
     concise: when True, return a compact event shape — drops ``organizer``,
-    ``response_status``, ``categories``; adds ``is_organizer`` and
-    ``attendees_count``. Default False preserves the existing shape.
+    ``response_status``, ``categories``, ``show_as``; adds ``is_organizer``
+    and ``attendees_count``. Default False preserves the existing shape.
 
     calendar: which calendar to read. None, blank or "primary" keeps the
     default calendar's ``/me/calendarView``; otherwise a display name or ID
@@ -248,7 +261,7 @@ async def list_events(
     else:
         query_params["$select"] = (
             "id,subject,start,end,location,isAllDay,"
-            "organizer,responseStatus,isOnlineMeeting,categories"
+            "organizer,responseStatus,isOnlineMeeting,categories,showAs"
         )
 
     from msgraph.generated.users.item.calendar_view.calendar_view_request_builder import (

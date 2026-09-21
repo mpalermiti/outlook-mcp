@@ -307,16 +307,16 @@ configured `timezone`; responses are always UTC.
 
 | Tool | Description |
 |------|-------------|
-| `outlook_list_events` | List events in a date range. Expands recurring events. Each event carries `type`, so a series master is distinguishable from a one-off. Configurable via `days`, `after`, `before`. `calendar` selects which calendar to read: omit (or `"primary"`) for the default, otherwise a display name (case-insensitive; not-found and ambiguous errors name what exists) or an ID from `outlook_list_calendars`. A `cursor` continues the listing it came from, so later pages need neither `calendar` nor a second lookup. |
-| `outlook_get_event` | Get full event details: attendees, body, online meeting URL, recurrence, `type` (`singleInstance` / `seriesMaster` / `occurrence` / `exception`). |
+| `outlook_list_events` | List events in a date range. Expands recurring events. Each event carries `type`, so a series master is distinguishable from a one-off, and `show_as`, the free/busy status Outlook labels "Show as". Configurable via `days`, `after`, `before`. `calendar` selects which calendar to read: omit (or `"primary"`) for the default, otherwise a display name (case-insensitive; not-found and ambiguous errors name what exists) or an ID from `outlook_list_calendars`. A `cursor` continues the listing it came from, so later pages need neither `calendar` nor a second lookup. `concise=True` omits `show_as`. |
+| `outlook_get_event` | Get full event details: attendees, body, online meeting URL, recurrence, `type` (`singleInstance` / `seriesMaster` / `occurrence` / `exception`), `show_as`. |
 | `outlook_list_events_delta` | List only event changes inside a window since the last call. `start` and `end` (ISO 8601) required on the first call (Graph constraint — no whole-calendar sync). Deletes come back as `{id, is_deleted: True}`. Cursor is stateless. |
 
 ### Calendar Write
 
 | Tool | Description |
 |------|-------------|
-| `outlook_create_event` | Create event with location and attendees. (`is_online` has no effect on personal accounts — Graph ignores `isOnlineMeeting` for consumer mailboxes.) Pass `recurrence` to create a **series**: a shorthand (`daily`, `weekdays`, `weekly`, `monthly`, `yearly`, anchored on `start`) or a full [Graph recurrence object](https://learn.microsoft.com/graph/api/resources/patternedrecurrence) for anything else. `range.startDate` defaults to the event's start date. |
-| `outlook_update_event` | Update event fields (subject, time, location, body, attendees, all-day). Only patches changed fields. Pass `recurrence` to turn a single event into a series, or `remove_recurrence=True` to turn a series back into a single event. `attendees` **replaces** the whole guest list and emails invitations/cancellations; `is_all_day` needs `start`+`end` in the same call. |
+| `outlook_create_event` | Create event with location and attendees. (`is_online` has no effect on personal accounts — Graph ignores `isOnlineMeeting` for consumer mailboxes.) Pass `recurrence` to create a **series**: a shorthand (`daily`, `weekdays`, `weekly`, `monthly`, `yearly`, anchored on `start`) or a full [Graph recurrence object](https://learn.microsoft.com/graph/api/resources/patternedrecurrence) for anything else. `range.startDate` defaults to the event's start date. `show_as` sets the free/busy status Outlook labels "Show as" — `free`, `tentative`, `busy`, `oof` (out of office), `workingElsewhere`, or `unknown`; omit it and Graph applies its own default of `busy`. |
+| `outlook_update_event` | Update event fields (subject, time, location, body, attendees, all-day, `show_as`). Only patches changed fields. Pass `recurrence` to turn a single event into a series, or `remove_recurrence=True` to turn a series back into a single event. `attendees` **replaces** the whole guest list and emails invitations/cancellations; `is_all_day` needs `start`+`end` in the same call, while `show_as` patches on its own. |
 | `outlook_delete_event` | Delete a calendar event. |
 | `outlook_rsvp` | RSVP to an event: `accept`, `decline`, or `tentative`. Optionally include a message. |
 

@@ -38,8 +38,12 @@ the mailbox lacks the data a given assertion needs. They must never assume this
 maintainer's mailbox.
 """
 
+from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
+
 import pytest
 
+from outlook_mcp.tools.calendar_read import list_events
 from outlook_mcp.tools.contacts import list_contacts, search_contacts
 from outlook_mcp.tools.mail_read import list_inbox, search_mail
 from outlook_mcp.tools.mail_thread import list_thread
@@ -327,3 +331,89 @@ async def test_contact_search_does_not_claim_to_know_categories(real_graph_clien
     found = await search_contacts(real_graph_client.sdk_client, query=term, count=25)
     assert found["contacts"], f"search for {term!r} returned nothing, though it names a contact"
     assert all("categories" not in c for c in found["contacts"])
+
+
+# ── calendar ──────────────────────────────────────────────────────────
+
+
+def _wide_window() -> tuple[str, str]:
+    """±180 days around now, computed rather than hardcoded.
+
+    A literal date range would keep passing for a while and then start skipping
+    for a reason that has nothing to do with the code under test.
+    """
+    now = datetime.now(dt_timezone.utc)
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    return (
+        (now - timedelta(days=180)).strftime(fmt),
+        (now + timedelta(days=180)).strftime(fmt),
+    )
+
+
+async def _walk_events_for_show_as(client):
+    """Events from a wide window, so a quiet next fortnight doesn't skip this.
+
+    A ±180-day window rather than the default 7: `list_events` is a calendarView
+    and returns nothing at all for a caller with no upcoming meetings, which
+    would let this skip forever while reading as covered — #63's page-one
+    lesson, one resource over.
+    """
+    after, before = _wide_window()
+    seen, with_status, cursor = 0, [], None
+    for _ in range(5):  # 500 events, bounded
+        page = await list_events(client, after=after, before=before, count=100, cursor=cursor)
+        seen += len(page["events"])
+        with_status.extend(e for e in page["events"] if e.get("show_as"))
+        if with_status or not page["has_more"]:
+            break
+        cursor = page["cursor"]
+    return {"seen": seen, "with_status": with_status}
+
+
+async def test_the_event_listing_returns_the_show_as_it_selects(real_graph_client):
+    """`showAs` is in `list_events`' $select, so it must come back populated.
+
+    Not "the key is present" — `_format_event_summary` writes that key
+    unconditionally, so asserting presence proves nothing about Graph and would
+    pass against the very bug this guards. Only a non-empty value carries
+    information.
+
+    This is not a hypothetical shape. The same listing's `$select` omits `type`
+    while the formatter reads it, so `type` comes back `""` on every call and
+    nothing in the mock suite can see it (issue #69). A `showAs` added to the
+    formatter and forgotten in the `$select` would have failed exactly here.
+    """
+    walk = await _walk_events_for_show_as(real_graph_client.sdk_client)
+
+    if not walk["seen"]:
+        pytest.skip("No events in a ±180-day window — nothing to assert against")
+    if not walk["with_status"]:
+        pytest.fail(
+            f"walked {walk['seen']} events and every one returned an empty show_as. "
+            f"Graph defaults showAs to 'busy' on every event, so this is a $select "
+            f"that was not honoured, not a mailbox without the data."
+        )
+
+    valid = {"free", "tentative", "busy", "oof", "workingElsewhere", "unknown"}
+    for event in walk["with_status"]:
+        assert event["show_as"] in valid, (
+            f"Graph returned an unknown freeBusyStatus {event['show_as']!r}; "
+            f"the write path's accepted set needs widening to match."
+        )
+
+
+async def test_the_concise_event_listing_does_not_pay_for_show_as(real_graph_client):
+    """The omission is a real saving on the wire, not just a formatter choice.
+
+    Asserting the default path costs nothing extra, the way #62 pinned that an
+    omitted `calendar` never lists `/me/calendars`.
+    """
+    after, before = _wide_window()
+    page = await list_events(
+        real_graph_client.sdk_client, after=after, before=before, count=25, concise=True
+    )
+
+    if not page["events"]:
+        pytest.skip("No events in a ±180-day window — nothing to assert against")
+
+    assert all("show_as" not in event for event in page["events"])

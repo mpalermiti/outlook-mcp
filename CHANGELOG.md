@@ -102,6 +102,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Events carry a "Show as" status, on both the write and the read side.** Graph's `showAs`
+  — Outlook's free/busy field — was reachable through neither: `outlook_create_event` and
+  `outlook_update_event` had no way to set it, and every read path dropped it. There was no
+  way to create a tentative hold, mark a block as free, or say "working elsewhere". This was
+  never an API limitation: `showAs` is a writable property on `microsoft.graph.event`, and a
+  live probe against a consumer mailbox confirmed Graph stores all six values (`free`,
+  `tentative`, `busy`, `oof`, `workingElsewhere`, `unknown`) on POST and on PATCH, each read
+  back on a fresh GET — no value is accepted and then silently dropped. `show_as` accepts
+  those values case-insensitively plus the spellings an agent reads off the Outlook menu
+  (`out of office`, `working elsewhere`); anything else is refused with the valid set named,
+  rather than passed through to a Graph 400 that lists nothing. Omitting it leaves Graph's
+  own default of `busy` — and, on update, the event's current status — untouched.
+
+  **Response-shape change:** `outlook_list_events`, `outlook_get_event` and
+  `outlook_list_events_delta` each gain a `show_as` key. Additive, and `show_as` is `""` only
+  when Graph did not return the field. `concise=True` deliberately does *not* carry it, on the
+  same terms as `response_status`, so the highest-volume listing costs no more than before.
+
 - **`outlook_list_events(calendar=…)` reads secondary calendars.** Every calendar read went to
   the default calendar, so events in a class schedule or a shared team calendar were
   unreachable — an empty listing with no hint why. `calendar` takes a display name

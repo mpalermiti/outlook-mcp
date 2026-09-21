@@ -50,6 +50,7 @@ def _make_mock_event(**overrides):
     # so a formatter reading the wrong field would still look like it worked.
     event.original_start_time_zone = overrides.get("original_start_tz", "UTC")
     event.original_end_time_zone = overrides.get("original_end_tz", "UTC")
+    event.show_as = overrides.get("show_as", None)
     attendee_data = overrides.get("attendees", [])
     attendees = []
     for a in attendee_data:
@@ -573,6 +574,61 @@ class TestEventDetailRecurrence:
         concise = _format_event_concise(_make_mock_event(type=MagicMock(value="seriesMaster")))
 
         assert "type" not in concise
+
+
+class TestShowAs:
+    """Outlook's "Show as" (Graph `showAs`) on the three read shapes."""
+
+    def test_summary_carries_show_as(self):
+        summary = _format_event_summary(_make_mock_event(show_as=MagicMock(value="tentative")))
+
+        assert summary["show_as"] == "tentative"
+
+    def test_detail_carries_show_as(self):
+        from outlook_mcp.tools.calendar_read import _format_event_detail
+
+        detail = _format_event_detail(_make_mock_event(show_as=MagicMock(value="oof")))
+
+        assert detail["show_as"] == "oof"
+
+    def test_missing_show_as_is_empty_string(self):
+        """Follows `type`'s convention on this shape, so one response has one."""
+        assert _format_event_summary(_make_mock_event())["show_as"] == ""
+
+    def test_concise_mode_omits_show_as(self):
+        """A deliberate trade, not an oversight — see _format_event_concise."""
+        from outlook_mcp.tools.calendar_read import _format_event_concise
+
+        concise = _format_event_concise(_make_mock_event(show_as=MagicMock(value="free")))
+
+        assert "show_as" not in concise
+
+    async def test_list_events_asks_graph_for_show_as(self):
+        """The formatter reads it, so the $select has to ask for it.
+
+        Without this the field reads back empty forever and the caller cannot
+        tell "this event is busy" from "we never fetched the field" — #65's
+        shape, and the reason issue #69 exists one field over.
+        """
+        mock_client = MagicMock()
+        response = MagicMock(value=[], odata_next_link=None)
+        mock_client.me.calendar_view.get = AsyncMock(return_value=response)
+        mock_client.me.calendars = MagicMock()
+
+        await list_events(mock_client, days=1)
+
+        assert "showAs" in _query_params(mock_client.me.calendar_view.get).select
+
+    async def test_concise_listing_does_not_pay_for_show_as(self):
+        """The omission is real on the wire, not just in the formatter."""
+        mock_client = MagicMock()
+        response = MagicMock(value=[], odata_next_link=None)
+        mock_client.me.calendar_view.get = AsyncMock(return_value=response)
+        mock_client.me.calendars = MagicMock()
+
+        await list_events(mock_client, days=1, concise=True)
+
+        assert "showAs" not in _query_params(mock_client.me.calendar_view.get).select
 
 
 class TestTimezoneResolutionReachesTheCaller:
