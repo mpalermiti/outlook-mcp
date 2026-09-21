@@ -8,6 +8,48 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Calendar events are anchored in a real time zone, so recurring series survive daylight
+  saving.** `outlook_create_event` labelled every `start` and `end` with the literal
+  `timeZone: "UTC"` while passing the caller's datetime through unchanged. For a single event
+  that is merely lossy — the instant is correct, the zone it was scheduled in is gone, and
+  `outlook_get_event` reports `(UTC)` no matter what was asked for. For a **recurring** event
+  it is wrong: Graph expands a series against the zone its master is anchored in, so a weekly
+  09:00 meeting created through this server became 08:00 the week the clocks went back, and
+  stayed there. Verified against a live consumer mailbox — three occurrences of one weekly
+  series, 09:00 / 08:00 / 08:00 local.
+
+  `outlook_create_event` and `outlook_update_event` now take `timezone`, an IANA zone name.
+  Create defaults it to `config.timezone`; update defaults to the zone the event is already
+  stored in, so patching a colleague's 09:00 New York meeting does not move it to the server's
+  zone. The datetime string still reaches Graph as written: an offset or a `Z` pins the instant
+  exactly as before, and the zone decides only what the *second* occurrence does.
+
+  Two things this could not have been done any other way. Graph rejects a `start` patch that
+  carries no `timeZone` at all, so on the update path the zone travels with the times and
+  cannot be edited alone — passing `timezone` without `start` and `end` is refused rather than
+  reported as `updated`. And Graph refuses a patch that would change a *series master's* zone
+  unless the recurrence is re-sent with it, answering `400 ErrorPropertyValidationFailure`,
+  which names neither the zone nor the property; `outlook_update_event` re-sends the event's
+  existing recurrence so that series created before this release can be repaired in place.
+
+  **Behaviour change.** A zone-less `start`/`end` on `outlook_create_event`
+  ("2026-10-28T09:00:00") now means that wall-clock time in the configured zone, where it
+  previously meant UTC. On a UTC-configured server nothing changes; on any other, an event
+  created from a zone-less datetime lands where the user meant rather than `config.timezone`'s
+  offset away from it. This is what `SKILL.md` has always said zone-less input means, and what
+  every read path already did.
+
+  **Response shape.** `outlook_get_event` gains `original_start_time_zone` and
+  `original_end_time_zone`. `start` and `end` stay UTC, which means they say nothing about the
+  anchor — an event anchored in `America/Los_Angeles` and one anchored in `UTC` are
+  indistinguishable in them while behaving differently across a transition. Listings and the
+  delta formatter are unchanged.
+
+  Abbreviations are refused locally with the zone name to use instead: `PDT` is not a zone
+  name, and Graph answers it with `400 TimeZoneNotSupportedException`. So are `EST`, `MST` and
+  `HST` — those *do* resolve as IANA keys, and Graph rejects them anyway (verified live), while
+  being fixed-offset zones that would not follow daylight saving even if it accepted them.
+
 - **`classification` was always empty outside the inbox listing.** `outlook_search_mail`,
   `outlook_list_drafts` and `outlook_get_thread` share `list_inbox`'s summary formatter, which
   reports Focused Inbox's verdict — but each had its own copy of the `$select`, and only

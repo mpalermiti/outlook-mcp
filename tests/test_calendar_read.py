@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
 from unittest.mock import AsyncMock, MagicMock
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -11,8 +11,6 @@ from outlook_mcp.pagination import decode_cursor_payload, encode_cursor, encode_
 from outlook_mcp.tools.calendar_read import (
     _compute_calendar_range,
     _format_event_summary,
-    _has_time_zone_database,
-    _resolve_timezone,
     get_event,
     list_events,
 )
@@ -47,6 +45,11 @@ def _make_mock_event(**overrides):
     event.online_meeting = MagicMock(join_url=overrides.get("join_url", None))
     event.recurrence = overrides.get("recurrence", None)
     event.type = overrides.get("type", None)
+    # Set explicitly, not left to MagicMock's auto-attribute: an auto-created
+    # child is truthy and stringifies to something no Graph response contains,
+    # so a formatter reading the wrong field would still look like it worked.
+    event.original_start_time_zone = overrides.get("original_start_tz", "UTC")
+    event.original_end_time_zone = overrides.get("original_end_tz", "UTC")
     attendee_data = overrides.get("attendees", [])
     attendees = []
     for a in attendee_data:
@@ -464,6 +467,62 @@ class TestGetEvent:
         assert result["categories"] == ["Blue Category"]
 
 
+class TestEventDetailAnchorZone:
+    """The detail payload has to say which zone the event is anchored in.
+
+    ``start``/``end`` come back in UTC because that is what Graph returns with
+    no ``Prefer: outlook.timezone`` header, and what every other datetime in
+    this server's responses is. That makes the UTC in ``start`` say nothing
+    about the anchor — an event anchored in America/Los_Angeles and one
+    anchored in UTC are indistinguishable in it, while behaving differently the
+    week daylight saving ends. ``original_start_time_zone`` is the difference.
+
+    ``get_event`` sends no ``$select`` at all, so there is no
+    ``_PAIRS`` row to add here: Graph returns every property and the
+    formatter-narrower-than-select bug class cannot arise. Adding a select
+    purely so a row became possible would *create* the failure mode the row
+    would then guard.
+    """
+
+    def _detail(self, **overrides):
+        from outlook_mcp.tools.calendar_read import _format_event_detail
+
+        return _format_event_detail(_make_mock_event(**overrides))
+
+    def test_the_anchor_zone_is_reported(self):
+        detail = self._detail(
+            original_start_tz="America/Los_Angeles",
+            original_end_tz="America/Los_Angeles",
+        )
+
+        assert detail["original_start_time_zone"] == "America/Los_Angeles"
+        assert detail["original_end_time_zone"] == "America/Los_Angeles"
+
+    def test_a_utc_anchor_is_distinguishable_from_a_named_one(self):
+        """The assertion that fails if the field is hardcoded or read off start.
+
+        Both events below report the same UTC ``start``; only the anchor tells
+        them apart, which is the entire reason the field is here.
+        """
+        named = self._detail(start_dt="2026-10-28T16:00:00", original_start_tz="Europe/London")
+        utc = self._detail(start_dt="2026-10-28T16:00:00", original_start_tz="UTC")
+
+        assert named["start"] == utc["start"]
+        assert named["original_start_time_zone"] != utc["original_start_time_zone"]
+
+    def test_the_summary_does_not_carry_it(self):
+        """Listings are unchanged; the new key is detail-only, deliberately.
+
+        `_format_event_delta` in `calendar_delta` claims in its own docstring
+        to mirror `_format_event_summary` field-for-field, nothing pins that,
+        and it is already false on main — the summary carries `type` and the
+        delta does not. That is issue #69, filed separately and not fixed here.
+        Keeping the anchor zone out of the summary means this change neither
+        leans on the claim nor widens the gap.
+        """
+        assert "original_start_time_zone" not in _format_event_summary(_make_mock_event())
+
+
 class TestEventDetailRecurrence:
     """#41 follow-on: recurrence must come back as the same JSON shape create accepts."""
 
@@ -516,59 +575,19 @@ class TestEventDetailRecurrence:
         assert "type" not in concise
 
 
-class TestTimezoneResolution:
-    """A calendar range needs a time zone database; say so when there isn't one.
+class TestTimezoneResolutionReachesTheCaller:
+    """The resolver itself is tested in `test_validation.py`; this is the wiring.
 
-    The regression these guard: on a host with no IANA database (Windows, or a
-    slim Linux image) every calendar tool failed with a bare `Error executing
-    tool outlook_list_events` and no text, because `_wrap_tool_errors` holds an
-    unexpected exception's message server-side.
+    What it pins is that a bad `config.timezone` still reaches the model through
+    the calendar path rather than dying as a message-free crash — the whole
+    reason the resolver raises `ValueError` instead of letting
+    `ZoneInfoNotFoundError` out.
     """
 
-    def test_a_real_zone_resolves(self):
-        assert _resolve_timezone("America/Los_Angeles").key == "America/Los_Angeles"
-
-    def test_a_typo_names_the_zone_and_where_to_fix_it(self):
-        with pytest.raises(ValueError) as excinfo:
-            _resolve_timezone("America/Los_Angelez")
-        message = str(excinfo.value)
-        assert "America/Los_Angelez" in message
-        assert "config.json" in message
-
-    def test_a_missing_database_blames_the_install_not_the_config(self, monkeypatch):
-        """No database at all: the fix is the install, not the config value."""
-        monkeypatch.setattr(
-            "outlook_mcp.tools.calendar_read.ZoneInfo",
-            MagicMock(side_effect=ZoneInfoNotFoundError("no such key")),
-        )
-        with pytest.raises(ValueError) as excinfo:
-            _resolve_timezone("America/Los_Angeles")
-        message = str(excinfo.value)
-        assert "tzdata" in message
-        # The installable is outlook-graph-mcp; outlook-mcp is only the command.
-        assert "outlook-graph-mcp" in message
-        assert "config.json" not in message
-
-    def test_a_path_shaped_key_is_refused_like_any_other_bad_zone(self):
-        """zoneinfo raises plain ValueError, not the subclass, for these."""
-        for key in ("/etc/localtime", "../../etc/passwd"):
-            with pytest.raises(ValueError) as excinfo:
-                _resolve_timezone(key)
-            assert "Invalid timezone" in str(excinfo.value)
-
-    def test_the_database_probe_sees_a_real_database(self):
-        assert _has_time_zone_database() is True
-
     def test_the_message_survives_the_wrapper_the_model_sees(self):
-        """ValueError is the anticipated-failure channel, so the text reaches the caller."""
         with pytest.raises(ValueError) as excinfo:
             _compute_calendar_range(7, None, None, "Not/AZone")
         assert "Not/AZone" in str(excinfo.value)
-
-    def test_a_long_zone_name_is_truncated_like_every_other_echo(self):
-        with pytest.raises(ValueError) as excinfo:
-            _resolve_timezone("X" * 200)
-        assert "X" * 51 not in str(excinfo.value)
 
 
 class TestCalendarRangeWithoutBounds:

@@ -2,14 +2,20 @@
 
 import itertools
 import time
+from unittest.mock import MagicMock
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
 from outlook_mcp.validation import (
+    _ZONES_GRAPH_REFUSES,
+    has_time_zone_database,
+    resolve_timezone,
     sanitize_kql,
     sanitize_output,
     validate_datetime,
     validate_email,
+    validate_event_timezone,
     validate_folder_name,
     validate_graph_id,
     validate_phone,
@@ -298,3 +304,115 @@ class TestOutputSanitization:
 
     def test_strips_null_bytes(self):
         assert sanitize_output("null\x00byte") == "nullbyte"
+
+
+class TestTimezoneResolution:
+    """A zone name needs a time zone database; say so when there isn't one.
+
+    The regression these guard: on a host with no IANA database (Windows, or a
+    slim Linux image) every calendar tool failed with a bare `Error executing
+    tool outlook_list_events` and no text, because `_wrap_tool_errors` holds an
+    unexpected exception's message server-side.
+
+    These moved here from `test_calendar_read.py` when the resolver moved out
+    of `calendar_read`: the write path needs the same zone vocabulary, and a
+    resolver two modules import does not belong in one of their test files.
+    """
+
+    def test_a_real_zone_resolves(self):
+        assert resolve_timezone("America/Los_Angeles").key == "America/Los_Angeles"
+
+    def test_a_typo_names_the_zone_and_where_to_fix_it(self):
+        with pytest.raises(ValueError) as excinfo:
+            resolve_timezone("America/Los_Angelez")
+        message = str(excinfo.value)
+        assert "America/Los_Angelez" in message
+        assert "config.json" in message
+
+    def test_a_missing_database_blames_the_install_not_the_config(self, monkeypatch):
+        """No database at all: the fix is the install, not the config value."""
+        monkeypatch.setattr(
+            "outlook_mcp.validation.ZoneInfo",
+            MagicMock(side_effect=ZoneInfoNotFoundError("no such key")),
+        )
+        with pytest.raises(ValueError) as excinfo:
+            resolve_timezone("America/Los_Angeles")
+        message = str(excinfo.value)
+        assert "tzdata" in message
+        # The installable is outlook-graph-mcp; outlook-mcp is only the command.
+        assert "outlook-graph-mcp" in message
+        assert "config.json" not in message
+
+    def test_a_path_shaped_key_is_refused_like_any_other_bad_zone(self):
+        """zoneinfo raises plain ValueError, not the subclass, for these."""
+        for key in ("/etc/localtime", "../../etc/passwd"):
+            with pytest.raises(ValueError) as excinfo:
+                resolve_timezone(key)
+            assert "Invalid timezone" in str(excinfo.value)
+
+    def test_the_database_probe_sees_a_real_database(self):
+        assert has_time_zone_database() is True
+
+    def test_a_long_zone_name_is_truncated_like_every_other_echo(self):
+        with pytest.raises(ValueError) as excinfo:
+            resolve_timezone("X" * 200)
+        assert "X" * 51 not in str(excinfo.value)
+
+    def test_an_abbreviation_is_told_it_is_an_abbreviation(self):
+        """A user says "3pm Pacific", so PDT is what an agent sends.
+
+        The generic "not a zone name the database contains" message sends the
+        reader hunting for a typo. Naming the category, and an example of the
+        thing that works, is the difference between one retry and several.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            resolve_timezone("PDT")
+        message = str(excinfo.value)
+        assert "abbreviation" in message
+        assert "America/Los_Angeles" in message
+
+
+class TestEventTimezoneValidation:
+    """The write path's stricter check, and why it is a separate function."""
+
+    def test_an_iana_name_passes_through_unchanged(self):
+        assert validate_event_timezone("America/Los_Angeles") == "America/Los_Angeles"
+
+    def test_surrounding_whitespace_is_trimmed(self):
+        assert validate_event_timezone("  Europe/London  ") == "Europe/London"
+
+    def test_a_zone_graph_refuses_is_refused_here_instead(self):
+        """EST resolves in Python; Graph answers 400 TimeZoneNotSupportedException.
+
+        Verified live 2026-09-21: EST, MST and HST are rejected by Graph, while
+        America/Los_Angeles, Pacific Standard Time, GMT, US/Pacific, Etc/UTC and
+        UTC are all accepted. Without this branch the local check passes and the
+        caller pays a network round trip to be told, in Graph's words, what we
+        already knew.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            validate_event_timezone("EST")
+        message = str(excinfo.value)
+        assert "America/New_York" in message
+        assert "daylight saving" in message
+
+    def test_every_refused_zone_really_does_resolve_in_python(self):
+        """Guard the premise of the table itself.
+
+        Each entry earns its place by being a name zoneinfo accepts and Graph
+        does not. If one ever stops resolving it belongs in
+        `_TIME_ZONE_ABBREVIATIONS` instead, and this row becomes a message
+        pointing the wrong way — which is worse than no message.
+        """
+        for name in _ZONES_GRAPH_REFUSES:
+            assert ZoneInfo(name), name
+
+    def test_config_timezone_is_not_held_to_this_standard(self):
+        """An upgrade must not kill a server whose config.json already says EST.
+
+        `resolve_timezone` loads `config.timezone` at startup, so it stays
+        permissive; only a freshly written tool argument goes through
+        `validate_event_timezone`. If the two ever collapse into one function,
+        this test is what notices.
+        """
+        assert resolve_timezone("EST").key == "EST"

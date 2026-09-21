@@ -643,10 +643,11 @@ async def outlook_get_event(
     ctx: Context,
     event_id: str,
 ) -> dict:
-    """Get one full calendar event by ID: body, attendees, organizer, recurrence, type.
+    """Get one full event by ID: body, attendees, organizer, recurrence, type, anchor zone.
 
     `recurrence` comes back in the same shape outlook_create_event accepts; `type` is
-    "singleInstance", "seriesMaster", "occurrence" or "exception".
+    "singleInstance", "seriesMaster", "occurrence" or "exception". `start`/`end` are UTC;
+    `original_start_time_zone` is the zone the event is anchored in.
     """
     client = _get_graph_client(ctx)
     return await calendar_read.get_event(client.sdk_client, event_id)
@@ -693,6 +694,7 @@ async def outlook_create_event(
     is_all_day: bool = False,
     is_online: bool = False,
     recurrence: dict | str | None = None,
+    timezone: str | None = None,
 ) -> dict:
     """Create a calendar event with optional attendees, recurrence, and Teams online meeting.
 
@@ -710,6 +712,10 @@ async def outlook_create_event(
     `range.startDate` defaults to the event's start date. Prefer a bounded range
     ("endDate"/"numbered") when the event has attendees — a "noEnd" series invites them
     to every future occurrence.
+    `timezone` is the IANA zone the event is anchored in (default: the configured zone),
+    and decides what a series does across a daylight-saving change: anchored in UTC, a
+    09:00 weekly event becomes 08:00 when the clocks go back. Use a zone name,
+    America/Los_Angeles, not an abbreviation like PDT.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -724,6 +730,7 @@ async def outlook_create_event(
         is_all_day,
         is_online,
         recurrence,
+        timezone,
         config=config,
     )
 
@@ -742,6 +749,7 @@ async def outlook_update_event(
     remove_recurrence: bool = False,
     attendees: list[str] | None = None,
     is_all_day: bool | None = None,
+    timezone: str | None = None,
 ) -> dict:
     """Update fields on an existing event (partial patch — only provided fields change).
 
@@ -752,8 +760,9 @@ async def outlook_update_event(
     `attendees` REPLACES the whole guest list (Graph has no add-one operation) and sends
     invitations to everyone on it plus cancellations to anyone dropped — pass the full
     intended list; [] removes everyone. `is_all_day` REQUIRES start and end in the same
-    call, both on midnight boundaries. Omitting an argument leaves it unchanged, so False
-    and [] are instructions, not absences.
+    call, both on midnight boundaries. `timezone` re-anchors the event and REQUIRES them
+    too; omitted, the event keeps the zone it is already stored in. Omitting an argument
+    leaves it unchanged, so False and [] are instructions, not absences.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -769,6 +778,7 @@ async def outlook_update_event(
         remove_recurrence,
         attendees,
         is_all_day,
+        timezone,
         config=config,
     )
 

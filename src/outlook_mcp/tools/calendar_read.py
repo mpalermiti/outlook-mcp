@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from outlook_mcp.calendar_resolver import resolve_calendar_id
 from outlook_mcp.pagination import (
@@ -16,65 +15,18 @@ from outlook_mcp.pagination import (
     wrap_nextlink,
 )
 from outlook_mcp.tools._recurrence import serialize_recurrence
-from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
+from outlook_mcp.validation import (
+    resolve_timezone,
+    sanitize_output,
+    validate_datetime,
+    validate_graph_id,
+)
 
 _UTC_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
-
-
-def _has_time_zone_database() -> bool:
-    """Whether *any* IANA database is reachable, asked by resolving a key that
-    every database has.
-
-    Importability of ``tzdata`` is a proxy for this, not the thing itself: a
-    POSIX host with ``/usr/share/zoneinfo`` and no ``tzdata`` installed has a
-    database, and would have been told its install was broken.
-    """
-    try:
-        ZoneInfo("UTC")
-    except (ZoneInfoNotFoundError, ValueError):
-        return False
-    return True
-
-
-def _resolve_timezone(name: str) -> ZoneInfo:
-    """Return the ``ZoneInfo`` for ``name``, or say why it would not load.
-
-    ``name`` is server configuration rather than a tool argument, but an
-    unhandled ``ZoneInfoNotFoundError`` reaches the model as a message-free
-    ``Error executing tool outlook_list_events`` — ``_wrap_tool_errors`` keeps
-    the text of an *unexpected* exception on the server, which is right for a
-    crash and wrong for a misconfiguration. Raising ``ValueError`` routes it
-    through ``ToolInputError`` instead, so the message survives the trip. This
-    is what ``validate_datetime`` already does with the same config value.
-
-    The two ways the lookup fails need different fixes, so they get different
-    messages: a name no database contains is a typo in ``config.json``, while
-    no database at all is a broken install — ``tzdata`` is a dependency exactly
-    so that Windows and slim Linux images have one.
-
-    ``ValueError`` is caught alongside ``ZoneInfoNotFoundError`` because zoneinfo
-    raises it, not the subclass, for a path-shaped key: ``/etc/localtime`` is a
-    plausible thing to put in a config file and would otherwise escape both the
-    truncation and the hint. ``validate_datetime`` already catches both.
-    """
-    try:
-        return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError) as exc:
-        if not _has_time_zone_database():
-            raise ValueError(
-                f"Invalid timezone: {name[:50]} — this host has no IANA time zone "
-                "database, so no zone name would resolve. Reinstall "
-                "outlook-graph-mcp to pick up its `tzdata` dependency."
-            ) from exc
-        raise ValueError(
-            f"Invalid timezone: {name[:50]} — not a zone name the IANA database "
-            "contains. Set `timezone` in ~/.outlook-mcp/config.json to a name "
-            "like America/Los_Angeles or UTC."
-        ) from exc
 
 
 def _compute_calendar_range(
@@ -88,7 +40,7 @@ def _compute_calendar_range(
     Uses explicit after/before if provided, otherwise computes
     relative to "now" in the configured timezone.
     """
-    tz = _resolve_timezone(timezone)
+    tz = resolve_timezone(timezone)
 
     def _now_plus(days_ahead: int) -> str:
         # The guard is load-bearing, not a micro-optimisation. PEP 495 makes
@@ -154,7 +106,15 @@ def _format_event_summary(event: Any) -> dict:
 
 
 def _format_event_detail(event: Any) -> dict:
-    """Convert Graph SDK event to full detail dict."""
+    """Convert Graph SDK event to full detail dict.
+
+    ``start``/``end`` are UTC because that is what Graph returns without a
+    ``Prefer: outlook.timezone`` header, and what every other datetime in this
+    server's responses is. ``original_start_time_zone`` is therefore the only
+    way a caller can see the zone the event is actually anchored in — which is
+    not cosmetic: a weekly series anchored in UTC shifts an hour in local terms
+    the moment daylight saving ends, and one anchored in a named zone does not.
+    """
     summary = _format_event_summary(event)
 
     organizer = {}
@@ -192,6 +152,8 @@ def _format_event_detail(event: Any) -> dict:
         "body": body,
         "attendees": attendees,
         "online_meeting_url": online_meeting_url,
+        "original_start_time_zone": event.original_start_time_zone,
+        "original_end_time_zone": event.original_end_time_zone,
         "recurrence": serialize_recurrence(event.recurrence),
         "categories": list(event.categories or []),
     }
