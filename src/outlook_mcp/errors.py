@@ -187,6 +187,13 @@ _HINT_TABLE: dict[tuple[int, str | None], str] = {
         "https://github.com/mpalermiti/outlook-mcp/blob/main/ROADMAP.md"
         "#investigated-and-not-viable for known dead-ends."
     ),
+    (400, "ErrorPropertyValidationFailure"): (
+        "Graph rejected a property but did not say which. On calendar writes this "
+        "has two observed causes, both about time zones: a "
+        "recurrence.range.recurrenceTimeZone naming a different zone than the "
+        "event's own (omit it — Graph derives it from the event), or changing a "
+        "series master's zone without re-sending its recurrence in the same call."
+    ),
     (404, "ErrorItemNotFound"): (
         "Resource not found. The ID may be stale — re-list to get current IDs."
     ),

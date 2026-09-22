@@ -126,21 +126,68 @@ def build_patterned_recurrence(recurrence: dict) -> Any:
     return pr
 
 
-def event_start_date(start: str) -> date:
-    """The calendar date of an event start, as the caller wrote it.
+def maybe_zone(name: str | None) -> Any:
+    """``ZoneInfo(name)`` if it resolves, else ``None``.
 
-    Deliberately *not* UTC-normalized. A ``00:30+02:00`` start is the 7th to
-    the person scheduling it, and Graph requires ``range.startDate`` to be the
-    date of the first occurrence — converting to UTC first would move an
+    Graph hands back Windows zone names ("Pacific Standard Time") as readily as
+    IANA ones, and no mapping between the two ships with Python. An
+    unresolvable name means the date below falls back to the text — the
+    behaviour before anchoring existed, which is wrong only for a start whose
+    offset disagrees with its zone, and never worse than not trying.
+    """
+    if not name:
+        return None
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        # OSError because ZoneInfo resolves the name against the filesystem: a
+        # value that is not a usable path component fails there rather than as
+        # a missing key. Every one of the three means the same thing here —
+        # no zone, so use the date as written.
+        return None
+
+
+def event_start_date(start: str, zone: str | None = None) -> date:
+    """The calendar date the event's first occurrence falls on, in its own zone.
+
+    Graph requires ``range.startDate`` to be the date of the first occurrence,
+    and expands a series against the zone the master is anchored in — so the
+    date that matters is the one the event has *there*.
+
+    Deliberately *not* UTC-normalized: a ``00:30+02:00`` start is the 7th to
+    the person scheduling it, and converting to UTC first would move an
     early-morning or late-evening series a day off.
+
+    ``zone`` resolves the remaining case, and it is not hypothetical. While
+    every event was anchored in UTC the text date and the event's own local
+    date were the same day by construction; once the anchor is real they can
+    differ. ``2026-10-29T01:00:00Z`` anchored in ``America/Los_Angeles`` is
+    Wednesday the 28th at 18:00 there — and taking the text date built a
+    *Thursday* pattern starting the 29th, which Graph accepted and scheduled a
+    full day late, reported as ``status: created``. Verified live 2026-09-21.
+
+    A naive start needs no conversion: it is already wall-clock time in
+    ``zone``. Only an offset-bearing or ``Z`` start names an instant whose
+    local date has to be worked out.
     """
     text = _OVERLONG_FRACTION.sub(r"\1", start.strip())
     if text.endswith(("Z", "z")):
         text = text[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(text).date()
+        parsed = datetime.fromisoformat(text)
     except ValueError as e:
         raise ValueError(f"Invalid event start for recurrence: {start[:50]}") from e
+
+    if parsed.tzinfo is not None:
+        tz = maybe_zone(zone)
+        if tz is not None:
+            # astimezone on an aware datetime, never timedelta arithmetic:
+            # PEP 495 resets `fold` on the latter, which is how a refactor that
+            # read as cleanup moved a window an hour in 1.21.0.
+            return parsed.astimezone(tz).date()
+    return parsed.date()
 
 
 def _expand_shorthand(name: str, start: date) -> dict:
@@ -206,14 +253,34 @@ def _reconcile_range(payload: dict, start: date) -> dict:
     return {**payload, "range": rng}
 
 
-def build_event_recurrence(recurrence: dict | str, *, start: str) -> Any:
+def build_event_recurrence(recurrence: dict | str, *, start: str, zone: str | None = None) -> Any:
     """Build a typed PatternedRecurrence for a calendar event.
 
     Accepts the Graph recurrence object, a JSON-encoded string of one, or a
     shorthand ("daily", "weekdays", "weekly", "monthly", "yearly") anchored on
     ``start``. ``range.startDate`` is defaulted from ``start`` when omitted.
+
+    ``zone`` is the zone the event is anchored in. It decides which calendar
+    date an offset-bearing ``start`` falls on — both for that default and for
+    the weekday a shorthand expands to. Omitted, the date comes from the text,
+    which is right only while the two agree; see ``event_start_date`` for the
+    case where they do not.
+
+    ``range.recurrenceTimeZone`` is passed through rather than stripped, and
+    that is a decision, not an oversight. Graph derives the range's zone from
+    the event's own when the field is absent, so supplying one can only agree
+    (redundant) or disagree — and a disagreement is refused outright with
+    ``400 ErrorPropertyValidationFailure`` rather than silently honoured, so it
+    is not the silent class of bug. Verified live 2026-09-21, along with the
+    reason not to police it here: Graph *accepts* the two vocabularies mixed
+    (event ``America/Los_Angeles`` with range ``Pacific Standard Time``, and
+    the reverse), and nothing in the standard library maps between them, so a
+    string comparison would refuse the read-modify-write round trip that works
+    today — ``serialize_recurrence`` hands back whichever spelling Graph
+    chose. The opaque Graph error carries a hint naming this cause instead
+    (``errors._HINT_TABLE``).
     """
-    start_date = event_start_date(start)
+    start_date = event_start_date(start, zone)
 
     if isinstance(recurrence, str):
         text = recurrence.strip()

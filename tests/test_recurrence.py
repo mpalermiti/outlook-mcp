@@ -228,3 +228,39 @@ class TestEventStartDate:
 
         with pytest.raises(ValueError, match="Invalid event start"):
             event_start_date("not-a-date")
+
+    def test_an_instant_takes_its_date_in_the_anchor_zone(self):
+        """01:00Z on Thursday is 18:00 on Wednesday in Los Angeles.
+
+        Both dates are correct answers to different questions; the one Graph
+        needs is the event's date in the zone the series is expanded against.
+        """
+        from outlook_mcp.tools._recurrence import event_start_date
+
+        assert event_start_date("2026-10-29T01:00:00Z") == date(2026, 10, 29)
+        assert event_start_date("2026-10-29T01:00:00Z", "America/Los_Angeles") == date(
+            2026, 10, 28
+        )
+
+    def test_a_naive_start_is_never_shifted(self):
+        """It is already wall-clock time in the zone; converting would move it."""
+        from outlook_mcp.tools._recurrence import event_start_date
+
+        assert event_start_date("2026-10-29T01:00:00", "America/Los_Angeles") == date(
+            2026, 10, 29
+        )
+        assert event_start_date("2026-10-29", "Asia/Tokyo") == date(2026, 10, 29)
+
+    def test_an_unresolvable_zone_falls_back_to_the_written_date(self):
+        """Graph hands back Windows zone names and Python maps none of them.
+
+        Falling back to the text is the behaviour from before anchoring
+        existed: wrong only when the offset and the zone disagree, and never
+        worse than not trying. Refusing instead would break `update_event` for
+        every event Graph reports with a Windows name.
+        """
+        from outlook_mcp.tools._recurrence import event_start_date
+
+        assert event_start_date("2026-10-29T01:00:00Z", "Pacific Standard Time") == date(
+            2026, 10, 29
+        )

@@ -38,6 +38,33 @@ def test_wrap_401_returns_auth_hint():
     assert "outlook-mcp auth" in wrapped.action
 
 
+def test_wrap_400_property_validation_names_the_time_zone_causes():
+    """`ErrorPropertyValidationFailure` says nothing about which property failed.
+
+    The whole of Graph's message is "At least one property failed validation",
+    and both causes seen on the calendar write path are time zones — neither
+    of which the text hints at. Verified live 2026-09-21: a recurrence whose
+    `recurrenceTimeZone` names a different zone than the event is refused with
+    exactly this code, as is a start/end patch that would change a series
+    master's zone without the recurrence alongside it.
+
+    A hint rather than a local refusal, deliberately. Detecting the first case
+    ourselves would mean deciding whether "Pacific Standard Time" and
+    "America/Los_Angeles" are the same zone — Graph accepts that pairing, and
+    the stdlib ships no mapping between the two vocabularies, so a string
+    comparison would refuse a round trip that currently works. That is the
+    shape of #30.
+    """
+    exc = _make_odata_error(
+        400, "ErrorPropertyValidationFailure", "At least one property failed validation."
+    )
+    wrapped = wrap_graph_error(exc)
+    assert wrapped.status_code == 400
+    assert wrapped.action is not None
+    assert "recurrenceTimeZone" in wrapped.action
+    assert "series master" in wrapped.action
+
+
 def test_wrap_403_access_denied_references_roadmap():
     """403/ErrorAccessDenied carries the unsupported-endpoint hint with ROADMAP pointer."""
     exc = _make_odata_error(403, "ErrorAccessDenied", "Access denied")

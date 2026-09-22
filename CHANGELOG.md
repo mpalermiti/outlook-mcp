@@ -8,6 +8,66 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Calendar events are anchored in a real time zone, so recurring series survive daylight
+  saving.** `outlook_create_event` labelled every `start` and `end` with the literal
+  `timeZone: "UTC"` while passing the caller's datetime through unchanged. For a single event
+  that is merely lossy — the instant is correct, the zone it was scheduled in is gone, and
+  `outlook_get_event` reports `(UTC)` no matter what was asked for. For a **recurring** event
+  it is wrong: Graph expands a series against the zone its master is anchored in, so a weekly
+  09:00 meeting created through this server became 08:00 the week the clocks went back, and
+  stayed there. Verified against a live consumer mailbox — three occurrences of one weekly
+  series, 09:00 / 08:00 / 08:00 local.
+
+  `outlook_create_event` now takes `timezone`, an IANA zone name, defaulting to
+  `config.timezone`. The datetime string still reaches Graph as written: an offset or a `Z` pins
+  the instant exactly as before, and the zone decides only what the *second* occurrence does.
+  The recurrence is built against the event's date **in that zone** — `2026-10-29T01:00:00Z`
+  anchored in `America/Los_Angeles` is Wednesday the 28th at 18:00, and taking the date off the
+  text built a Thursday series starting the 29th, which Graph accepted and scheduled a day late.
+
+  `outlook_update_event` gains no argument, but stops undoing the fix: a `start`/`end` patch now
+  keeps the zone the event is already anchored in instead of stamping `UTC` on it. Graph rejects
+  a `start` patch carrying no `timeZone` at all, so one has to be sent, and the event's own is
+  the only one that does not move it. Start and end are read separately because Graph stores
+  them separately — a flight that leaves New York and lands in Los Angeles keeps both ends.
+  Re-anchoring an event into a *different* zone is deliberately not here; it is a larger change
+  than it looks (Graph refuses to move a series master's zone unless the recurrence is re-sent
+  with it) and is proposed separately.
+
+  **Behaviour change.** A zone-less `start`/`end` on `outlook_create_event`
+  ("2026-10-28T09:00:00") now means that wall-clock time in the configured zone, where it
+  previously meant UTC. On a UTC-configured server nothing changes; on any other, an event
+  created from a zone-less datetime lands where the user meant rather than `config.timezone`'s
+  offset away from it. This is what `SKILL.md` has always said zone-less input means, and what
+  every read path already did.
+
+  **Response shape.** `outlook_get_event` gains `original_start_time_zone` and
+  `original_end_time_zone`. `start` and `end` stay UTC, which means they say nothing about the
+  anchor — an event anchored in `America/Los_Angeles` and one anchored in `UTC` are
+  indistinguishable in them while behaving differently across a transition. Listings and the
+  delta formatter are unchanged.
+
+  Abbreviations passed as `timezone` are refused locally with the zone name to use instead:
+  `PDT` is not a zone name, and Graph answers it with `400 TimeZoneNotSupportedException`. So
+  are `EST`, `MST` and `HST` — those *do* resolve as IANA keys, and Graph rejects them anyway
+  (verified live), while being fixed-offset zones that would not follow daylight saving even if
+  it accepted them.
+
+  An existing `config.timezone` holding one of those three is **not** refused. Nothing ever sent
+  it anywhere before this release, so an install carrying one has been working; refusing it now
+  would leave that server reading calendars happily while every `outlook_create_event` without an
+  explicit `timezone` failed. Instead such an event is anchored in **UTC** — exactly what this
+  server wrote before it sent a zone at all — and a warning is logged once per run naming the
+  config key and the IANA zone to set. Those installs are no worse off than before; they simply
+  do not get DST-correct recurring events until someone edits one line.
+
+  `EST` is deliberately *not* translated to `America/New_York`: they are different zones. `EST` is
+  a fixed UTC−05:00 that never observes daylight saving, and that is how `resolve_timezone` — and
+  therefore every calendar *read* — already interprets the value, so anchoring writes in a
+  DST-observing zone would make the two halves of the server disagree about the same string every
+  summer. A *misspelt* `config.timezone` is an error for the same reason: it already fails every
+  calendar read, and inventing a zone for its writes would split the two apart.
+
 - **`classification` was always empty outside the inbox listing.** `outlook_search_mail`,
   `outlook_list_drafts` and `outlook_get_thread` share `list_inbox`'s summary formatter, which
   reports Focused Inbox's verdict — but each had its own copy of the `$select`, and only

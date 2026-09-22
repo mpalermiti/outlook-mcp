@@ -104,10 +104,10 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 
 ### Calendar
 - `outlook_list_events` — List events in date range (expands recurring); each carries `type` (seriesMaster vs one-off); `calendar` reads a secondary calendar by name or ID (default calendar when omitted); a cursor continues the same calendar
-- `outlook_get_event` — Get event details, incl. `recurrence` and `type` (`seriesMaster` etc.)
+- `outlook_get_event` — Get event details, incl. `recurrence`, `type` (`seriesMaster` etc.) and `original_start_time_zone` (the zone the event is anchored in; `start`/`end` are UTC)
 - `outlook_list_events_delta` — List only event changes since last call within a window (massive token savings for recurring agent jobs)
-- `outlook_create_event` — Create event with attendees, online meeting; `recurrence` (shorthand or Graph object) creates a series
-- `outlook_update_event` — Update event fields incl. attendees (replaces the list, sends invites) and all-day; `recurrence` converts a single event into a series, `remove_recurrence=True` converts it back
+- `outlook_create_event` — Create event with attendees, online meeting; `recurrence` (shorthand or Graph object) creates a series; `timezone` (IANA name) anchors it, defaulting to the config timezone
+- `outlook_update_event` — Update event fields incl. attendees (replaces the list, sends invites) and all-day; `recurrence` converts a single event into a series, `remove_recurrence=True` converts it back; patching a time keeps the zone the event is anchored in
 - `outlook_delete_event` — Delete event
 - `outlook_rsvp` — Accept, decline, or tentatively accept
 
@@ -172,6 +172,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 ## Notes
 - IDs are opaque Graph strings — get them from list/search tools, never guess
 - Dates take ISO 8601 or a relative offset (`7d` ago, `+7d` from now, `now`); responses are UTC, and zone-less input is read in the config timezone
+- A recurring event is expanded in the zone it is anchored in, so pass `timezone` (or set the config one) when creating a series that crosses a daylight-saving change — anchored in UTC, a 09:00 weekly meeting becomes 08:00 when the clocks go back. Use a zone name (`America/Los_Angeles`), never an abbreviation (`PDT`)
 - Attachments may only be read from or written to `attachments_dir` — put a file there before asking for it to be sent
 - Three workflow prompts ship with the server: `morning_brief`, `triage_folder`, `catch_up`
 - Mail search uses KQL syntax

@@ -179,9 +179,45 @@ class TestCalendarWrite:
             '"numberOfOccurrences": 3',
         )
 
+    async def test_create_event_puts_the_anchor_zone_on_the_wire(self):
+        """The zone is a value Graph reads, so assert it in the payload.
+
+        ``event.start.time_zone`` was the literal ``"UTC"`` until the timezone
+        fix, and a model-level assertion on it would have passed just as
+        happily then — the string was always *there*. What changed is which
+        string, and the only way to state that is to pin the one that ships.
+        """
+        client = MagicMock()
+        client.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="s"))
+
+        await calendar_write.create_event(
+            client,
+            subject="SENTINEL-SUBJECT-4c1",
+            start="2026-10-28T09:00:00",
+            end="2026-10-28T10:00:00",
+            timezone="America/New_York",
+            config=_CFG,
+        )
+
+        assert_on_wire(
+            client.me.events.post.call_args[0][0],
+            "SENTINEL-SUBJECT-4c1",
+            '"timeZone": "America/New_York"',
+            '"dateTime": "2026-10-28T09:00:00"',
+        )
+
     async def test_update_event_every_argument_reaches_the_wire(self):
         builder = MagicMock()
         builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
+        # A start/end patch reads the event first for the zone it must carry.
+        # The mock answers with a real string, not a MagicMock, because a
+        # MagicMock is truthy and would sail through the fallback while
+        # serializing to something no Graph response ever contains.
+        current = MagicMock(type=MagicMock(value="singleInstance"))
+        current.start = MagicMock(date_time="2026-10-22T00:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "UTC"
+        current.original_end_time_zone = "UTC"
+        builder.get = AsyncMock(return_value=current)
         client = MagicMock()
         client.me.events.by_event_id = MagicMock(return_value=builder)
 

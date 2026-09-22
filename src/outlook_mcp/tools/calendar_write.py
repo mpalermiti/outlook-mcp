@@ -6,8 +6,84 @@ from typing import Any
 
 from outlook_mcp.config import Config
 from outlook_mcp.permissions import CATEGORY_CALENDAR_WRITE, check_permission
-from outlook_mcp.tools._recurrence import build_event_recurrence
-from outlook_mcp.validation import validate_datetime, validate_email, validate_graph_id
+from outlook_mcp.tools._recurrence import (
+    build_event_recurrence,
+)
+from outlook_mcp.validation import (
+    resolve_config_event_timezone,
+    validate_datetime,
+    validate_email,
+    validate_event_timezone,
+    validate_graph_id,
+)
+
+
+def _usable_zone(value: Any) -> str | None:
+    """A zone name we can send back, or ``None`` when there isn't one.
+
+    An event created against a custom time zone reports the sentinel
+    ``tzone://Microsoft/Custom``. It cannot be echoed — Graph answers it with a
+    400 — and every substitute moves the event, so the caller is asked for a
+    zone rather than given a guess. Documented behaviour; not something I have
+    reproduced live, which is why this refuses rather than translates.
+    """
+    if not value or str(value).startswith("tzone://"):
+        return None
+    return str(value)
+
+
+def _anchor_zones(event: Any) -> tuple[str | None, str | None]:
+    """The zones ``event``'s start and end are anchored in, as a plain GET reports them.
+
+    Deliberately **not** ``event.start.time_zone``. Graph projects ``start`` and
+    ``end`` into UTC unless the request carries a ``Prefer: outlook.timezone``
+    header, and this server never sends one — so ``start.time_zone`` reads
+    ``"UTC"`` for every event ever fetched, whatever it is anchored in. The
+    ``original*TimeZone`` fields are the ones that survive that projection.
+
+    Reading the wrong one is not a near-miss: it makes "keep the zone the event
+    is already stored in" resolve to UTC every time, which is precisely the
+    behaviour this module was changed to stop — a New York meeting patched to a
+    new time is relocated to UTC and its series re-anchored, reported as
+    ``updated``.
+
+    Start and end are returned **separately** because Graph stores them
+    separately, and a transcontinental flight is the ordinary case: verified
+    live 2026-09-21, an event sent as 08:00 ``America/New_York`` to 11:00
+    ``America/Los_Angeles`` comes back as 13:00Z to 19:00Z with both anchors
+    intact. Collapsing them onto the start's zone would relabel that landing
+    time and move it three hours.
+
+    Read one attribute at a time rather than through a loop: ``getattr`` with a
+    variable attribute is invisible to the guards built for exactly this class
+    of field-name drift.
+    """
+    return (
+        _usable_zone(getattr(event, "original_start_time_zone", None)),
+        _usable_zone(getattr(event, "original_end_time_zone", None)),
+    )
+
+
+def _as_instant(date_time: str, projected_zone: str | None) -> str:
+    """Mark a stored start as the instant it is, so its local date can be found.
+
+    Graph returns ``start.dateTime`` as a **naive** string already projected
+    into ``start.timeZone`` — "2026-10-29T01:00:00.0000000" with
+    ``timeZone: "UTC"`` beside it. Handed on as-is it reads as wall-clock time,
+    so ``event_start_date`` takes the UTC date and never converts. Appending
+    the offset turns it back into the instant Graph meant, which is the thing
+    a zone can be applied to.
+
+    Only UTC is handled, because that is the only projection this server ever
+    asks for: no request here sends ``Prefer: outlook.timezone``. Anything else
+    is returned untouched rather than guessed at.
+    """
+    text = date_time.strip()
+    if not projected_zone or projected_zone.strip().upper() != "UTC":
+        return text
+    if text.endswith(("Z", "z")) or "+" in text[10:] or "-" in text[10:]:
+        return text
+    return text + "Z"
 
 
 async def create_event(
@@ -21,6 +97,7 @@ async def create_event(
     is_all_day: bool = False,
     is_online: bool = False,
     recurrence: dict | str | None = None,
+    timezone: str | None = None,
     *,
     config: Config,
 ) -> dict:
@@ -32,12 +109,40 @@ async def create_event(
     ``recurrence`` accepts a Graph recurrence object, a JSON string of one, or
     a shorthand ("daily", "weekdays", "weekly", "monthly", "yearly"). Setting
     it makes the created event a series master rather than a single occurrence.
+
+    ``timezone`` is the IANA zone the event is *anchored* in, defaulting to
+    ``config.timezone``. It is the zone that governs the series, not a
+    conversion applied to ``start``: an offset or ``Z`` in the datetime still
+    pins the instant (Graph honours it), while the zone decides what the second
+    occurrence of a weekly series does when daylight saving ends. Anchored in
+    ``UTC`` — which is what this tool sent unconditionally before 1.23.0 — a
+    09:00 series silently becomes 08:00 the week the clocks go back.
+
+    A zone-less ``start``/``end`` ("2026-10-28T09:00:00") is read by Graph as
+    wall-clock time *in that zone*, which is what ``config.timezone`` has
+    always meant for input interpretation everywhere else in this server.
+
+    The datetime string is passed through as the caller wrote it rather than
+    normalized to UTC first. That is load-bearing twice over: normalizing a
+    naive value needs a zone to resolve it against, and resolving it against
+    the host's clock is the bug 1.15.0 removed; and Graph requires an all-day
+    event to start on a midnight boundary, which a UTC conversion of local
+    midnight is not.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_create_event")
 
     # Validate datetime inputs
     validate_datetime(start)
     validate_datetime(end)
+    # `is None`, not `or`: an explicitly empty timezone is a mistake to refuse,
+    # not a synonym for "use the configured one". The two sources are held to
+    # different standards on purpose — a stored config value can be legacy, a
+    # freshly written argument cannot.
+    zone = (
+        resolve_config_event_timezone(config.timezone)
+        if timezone is None
+        else validate_event_timezone(timezone)
+    )
 
     # Validate attendee emails if provided
     validated_attendees = []
@@ -57,11 +162,11 @@ async def create_event(
 
     event.start = DateTimeTimeZone()
     event.start.date_time = start
-    event.start.time_zone = "UTC"
+    event.start.time_zone = zone
 
     event.end = DateTimeTimeZone()
     event.end.date_time = end
-    event.end.time_zone = "UTC"
+    event.end.time_zone = zone
 
     event.is_all_day = is_all_day
     event.is_online_meeting = is_online
@@ -84,7 +189,7 @@ async def create_event(
             event.attendees.append(att)
 
     if recurrence:
-        event.recurrence = build_event_recurrence(recurrence, start=start)
+        event.recurrence = build_event_recurrence(recurrence, start=start, zone=zone)
 
     response = await graph_client.me.events.post(event)
 
@@ -126,6 +231,22 @@ async def update_event(
     lone isAllDay patch — and both must fall on midnight boundaries. We reject
     the incomplete call locally rather than pass through that error.
 
+    A ``start``/``end`` patch keeps the zone the event is already anchored in.
+    Graph rejects a ``start`` patch carrying no ``timeZone`` at all
+    (``TimeZoneNotSupportedException`` on the empty string), so one has to be
+    sent, and the event's own is the only one that does not move it —
+    patching a colleague's 09:00 New York meeting must not relocate it to this
+    server's zone. That costs one GET, issued only when ``start``/``end`` is
+    in play, and the zone comes off ``originalStartTimeZone`` rather than
+    ``start.timeZone``: see ``_anchor_zones`` for why the obvious field is the
+    wrong one, and why start and end are read separately.
+
+    There is deliberately no ``timezone`` argument here. Re-anchoring an event
+    into a *different* zone is a real capability and a larger one than it
+    looks — Graph refuses to change a series master's zone unless the
+    recurrence is re-sent in the same patch — so it is proposed separately
+    rather than bundled with the bug fix this change is.
+
     There is deliberately no ``is_online`` here. Graph accepts ``isOnlineMeeting``
     on a personal (consumer) account and silently ignores it — a created or
     patched event comes back ``isOnlineMeeting: False, onlineMeetingProvider:
@@ -157,9 +278,22 @@ async def update_event(
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_update_event")
     event_id = validate_graph_id(event_id)
 
+
     validated_attendees = None
     if attendees is not None:
         validated_attendees = [validate_email(e) for e in attendees]
+
+    # The event as Graph currently holds it, fetched at most once and only when
+    # something actually needs it: the zone a start/end patch must carry, the
+    # anchor date for a recurrence sent without a start, or the existing
+    # recurrence a zone change has to bring along.
+    _current: Any = None
+
+    async def current_event() -> Any:
+        nonlocal _current
+        if _current is None:
+            _current = await graph_client.me.events.by_event_id(event_id).get()
+        return _current
 
     from msgraph.generated.models.attendee import Attendee
     from msgraph.generated.models.body_type import BodyType
@@ -174,17 +308,35 @@ async def update_event(
     if subject is not None:
         event.subject = subject
 
+    start_zone: str | None = None
+    end_zone: str | None = None
+    if start is not None or end is not None:
+        # Echoed back verbatim, not validated: Graph stores Windows zone names
+        # ("Pacific Standard Time") as readily as IANA ones, and a name it gave
+        # us is by definition one it accepts.
+        start_zone, end_zone = _anchor_zones(await current_event())
+
+    def _anchored(zone: str | None, which: str) -> str:
+        if zone is None:
+            raise ValueError(
+                f"Could not read the zone this event's {which} is anchored in, so "
+                f"patching its time would move the event. This happens for an event "
+                f"created against a custom time zone, which Graph reports as a "
+                f"sentinel it will not accept back."
+            )
+        return zone
+
     if start is not None:
         validate_datetime(start)
         event.start = DateTimeTimeZone()
         event.start.date_time = start
-        event.start.time_zone = "UTC"
+        event.start.time_zone = _anchored(start_zone, "start")
 
     if end is not None:
         validate_datetime(end)
         event.end = DateTimeTimeZone()
         event.end.date_time = end
-        event.end.time_zone = "UTC"
+        event.end.time_zone = _anchored(end_zone, "end")
 
     if location is not None:
         event.location = Location()
@@ -224,15 +376,20 @@ async def update_event(
 
     if recurrence is not None:
         anchor = start
+        anchor_zone = start_zone
         if anchor is None:
-            current = await graph_client.me.events.by_event_id(event_id).get()
-            anchor = getattr(getattr(current, "start", None), "date_time", None)
+            existing = await current_event()
+            anchor = getattr(getattr(existing, "start", None), "date_time", None)
             if not anchor:
                 raise ValueError(
                     "Could not read the event's current start to anchor the recurrence "
                     "range; pass `start` alongside `recurrence`."
                 )
-        event.recurrence = build_event_recurrence(recurrence, start=anchor)
+            if anchor_zone is None:
+                anchor_zone, _ = _anchor_zones(existing)
+            stored_start = getattr(existing, "start", None)
+            anchor = _as_instant(anchor, getattr(stored_start, "time_zone", None))
+        event.recurrence = build_event_recurrence(recurrence, start=anchor, zone=anchor_zone)
 
     response = await graph_client.me.events.by_event_id(event_id).patch(event)
 
