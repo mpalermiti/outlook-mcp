@@ -643,7 +643,7 @@ async def outlook_get_event(
     ctx: Context,
     event_id: str,
 ) -> dict:
-    """Get one full event by ID: body, attendees, organizer, recurrence, type, anchor zone.
+    """Get one event by ID: body, attendees, organizer, recurrence, type, show_as, anchor zone.
 
     `recurrence` comes back in the same shape outlook_create_event accepts; `type` is
     "singleInstance", "seriesMaster", "occurrence" or "exception". `start`/`end` are UTC;

@@ -732,15 +732,36 @@ class TestShowAsIsHonoured:
         hand-check that reached for `tentative` — and `unknown` is here because
         the tool accepts it on the strength of this exact round trip, not on
         the strength of the documentation.
+
+        Every case has to be a real *transition*. Creating the event without a
+        `show_as` lets Graph apply its default of `busy`, and the `busy`
+        parameter would then assert `busy == busy` with the PATCH doing
+        nothing — passing just as happily if Graph started dropping `showAs`
+        the way it dropped `isOnlineMeeting`. So the event is created at a
+        value the case under test never uses.
         """
         monday = _anchor_monday()
+        initial = "free" if value != "free" else "busy"
 
         async with _temporary_event(
             real_graph_client,
             live_write_config,
             start=f"{monday.isoformat()}T20:00:00Z",
             end=f"{monday.isoformat()}T20:30:00Z",
+            show_as=initial,
         ) as event_id:
+            # Guard the premise: the transition below only means anything if
+            # the event really started somewhere else. Without this, a Graph
+            # regression on *create* would leave the event at `busy` and quietly
+            # turn four of these six cases back into the vacuous assertion the
+            # `initial` value exists to prevent.
+            before = await get_event(real_graph_client.sdk_client, event_id)
+            assert before["show_as"] == initial, (
+                f"event was created with show_as={initial!r} but reads back as "
+                f"{before['show_as']!r} — the premise of this test is gone, so a "
+                f"passing assertion below would prove nothing"
+            )
+
             await update_event(
                 real_graph_client.sdk_client,
                 event_id=event_id,

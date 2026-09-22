@@ -402,18 +402,14 @@ async def test_the_event_listing_returns_the_show_as_it_selects(real_graph_clien
         )
 
 
-async def test_the_concise_event_listing_does_not_pay_for_show_as(real_graph_client):
-    """The omission is a real saving on the wire, not just a formatter choice.
-
-    Asserting the default path costs nothing extra, the way #62 pinned that an
-    omitted `calendar` never lists `/me/calendars`.
-    """
-    after, before = _wide_window()
-    page = await list_events(
-        real_graph_client.sdk_client, after=after, before=before, count=25, concise=True
-    )
-
-    if not page["events"]:
-        pytest.skip("No events in a ±180-day window — nothing to assert against")
-
-    assert all("show_as" not in event for event in page["events"])
+# There is deliberately no live guard for concise mode's *omission* of showAs.
+# The obvious one — assert `show_as` is absent from a live concise listing —
+# cannot fail: `_format_event_concise` builds a fixed key list that never
+# contains it, so the assertion holds whatever the `$select` asked Graph for,
+# and would pass against the very regression it appears to guard. The honest
+# place for that contract is the `$select` itself, which is a string we send
+# and can therefore be asserted offline:
+# `test_calendar_read.py::TestShowAs::test_concise_listing_does_not_pay_for_show_as`.
+# Nothing is left for the live tier to see here, because an omitted field has
+# no wire behaviour for Graph to get wrong — unlike the positive case above,
+# where a `$select` Graph silently ignores is invisible to a mock.

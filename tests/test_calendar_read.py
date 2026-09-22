@@ -595,6 +595,20 @@ class TestShowAs:
         """Follows `type`'s convention on this shape, so one response has one."""
         assert _format_event_summary(_make_mock_event())["show_as"] == ""
 
+    def test_a_plain_string_show_as_survives_the_enum_fallback(self):
+        """The `else str(...)` half of the extraction, which the SDK path never hits.
+
+        `event.show_as` is a `FreeBusyStatus` today, so every other test here
+        exercises the `.value` branch and the fallback is dead weight nothing
+        would notice breaking. It is not speculative: the same two-branch idiom
+        guards `type` and `response_status` in this formatter because kiota has
+        handed back raw strings before. Pinning it means a refactor that drops
+        the fallback fails here rather than in a caller's listing.
+        """
+        assert _format_event_summary(_make_mock_event(show_as="tentative"))["show_as"] == (
+            "tentative"
+        )
+
     def test_concise_mode_omits_show_as(self):
         """A deliberate trade, not an oversight — see _format_event_concise."""
         from outlook_mcp.tools.calendar_read import _format_event_concise

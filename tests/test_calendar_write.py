@@ -1517,3 +1517,37 @@ class TestShowAs:
             await update_event(mock_client, event_id="AAMkAG123=", show_as="maybe", config=_CFG)
 
         builder.patch.assert_not_called()
+
+    async def test_invalid_show_as_is_refused_before_any_graph_call(self):
+        """Refuse bad input before the network, not after — `.get()` counts.
+
+        `update_event(recurrence=…)` without `start` reads the event back to
+        anchor the recurrence range. Resolving `show_as` after that block meant
+        a rejected value still cost a Graph round trip: harmless to the mailbox,
+        but it breaks the project's rule that input is validated before Graph is
+        called, and it is the kind of ordering that stops being harmless the
+        moment a write is added above it.
+        """
+        builder = _make_event_builder()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        # A usable anchor, so that without the fix the recurrence block runs to
+        # completion and this test fails on `get.assert_not_called()` — the
+        # thing it is about — rather than on an incidental TypeError from a
+        # MagicMock datetime.
+        builder.get = AsyncMock(
+            return_value=MagicMock(start=MagicMock(date_time="2026-09-07T12:30:00"))
+        )
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError, match="show_as"):
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                recurrence="weekly",
+                show_as="maybe",
+                config=_CFG,
+            )
+
+        builder.get.assert_not_called()
+        builder.patch.assert_not_called()

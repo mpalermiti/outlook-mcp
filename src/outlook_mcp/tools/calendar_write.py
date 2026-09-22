@@ -219,6 +219,11 @@ async def create_event(
     if attendees:
         validated_attendees = [validate_email(e) for e in attendees]
 
+    # Resolved here rather than at the assignment, so every argument is checked
+    # before anything is sent. `update_event` has the same ordering for a
+    # sharper reason (see there); these two stay the same shape deliberately.
+    resolved_show_as = _free_busy(show_as) if show_as is not None else None
+
     from msgraph.generated.models.attendee import Attendee
     from msgraph.generated.models.body_type import BodyType
     from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
@@ -261,8 +266,8 @@ async def create_event(
     if recurrence:
         event.recurrence = build_event_recurrence(recurrence, start=start, zone=zone)
 
-    if show_as is not None:
-        event.show_as = _free_busy(show_as)
+    if resolved_show_as is not None:
+        event.show_as = resolved_show_as
 
     response = await graph_client.me.events.post(event)
 
@@ -389,6 +394,13 @@ async def update_event(
     if attendees is not None:
         validated_attendees = [validate_email(e) for e in attendees]
 
+    # Resolved here, with the other argument checks, rather than at the
+    # assignment far below: every read path in this function is lazy, so a
+    # `show_as` refused late would still have cost the `current_event()` GET
+    # that a recurrence or a time patch triggers. Validating before any await
+    # is the rule this function already follows for datetimes and attendees.
+    resolved_show_as = _free_busy(show_as) if show_as is not None else None
+
     # The event as Graph currently holds it, fetched at most once and only when
     # something actually needs it: the zone a start/end patch must carry, the
     # anchor date for a recurrence sent without a start, or the existing
@@ -498,8 +510,8 @@ async def update_event(
             anchor = _as_instant(anchor, getattr(stored_start, "time_zone", None))
         event.recurrence = build_event_recurrence(recurrence, start=anchor, zone=anchor_zone)
 
-    if show_as is not None:
-        event.show_as = _free_busy(show_as)
+    if resolved_show_as is not None:
+        event.show_as = resolved_show_as
 
     response = await graph_client.me.events.by_event_id(event_id).patch(event)
 
