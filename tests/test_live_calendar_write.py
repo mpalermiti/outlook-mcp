@@ -491,6 +491,54 @@ class TestTimeZoneAnchoring:
             # rather than as UTC.
             assert "T09:00:00" not in detail["start"]
 
+    async def test_patching_a_time_keeps_the_zone_the_event_is_anchored_in(
+        self, real_graph_client, live_write_config
+    ):
+        """`update_event` without `timezone` must not relocate the event.
+
+        This is the case every other test here missed. The three around it pass
+        `timezone` explicitly, so they exercise the path where the stored zone
+        is only *compared*, never *used* — and the code read the anchor off
+        `start.time_zone`, which a plain GET reports as "UTC" for every event
+        Graph holds. Preservation therefore resolved to UTC every time, and
+        nothing offline or live could see it: the unit mock had been built with
+        the anchor in `start.time_zone`, a shape the wire never produces.
+
+        The assertion is on the anchor and on the UTC instant, because both
+        move together when this breaks: relabelled UTC, 11:00 New York becomes
+        11:00Z instead of 15:00Z or 16:00Z.
+        """
+        monday = _anchor_monday()
+        zone = "America/New_York"
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" tz-preserve",
+            start=f"{monday.isoformat()}T09:00:00",
+            end=f"{monday.isoformat()}T09:30:00",
+            timezone=zone,
+        ) as event_id:
+            assert (await get_event(real_graph_client.sdk_client, event_id))[
+                "original_start_time_zone"
+            ] == zone
+
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                start=f"{monday.isoformat()}T11:00:00",
+                end=f"{monday.isoformat()}T11:30:00",
+                config=live_write_config,
+            )
+
+            after = await get_event(real_graph_client.sdk_client, event_id)
+            assert after["original_start_time_zone"] == zone, (
+                "the patch relocated the event to another zone"
+            )
+            assert _utc_instant(after["start"]) != "11:00:00", (
+                "11:00 New York came back as 11:00Z, so the new time was labelled UTC"
+            )
+
     async def test_a_utc_series_can_be_re_anchored_into_a_zone(
         self, real_graph_client, live_write_config
     ):

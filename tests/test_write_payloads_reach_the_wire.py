@@ -215,6 +215,7 @@ class TestCalendarWrite:
         # serializing to something no Graph response ever contains.
         current = MagicMock(type=MagicMock(value="singleInstance"))
         current.start = MagicMock(date_time="2026-10-22T00:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "UTC"
         builder.get = AsyncMock(return_value=current)
         client = MagicMock()
         client.me.events.by_event_id = MagicMock(return_value=builder)

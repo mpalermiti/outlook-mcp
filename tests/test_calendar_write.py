@@ -308,6 +308,7 @@ class TestUpdateEvent:
         current = MagicMock()
         # Graph returns 7 fractional digits, which datetime.fromisoformat rejects on 3.10.
         current.start = MagicMock(date_time="2026-09-07T12:30:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "UTC"
 
         builder = _make_event_builder()
         builder.get = AsyncMock(return_value=current)
@@ -741,11 +742,19 @@ class TestEventTimezone:
         mock_client.me.events.post.assert_not_called()
 
     async def test_update_keeps_the_zone_the_event_is_stored_in(self):
-        """Patching a colleague's New York meeting must not move it here."""
+        """Patching a colleague's New York meeting must not move it here.
+
+        The mock models what a plain GET actually returns, and the difference
+        is the whole finding: Graph projects `start` into UTC unless the
+        request carries `Prefer: outlook.timezone`, which this server never
+        sends, so `start.time_zone` reads "UTC" for every event regardless of
+        its anchor. An earlier version of this test set `start.time_zone` to
+        the anchor — a shape the wire never produces — and passed against code
+        that read the wrong field and relocated every event it patched.
+        """
         current = MagicMock(type=MagicMock(value="singleInstance"))
-        current.start = MagicMock(
-            date_time="2026-10-28T09:00:00.0000000", time_zone="America/New_York"
-        )
+        current.start = MagicMock(date_time="2026-10-28T16:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "America/New_York"
 
         builder = _make_event_builder()
         builder.get = AsyncMock(return_value=current)
@@ -765,9 +774,48 @@ class TestEventTimezone:
         assert patched.start.time_zone == "America/New_York"
         assert patched.end.time_zone == "America/New_York"
 
-    async def test_update_falls_back_to_config_when_graph_names_no_zone(self):
+    async def test_update_refuses_rather_than_guess_an_unreadable_anchor(self):
+        """An event in a custom zone reports `tzone://Microsoft/Custom`.
+
+        Every available move is wrong: echoing the sentinel is a 400, and any
+        substitute — the config zone, UTC — relocates the event while
+        answering `updated`. So the call is refused, naming the argument that
+        resolves it. Documented behaviour; I have not reproduced a custom-zone
+        event live, which is why the guard is a refusal and not a translation.
+        """
         current = MagicMock(type=MagicMock(value="singleInstance"))
-        current.start = MagicMock(date_time="2026-10-28T09:00:00.0000000", time_zone=None)
+        current.start = MagicMock(date_time="2026-10-28T16:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "tzone://Microsoft/Custom"
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError) as excinfo:
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-10-28T11:00:00",
+                end="2026-10-28T12:00:00",
+                config=_CFG_LA,
+            )
+
+        assert "Pass `timezone`" in str(excinfo.value)
+        builder.patch.assert_not_called()
+
+    async def test_the_anchor_never_comes_from_start_time_zone(self):
+        """The regression guard for the finding itself.
+
+        `start.time_zone` is "UTC" on every plain GET, so code reading it
+        cannot preserve anything. This pins that the two fields disagreeing
+        resolves in favour of the anchor — the assertion that fails the moment
+        anyone reaches for the obvious field again.
+        """
+        current = MagicMock(type=MagicMock(value="singleInstance"))
+        current.start = MagicMock(date_time="2026-10-28T16:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "Europe/London"
 
         builder = _make_event_builder()
         builder.get = AsyncMock(return_value=current)
@@ -783,7 +831,8 @@ class TestEventTimezone:
             config=_CFG_LA,
         )
 
-        assert builder.patch.call_args[0][0].start.time_zone == "America/Los_Angeles"
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.time_zone == "Europe/London"
 
     async def test_update_refuses_a_zone_with_no_times_to_apply_it_to(self):
         """A lone timezone would patch nothing and answer `updated`.
@@ -818,6 +867,7 @@ class TestEventTimezone:
 
         current = MagicMock(type=MagicMock(value="seriesMaster"))
         current.start = MagicMock(date_time="2026-10-28T16:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "UTC"
         current.recurrence = build_event_recurrence("weekly", start="2026-10-28T16:00:00Z")
 
         builder = _make_event_builder()
@@ -850,6 +900,7 @@ class TestEventTimezone:
         """
         current = MagicMock(type=MagicMock(value="singleInstance"))
         current.start = MagicMock(date_time="2026-10-28T16:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "UTC"
         current.recurrence = None
 
         builder = _make_event_builder()
@@ -872,9 +923,8 @@ class TestEventTimezone:
     async def test_update_does_not_resend_recurrence_when_the_zone_is_unchanged(self):
         """The control for the test above: same series, no zone change, no re-send."""
         current = MagicMock(type=MagicMock(value="seriesMaster"))
-        current.start = MagicMock(
-            date_time="2026-10-28T09:00:00.0000000", time_zone="America/Los_Angeles"
-        )
+        current.start = MagicMock(date_time="2026-10-28T16:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "America/Los_Angeles"
         current.recurrence = build_event_recurrence("weekly", start="2026-10-28T09:00:00")
 
         builder = _make_event_builder()

@@ -23,6 +23,33 @@ def _is_series_master(event: Any) -> bool:
     return (getattr(event_type, "value", None) or str(event_type)) == "seriesMaster"
 
 
+def _anchor_zone(event: Any) -> str | None:
+    """The zone ``event`` is anchored in, as Graph reports it on a plain GET.
+
+    Deliberately **not** ``event.start.time_zone``. Graph projects ``start`` and
+    ``end`` into UTC unless the request carries a ``Prefer: outlook.timezone``
+    header, and this server never sends one — so ``start.time_zone`` reads
+    ``"UTC"`` for every event ever fetched, whatever it is anchored in.
+    ``originalStartTimeZone`` is the field that survives that projection.
+
+    Reading the wrong one is not a near-miss: it makes "keep the zone the event
+    is already stored in" resolve to UTC every time, which is precisely the
+    behaviour this module was changed to stop — a New York meeting patched to a
+    new time is relocated to UTC and its series re-anchored, reported as
+    ``updated``.
+
+    Returns ``None`` when Graph names a zone we cannot send back. An event
+    created against a custom time zone reports the sentinel
+    ``tzone://Microsoft/Custom``, which is documented but not something I have
+    reproduced live; it is refused rather than echoed, because echoing it is a
+    400 and guessing a replacement moves the event.
+    """
+    zone = getattr(event, "original_start_time_zone", None)
+    if not zone or str(zone).startswith("tzone://"):
+        return None
+    return str(zone)
+
+
 def _resend_recurrence(event: Any, *, anchor: str | None) -> Any:
     """The event's own recurrence, rebuilt as a payload safe to send back.
 
@@ -209,7 +236,10 @@ async def update_event(
     event keeps the zone it is already stored in — patching a colleague's
     09:00 New York meeting must not quietly move it to this server's zone,
     which is why this defaults differently from ``create_event``. Reading the
-    stored zone costs one GET, issued only when ``start``/``end`` is in play.
+    stored zone costs one GET, issued only when ``start``/``end`` is in play,
+    and the zone comes off ``originalStartTimeZone`` rather than
+    ``start.timeZone``: see ``_anchor_zone`` for why the obvious field is the
+    wrong one.
 
     Changing the zone of a *series master* needs the recurrence re-sent in the
     same patch; without it Graph answers ``400 ErrorPropertyValidationFailure``
@@ -293,8 +323,14 @@ async def update_event(
             # Echoed back verbatim, not validated: Graph stores Windows zone
             # names ("Pacific Standard Time") as readily as IANA ones, and a
             # name it gave us is by definition one it accepts.
-            stored = getattr(getattr(await current_event(), "start", None), "time_zone", None)
-            zone = stored or validate_event_timezone(config.timezone)
+            stored = _anchor_zone(await current_event())
+            if stored is None:
+                raise ValueError(
+                    "Could not read the zone this event is anchored in, so patching its "
+                    "time would move it. Pass `timezone` explicitly alongside `start` "
+                    "and `end` to say which zone the new times are in."
+                )
+            zone = stored
 
     if start is not None:
         validate_datetime(start)
@@ -361,7 +397,7 @@ async def update_event(
         # consumer mailbox, 2026-09-21 — both directions, and with the zone
         # unchanged as the control.
         existing = await current_event()
-        stored_zone = getattr(getattr(existing, "start", None), "time_zone", None)
+        stored_zone = _anchor_zone(existing)
         if stored_zone and stored_zone != zone and _is_series_master(existing):
             event.recurrence = _resend_recurrence(existing, anchor=start)
 
