@@ -52,11 +52,9 @@ _ISO_DATETIME_RE = re.compile(
 # Time zone abbreviations an agent reaches for when a user says "3pm Pacific".
 # None of these resolve as IANA keys, so they land in `resolve_timezone`'s error
 # path; naming them there turns "not a zone name the database contains" into the
-# sentence that actually fixes the call. Deliberately only the abbreviations
-# zoneinfo *cannot* resolve, so they land in `resolve_timezone`'s error path;
-# naming them there turns "not a zone name the database contains" into the
-# sentence that fixes the call. `GMT` is a real key Graph accepts, so it is not
-# here; `EST`/`MST`/`HST` are real keys Graph *refuses*, handled just below.
+# sentence that actually fixes the call. Only abbreviations zoneinfo *cannot*
+# resolve belong here: `GMT` is a real key Graph accepts, and `EST`/`MST`/`HST`
+# are real keys Graph *refuses*, handled by the table just below.
 _TIME_ZONE_ABBREVIATIONS = frozenset(
     {
         "PT", "PST", "PDT", "MT", "MDT", "CT", "CST", "CDT", "ET", "EDT",
