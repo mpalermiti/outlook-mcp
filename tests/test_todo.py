@@ -184,20 +184,66 @@ class TestResolveListId:
         client.me.todo.lists.get.assert_called_once()
 
     async def test_default_list_found_past_the_first_page(self):
-        """No $top/nextLink walking meant a user whose first page lacked the
-        defaultList entry got an arbitrary list."""
+        """No nextLink walking meant a user whose first page lacked the
+        defaultList entry got an arbitrary list. The walk now follows the raw
+        @odata.nextLink with with_url — the assertion is on the link itself,
+        because the old test only fed side_effect pages to `.get` and passed
+        even when cursor forwarding was broken (ListsRequestBuilderGetQuery
+        Parameters has no skiptoken field, so rebuilding params drops the
+        token and page one is fetched forever)."""
         default_list = _mock_task_list("default9", "Tasks", True, "defaultList")
         other = _mock_task_list("listA", "A", True, "none")
-        page1 = MagicMock(value=[other], odata_next_link=(
-            "https://graph.microsoft.com/v1.0/me/todo/lists?$skip=100"
-        ))
+        next_link = (
+            "https://graph.microsoft.com/v1.0/me/todo/lists?"
+            "$skiptoken=MSxnMjsjOyM7Jw"
+        )
+        page1 = MagicMock(value=[other], odata_next_link=next_link)
         page2 = MagicMock(value=[default_list], odata_next_link=None)
         client = _build_mock_client()
-        client.me.todo.lists.get = AsyncMock(side_effect=[page1, page2])
+        client.me.todo.lists.get = AsyncMock(return_value=page1)
+        page2_via_url = MagicMock()
+        page2_via_url.get = AsyncMock(return_value=page2)
+        client.me.todo.lists.with_url = MagicMock(return_value=page2_via_url)
 
         await list_tasks(client)
 
         client.me.todo.lists.by_todo_task_list_id.assert_called_with("default9")
+        client.me.todo.lists.get.assert_called_once()
+        client.me.todo.lists.with_url.assert_called_once_with(next_link)
+        page2_via_url.get.assert_awaited_once()
+
+    async def test_default_list_walk_caps_runaway_paging(self):
+        """A server that never stops handing out a nextLink must not loop
+        forever — the walk stops at a page cap and says so."""
+        page = MagicMock(
+            value=[_mock_task_list("listA", "A", True, "none")],
+            odata_next_link="https://graph.microsoft.com/v1.0/me/todo/lists?$skiptoken=x",
+        )
+        client = _build_mock_client()
+        client.me.todo.lists.get = AsyncMock(return_value=page)
+        looped = MagicMock()
+        looped.get = AsyncMock(return_value=page)
+        client.me.todo.lists.with_url = MagicMock(return_value=looped)
+
+        with pytest.raises(ValueError, match="refusing to walk"):
+            await list_tasks(client)
+
+        # The cap counts pages: 1 first-page GET + 19 followed links = 20.
+        assert client.me.todo.lists.with_url.call_count == 19
+
+    async def test_first_list_fallback_is_not_cached(self):
+        """A mailbox with no defaultList entry falls back to the first list,
+        but must not pin it: the fallback can be a shared list, and the real
+        default can appear later. Only a found defaultList is cached."""
+        lists = [_mock_task_list("listA", "Shared", False, "none")]
+        client = _build_mock_client(lists=lists)
+
+        first = await list_tasks(client)
+        second = await list_tasks(client)
+
+        assert first["tasks"] == second["tasks"]
+        client.me.todo.lists.by_todo_task_list_id.assert_called_with("listA")
+        # Two resolutions for two calls — the fallback re-resolves each time.
         assert client.me.todo.lists.get.await_count == 2
 
     async def test_no_lists_at_all_is_an_error(self):

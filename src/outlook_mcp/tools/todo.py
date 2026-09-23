@@ -14,6 +14,11 @@ from outlook_mcp.validation import sanitize_output, validate_datetime, validate_
 
 _VALID_IMPORTANCES = {"low", "normal", "high"}
 
+# Backstop for the nextLink walks (see fetch_all_task_lists): 20 pages of
+# $top=100 is 2,000 lists/checklist pages — far past any real mailbox — so a
+# server that keeps handing us a nextLink is broken, not big.
+_PAGE_CAP = 20
+
 
 def _importance_enum(value: str) -> Any:
     """Map a string importance to the SDK Importance enum."""
@@ -72,6 +77,49 @@ def _iso_datetime(value: Any) -> str:
 _DEFAULT_LIST_BY_CLIENT: WeakKeyDictionary = WeakKeyDictionary()
 
 
+def _lists_first_page_config() -> Any:
+    """RequestConfiguration for the first ``/me/todo/lists`` page."""
+    from msgraph.generated.users.item.todo.lists.lists_request_builder import (
+        ListsRequestBuilder,
+    )
+
+    return build_request_config(
+        ListsRequestBuilder.ListsRequestBuilderGetQueryParameters, {"$top": 100}
+    )
+
+
+async def fetch_all_task_lists(graph_client: Any, top: int = 100) -> list[Any]:
+    """Every task list in ``/me/todo/lists``, following ``@odata.nextLink``.
+
+    The pages are followed with ``with_url`` on the raw link, the same way
+    ``calendar_resolver.fetch_all_calendars`` walks calendars. That matters
+    here because To Do lists page with ``$skiptoken``, and the SDK's typed
+    ``ListsRequestBuilderGetQueryParameters`` has no ``skiptoken`` field —
+    rebuilding query parameters for page two silently drops the token and
+    re-fetches page one forever. The raw link is followed verbatim instead,
+    with a page cap so a misbehaving server cannot loop us.
+    """
+    response = await graph_client.me.todo.lists.get(
+        request_configuration=_lists_first_page_config()
+    )
+    collected = list(response.value) if response and response.value else []
+    pages = 1
+    while True:
+        next_link = getattr(response, "odata_next_link", None)
+        if not isinstance(next_link, str) or not next_link:
+            break
+        pages += 1
+        if pages > _PAGE_CAP:
+            raise ValueError(
+                f"/me/todo/lists kept returning a nextLink for {pages} pages "
+                f"({len(collected)} lists so far) — refusing to walk further; "
+                "this looks like a broken paging response, not a big mailbox"
+            )
+        response = await graph_client.me.todo.lists.with_url(next_link).get()
+        collected.extend(list(response.value) if response and response.value else [])
+    return collected
+
+
 async def _resolve_list_id(graph_client: Any, list_id: str | None) -> str:
     """Resolve list_id — use provided value or find the default list.
 
@@ -89,6 +137,16 @@ async def _resolve_list_id(graph_client: Any, list_id: str | None) -> str:
     starts cold. The trade-off is a stale id if the user deletes their default
     list mid-session; Graph answers 404 with a "re-list" hint, and nothing in
     this surface creates or deletes lists.
+
+    Only a *found* defaultList is cached. The first-list fallback is not: a
+    mailbox whose ``defaultList`` entry is missing (renamed away, or hidden by
+    paging trouble) would otherwise pin what may be a shared list for the life
+    of the process — the next call re-resolves and can find the real default.
+
+    The walk follows the raw ``@odata.nextLink`` with ``with_url`` (see
+    ``fetch_all_task_lists``): rebuilding typed query parameters drops
+    ``$skiptoken`` — the SDK class has no such field — so a rebuilt request
+    re-fetches page one and the walk never advances.
     """
     if list_id is not None:
         if not list_id.strip():
@@ -103,19 +161,13 @@ async def _resolve_list_id(graph_client: Any, list_id: str | None) -> str:
     if cached is not None:
         return cached
 
-    from msgraph.generated.users.item.todo.lists.lists_request_builder import (
-        ListsRequestBuilder,
-    )
-
     first_list_id: str | None = None
-    params: dict[str, Any] = {"$top": 100}
+    response = await graph_client.me.todo.lists.get(
+        request_configuration=_lists_first_page_config()
+    )
+    pages = 1
     while True:
-        req_config = build_request_config(
-            ListsRequestBuilder.ListsRequestBuilderGetQueryParameters,
-            params,
-        )
-        response = await graph_client.me.todo.lists.get(request_configuration=req_config)
-        for lst in response.value or []:
+        for lst in (response.value if response else None) or []:
             if first_list_id is None:
                 first_list_id = lst.id
             wellknown = ""
@@ -129,17 +181,23 @@ async def _resolve_list_id(graph_client: Any, list_id: str | None) -> str:
                 _DEFAULT_LIST_BY_CLIENT[graph_client] = lst.id
                 return lst.id
         # The default list can sit past the first page; keep walking until
-        # Graph stops handing us a nextLink.
-        next_cursor = wrap_nextlink(response.odata_next_link)
-        if next_cursor is None:
+        # Graph stops handing us a nextLink — following the raw link, not
+        # rebuilt parameters (see the docstring).
+        next_link = getattr(response, "odata_next_link", None)
+        if not isinstance(next_link, str) or not next_link:
             break
-        params = apply_pagination(params, 100, next_cursor)
+        pages += 1
+        if pages > _PAGE_CAP:
+            raise ValueError(
+                f"/me/todo/lists kept returning a nextLink for {pages} pages "
+                "while looking for the default list — refusing to walk further"
+            )
+        response = await graph_client.me.todo.lists.with_url(next_link).get()
 
     if first_list_id is None:
         raise ValueError("No task lists found. Create a list in Microsoft To Do first.")
 
-    # Fallback: first list
-    _DEFAULT_LIST_BY_CLIENT[graph_client] = first_list_id
+    # Fallback: first list. Not cached — see the docstring.
     return first_list_id
 
 
