@@ -672,6 +672,28 @@ class TestTodo:
         assert '"isChecked"' not in body, body
         assert "checkedDateTime" not in body, body
 
+    async def test_update_checklist_item_is_checked_reaches_the_wire(self):
+        """The positive half, which the wire suite never asserted: a check
+        must serialize as isChecked:true on the PATCH — the model attribute
+        existing proves nothing about the JSON kiota sends."""
+        from tests.test_todo import _build_mock_client
+
+        client = _build_mock_client()
+
+        await todo.update_checklist_item(
+            client,
+            task_id="task1",
+            checklist_item_id="ci1",
+            is_checked=True,
+            config=_CFG,
+        )
+
+        item = (
+            client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id.return_value.checklist_items.by_checklist_item_id.return_value
+        )
+        payload = item.patch.call_args.args[0]
+        assert_on_wire(payload, '"isChecked": true')
+
     async def test_upload_task_attachment_argument_reaches_the_wire(self, tmp_path):
         """The inline-POST payload: base64 contentBytes (not a filename, not
         a session reference) plus the metadata Graph needs to rebuild it."""
