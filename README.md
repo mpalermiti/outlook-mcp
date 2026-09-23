@@ -371,7 +371,9 @@ configured `timezone`; responses are always UTC.
 >
 > The same fence covers the To Do attachment tools (`outlook_upload_task_attachment`,
 > `outlook_download_task_attachment`): uploads read from `attachments_dir` and downloads
-> write into it, so `todo_write`-granted agents cannot sweep arbitrary files off disk either.
+> write into it, so neither can sweep arbitrary files off disk. (Downloads are not
+> `todo_write`-gated — they are reads, like `outlook_download_attachment`; the fence, not
+> the category, is what confines them.)
 
 | Tool | Description |
 |------|-------------|
@@ -490,7 +492,7 @@ By default, `read_only: false` unlocks **all** write tools. For finer control, s
 | `mail_send` | send, reply, forward, send_draft, send_with_attachments | **Dangerous** — sends email on your behalf |
 | `calendar_write` | create/update/delete event, RSVP | Moderate — creates calendar entries |
 | `contacts_write` | create/update/delete contact | Moderate |
-| `todo_write` | create/update/complete/delete task, checklist items; upload/download/delete task attachments | Moderate — your own task list, but `outlook_upload_task_attachment` reads local files from `attachments_dir` and pushes their bytes to Graph, and task/checklist/attachment deletes are irreversible |
+| `todo_write` | create/update/complete/delete task, checklist items; upload/delete task attachments | Moderate — your own task list, but `outlook_upload_task_attachment` reads local files from `attachments_dir` and pushes their bytes to Graph, and task/checklist/attachment deletes are irreversible. Listing and downloading attachments are plain reads, gated like every other read (not at all) and fenced to `attachments_dir` |
 
 **Example policies:**
 
@@ -500,8 +502,10 @@ By default, `read_only: false` unlocks **all** write tools. For finer control, s
 { "read_only": false, "allow_categories": ["mail_drafts", "mail_triage", "todo_write"] }
 ```
 
-(Note that `todo_write` includes the task-attachment tools — file reads from `attachments_dir`,
-uploads to Graph, and irreversible deletes — see the table above.)
+(Note that `todo_write` includes the *write-side* task-attachment tools — file reads
+from `attachments_dir`, uploads to Graph, and irreversible deletes. Listing and
+downloading task attachments are reads and are not write-gated, like the mail
+attachment reads — see the table above.)
 
 **Calendar-only** (agent can manage your schedule, nothing else):
 
