@@ -101,7 +101,8 @@ Working rules, each of which saves a round trip:
 """
 
 # SEP-2549: tell the client how long `tools/list` stays fresh, so it can stop
-# re-fetching ~8.6k tokens of schemas. The set is fixed at import — toolset
+# re-fetching ~13k chars/4 proxy tokens of schemas. The set is fixed at import —
+# toolset
 # gating reads its env var once — so it cannot change while the process lives.
 # Five minutes rather than an hour because it *can* change across a restart,
 # which is exactly what someone editing OUTLOOK_MCP_TOOLSETS just did. Private:
