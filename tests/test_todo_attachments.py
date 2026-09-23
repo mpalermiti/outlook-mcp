@@ -6,7 +6,9 @@ upload-session endpoint — verified live), so these tests assert the
 SDK's base64 handling as the SDK's problem.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+import os
+import stat as stat_module
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -551,6 +553,55 @@ class TestUploadTaskAttachment:
             await upload_task_attachment(
                 client, task_id="task1", file_path=str(source_file), config=config
             )
+
+    async def test_upload_size_gate_reads_the_file_not_the_stat(self, tmp_path):
+        """The gate used to be os.stat followed by an unbounded read, so a
+        file growing in between sailed through the cap with a stale size
+        (reproduced offline: gate saw 1 KiB, the wire got 26 MB). The read is
+        the gate now — a lying stat cannot bypass it."""
+        client = _build_mock_client()
+        config = _cfg(tmp_path)
+        oversize = tmp_path / "att" / "grew.bin"
+        oversize.parent.mkdir(parents=True)
+        oversize.write_bytes(b"\x00" * (20 * 1024 * 1024 + 1))
+
+        real_stat = os.stat
+
+        def lying_stat(path, *args, **kwargs):
+            st = real_stat(path, *args, **kwargs)
+            if str(path) == str(oversize):
+                # A regular file that claims to be 1 KiB (S_IFREG so
+                # os.path.isfile still says yes) while the bytes on disk are
+                # over the cap — the race, frozen in place.
+                st = os.stat_result(
+                    (stat_module.S_IFREG | 0o644, 0, 0, 0, 0, 0, 1024, 0, 0, 0)
+                )
+            return st
+
+        with patch("os.stat", side_effect=lying_stat):
+
+            with pytest.raises(ValueError, match="20 MiB"):
+                await upload_task_attachment(
+                    client, task_id="task1", file_path=str(oversize), config=config
+                )
+        _attachments_of(client).post.assert_not_called()
+
+    async def test_upload_at_exactly_the_cap_is_accepted(self, tmp_path):
+        """The read is capped at MAX+1 so an over-cap file is caught cheap;
+        a file of exactly MAX bytes must still go through, whole."""
+        client = _build_mock_client()
+        config = _cfg(tmp_path)
+        exact = tmp_path / "att" / "exact.bin"
+        exact.parent.mkdir(parents=True)
+        exact.write_bytes(b"\x01" * (20 * 1024 * 1024))
+
+        result = await upload_task_attachment(
+            client, task_id="task1", file_path=str(exact), config=config
+        )
+
+        assert result["size"] == 20 * 1024 * 1024
+        payload = _attachments_of(client).post.call_args.args[0]
+        assert len(payload.content_bytes) == 20 * 1024 * 1024
 
 
 # --- delete_task_attachment ---

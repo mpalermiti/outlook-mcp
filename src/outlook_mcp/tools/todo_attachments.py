@@ -259,7 +259,15 @@ async def upload_task_attachment(
         # ValueError text to the model, and the path is the thing it needs.
         raise ValueError(f"Attachment file not found: {file_path}")
 
-    file_size = os.stat(file_path).st_size
+    # Race-free size gate. `os.stat` then an unbounded `f.read()` let a file
+    # that grows in the window between the two bypass the cap entirely (the
+    # maintainer reproduced it offline: the gate saw 1 KiB, the wire got
+    # 26 MB) and reported a stale size. The read itself is the gate: capped
+    # at MAX+1 bytes, so an over-cap file is caught without ever being read
+    # whole, and the sent size is always the length actually read.
+    with open(file_path, "rb") as f:
+        content = f.read(_MAX_ATTACHMENT_SIZE + 1)
+    file_size = len(content)
     if file_size < 1:
         raise ValueError(
             f"Attachment file is empty ({file_size} bytes) — accepted size is "
@@ -267,10 +275,10 @@ async def upload_task_attachment(
         )
     if file_size > _MAX_ATTACHMENT_SIZE:
         raise ValueError(
-            f"Attachment is {file_size} bytes; task attachments are limited to "
-            f"20 MiB ({_MAX_ATTACHMENT_SIZE} bytes). Graph caps the request "
-            "body at 30 MB and base64 inflates the file 4/3, so anything "
-            "larger is rejected before it leaves."
+            f"Attachment is over the 20 MiB ceiling (read {file_size} bytes "
+            f"of it; the cap is {_MAX_ATTACHMENT_SIZE} bytes). Graph caps "
+            "request bodies at 30 MB and base64 inflates the file 4/3, so "
+            "anything larger is rejected before it leaves."
         )
 
     resolved_id = await _resolve_list_id(graph_client, list_id)
@@ -283,9 +291,7 @@ async def upload_task_attachment(
     att.name = os.path.basename(file_path)
     att.content_type = content_type or "application/octet-stream"
     att.size = file_size
-    with open(file_path, "rb") as f:
-        # One read into memory — bounded by the 20 MiB gate above.
-        att.content_bytes = f.read()
+    att.content_bytes = content
 
     response = await (
         graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
