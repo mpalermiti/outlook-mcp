@@ -171,7 +171,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 
 ## Notes
 - IDs are opaque Graph strings — get them from list/search tools, never guess
-- Dates take ISO 8601 or a relative offset (`7d` ago, `+7d` from now, `now`); responses are UTC, and zone-less input is read in the config timezone
+- Dates take ISO 8601 or a relative offset (`7d` ago, `+7d` from now, `now`); responses are UTC. A zone-less date is read in the config timezone — except on `outlook_update_event`, where it is read in the zone the event itself is anchored in, so patching a colleague's New York meeting to `09:00` means 09:00 *there*
 - A recurring event is expanded in the zone it is anchored in, so pass `timezone` (or set the config one) when creating a series that crosses a daylight-saving change — anchored in UTC, a 09:00 weekly meeting becomes 08:00 when the clocks go back. Use a zone name (`America/Los_Angeles`), never an abbreviation (`PDT`)
 - Attachments may only be read from or written to `attachments_dir` — put a file there before asking for it to be sent
 - Three workflow prompts ship with the server: `morning_brief`, `triage_folder`, `catch_up`

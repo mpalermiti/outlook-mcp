@@ -712,10 +712,9 @@ async def outlook_create_event(
     `range.startDate` defaults to the event's start date. Prefer a bounded range
     ("endDate"/"numbered") when the event has attendees — a "noEnd" series invites them
     to every future occurrence.
-    `timezone` is the IANA zone the event is anchored in (default: the configured zone),
-    and decides what a series does across a daylight-saving change: anchored in UTC, a
-    09:00 weekly event becomes 08:00 when the clocks go back. Use a zone name,
-    America/Los_Angeles, not an abbreviation like PDT.
+    `timezone` is the IANA zone the event is anchored in, which is what a recurring
+    series is expanded against (default: the configured zone). A zone name like
+    America/Los_Angeles, never an abbreviation like PDT.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)

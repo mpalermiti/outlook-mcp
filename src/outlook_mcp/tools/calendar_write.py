@@ -143,6 +143,15 @@ async def create_event(
         if timezone is None
         else validate_event_timezone(timezone)
     )
+    if is_all_day:
+        # Graph stores an all-day event anchored in UTC whatever zone it is
+        # sent — verified live 2026-09-21, both a midnight `Z` and a naive
+        # midnight labelled America/Los_Angeles came back
+        # `originalStartTimeZone: UTC`. Sending the zone therefore buys nothing
+        # there and costs something here: `00:00Z` labelled Los Angeles is
+        # 17:00 the previous day, so the recurrence would be built for the
+        # wrong date and weekday. Label it as Graph will store it.
+        zone = "UTC"
 
     # Validate attendee emails if provided
     validated_attendees = []
@@ -241,6 +250,12 @@ async def update_event(
     ``start.timeZone``: see ``_anchor_zones`` for why the obvious field is the
     wrong one, and why start and end are read separately.
 
+    A consequence worth stating, because nothing else says it: a zone-less
+    ``start``/``end`` here is read in the **event's** zone — not UTC as before
+    this change, and not ``config.timezone`` as everywhere else in this server.
+    Patching a colleague's New York meeting to ``"2026-11-03T09:00:00"`` means
+    09:00 in New York, not 09:00 where this server is configured.
+
     There is deliberately no ``timezone`` argument here. Re-anchoring an event
     into a *different* zone is a real capability and a larger one than it
     looks — Graph refuses to change a series master's zone unless the
@@ -278,6 +293,27 @@ async def update_event(
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_update_event")
     event_id = validate_graph_id(event_id)
 
+    # Everything that can reject this call without asking Graph anything goes
+    # above the first `await`. Before the anchor-zone read existed these all
+    # rejected with zero network calls, and hoisting the read above them had
+    # two costs: a stale id plus a malformed time surfaced as
+    # `404 ErrorItemNotFound` instead of the input error, and every rejected
+    # patch paid for a full-event round trip.
+    if start is not None:
+        validate_datetime(start)
+    if end is not None:
+        validate_datetime(end)
+    if is_all_day is not None and (start is None or end is None):
+        raise ValueError(
+            "is_all_day requires start and end in the same call; Graph rejects a lone "
+            "isAllDay patch with 'Missing parameters: Event.Start'. Both must be "
+            "midnight boundaries, e.g. start=2026-10-22T00:00:00, end=2026-10-23T00:00:00"
+        )
+    if remove_recurrence and recurrence is not None:
+        raise ValueError(
+            "Pass either recurrence or remove_recurrence, not both — they ask for "
+            "opposite things"
+        )
 
     validated_attendees = None
     if attendees is not None:
@@ -311,29 +347,41 @@ async def update_event(
     start_zone: str | None = None
     end_zone: str | None = None
     if start is not None or end is not None:
+        existing_event = await current_event()
         # Echoed back verbatim, not validated: Graph stores Windows zone names
         # ("Pacific Standard Time") as readily as IANA ones, and a name it gave
         # us is by definition one it accepts.
-        start_zone, end_zone = _anchor_zones(await current_event())
+        start_zone, end_zone = _anchor_zones(existing_event)
+        # An all-day event is stored anchored in UTC whatever zone it is sent
+        # (see `create_event`), so label it the way Graph will hold it. The
+        # stored flag decides when the caller did not, because a patch that
+        # leaves `is_all_day` alone still has to agree with what the event is.
+        all_day = (
+            is_all_day
+            if is_all_day is not None
+            else bool(getattr(existing_event, "is_all_day", False))
+        )
+        if all_day:
+            start_zone = end_zone = "UTC"
 
     def _anchored(zone: str | None, which: str) -> str:
         if zone is None:
             raise ValueError(
                 f"Could not read the zone this event's {which} is anchored in, so "
-                f"patching its time would move the event. This happens for an event "
-                f"created against a custom time zone, which Graph reports as a "
-                f"sentinel it will not accept back."
+                f"patching its time would move the event. Graph reports no usable "
+                f"zone in two cases: an event created against a custom time zone, "
+                f"where it returns a sentinel it will not accept back, and one where "
+                f"the field is absent entirely. Read the event back with "
+                f"outlook_get_event to see which."
             )
         return zone
 
     if start is not None:
-        validate_datetime(start)
         event.start = DateTimeTimeZone()
         event.start.date_time = start
         event.start.time_zone = _anchored(start_zone, "start")
 
     if end is not None:
-        validate_datetime(end)
         event.end = DateTimeTimeZone()
         event.end.date_time = end
         event.end.time_zone = _anchored(end_zone, "end")
@@ -356,20 +404,9 @@ async def update_event(
             event.attendees.append(att)
 
     if is_all_day is not None:
-        if start is None or end is None:
-            raise ValueError(
-                "is_all_day requires start and end in the same call; Graph rejects a lone "
-                "isAllDay patch with 'Missing parameters: Event.Start'. Both must be "
-                "midnight boundaries, e.g. start=2026-10-22T00:00:00Z, end=2026-10-23T00:00:00Z"
-            )
         event.is_all_day = is_all_day
 
     if remove_recurrence:
-        if recurrence is not None:
-            raise ValueError(
-                "Pass either recurrence or remove_recurrence, not both — they ask for "
-                "opposite things"
-            )
         # `event.recurrence = None` does not serialize (see the docstring);
         # additional_data survives as the explicit JSON null Graph needs.
         event.additional_data = {**(event.additional_data or {}), "recurrence": None}

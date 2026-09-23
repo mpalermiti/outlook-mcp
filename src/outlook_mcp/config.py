@@ -35,7 +35,14 @@ class Config(BaseModel):
             "categories are permitted."
         ),
     )
-    timezone: str = Field(default="UTC", description="IANA timezone for relative date computations")
+    timezone: str = Field(
+        default="UTC",
+        description=(
+            "IANA timezone. Interprets zone-less dates, and anchors every event "
+            "created — a recurring event is expanded in this zone, so the UTC "
+            "default makes one shift an hour across a daylight-saving change."
+        ),
+    )
     attachments_dir: str = Field(
         default="~/.outlook-mcp/attachments",
         description=(

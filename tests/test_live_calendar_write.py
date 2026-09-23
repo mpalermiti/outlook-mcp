@@ -220,7 +220,15 @@ class TestPatchingEventFlags:
     async def test_update_can_make_a_midnight_event_all_day(
         self, real_graph_client, live_write_config
     ):
-        """Graph needs the bounds resent with isAllDay; this proves the rule we enforce."""
+        """Graph needs the bounds resent with isAllDay; this proves the rule we enforce.
+
+        The day and anchor assertions were added when anchoring arrived. This
+        test ran green throughout, including while a `00:00Z` bound was being
+        labelled with a non-UTC zone — 17:00 the previous day — because
+        asserting only the flag cannot see where the event landed. Graph
+        coerces an all-day event to a UTC anchor whatever it is sent, so the
+        flag survived a payload that was wrong about the date.
+        """
         monday = _anchor_monday()
         tuesday = monday + timedelta(days=1)
 
@@ -239,7 +247,12 @@ class TestPatchingEventFlags:
                 config=live_write_config,
             )
 
-            assert (await get_event(real_graph_client.sdk_client, event_id))["is_all_day"] is True
+            detail = await get_event(real_graph_client.sdk_client, event_id)
+            assert detail["is_all_day"] is True
+            assert detail["original_start_time_zone"] == "UTC"
+            assert detail["start"].startswith(f"{monday.isoformat()}T00:00:00"), (
+                "the all-day bound moved off midnight on the day that was asked for"
+            )
 
     async def test_subject_edit_leaves_other_fields_alone(
         self, real_graph_client, live_write_config
@@ -574,7 +587,14 @@ class TestTimeZoneAnchoring:
             start=f"{thursday.isoformat()}T{utc_hour - 24:02d}:00:00Z",
             end=f"{thursday.isoformat()}T{utc_hour - 23:02d}:00:00Z",
             timezone=zone,
-            recurrence="weekly",
+            # Not the "weekly" shorthand: it expands to `noEnd`, and this tier
+            # bans unbounded ranges because a crash before the `finally` would
+            # leave an open-ended series on a real account. The pattern is what
+            # is under test, so it is spelled out with a bounded range.
+            recurrence={
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["wednesday"]},
+                "range": {"type": "numbered", "numberOfOccurrences": 2},
+            },
         ) as event_id:
             detail = await get_event(real_graph_client.sdk_client, event_id)
             assert detail["recurrence"]["range"]["startDate"] == wednesday.isoformat(), (

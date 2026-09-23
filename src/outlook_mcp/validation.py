@@ -3,9 +3,33 @@
 import logging
 import re
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from functools import lru_cache
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 logger = logging.getLogger(__name__)
+
+# Where a bad `config.timezone` is fixed. Kept next to the logger so the
+# read path and the write path quote the same sentence.
+CONFIG_REMEDY_TEXT = "Set `timezone` in ~/.outlook-mcp/config.json."
+
+
+@lru_cache(maxsize=1)
+def _known_zone_keys() -> frozenset[str]:
+    """Every zone key this host's database holds, built once.
+
+    Membership here, rather than "does ``ZoneInfo`` raise", because the two
+    disagree by platform: macOS resolves names against a case-insensitive
+    ``/usr/share/zoneinfo``, so ``ZoneInfo("america/los_angeles")`` succeeds
+    there and the name goes to Graph exactly as written, while a Linux
+    tzdata-only install refuses the same string. A validator built on the
+    exception therefore passes on a contributor's laptop and rejects in
+    production. ``available_timezones()`` is the same set everywhere.
+
+    Cached because it walks the database — ~50 ms per call, and
+    ``config.timezone`` is resolved on every calendar read.
+    """
+    return frozenset(available_timezones())
+
 
 # Process-local latch so the legacy-zone substitution warns at most once per
 # run rather than on every event created.
@@ -59,30 +83,42 @@ _ISO_DATETIME_RE = re.compile(
 # Time zone abbreviations an agent reaches for when a user says "3pm Pacific".
 # None of these resolve as IANA keys, so they land in `resolve_timezone`'s error
 # path; naming them there turns "not a zone name the database contains" into the
-# sentence that actually fixes the call. Only abbreviations zoneinfo *cannot*
-# resolve belong here: `GMT` is a real key Graph accepts, and `EST`/`MST`/`HST`
-# are real keys Graph *refuses*, handled by the table just below.
+# sentence that actually fixes the call.
+#
+# The invariant is "only abbreviations zoneinfo *cannot* resolve", and it is
+# guarded in both directions by `test_the_abbreviation_table_holds_only_
+# unresolvable_names`. It was false when this shipped: `CET`, `EET` and `WET`
+# all resolve, so the refusal branch was dead for them and they were handed
+# to Graph unchecked. They live in the table below now.
 _TIME_ZONE_ABBREVIATIONS = frozenset(
     {
         "PT", "PST", "PDT", "MT", "MDT", "CT", "CST", "CDT", "ET", "EDT",
-        "AKST", "AKDT", "ADT", "NST", "NDT", "BST", "CET", "CEST", "EET",
-        "EEST", "WET", "WEST", "AEST", "AEDT", "ACST", "ACDT", "AWST",
+        "AKST", "AKDT", "ADT", "NST", "NDT", "BST", "CEST",
+        "EEST", "WEST", "AEST", "AEDT", "ACST", "ACDT", "AWST",
         "NZST", "NZDT", "SGT", "PHT", "KST", "JST", "IST", "ICT",
     }
 )
 
 # Zone names the IANA database *does* resolve and Graph rejects with
-# `400 TimeZoneNotSupportedException` — verified live, 2026-09-21, alongside
-# `America/Los_Angeles`, `Pacific Standard Time`, `GMT`, `US/Pacific`, `Etc/UTC`
-# and `UTC`, which are all accepted. They are legacy fixed-offset keys, so even
-# where Graph took one it would be the wrong answer for a series crossing a DST
-# boundary — which is the bug this validation exists to prevent. Each maps to
-# the zone a caller reaching for it meant.
+# `400 TimeZoneNotSupportedException` — verified live 2026-09-21 (EST/MST/HST)
+# and 2026-09-23 (CET/EET/WET), alongside `America/Los_Angeles`, `Pacific
+# Standard Time`, `GMT`, `US/Pacific`, `Etc/UTC` and `UTC`, which are all
+# accepted. Each maps to the zone a caller reaching for it meant.
 _ZONES_GRAPH_REFUSES = {
     "EST": "America/New_York",
     "MST": "America/Denver",
     "HST": "Pacific/Honolulu",
+    "CET": "Europe/Paris",
+    "EET": "Europe/Athens",
+    "WET": "Europe/Lisbon",
 }
+
+# Of those, the ones that are *also* fixed offsets which never observe daylight
+# saving — so they would be the wrong anchor for a DST-crossing series even if
+# Graph took them. `CET`/`EET`/`WET` are deliberately not here: tzdata gives
+# them CEST/EEST/WEST, verified 2026-09-23 (Jan +1:00, Jul +2:00 for CET), so
+# saying that of them would be false and the reason has to stay true per entry.
+_FIXED_OFFSET_ZONES = frozenset({"EST", "MST", "HST"})
 
 WELL_KNOWN_FOLDERS = {
     "inbox", "drafts", "sentitems", "deleteditems",
@@ -118,12 +154,12 @@ def has_time_zone_database() -> bool:
     """
     try:
         ZoneInfo("UTC")
-    except (ZoneInfoNotFoundError, ValueError):
+    except (ZoneInfoNotFoundError, ValueError, OSError):
         return False
     return True
 
 
-def resolve_timezone(name: str) -> ZoneInfo:
+def resolve_timezone(name: str, remedy: str | None = None) -> ZoneInfo:
     """Return the ``ZoneInfo`` for ``name``, or say why it would not load.
 
     Shared by the calendar read path (where ``name`` is ``config.timezone``)
@@ -144,11 +180,25 @@ def resolve_timezone(name: str) -> ZoneInfo:
     ``ValueError`` is caught alongside ``ZoneInfoNotFoundError`` because
     zoneinfo raises it, not the subclass, for a path-shaped key:
     ``/etc/localtime`` is a plausible thing to put in a config file and would
-    otherwise escape both the truncation and the hint.
+    otherwise escape both the truncation and the hint. ``OSError`` joins them
+    because ``ZoneInfo`` resolves a name against the filesystem where one
+    exists, so a name too long to be a path component fails there instead —
+    ``'x' * 256`` raises ``OSError [Errno 63] File name too long`` on macOS
+    while raising ``ZoneInfoNotFoundError`` on a Windows tzdata-only install.
+    That platform split is why it went unnoticed: the escape is invisible on
+    the machine this was written on, and reaches the model as a message-free
+    crash on the maintainer's.
+
+    ``remedy`` is appended to the not-a-zone message, and the caller supplies
+    it because only the caller knows where the value came from. Naming
+    ``config.json`` unconditionally told a *model* to go and edit the
+    operator's config file to fix its own tool argument.
     """
     try:
+        if name not in _known_zone_keys():
+            raise ZoneInfoNotFoundError(f"No time zone found with key {name}")
         return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError) as exc:
+    except (ZoneInfoNotFoundError, ValueError, OSError) as exc:
         if not has_time_zone_database():
             raise ValueError(
                 f"Invalid timezone: {name[:50]} — this host has no IANA time zone "
@@ -164,8 +214,8 @@ def resolve_timezone(name: str) -> ZoneInfo:
             ) from exc
         raise ValueError(
             f"Invalid timezone: {name[:50]} — not a zone name the IANA database "
-            "contains. Set `timezone` in ~/.outlook-mcp/config.json to a name "
-            "like America/Los_Angeles or UTC."
+            f"contains. Use an IANA name like America/Los_Angeles or UTC."
+            + (f" {remedy}" if remedy else "")
         ) from exc
 
 
@@ -198,12 +248,20 @@ def validate_event_timezone(name: str) -> str:
         )
     replacement = _ZONES_GRAPH_REFUSES.get(key.upper())
     if replacement:
+        # The second clause is true of EST/MST/HST and false of CET/EET/WET,
+        # which do observe daylight saving — so it is stated per entry rather
+        # than of the table, and the table's own comment says why.
+        also_fixed = (
+            " and it is a fixed-offset zone that would not follow daylight saving "
+            "even if it did"
+            if key.upper() in _FIXED_OFFSET_ZONES
+            else ""
+        )
         raise ValueError(
-            f"Invalid timezone: {key[:50]} — Microsoft Graph rejects it, and it is a "
-            f"fixed-offset zone that would not follow daylight saving even if it did. "
+            f"Invalid timezone: {key[:50]} — Microsoft Graph rejects it{also_fixed}. "
             f"Use {replacement}."
         )
-    resolve_timezone(key)
+    resolve_timezone(key, remedy="Pass it as the `timezone` argument.")
     return key
 
 
@@ -242,19 +300,31 @@ def resolve_config_event_timezone(name: str) -> str:
         better = _ZONES_GRAPH_REFUSES[str(key).upper()]
         if key not in _warned_legacy_config_zone:
             _warned_legacy_config_zone.add(key)
+            # The parenthetical is true of EST/MST/HST and false of CET/EET/WET,
+            # so it is chosen per entry — the same split `validate_event_timezone`
+            # makes. Telling an operator that CET "never observes daylight saving"
+            # would be false diagnostic information in the one message they get.
+            why = (
+                f" (not {key!r}, which is a fixed offset that never observes "
+                f"daylight saving)"
+                if str(key).upper() in _FIXED_OFFSET_ZONES
+                else ""
+            )
             logger.warning(
                 "config.timezone is %r, which Microsoft Graph rejects for calendar "
                 "events. Anchoring them in UTC, as this server did before it sent a "
                 "zone at all — so recurring events will still shift an hour across a "
                 "daylight-saving change. Set `timezone` in ~/.outlook-mcp/config.json "
-                "to %s (not %r, which is a fixed offset that never observes daylight "
-                "saving) to fix that.",
+                "to %s%s to fix that.",
                 key,
                 better,
-                key,
+                why,
             )
         return "UTC"
-    return validate_event_timezone(name)
+    # Not `validate_event_timezone`: its remedy names the `timezone` argument,
+    # and this value came from the config file.
+    resolve_timezone(name, remedy=CONFIG_REMEDY_TEXT)
+    return name.strip()
 
 
 def validate_datetime(value: str, tz: str = "UTC", *, now: datetime | None = None) -> str:
@@ -303,7 +373,8 @@ def validate_datetime(value: str, tz: str = "UTC", *, now: datetime | None = Non
             "this moment (units: m, h, d, w)."
         )
 
-    zone = resolve_timezone(tz)
+    # `tz` is `config.timezone` on every caller, so the remedy is the config file.
+    zone = resolve_timezone(tz, remedy=CONFIG_REMEDY_TEXT)
 
     # Second pass: actually parse it to ensure validity
     try:

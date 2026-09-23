@@ -213,10 +213,14 @@ class TestCalendarWrite:
         # The mock answers with a real string, not a MagicMock, because a
         # MagicMock is truthy and would sail through the fallback while
         # serializing to something no Graph response ever contains.
+        # Anchored in a NON-UTC zone deliberately. With a UTC fixture the
+        # preserved anchor and the pre-fix hardcoded `"UTC"` serialize
+        # byte-identically, so reverting the update-side fix left this green.
         current = MagicMock(type=MagicMock(value="singleInstance"))
         current.start = MagicMock(date_time="2026-10-22T00:00:00.0000000", time_zone="UTC")
-        current.original_start_time_zone = "UTC"
-        current.original_end_time_zone = "UTC"
+        current.original_start_time_zone = "America/New_York"
+        current.original_end_time_zone = "America/New_York"
+        current.is_all_day = False
         builder.get = AsyncMock(return_value=current)
         client = MagicMock()
         client.me.events.by_event_id = MagicMock(return_value=builder)
@@ -242,8 +246,49 @@ class TestCalendarWrite:
             "SENTINEL-LOCATION-5b2",
             "SENTINEL-BODY-5b3",
             "sentinel.guest@example.com",
+            # UTC, not the New York anchor above: an all-day event is stored
+            # anchored in UTC whatever zone it is sent, so that is what goes on
+            # the wire. The preserved anchor has its own test below, because
+            # the two are mutually exclusive by design.
+            '"timeZone": "UTC"',
             '"isAllDay": true',
             '"daysOfWeek": ["thursday"]',  # 2026-10-22 is a Thursday
+        )
+
+    async def test_update_event_puts_the_preserved_anchor_on_the_wire(self):
+        """The anchor is a value Graph reads, so assert it in the payload.
+
+        Anchored in a non-UTC zone deliberately. The sibling test above must
+        use an all-day event, which is always UTC-anchored — and with a UTC
+        fixture the preserved anchor and the pre-fix hardcoded `"UTC"`
+        serialize byte-identically, so reverting the update-side fix left it
+        green. This is the one that can tell them apart.
+        """
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
+        current = MagicMock(type=MagicMock(value="singleInstance"))
+        current.start = MagicMock(date_time="2026-10-22T13:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "America/New_York"
+        current.original_end_time_zone = "America/New_York"
+        current.is_all_day = False
+        builder.get = AsyncMock(return_value=current)
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await calendar_write.update_event(
+            client,
+            event_id="AAMkAG123=",
+            subject="SENTINEL-SUBJECT-5c1",
+            start="2026-10-22T09:00:00",
+            end="2026-10-22T10:00:00",
+            config=_CFG,
+        )
+
+        assert_on_wire(
+            builder.patch.call_args[0][0],
+            "SENTINEL-SUBJECT-5c1",
+            '"timeZone": "America/New_York"',
+            '"dateTime": "2026-10-22T09:00:00"',
         )
 
     async def test_update_event_remove_recurrence_is_an_explicit_null(self):

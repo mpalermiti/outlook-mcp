@@ -16,6 +16,7 @@ from outlook_mcp.pagination import (
 )
 from outlook_mcp.tools._recurrence import serialize_recurrence
 from outlook_mcp.validation import (
+    CONFIG_REMEDY_TEXT,
     resolve_timezone,
     sanitize_output,
     validate_datetime,
@@ -40,7 +41,7 @@ def _compute_calendar_range(
     Uses explicit after/before if provided, otherwise computes
     relative to "now" in the configured timezone.
     """
-    tz = resolve_timezone(timezone)
+    tz = resolve_timezone(timezone, remedy=CONFIG_REMEDY_TEXT)
 
     def _now_plus(days_ahead: int) -> str:
         # The guard is load-bearing, not a micro-optimisation. PEP 495 makes

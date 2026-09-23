@@ -3,12 +3,15 @@
 import itertools
 import time
 from unittest.mock import MagicMock
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 import pytest
 
 from outlook_mcp.validation import (
+    _FIXED_OFFSET_ZONES,
+    _TIME_ZONE_ABBREVIATIONS,
     _ZONES_GRAPH_REFUSES,
+    CONFIG_REMEDY_TEXT,
     has_time_zone_database,
     resolve_timezone,
     sanitize_kql,
@@ -322,12 +325,50 @@ class TestTimezoneResolution:
     def test_a_real_zone_resolves(self):
         assert resolve_timezone("America/Los_Angeles").key == "America/Los_Angeles"
 
-    def test_a_typo_names_the_zone_and_where_to_fix_it(self):
+    def test_a_typo_names_the_zone_and_the_callers_own_remedy(self):
+        """The remedy is the caller's to supply, because only it knows the source.
+
+        Naming `config.json` unconditionally meant a *model* passing a bad
+        `timezone` argument was told to go and edit the operator's config file
+        to fix its own input — a hint pointing at the wrong actor, which #53
+        established is worse than none.
+        """
         with pytest.raises(ValueError) as excinfo:
             resolve_timezone("America/Los_Angelez")
         message = str(excinfo.value)
         assert "America/Los_Angelez" in message
-        assert "config.json" in message
+        assert "config.json" not in message
+
+        with pytest.raises(ValueError) as excinfo:
+            resolve_timezone("America/Los_Angelez", remedy=CONFIG_REMEDY_TEXT)
+        assert "config.json" in str(excinfo.value)
+
+    def test_a_name_too_long_to_be_a_path_is_still_a_value_error(self):
+        """`ZoneInfo` resolves against the filesystem, so an over-long name can
+        fail as `OSError` rather than a missing key.
+
+        Platform-split, and that is why it shipped: `'x' * 256` raises
+        `OSError [Errno 63] File name too long` on macOS and
+        `ZoneInfoNotFoundError` on a Windows tzdata-only install. Caught only
+        on the machine it was written on, it reached the model as a
+        message-free crash everywhere else — the exact failure `resolve_timezone`
+        exists to prevent, through the one exception it did not catch.
+        """
+        for length in (255, 256, 4096):
+            with pytest.raises(ValueError) as excinfo:
+                resolve_timezone("x" * length)
+            assert "Invalid timezone" in str(excinfo.value), length
+
+    def test_a_case_variant_is_refused_on_every_platform(self):
+        """macOS would accept this and send it to Graph; Linux would not.
+
+        `ZoneInfo("america/los_angeles")` succeeds against a case-insensitive
+        `/usr/share/zoneinfo`, so a validator built on "does it raise" passes
+        on a contributor's Mac and rejects in production. Membership in
+        `available_timezones()` is the same answer everywhere.
+        """
+        with pytest.raises(ValueError):
+            resolve_timezone("america/los_angeles")
 
     def test_a_missing_database_blames_the_install_not_the_config(self, monkeypatch):
         """No database at all: the fix is the install, not the config value."""
@@ -395,6 +436,49 @@ class TestEventTimezoneValidation:
         message = str(excinfo.value)
         assert "America/New_York" in message
         assert "daylight saving" in message
+
+    def test_the_abbreviation_table_holds_only_unresolvable_names(self):
+        """The invariant, checked in the direction that was false.
+
+        `_TIME_ZONE_ABBREVIATIONS` is documented as "only abbreviations
+        zoneinfo cannot resolve". `CET`, `EET` and `WET` all resolve, so their
+        refusal branch was dead and `validate_event_timezone` handed them
+        straight to Graph — which rejects all three
+        (`400 TimeZoneNotSupportedException`, verified live 2026-09-23). A
+        membership check alone cannot see an entry that does not belong; this
+        is the check that can.
+        """
+        resolvable = sorted(a for a in _TIME_ZONE_ABBREVIATIONS if a in available_timezones())
+        assert resolvable == [], (
+            f"{resolvable} resolve as IANA keys, so the abbreviation branch never fires "
+            f"for them. Either they are real zones Graph accepts and belong nowhere, or "
+            f"Graph refuses them and they belong in _ZONES_GRAPH_REFUSES with a replacement."
+        )
+
+    def test_the_two_zone_tables_do_not_overlap(self):
+        """A name in both would take whichever branch runs first, silently."""
+        assert not (_TIME_ZONE_ABBREVIATIONS & set(_ZONES_GRAPH_REFUSES))
+
+    def test_only_genuinely_fixed_offset_zones_claim_to_be_one(self):
+        """The refusal text says "fixed-offset … never observes daylight saving".
+
+        True of EST/MST/HST, false of CET/EET/WET, which tzdata gives CEST /
+        EEST / WEST. Stating it of the whole table would have put a false
+        sentence in front of the model, so it is per entry — and this is what
+        keeps it true as entries are added.
+        """
+        from datetime import datetime
+
+        for name in _ZONES_GRAPH_REFUSES:
+            tz = ZoneInfo(name)
+            jan = datetime(2026, 1, 15, 12, tzinfo=tz).utcoffset()
+            jul = datetime(2026, 7, 15, 12, tzinfo=tz).utcoffset()
+            observes_dst = jan != jul
+            claimed_fixed = name in _FIXED_OFFSET_ZONES
+            assert claimed_fixed != observes_dst, (
+                f"{name}: table says fixed-offset={claimed_fixed}, tzdata says it "
+                f"observes DST={observes_dst}"
+            )
 
     def test_every_refused_zone_really_does_resolve_in_python(self):
         """Guard the premise of the table itself.

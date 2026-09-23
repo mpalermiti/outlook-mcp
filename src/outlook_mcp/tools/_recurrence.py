@@ -127,25 +127,29 @@ def build_patterned_recurrence(recurrence: dict) -> Any:
 
 
 def maybe_zone(name: str | None) -> Any:
-    """``ZoneInfo(name)`` if it resolves, else ``None``.
+    """The ``ZoneInfo`` for ``name`` if this host has one, else ``None``.
 
-    Graph hands back Windows zone names ("Pacific Standard Time") as readily as
-    IANA ones, and no mapping between the two ships with Python. An
-    unresolvable name means the date below falls back to the text — the
-    behaviour before anchoring existed, which is wrong only for a start whose
-    offset disagrees with its zone, and never worse than not trying.
+    Delegates to ``validation.resolve_timezone`` rather than calling
+    ``ZoneInfo`` again, so there is one place that knows how zone resolution
+    fails — which platform-specific exception each failure raises, and that
+    membership in ``available_timezones()`` is the portable test. This copy
+    caught ``OSError`` when the shared one did not, and the divergence was the
+    bug: an over-long name reached the model as a message-free crash through
+    the path that had *not* been updated.
+
+    The difference that remains is deliberate. ``resolve_timezone`` raises a
+    ``ValueError`` the model can act on, because a bad zone there is the
+    caller's mistake. Here a name that will not resolve is usually Graph's own
+    Windows spelling, which is nobody's mistake, and the answer is to fall back
+    to the date as written.
     """
     if not name:
         return None
-    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    from outlook_mcp.validation import resolve_timezone
 
     try:
-        return ZoneInfo(name)
-    except (ZoneInfoNotFoundError, ValueError, OSError):
-        # OSError because ZoneInfo resolves the name against the filesystem: a
-        # value that is not a usable path component fails there rather than as
-        # a missing key. Every one of the three means the same thing here —
-        # no zone, so use the date as written.
+        return resolve_timezone(name)
+    except ValueError:
         return None
 
 

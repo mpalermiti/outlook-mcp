@@ -36,10 +36,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
   **Behaviour change.** A zone-less `start`/`end` on `outlook_create_event`
   ("2026-10-28T09:00:00") now means that wall-clock time in the configured zone, where it
-  previously meant UTC. On a UTC-configured server nothing changes; on any other, an event
-  created from a zone-less datetime lands where the user meant rather than `config.timezone`'s
-  offset away from it. This is what `SKILL.md` has always said zone-less input means, and what
-  every read path already did.
+  previously meant UTC — *unless* `config.timezone` is one of the legacy names Graph refuses
+  (below), where it still means UTC. On a UTC-configured server nothing changes; on any other,
+  an event created from a zone-less datetime lands where the user meant rather than
+  `config.timezone`'s offset away from it. This is what `SKILL.md` has always said zone-less
+  input means, and what every read path already did.
+
+  On `outlook_update_event` a zone-less time is read in the **event's own** zone, which is
+  neither of the above. Patching a colleague's New York meeting to `09:00` means 09:00 there.
+
+  **All-day events are unaffected**, deliberately. Graph stores one anchored in UTC whatever
+  zone it is sent — verified live, both a midnight `Z` and a naive midnight labelled
+  `America/Los_Angeles` came back `originalStartTimeZone: UTC` — so an all-day event is
+  labelled the way Graph will hold it. Anything else would have been worse than cosmetic: a
+  `00:00Z` start labelled `America/Los_Angeles` is 17:00 the *previous* day, which built the
+  recurrence for the wrong date and the wrong weekday.
 
   **Response shape.** `outlook_get_event` gains `original_start_time_zone` and
   `original_end_time_zone`. `start` and `end` stay UTC, which means they say nothing about the
@@ -49,17 +60,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
   Abbreviations passed as `timezone` are refused locally with the zone name to use instead:
   `PDT` is not a zone name, and Graph answers it with `400 TimeZoneNotSupportedException`. So
-  are `EST`, `MST` and `HST` — those *do* resolve as IANA keys, and Graph rejects them anyway
-  (verified live), while being fixed-offset zones that would not follow daylight saving even if
-  it accepted them.
+  are six names that *do* resolve as IANA keys and that Graph rejects anyway, all verified live —
+  `EST`, `MST` and `HST`, which are fixed offsets that would not follow daylight saving even if
+  it accepted them, and `CET`, `EET` and `WET`, which do observe it and are refused purely
+  because Graph will not take them. The reason is stated per name rather than of the group,
+  because the daylight-saving half is false for the second three.
 
-  An existing `config.timezone` holding one of those three is **not** refused. Nothing ever sent
+  Zone names are checked against `zoneinfo.available_timezones()` rather than by catching what
+  `ZoneInfo()` raises. The two disagree by platform: macOS resolves names against a
+  case-insensitive `/usr/share/zoneinfo`, so `america/los_angeles` is accepted there and sent to
+  Graph as written, while a Linux tzdata-only install refuses it — a validator built on the
+  exception passes on a contributor's laptop and rejects in production.
+
+  An existing `config.timezone` holding one of those six is **not** refused. Nothing ever sent
   it anywhere before this release, so an install carrying one has been working; refusing it now
   would leave that server reading calendars happily while every `outlook_create_event` without an
   explicit `timezone` failed. Instead such an event is anchored in **UTC** — exactly what this
   server wrote before it sent a zone at all — and a warning is logged once per run naming the
   config key and the IANA zone to set. Those installs are no worse off than before; they simply
   do not get DST-correct recurring events until someone edits one line.
+
+  The only signal an operator gets is a log line, which the model never sees — so if an agent
+  needs to know its event was anchored somewhere other than the configured zone, that is still
+  missing. Scoped rather than claimed: the behaviour-change note above says so explicitly.
 
   `EST` is deliberately *not* translated to `America/New_York`: they are different zones. `EST` is
   a fixed UTC−05:00 that never observes daylight saving, and that is how `resolve_timezone` — and
