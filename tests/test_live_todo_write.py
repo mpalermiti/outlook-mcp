@@ -169,9 +169,13 @@ class TestChecklistRoundTrip:
             )
 
             got = await get_task(real_graph_client.sdk_client, task_id)
-            # Unchecked first after re-sorting
-            flags = [i["is_checked"] for i in got["checklist_items"]]
-            assert flags == sorted(flags)
+            # The order an agent reads as "the next step": we added "step one"
+            # then "step two" and checked "step one" — expect that derived
+            # order by name, not the list compared against its own sort.
+            assert [i["display_name"] for i in got["checklist_items"]] == [
+                "step two",
+                "step one",
+            ]
             checked = next(i for i in got["checklist_items"] if i["is_checked"])
             assert checked["id"] == first["checklist_item_id"]
             # checkedDateTime is server-maintained from isChecked, and comes
@@ -224,7 +228,11 @@ class TestAttachmentRoundTrip:
                 assert listing["count"] == 1
                 att = listing["attachments"][0]
                 assert att["name"] == src.name
-                assert att["size"] == len(payload)
+                # Graph's `size` may carry service-side overhead above the raw
+                # byte count (the Exchange-backed store), so >= rather than ==;
+                # the download's byte-for-byte comparison below is the real
+                # fidelity check.
+                assert att["size"] >= len(payload)
 
                 await download_task_attachment(
                     real_graph_client.sdk_client,
