@@ -142,10 +142,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   patch: `is_checked` or rename) and `outlook_delete_checklist_item` manage those sub-steps.
   Task attachments are their own resource, not mail FileAttachments: creation is an inline
   base64 POST of a `taskFileAttachment` — verified live on a consumer outlook.com mailbox
-  from 64 bytes to 4 MB, while the upload-session endpoint answers 404 on those accounts,
-  so the session+chunked-PUT path was never an option there. The client-side ceiling is
-  **1 byte – 20 MiB**: Graph rejects request bodies over 30 MB and base64 inflates the file
-  4/3. Downloads read `contentBytes` off the attachment entity and write atomically (temp
+  from 64 bytes to the full 20 MiB ceiling. (The upload-session route exists on those
+  accounts too — `createUploadSession` answers 201 — but its upload URL is a Graph route,
+  so every chunk PUT needs `Authorization` and `Content-Type` headers, response checking,
+  and `nextExpectedRanges` handling; inline stays the simpler, verified path at these
+  sizes and sessions are the documented future route above 20 MiB.) The client-side
+  ceiling is **1 byte – 20 MiB**: Graph rejects request bodies over 30 MB and base64
+  inflates the file 4/3. Downloads read `contentBytes` off the attachment entity and
+  write atomically (temp
   file + replace), so a failed fetch can never truncate a file already staged in
   `attachments_dir`. `outlook_list_task_attachments` paginates (`$top` + cursor) like every
   other list tool; uploads and downloads are confined to `attachments_dir`, same as mail

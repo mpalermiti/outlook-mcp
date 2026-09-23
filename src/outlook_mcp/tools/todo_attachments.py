@@ -5,12 +5,17 @@ resource lives under ``/me/todo/lists/{id}/tasks/{taskId}/attachments`` and
 the content endpoint is ``.../attachments/{id}/$value``.
 
 Creation is an inline base64 POST — a ``taskFileAttachment`` with
-``contentBytes`` sent to the attachments collection — and on the accounts this
-server targets that is not one option among two: the upload-session endpoint
-(``POST .../tasks/{id}/attachmentSessions``) answers **404** on consumer
-outlook.com mailboxes (verified live), so the session+chunked-PUT path cannot
-work there at all. Inline POST was verified live on the same mailbox from 64
-bytes to 4 MB.
+``contentBytes`` sent to the attachments collection. The upload-session
+route also exists on consumer outlook.com mailboxes
+(``POST .../attachments/createUploadSession``, verified live), but its
+upload URL is a ``graph.microsoft.com`` route rather than a pre-authenticated
+``outlook.office.com`` one like mail's: every chunk PUT needs an
+``Authorization`` header (401 "Access token is empty" without it, verified)
+and a ``Content-Type`` header (400 without it, verified), plus response
+checking and offset-following of ``nextExpectedRanges``. At the sizes this
+tool accepts, inline is one round-trip through kiota's throttling and retry;
+it was verified live on a consumer mailbox from 64 bytes to the full 20 MiB
+ceiling. The session route is the documented future path above that.
 
 Size ceiling: the inline POST is one JSON document, Graph refuses bodies over
 30 MB, and base64 inflates content 4/3 — the hard limit is ~22.5 MB of raw
