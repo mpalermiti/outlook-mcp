@@ -532,7 +532,7 @@ When `allow_categories` is set, any tool in a non-allowed category returns a per
 ## Privacy and Security
 
 - **Zero telemetry.** No analytics, no tracking, no usage data collected.
-- **Zero local caching.** Every call goes directly to Microsoft Graph. No local email/calendar storage.
+- **Zero local caching.** Every call goes directly to Microsoft Graph. No local email/calendar storage. (One carve-out: the To Do default-list id is resolved once per process and kept for the session — an id, not content; see `outlook_list_tasks`.)
 - **Zero third-party calls.** The server only talks to `graph.microsoft.com` and `login.microsoftonline.com`.
 - **Token storage.** OAuth tokens are persisted via `azure-identity`'s `TokenCachePersistenceOptions`. On macOS the OS Keychain is used; on Windows, DPAPI; on Linux with PyGObject/libsecret available, gnome-keyring. On Linux *without* libsecret (e.g. the isolated venv created by `uv tool install`), tokens fall back to a `0600` plaintext file at `~/.IdentityService/` and the MCP logs a one-time warning at startup. For encrypted storage on Linux, install `python3-gi gnome-keyring libsecret-1-0` and re-create the venv with `--system-site-packages`.
 - **No logging of sensitive data.** Message bodies, recipient addresses, and tokens are never logged.

@@ -64,7 +64,8 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   no hand-written Pydantic I/O layer — one existed until 1.16.0, was wired to nothing, and
   is why #41 went unnoticed for fourteen releases: a validator that looked authoritative and
   never ran. If you add one, wire it to the tool path in the same commit.
-- No telemetry, no local caching, no third-party calls
+- No telemetry, no local caching, no third-party calls (carve-out: the To Do default-list
+  id is resolved once per Graph client and kept — an id, not content)
 - Tests: TDD, pytest, mock Graph client for unit tests. Four offline guards against the silent-no-op class that produced #41 — a call that succeeds and does nothing: `test_no_dead_parameters.py` (parameter declared, never read), `test_no_dead_modules.py` (module nothing imports), `test_sdk_fields_exist.py` (attribute assigned on an SDK model that has no such field — the SDK drops it silently), `test_write_payloads_reach_the_wire.py` (each write argument must appear in the *serialized* payload, not just on the model). Fix the finding or justify an allowlist entry in the file; never weaken the guard. Mocks assert what we *send* — they cannot see a query Graph rejects or silently mis-evaluates, so anything that builds a `$filter`/`$orderby`/`$search` string also needs a `@pytest.mark.live` guard
 - Errors: raise OutlookMCPError subclasses, never return error dicts. They inherit the SDK's
   `ToolError` — an *anticipated* failure, whose text the SDK forwards to the model. Anything
@@ -79,8 +80,11 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 - Anything taking a host filesystem path routes through `resolve_attachment_path`. Paths come
   from the model, and the model reads email — treat them as untrusted input, and confine by
   resolving, never by string comparison
-- Tool schemas are a per-turn cost with a measured baseline (~8,644 tokens for 62 tools;
-  ~12.9k for 70 with the To Do detail surface).
+- Tool schemas are a per-turn cost with a measured baseline — two yardsticks, never compared
+  with each other: ~8,644 **o200k** tokens for the 62-tool surface (real tokenizer, ROADMAP
+  2026-07) and ~13.2k **chars/4 proxy** tokens for the 70-tool surface with the To Do detail
+  tools (the budget test's own measure; under the same yardstick the 62-tool surface is
+  ~11.7k, so the To Do detail set costs ~+12% per turn).
   Metadata that is correct but inert — `openWorldHint`, which is `true` by default anyway, or
   titles that restate the tool name — is not free. `test_tool_surface_budget.py` holds the line
 - Datetimes: UTC in responses, config timezone for input interpretation
