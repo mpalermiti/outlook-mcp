@@ -32,6 +32,7 @@ from __future__ import annotations
 import mimetypes
 import os
 import tempfile
+from pathlib import Path
 from typing import Any
 
 from outlook_mcp.config import Config
@@ -149,6 +150,32 @@ async def list_task_attachments(
     }
 
 
+def _validated_download_target(save_path: str, attachments_dir: str) -> str:
+    """Refuse a download target that cannot land, before any Graph call.
+
+    Two shapes used to slip past the confinement check and blow up late:
+    ``save_path`` resolving to the attachments directory itself (``"."`` is
+    relative to it, and ``is_relative_to`` is satisfied) sent ``dirname()`` one
+    level *above* the fence, so the temp file landed next to ``config.json``;
+    and a path whose parent does not exist made it all the way through the
+    fetch before ``mkstemp`` raised FileNotFoundError — an OS error whose text
+    never reaches the model. Both are caller-input problems, so both are
+    ValueError, checked before a single byte is requested.
+    """
+    resolved = Path(save_path)
+    if resolved.is_dir():
+        raise ValueError(
+            f"Attachment download target is a directory, not a file: "
+            f"{resolved}. Pass a file path inside {attachments_dir}."
+        )
+    if not resolved.parent.is_dir():
+        raise ValueError(
+            f"Attachment download directory does not exist: {resolved.parent}. "
+            "Create it first — downloads do not create directories on demand."
+        )
+    return save_path
+
+
 async def download_task_attachment(
     graph_client: Any,
     task_id: str,
@@ -161,14 +188,18 @@ async def download_task_attachment(
     """Download a To Do task attachment's content to a local file.
 
     GET /me/todo/lists/{id}/tasks/{taskId}/attachments/{attId}, bytes from
-    contentBytes (kiota decodes the base64). All bytes are fetched *before*
-    the destination is touched, and the write lands via a temp file + atomic
-    replace — an empty or failed download never truncates a staged file under
-    its trusted name. A 0-byte attachment writes an honest 0-byte file.
+    contentBytes (kiota decodes the base64). The payload is cross-checked
+    against the entity's own `size` — a response whose bytes contradict its
+    declared size errors out rather than writing half an attachment. All
+    bytes are fetched *before* the destination is touched, and the write lands
+    via a temp file + atomic replace — an empty or failed download never
+    truncates a staged file under its trusted name. A 0-byte attachment
+    (size 0, no contentBytes) writes an honest 0-byte file.
     """
     task_id = validate_graph_id(task_id)
     attachment_id = validate_graph_id(attachment_id)
     save_path = resolve_attachment_path(save_path, config.attachments_dir)
+    save_path = _validated_download_target(save_path, config.attachments_dir)
     resolved_id = await _resolve_list_id(graph_client, list_id)
 
     attachment = await (

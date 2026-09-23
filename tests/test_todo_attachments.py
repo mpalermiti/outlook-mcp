@@ -296,6 +296,156 @@ class TestDownloadTaskAttachment:
                 config=config,
             )
 
+    async def test_download_missing_bytes_with_declared_size_is_an_error(
+        self, tmp_path
+    ):
+        """The old bug: contentBytes absent -> `or b""` wrote a 0-byte file
+        under the trusted name and reported success. The entity's own size is
+        the witness — bytes and declared size must not contradict each other,
+        and a staged destination file must survive the refusal."""
+        client = _build_mock_client(
+            attachment_entity=_entity(
+                id="att1",
+                name="handbook.pdf",
+                content_type="application/pdf",
+                content_bytes=None,
+                size=1234,
+            )
+        )
+        config = _cfg(tmp_path)
+        base = tmp_path / "att"
+        base.mkdir(parents=True)
+        staged = base / "handbook.pdf"
+        staged.write_bytes(b"precious staged bytes")
+
+        with pytest.raises(ValueError, match="declares 1234 bytes"):
+            await download_task_attachment(
+                client,
+                task_id="task1",
+                attachment_id="att1",
+                save_path="handbook.pdf",
+                config=config,
+            )
+
+        assert staged.read_bytes() == b"precious staged bytes"
+
+    async def test_download_entity_without_content_bytes_property_is_a_clear_error(
+        self, tmp_path
+    ):
+        """A response without @odata.type deserializes as AttachmentBase,
+        which has no content_bytes attribute — that must be a ValueError, not
+        a bare AttributeError whose text never reaches the model."""
+        from msgraph.generated.models.attachment_base import AttachmentBase
+
+        entity = AttachmentBase()
+        entity.id = "att1"
+        entity.name = "handbook.pdf"
+        entity.content_type = "application/pdf"
+        entity.size = 1234
+
+        client = _build_mock_client(attachment_entity=entity)
+        config = _cfg(tmp_path)
+
+        with pytest.raises(ValueError, match="no contentBytes property"):
+            await download_task_attachment(
+                client,
+                task_id="task1",
+                attachment_id="att1",
+                save_path="handbook.pdf",
+                config=config,
+            )
+
+    async def test_download_bytes_where_size_says_zero_is_an_error(self, tmp_path):
+        """The contradiction in the other direction: a payload the entity
+        claims is empty is not written either."""
+        client = _build_mock_client(
+            attachment_entity=_entity(
+                id="att1",
+                name="handbook.pdf",
+                content_type="application/pdf",
+                content_bytes=b"%PDF-fake-bytes",
+                size=0,
+            )
+        )
+        config = _cfg(tmp_path)
+
+        with pytest.raises(ValueError, match="contradicts itself"):
+            await download_task_attachment(
+                client,
+                task_id="task1",
+                attachment_id="att1",
+                save_path="handbook.pdf",
+                config=config,
+            )
+
+    async def test_download_declared_size_zero_with_no_bytes_writes_empty(
+        self, tmp_path
+    ):
+        """A 0-byte attachment carries size=0 and no contentBytes — honest
+        data, and the witness check must not block it."""
+        client = _build_mock_client(
+            attachment_entity=_entity(
+                id="att1",
+                name="empty.bin",
+                content_type="application/octet-stream",
+                content_bytes=None,
+                size=0,
+            )
+        )
+        config = _cfg(tmp_path)
+
+        result = await download_task_attachment(
+            client,
+            task_id="task1",
+            attachment_id="att1",
+            save_path="empty.bin",
+            config=config,
+        )
+
+        assert (tmp_path / "att" / "empty.bin").read_bytes() == b""
+        assert result["size"] == 0
+
+    async def test_download_rejects_the_directory_itself_before_any_fetch(
+        self, tmp_path
+    ):
+        """save_path resolving to attachments_dir (or '.') passed the
+        confinement check and sent dirname() one level above the fence —
+        mkstemp would land next to config.json. Refused before the Graph
+        call now."""
+        client = _build_mock_client()
+        config = _cfg(tmp_path)
+
+        with pytest.raises(ValueError, match="is a directory"):
+            await download_task_attachment(
+                client,
+                task_id="task1",
+                attachment_id="att1",
+                save_path=".",
+                config=config,
+            )
+
+        _attachments_of(client).by_attachment_base_id.return_value.get.assert_not_called()
+
+    async def test_download_rejects_missing_parent_directory_before_any_fetch(
+        self, tmp_path
+    ):
+        """sub/x.pdf with sub/ absent used to fail at mkstemp *after* the
+        fetch, with a FileNotFoundError the model never sees. ValueError,
+        before the fetch."""
+        client = _build_mock_client()
+        config = _cfg(tmp_path)
+
+        with pytest.raises(ValueError, match="does not exist"):
+            await download_task_attachment(
+                client,
+                task_id="task1",
+                attachment_id="att1",
+                save_path="sub/x.pdf",
+                config=config,
+            )
+
+        _attachments_of(client).by_attachment_base_id.return_value.get.assert_not_called()
+
 
 # --- upload_task_attachment ---
 
