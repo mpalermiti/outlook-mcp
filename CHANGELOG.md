@@ -157,6 +157,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **The five existing To Do tools got stricter inputs and ISO datetimes.** `outlook_list_tasks`,
+  `outlook_get_task`, `outlook_create_task`, `outlook_update_task`, `outlook_complete_task` and
+  `outlook_delete_task` (and the new detail tools) share one `list_id` resolver, and it changed
+  in ways clients can observe. An empty `list_id` string is now **rejected** instead of
+  silently falling back to the default list — clients that fill every optional string with `""`
+  were quietly targeting the default list; the error names the fix (omit the argument). An
+  explicit `list_id` is now validated as a Graph id, so a mistyped id fails locally with the
+  offending value instead of as an opaque Graph 400. The default list is resolved **once per
+  process** rather than on every call (halving the request count of a normal checklist flow);
+  only a found `defaultList` is cached — the first-list fallback re-resolves. Response
+  timestamps (`created`, `completed`, `checked_at`) are now real ISO 8601 with a `T`
+  (`2026-09-15T09:00:00+00:00`), not Python's `str(datetime)` with a space separator, so they
+  sort and parse as datetimes.
+
 - **SKILL.md installs from PyPI instead of cloning `main`.** The OpenClaw install manifest
   ran `git clone … && uv sync`, which fetches whatever is on the default branch at install
   time — unpinned, unversioned, and not what any release was tested as. It now runs
