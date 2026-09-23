@@ -778,6 +778,38 @@ class TestGetTask:
             assert result["checklist_items"] == []
             assert result["checklist_count"] == 0
 
+    async def test_get_task_follows_a_paged_checklist_expansion(self):
+        """Defensive: if Graph ever truncates the $expand and hands back a
+        checklistItems@odata.nextLink, the sub-steps on the next page must
+        still reach the caller — followed via with_url on the raw link,
+        because the typed expand has no page-two query to rebuild."""
+        expand_link = (
+            "https://graph.microsoft.com/v1.0/me/todo/lists/list1/tasks/task1"
+            "/checklistItems?$skiptoken=MSxn"
+        )
+        task = _mock_task(
+            checklist_items=[_mock_checklist_item(item_id="ci1", display_name="page one")]
+        )
+        task.additional_data = {"checklistItems@odata.nextLink": expand_link}
+        client = _build_mock_client(tasks=[task])
+        page2 = MagicMock(
+            value=[_mock_checklist_item(item_id="ci2", display_name="page two")],
+            odata_next_link=None,
+        )
+        page2_via_url = MagicMock()
+        page2_via_url.get = AsyncMock(return_value=page2)
+        self._task_item(client).return_value.checklist_items.with_url = MagicMock(
+            return_value=page2_via_url
+        )
+
+        result = await get_task(client, task_id="task1")
+
+        self._task_item(client).return_value.checklist_items.with_url.assert_called_once_with(
+            expand_link
+        )
+        assert result["checklist_count"] == 2
+        assert {i["id"] for i in result["checklist_items"]} == {"ci1", "ci2"}
+
     async def test_get_task_validates_id(self):
         client = _build_mock_client()
         with pytest.raises(ValueError):

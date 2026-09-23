@@ -404,7 +404,32 @@ async def get_task(
     # $expand Graph fills that list directly, and an empty expansion is [].
     # There is no collection response to unwrap (verified live: every task
     # carrying sub-steps crashed on a phantom `.value`).
-    raw_items = getattr(task, "checklist_items", None) or []
+    raw_items = list(getattr(task, "checklist_items", None) or [])
+    # Defensive: an $expand whose result exceeds Graph's page limit comes back
+    # truncated with `checklistItems@odata.nextLink` in the task's
+    # additional_data. Whether To Do ever actually pages this expansion is
+    # unverified (forcing it live would take a checklist past the page size,
+    # and this is a read path) — so this follows the link if it ever appears
+    # rather than assuming it cannot, the same with_url walk the lists use.
+    next_link = (getattr(task, "additional_data", None) or {}).get(
+        "checklistItems@odata.nextLink"
+    )
+    pages = 1
+    while isinstance(next_link, str) and next_link:
+        pages += 1
+        if pages > _PAGE_CAP:
+            raise ValueError(
+                f"checklistItems expansion kept returning a nextLink for "
+                f"{pages} pages on task {task_id} — refusing to walk further"
+            )
+        page = await (
+            graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
+            .tasks.by_todo_task_id(task_id)
+            .checklist_items.with_url(next_link)
+            .get()
+        )
+        raw_items.extend(list(page.value) if page and page.value else [])
+        next_link = getattr(page, "odata_next_link", None)
     items = [_format_checklist_item(i) for i in raw_items]
     result["checklist_items"] = _checked_last(items)
     result["checklist_count"] = len(items)
