@@ -263,10 +263,10 @@ async def upload_task_attachment(
 
     # Race-free size gate. `os.stat` then an unbounded `f.read()` let a file
     # that grows in the window between the two bypass the cap entirely (the
-    # maintainer reproduced it offline: the gate saw 1 KiB, the wire got
-    # 26 MB) and reported a stale size. The read itself is the gate: capped
-    # at MAX+1 bytes, so an over-cap file is caught without ever being read
-    # whole, and the sent size is always the length actually read.
+    # gate can see 1 KiB while the wire gets 26 MB) and reported a stale
+    # size. The read itself is the gate: capped at MAX+1 bytes, so an
+    # over-cap file is caught without ever being read whole, and the sent
+    # size is always the length actually read.
     with open(file_path, "rb") as f:
         content = f.read(_MAX_ATTACHMENT_SIZE + 1)
     file_size = len(content)
