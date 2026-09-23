@@ -739,9 +739,15 @@ class TestShowAsIsHonoured:
         nothing — passing just as happily if Graph started dropping `showAs`
         the way it dropped `isOnlineMeeting`. So the event is created at a
         value the case under test never uses.
+
+        The starting value must also never be `busy`, for the same reason one
+        level down: `busy` is what Graph applies on its own, so a premise guard
+        asserting the event started there holds whether or not *create* stored
+        anything. The `free` case used to start from `busy` and was the one
+        case still proving nothing.
         """
         monday = _anchor_monday()
-        initial = "free" if value != "free" else "busy"
+        initial = "free" if value != "free" else "tentative"
 
         async with _temporary_event(
             real_graph_client,

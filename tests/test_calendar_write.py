@@ -1487,7 +1487,14 @@ class TestShowAs:
         Graph answers a bad showAs with a 400 whose text does not list the
         alternatives. The caller here is a model choosing from a menu it cannot
         see, so the message carries the menu.
+
+        The expected values are read off ``FreeBusyStatus`` rather than typed
+        here, so this cannot pass while the message names a subset — which is
+        how it previously missed that `unknown` went unlisted in `SKILL.md`.
+        If the SDK ever gains a member, this fails until the refusal names it.
         """
+        from msgraph.generated.models.free_busy_status import FreeBusyStatus
+
         mock_client = AsyncMock()
         mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
 
@@ -1502,8 +1509,8 @@ class TestShowAs:
             )
 
         message = str(excinfo.value)
-        for value in ("free", "tentative", "busy", "oof", "workingElsewhere"):
-            assert value in message, f"refusal does not name {value!r}: {message}"
+        for member in FreeBusyStatus:
+            assert member.value in message, f"refusal does not name {member.value!r}: {message}"
         mock_client.me.events.post.assert_not_called()
 
     async def test_invalid_show_as_on_update_never_reaches_graph(self):

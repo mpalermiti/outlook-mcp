@@ -128,9 +128,15 @@ def _free_busy(value: str) -> Any:
         if member.value.lower() == normalised:
             return member
 
+    # The valid set is derived from the enum so it cannot drift. The sentence
+    # after it names only the two values whose Graph spelling differs from the
+    # label Outlook shows — the same two `_FREE_BUSY_ALIASES` exists for — and
+    # no longer claims to translate the whole list. Naming all six would mean
+    # inventing an Outlook label for `unknown`, which the UI does not offer,
+    # so the enumeration is the part that had to go rather than the hint.
     raise ValueError(
-        f"Invalid show_as '{value[:50]}'. Must be one of: {valid} — Outlook shows "
-        f"these as Free, Tentative, Busy, Out of office and Working elsewhere."
+        f"Invalid show_as '{value[:50]}'. Must be one of: {valid}. Outlook labels "
+        f"'oof' as Out of office and 'workingElsewhere' as Working elsewhere."
     )
 
 
