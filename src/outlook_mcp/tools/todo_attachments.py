@@ -35,6 +35,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.permissions import CATEGORY_TODO_WRITE, check_permission
@@ -293,11 +295,33 @@ async def upload_task_attachment(
     att.size = file_size
     att.content_bytes = content
 
-    response = await (
-        graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
-        .tasks.by_todo_task_id(task_id)
-        .attachments.post(att)
-    )
+    from kiota_abstractions.base_request_configuration import RequestConfiguration
+    from kiota_http.middleware.options.retry_handler_option import RetryHandlerOption
+
+    # One POST, no retries. kiota's RetryHandler re-sends on 429/503/504, and
+    # for this call that means up to three more copies of a ~28 MB JSON body
+    # (112 MB of upload for one attachment) — and a 504 that arrives *after*
+    # the server committed creates duplicate attachments that no read-back
+    # guard can see, because the failure looks transport-level. A per-request
+    # option disables just this POST; the handler stays on for everything
+    # else the client sends.
+    one_shot = RequestConfiguration(options=[RetryHandlerOption(should_retry=False)])
+
+    try:
+        response = await (
+            graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
+            .tasks.by_todo_task_id(task_id)
+            .attachments.post(att, request_configuration=one_shot)
+        )
+    except httpx.TimeoutException as exc:
+        # With retries off, a transport timeout is a single unanswered
+        # attempt — but the server may still have committed it. Say the
+        # verify-first thing, same as the no-id branch below.
+        raise ValueError(
+            "Attachment upload timed out — the POST is not auto-retried "
+            "(re-sending a ~28 MB body may attach a duplicate). Verify with "
+            "outlook_list_task_attachments whether it landed before retrying."
+        ) from exc
 
     if response is None or response.id is None:
         # Optional[AttachmentBase] on the SDK side; an empty 201/204 must not

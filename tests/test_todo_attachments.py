@@ -554,6 +554,49 @@ class TestUploadTaskAttachment:
                 client, task_id="task1", file_path=str(source_file), config=config
             )
 
+    async def test_upload_post_is_marked_do_not_retry(self, tmp_path, source_file):
+        """kiota's RetryHandler re-sends on 429/503/504 — for this POST that
+        is up to three more copies of a ~28 MB body, and a 504 that lands
+        after the server committed silently attaches duplicates. The request
+        must carry RetryHandlerOption(should_retry=False); kiota honors the
+        per-request option over the handler default (RetryHandler.send reads
+        it via request options), so a first 504 is answered by exactly one
+        send."""
+        from kiota_http.middleware.options.retry_handler_option import RetryHandlerOption
+
+        client = _build_mock_client()
+        config = _cfg(tmp_path)
+
+        await upload_task_attachment(
+            client, task_id="task1", file_path=str(source_file), config=config
+        )
+
+        kwargs = _attachments_of(client).post.call_args.kwargs
+        options = list(kwargs["request_configuration"].options)
+        retry_options = [o for o in options if isinstance(o, RetryHandlerOption)]
+        assert len(retry_options) == 1, options
+        assert retry_options[0].should_retry is False
+
+    async def test_upload_timeout_maps_to_a_verify_first_error(self, tmp_path, source_file):
+        """With retries off, a transport timeout is one unanswered attempt —
+        but the server may still have committed it. The error says verify
+        first, not retry, in ValueError form so the text reaches the model."""
+        import httpx
+
+        client = _build_mock_client()
+        _attachments_of(client).post = AsyncMock(
+            side_effect=httpx.ConnectTimeout("timed out sending 28 MB")
+        )
+        config = _cfg(tmp_path)
+
+        with pytest.raises(ValueError, match="outlook_list_task_attachments"):
+            await upload_task_attachment(
+                client, task_id="task1", file_path=str(source_file), config=config
+            )
+
+        # And the one timed-out attempt was the only send.
+        assert _attachments_of(client).post.await_count == 1
+
     async def test_upload_size_gate_reads_the_file_not_the_stat(self, tmp_path):
         """The gate used to be os.stat followed by an unbounded read, so a
         file growing in between sailed through the cap with a stale size
