@@ -448,8 +448,20 @@ async def test_get_task_checklist_expand_is_accepted(real_graph_client):
         assert isinstance(item["display_name"], str)
         assert isinstance(item["is_checked"], bool)
     # Unchecked-first ordering is part of the tool's contract: an agent reads
-    # the first unchecked item as "the next step" — and the order within each
-    # group must be the deterministic (is_checked, created) key, not whatever
-    # Graph happened to return.
-    keys = [(i["is_checked"], i["created"]) for i in detail["checklist_items"]]
-    assert keys == sorted(keys), f"checklist order broke the (is_checked, created) key: {keys}"
+    # the first unchecked item as "the next step". Rather than compare the
+    # emission to its own sort (which can only re-verify Python's sorted()),
+    # assert the contract directly — pairwise, no checked item precedes an
+    # unchecked one and `created` never runs backwards within a group.
+    items = detail["checklist_items"]
+    for earlier, later in zip(items, items[1:]):
+        assert (earlier["is_checked"], earlier["created"]) <= (
+            later["is_checked"],
+            later["created"],
+        ), f"checklist order broke the (is_checked, created) key: {items}"
+    # And the load-bearing half for an agent loop: two identical calls on an
+    # unchanged task emit the same order — a nondeterministic "next step" is
+    # the bug this contract exists to prevent.
+    again = await get_task(real_graph_client.sdk_client, detail["id"])
+    assert [(i["is_checked"], i["created"]) for i in again["checklist_items"]] == [
+        (i["is_checked"], i["created"]) for i in items
+    ]
