@@ -46,6 +46,57 @@ from outlook_mcp.validation import sanitize_output, validate_graph_id
 # 4/3 — 25 MiB of file is ~33.4 MB of JSON and a guaranteed 400.
 _MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024
 
+# Sentinel for "the response entity has no contentBytes property at all" —
+# distinct from None, which a 0-byte attachment legitimately carries.
+_NO_CONTENT_BYTES = object()
+
+
+def _verified_content_bytes(attachment: Any, attachment_id: str) -> bytes:
+    """contentBytes off the entity, cross-checked against its ``size``.
+
+    A missing ``contentBytes`` used to be smoothed over with ``or b""``: the
+    download wrote a 0-byte file under the trusted name and reported success,
+    which is exactly what the atomic-write docstring promises can never
+    happen. So the entity's own ``size`` — already in the response — is the
+    witness: no bytes where size says there are some (or the reverse) is a
+    broken response, not an empty attachment, and errors out before any file
+    is touched.
+
+    The property check exists because kiota picks the model class from
+    ``@odata.type``: a response without it deserializes as ``AttachmentBase``,
+    which has no ``content_bytes`` attribute at all, and a bare attribute read
+    would raise AttributeError whose text never reaches the model.
+    """
+    content = getattr(attachment, "content_bytes", _NO_CONTENT_BYTES)
+    if content is _NO_CONTENT_BYTES:
+        raise ValueError(
+            f"Attachment {attachment_id} came back with no contentBytes "
+            "property (the response may lack @odata.type, so the SDK built "
+            "the wrong entity type) — nothing was written; re-list with "
+            "outlook_list_task_attachments and report the response"
+        )
+    declared = getattr(attachment, "size", None)
+    # Only an int witnesses anything; anything else (mocks, absent property)
+    # cannot contradict the payload and must not block an honest 0-byte write.
+    if isinstance(declared, int):
+        if not content and declared > 0:
+            raise ValueError(
+                f"Attachment {attachment_id} declares {declared} bytes but "
+                "Graph returned no contentBytes — refusing to write an empty "
+                "file and call it the attachment; nothing was written, "
+                "re-try the download or re-list with "
+                "outlook_list_task_attachments"
+            )
+        if content and declared == 0:
+            raise ValueError(
+                f"Attachment {attachment_id} returned {len(content)} bytes "
+                "but declares size 0 — the response contradicts itself; "
+                "nothing was written"
+            )
+    # contentBytes is Optional[bytes]; a 0-byte attachment legitimately
+    # carries None or b"" past the witness check above.
+    return content or b""
+
 
 async def list_task_attachments(
     graph_client: Any,
@@ -131,9 +182,7 @@ async def download_task_attachment(
             f"Graph returned no attachment for id {attachment_id} — it may be "
             "gone; re-list with outlook_list_task_attachments"
         )
-    # contentBytes is Optional[bytes]; a 0-byte attachment legitimately comes
-    # back empty, and a missing property is indistinguishable from empty here.
-    content = attachment.content_bytes or b""
+    content = _verified_content_bytes(attachment, attachment_id)
 
     fd, tmp_path = tempfile.mkstemp(
         dir=os.path.dirname(save_path), prefix=".download-", suffix=".tmp"
