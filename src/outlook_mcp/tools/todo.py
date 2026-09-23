@@ -279,10 +279,14 @@ async def list_task_lists(graph_client: Any) -> dict:
     """List all To Do task lists.
 
     GET /me/todo/lists
-    Returns {task_lists: [{id, display_name, is_default}], count}.
+    Returns {task_lists: [{id, display_name, is_default}], count, has_more,
+    next_cursor}. The walk follows every ``@odata.nextLink`` server-side (see
+    ``fetch_all_task_lists``), so the listing is always complete: ``has_more``
+    is False and ``next_cursor`` is None on every return — the pair is emitted
+    anyway so the shape matches the other list tools, and a caller that polls
+    on it simply stops.
     """
-    response = await graph_client.me.todo.lists.get()
-    lists = response.value or []
+    lists = await fetch_all_task_lists(graph_client)
 
     task_lists = []
     for lst in lists:
@@ -306,6 +310,8 @@ async def list_task_lists(graph_client: Any) -> dict:
     return {
         "task_lists": task_lists,
         "count": len(task_lists),
+        "has_more": False,
+        "next_cursor": None,
     }
 
 

@@ -274,6 +274,40 @@ class TestListTaskLists:
         assert result["task_lists"][1]["is_default"] is False
         client.me.todo.lists.get.assert_called_once()
 
+    async def test_follows_nextlink_to_every_page(self):
+        """/me/todo/lists pages with $skiptoken and the SDK's typed query
+        class cannot carry it — the walk follows the raw link with with_url,
+        so no list can hide on page two."""
+        next_link = (
+            "https://graph.microsoft.com/v1.0/me/todo/lists?$skiptoken=MSxn"
+        )
+        page1 = MagicMock(
+            value=[_mock_task_list("list1", "First", True, "defaultList")],
+            odata_next_link=next_link,
+        )
+        page2 = MagicMock(
+            value=[_mock_task_list("list2", "Second", False, "none")],
+            odata_next_link=None,
+        )
+        client = _build_mock_client()
+        client.me.todo.lists.get = AsyncMock(return_value=page1)
+        page2_via_url = MagicMock()
+        page2_via_url.get = AsyncMock(return_value=page2)
+        client.me.todo.lists.with_url = MagicMock(return_value=page2_via_url)
+
+        result = await list_task_lists(client)
+
+        client.me.todo.lists.with_url.assert_called_once_with(next_link)
+        assert result["count"] == 2
+        assert [lst["display_name"] for lst in result["task_lists"]] == [
+            "First",
+            "Second",
+        ]
+        # The walk is server-side-complete, so the cursor pair is terminal —
+        # emitted for shape consistency with the other list tools.
+        assert result["has_more"] is False
+        assert result["next_cursor"] is None
+
     async def test_empty_lists(self):
         """list_task_lists handles no task lists."""
         client = _build_mock_client(lists=[])
