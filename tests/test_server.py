@@ -306,6 +306,15 @@ class TestCalendarWriteArgumentOrder:
     twice. These run the *real* handler behind the *real* server wrapper and
     assert on the Graph model that comes out the other end, so a `show_as`
     landing in `recurrence`'s slot fails here rather than at a user's mailbox.
+
+    `timezone` and `show_as` are the pair that matters now. Both arrived as a
+    bare `str | None` appended to `create_event`, from two branches that did not
+    see each other — #76 and this one — and the signature and `server.py`'s
+    positional call are edited in different files. Swap them in one place only
+    and nothing fails until a caller supplies a value: `show_as="tentative"`
+    alone becomes `Invalid timezone: tentative`, and `timezone="Europe/London"`
+    alone becomes `Invalid show_as`. Each direction gets its own test, because a
+    single test that passes both values would still pass if both were swapped.
     """
 
     @staticmethod
@@ -341,6 +350,7 @@ class TestCalendarWriteArgumentOrder:
                 start="2026-09-07T12:30:00Z",
                 end="2026-09-07T13:00:00Z",
                 location="Room 101",
+                timezone="America/New_York",
                 show_as="tentative",
             )
 
@@ -348,7 +358,77 @@ class TestCalendarWriteArgumentOrder:
         assert event.subject == "Review"
         assert event.location.display_name == "Room 101"
         assert event.show_as.value == "tentative"
+        assert event.start.time_zone == "America/New_York"
         assert event.recurrence is None
+
+    @pytest.mark.asyncio
+    async def test_show_as_alone_is_not_read_as_a_timezone(self):
+        """The exact call the slot swap breaks, with `timezone` left out.
+
+        If `show_as` were passed into `timezone`'s slot this raises
+        `Invalid timezone: tentative` rather than creating anything, and the
+        anchor silently stops falling back to the configured zone.
+        """
+        from unittest.mock import AsyncMock
+
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        sdk = AsyncMock()
+        sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        client = MagicMock()
+        client.sdk_client = sdk
+
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=Config(client_id="test")),
+        ):
+            await server_mod.outlook_create_event(
+                self._ctx(),
+                subject="Review",
+                start="2026-09-07T12:30:00Z",
+                end="2026-09-07T13:00:00Z",
+                show_as="tentative",
+            )
+
+        event = sdk.me.events.post.call_args[0][0]
+        assert event.show_as.value == "tentative"
+        # Config default, i.e. the fallback really was reached.
+        assert event.start.time_zone == "UTC"
+
+    @pytest.mark.asyncio
+    async def test_timezone_alone_is_not_read_as_show_as(self):
+        """The mirror of the above, which the other direction of the swap breaks.
+
+        `show_as` must stay unset: assigning it a zone name would raise
+        `Invalid show_as`, and a `show_as` we never asked for reaching the wire
+        would overwrite the event's free/busy status.
+        """
+        from unittest.mock import AsyncMock
+
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        sdk = AsyncMock()
+        sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        client = MagicMock()
+        client.sdk_client = sdk
+
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=Config(client_id="test")),
+        ):
+            await server_mod.outlook_create_event(
+                self._ctx(),
+                subject="Review",
+                start="2026-09-07T12:30:00Z",
+                end="2026-09-07T13:00:00Z",
+                timezone="Europe/London",
+            )
+
+        event = sdk.me.events.post.call_args[0][0]
+        assert event.start.time_zone == "Europe/London"
+        assert event.show_as is None
 
     @pytest.mark.asyncio
     async def test_update_event_arguments_land_in_the_right_slots(self):
