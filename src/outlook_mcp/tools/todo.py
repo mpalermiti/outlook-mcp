@@ -77,14 +77,14 @@ def _iso_datetime(value: Any) -> str:
 _DEFAULT_LIST_BY_CLIENT: WeakKeyDictionary = WeakKeyDictionary()
 
 
-def _lists_first_page_config() -> Any:
+def _lists_first_page_config(top: int = 100) -> Any:
     """RequestConfiguration for the first ``/me/todo/lists`` page."""
     from msgraph.generated.users.item.todo.lists.lists_request_builder import (
         ListsRequestBuilder,
     )
 
     return build_request_config(
-        ListsRequestBuilder.ListsRequestBuilderGetQueryParameters, {"$top": 100}
+        ListsRequestBuilder.ListsRequestBuilderGetQueryParameters, {"$top": top}
     )
 
 
@@ -100,7 +100,7 @@ async def fetch_all_task_lists(graph_client: Any, top: int = 100) -> list[Any]:
     with a page cap so a misbehaving server cannot loop us.
     """
     response = await graph_client.me.todo.lists.get(
-        request_configuration=_lists_first_page_config()
+        request_configuration=_lists_first_page_config(top)
     )
     collected = list(response.value) if response and response.value else []
     pages = 1
