@@ -1,14 +1,18 @@
 """Tests for auth module."""
 
 import logging
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
+from azure.core.exceptions import ClientAuthenticationError
+from azure.identity import AuthenticationRecord, DeviceCodeCredential
 
 from outlook_mcp import auth as auth_module
 from outlook_mcp.auth import AuthManager, _unencrypted_fallback_will_be_used
 from outlook_mcp.config import Config
 from outlook_mcp.errors import AuthRequiredError, UnencryptedTokenCacheError
+
+GRAPH_SCOPE = "https://graph.microsoft.com/.default"
 
 
 @pytest.fixture(autouse=True)
@@ -234,7 +238,8 @@ class TestUnencryptedCacheIsOptIn:
             auth.try_cached_token()
 
     # azure-identity's own text, from _persistent_cache.py — raised lazily at
-    # first token use, not at credential construction.
+    # first token use, not at credential construction, where the persistent
+    # cache is built.
     AZURE_REFUSAL = ValueError(
         "Cache encryption is impossible because libsecret dependencies are not "
         "installed or are unusable, for example because no display is available "
@@ -243,20 +248,38 @@ class TestUnencryptedCacheIsOptIn:
         "instead of raising this exception."
     )
 
+    # A well-formed record, so the silent path gets past construction.
+    RECORD = AuthenticationRecord(
+        tenant_id="consumers",
+        client_id="test-id",
+        authority="https://login.microsoftonline.com/consumers",
+        home_account_id="home-1",
+        username="user@example.com",
+    )
+
     def test_libsecret_installed_but_unusable_is_the_same_condition(self):
         """gi importable + no Secret Service: our eager check cannot see this.
 
         A display-less SSH session or a container hits azure's lazy refusal at
-        ``get_token``. Left untranslated it surfaces as a generic failure naming
-        azure's kwarg, not the config key the operator actually sets.
+        ``get_token`` — and every token-acquisition method azure-identity
+        exposes is wrapped by ``@wrap_exceptions``, which re-types the refusal
+        into a ``ClientAuthenticationError`` before we see it. These tests
+        drive the refusal through a REAL credential so the wrapping is on the
+        path (a MagicMock short-circuits the decorator and proves nothing).
+        Left untranslated it surfaces as a generic failure naming azure's
+        kwarg, not the config key the operator actually sets.
         """
         auth = AuthManager(Config(client_id="test-id"))
-        cred = MagicMock()
-        cred.get_token = MagicMock(side_effect=self.AZURE_REFUSAL)
 
         with (
-            patch("outlook_mcp.auth._load_auth_record", return_value=object()),
-            patch.object(AuthManager, "_make_credential", return_value=cred),
+            patch("outlook_mcp.auth._load_auth_record", return_value=self.RECORD),
+            patch(
+                "outlook_mcp.auth._unencrypted_fallback_will_be_used",
+                return_value=False,
+            ),
+            patch.object(
+                DeviceCodeCredential, "_get_app", side_effect=self.AZURE_REFUSAL
+            ),
             pytest.raises(UnencryptedTokenCacheError) as exc,
         ):
             auth.try_cached_token()
@@ -264,22 +287,36 @@ class TestUnencryptedCacheIsOptIn:
 
     def test_the_cli_auth_path_translates_it_too(self):
         auth = AuthManager(Config(client_id="test-id"))
-        cred = MagicMock()
-        cred.get_token = MagicMock(side_effect=self.AZURE_REFUSAL)
 
         with (
-            patch.object(AuthManager, "_make_credential", return_value=cred),
+            patch.object(
+                DeviceCodeCredential, "_get_app", side_effect=self.AZURE_REFUSAL
+            ),
             pytest.raises(UnencryptedTokenCacheError),
         ):
             auth.login_interactive()
 
-    def test_an_unrelated_valueerror_is_not_swallowed_as_this(self):
+    def test_a_transient_auth_failure_does_not_flip_anything(self):
+        """A wrapped non-refusal failure reads as "re-auth", never as the
+        config error — the two remedies are different."""
         auth = AuthManager(Config(client_id="test-id"))
-        cred = MagicMock()
-        cred.get_token = MagicMock(side_effect=ValueError("something else"))
+        transient = RuntimeError("connection reset while polling the device flow")
 
         with (
-            patch("outlook_mcp.auth._load_auth_record", return_value=object()),
-            patch.object(AuthManager, "_make_credential", return_value=cred),
+            patch("outlook_mcp.auth._load_auth_record", return_value=self.RECORD),
+            patch(
+                "outlook_mcp.auth._unencrypted_fallback_will_be_used",
+                return_value=False,
+            ),
+            patch.object(DeviceCodeCredential, "_get_app", side_effect=transient),
         ):
-            assert auth.try_cached_token() is False
+            assert auth.try_cached_token() is False  # not UnencryptedTokenCacheError
+
+        # On the interactive path the same failure re-raises as the wrapped
+        # ClientAuthenticationError azure-identity guarantees its callers.
+        with (
+            patch.object(DeviceCodeCredential, "_get_app", side_effect=transient),
+            pytest.raises(ClientAuthenticationError) as exc,
+        ):
+            auth.login_interactive()
+        assert auth_module._is_azure_unencrypted_refusal(exc.value) is False

@@ -7,6 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
+from azure.core.exceptions import ClientAuthenticationError
 from azure.identity import (
     AuthenticationRecord,
     DeviceCodeCredential,
@@ -73,14 +74,36 @@ def _unencrypted_fallback_will_be_used() -> bool:
 # use, not at credential construction — and only when libsecret is importable
 # but unusable (a display-less SSH session, a container). The eager
 # find_spec("gi") check above cannot see that case, so this is the second half
-# of the same condition. Matched on azure's own wording from
+# of the same condition. The refusal text is azure's own wording from
 # azure/identity/_persistent_cache.py.
 _AZURE_UNENCRYPTED_MARKER = "allow_unencrypted_storage"
 
 
 def _is_azure_unencrypted_refusal(exc: BaseException) -> bool:
-    """True for azure-identity's "cache encryption is impossible" ValueError."""
-    return isinstance(exc, ValueError) and _AZURE_UNENCRYPTED_MARKER in str(exc)
+    """True for the "cache encryption is impossible" refusal, as it arrives.
+
+    Every azure-identity token-acquisition path is wrapped in
+    ``@wrap_exceptions``, which re-types anything that is not already a
+    ``ClientAuthenticationError`` into one — message
+    ``"Authentication failed: <original>"``, original exception on
+    ``__cause__``. The persistent cache's refusal is a ``ValueError`` raised
+    while building the cache inside those wrapped methods, so it never
+    surfaces as a ``ValueError``: it arrives as a ``ClientAuthenticationError``
+    whose message embeds azure's own wording and whose cause is the original.
+    Matching the marker on the error and its cause covers both halves; the
+    bare-``ValueError`` arm can only fire for a caller that bypassed a real
+    credential.
+    """
+    if isinstance(exc, ValueError) and _AZURE_UNENCRYPTED_MARKER in str(exc):
+        return True
+    if not isinstance(exc, ClientAuthenticationError):
+        return False
+    if _AZURE_UNENCRYPTED_MARKER in str(exc):
+        return True
+    cause = exc.__cause__
+    return isinstance(cause, BaseException) and _AZURE_UNENCRYPTED_MARKER in str(
+        cause
+    )
 
 
 # The Graph SDK always requests .default scope internally, so we must
@@ -222,7 +245,7 @@ class AuthManager:
         # Must use .default scope to match what the Graph SDK requests.
         try:
             cred.get_token(*self.get_token_scopes())
-        except ValueError as exc:
+        except ClientAuthenticationError as exc:
             if _is_azure_unencrypted_refusal(exc):
                 raise UnencryptedTokenCacheError() from exc
             raise
@@ -258,7 +281,12 @@ class AuthManager:
             # Swallowing it here sends the operator round the `outlook-mcp auth`
             # loop with no idea what to change.
             raise
-        except ValueError as exc:
+        except ClientAuthenticationError as exc:
+            # What every failure inside get_token arrives as (see
+            # _is_azure_unencrypted_refusal). Either the host cannot store a
+            # token safely — a config problem, raised above — or this
+            # credential can no longer serve its identity, which re-running
+            # `outlook-mcp auth` actually fixes.
             if _is_azure_unencrypted_refusal(exc):
                 raise UnencryptedTokenCacheError() from exc
             logger.warning("Cached token refresh failed — re-run `outlook-mcp auth`.")
