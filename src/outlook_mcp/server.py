@@ -11,10 +11,11 @@ from typing import Any
 
 from mcp.server.caching import CacheHint
 from mcp.server.mcpserver import Context, MCPServer
+from pydantic import ValidationError
 
 from outlook_mcp import __version__, toolsets
 from outlook_mcp.auth import AuthManager
-from outlook_mcp.config import load_config
+from outlook_mcp.config import DEFAULT_CONFIG_DIR, load_config
 from outlook_mcp.errors import (
     OutlookMCPError,
     ToolInputError,
@@ -50,8 +51,37 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(server):
-    """Initialize server state: config, auth, and cached token."""
-    config = load_config()
+    """Initialize server state: config, auth, and cached token.
+
+    ``load_config`` fails for reasons the operator has to fix in the file
+    system or the config file: a ``ValidationError`` (a value no release
+    accepts), a ``PermissionError`` (the config is a symlink — refused on
+    purpose), or an ``OSError`` around it (unreadable file, chmod-protected
+    directory). None of those improve by retrying, and an unhandled raise
+    here reaches the client as a dead process with a traceback nobody reads.
+    So each one exits with the repair spelled out instead — on stderr, never
+    stdout, which is the protocol channel.
+    """
+    try:
+        config = load_config()
+    except ValidationError as exc:
+        logger.error("The config file is invalid — the server cannot start:")
+        for e in exc.errors():
+            field = ".".join(str(p) for p in e["loc"]) or "config"
+            logger.error("  %s: %s", field, e["msg"])
+        logger.error(
+            "Fix %s/config.json and restart the server.", DEFAULT_CONFIG_DIR
+        )
+        raise SystemExit(1) from exc
+    except OSError as exc:  # includes the symlink PermissionError
+        logger.error("Cannot load the config file — the server cannot start: %s", exc)
+        logger.error(
+            "A symlinked config.json is refused on purpose: replace it with a "
+            "real file. For any other error above, check the file and its "
+            "directory are readable and owned by you, in %s, then restart.",
+            DEFAULT_CONFIG_DIR,
+        )
+        raise SystemExit(1) from exc
     auth = AuthManager(config)
     # Try to load cached token silently — if this fails, tools will
     # return an error telling the user to run `outlook-mcp auth`.

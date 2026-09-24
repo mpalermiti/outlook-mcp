@@ -73,3 +73,74 @@ async def test_an_ordinary_unauthenticated_host_is_unchanged():
     assert result["action_required"] == (
         "Run `outlook-mcp auth` on the host to authenticate."
     )
+
+
+# ── A config the server cannot load exits with the fix, not a traceback ──
+
+
+def _validation_error() -> Exception:
+    """A real pydantic ValidationError, raised the way load_config raises it."""
+    from pydantic import ValidationError
+
+    try:
+        Config.model_validate({"allow_categories": ["not-a-category"]})
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("expected a ValidationError")
+
+
+@pytest.mark.asyncio
+async def test_invalid_config_exits_naming_the_field_and_the_fix(caplog):
+    import logging
+
+    with (
+        patch("outlook_mcp.server.load_config", side_effect=_validation_error()),
+        caplog.at_level(logging.ERROR, logger="outlook_mcp.server"),
+        pytest.raises(SystemExit) as exc,
+    ):
+        async with lifespan(MagicMock()):
+            pass
+
+    assert exc.value.code == 1
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("allow_categories" in m for m in messages)  # names the field
+    assert any("restart the server" in m for m in messages)  # names the fix
+
+
+@pytest.mark.asyncio
+async def test_symlinked_config_exits_with_the_reason_not_a_traceback(caplog):
+    import logging
+
+    refusal = PermissionError("Refusing to load symlinked config: /x/config.json")
+    with (
+        patch("outlook_mcp.server.load_config", side_effect=refusal),
+        caplog.at_level(logging.ERROR, logger="outlook_mcp.server"),
+        pytest.raises(SystemExit) as exc,
+    ):
+        async with lifespan(MagicMock()):
+            pass
+
+    assert exc.value.code == 1
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("symlink" in m for m in messages)
+    assert any("restart" in m for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_unreadable_config_exits_the_same_way(caplog):
+    """chmod and read failures are OSErrors too — same guidance, no crash."""
+    import logging
+
+    with (
+        patch(
+            "outlook_mcp.server.load_config",
+            side_effect=OSError(13, "Permission denied"),
+        ),
+        caplog.at_level(logging.ERROR, logger="outlook_mcp.server"),
+        pytest.raises(SystemExit) as exc,
+    ):
+        async with lifespan(MagicMock()):
+            pass
+
+    assert exc.value.code == 1
+    assert any("cannot start" in r.getMessage() for r in caplog.records)
