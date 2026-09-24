@@ -78,6 +78,30 @@ def test_login_interactive_requires_client_id():
         auth.login_interactive()
 
 
+def test_auth_record_round_trips_atomically(tmp_path, monkeypatch):
+    """The record lands whole: same write pattern as config.json (temp file,
+    fsync, rename), so a reader never sees a half-written record and no
+    temp file outlives the save."""
+    record = AuthenticationRecord(
+        tenant_id="consumers",
+        client_id="test-id",
+        authority="https://login.microsoftonline.com/consumers",
+        home_account_id="home-1",
+        username="user@example.com",
+    )
+    monkeypatch.setattr(
+        auth_module, "_auth_record_path", lambda: tmp_path / "auth_record.json"
+    )
+
+    auth_module._save_auth_record(record)
+
+    loaded = auth_module._load_auth_record()
+    assert loaded is not None
+    assert loaded.home_account_id == record.home_account_id
+    assert loaded.username == record.username
+    assert list(tmp_path.glob("*.tmp")) == []  # the temp file became the record
+
+
 def test_try_cached_token_returns_false_without_client_id():
     """try_cached_token returns False if client_id is not set."""
     config = Config()

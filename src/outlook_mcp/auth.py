@@ -14,7 +14,7 @@ from azure.identity import (
     TokenCachePersistenceOptions,
 )
 
-from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config
+from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config, _atomic_write
 from outlook_mcp.errors import (
     AuthRequiredError,
     OutlookMCPError,
@@ -120,11 +120,16 @@ def _auth_record_path() -> Path:
 
 
 def _save_auth_record(record: AuthenticationRecord) -> None:
-    """Persist AuthenticationRecord to disk."""
+    """Persist AuthenticationRecord to disk.
+
+    Same atomic pattern as config.json (write-temp, fsync, 0600, rename):
+    the record identifies the signed-in account, and a plain write_text
+    leaves a world-readable window and a half-written file for anything
+    that reads it concurrently.
+    """
     path = _auth_record_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(record.serialize())
-    path.chmod(0o600)
+    _atomic_write(path, record.serialize())
 
 
 def _load_auth_record() -> AuthenticationRecord | None:
@@ -215,16 +220,24 @@ class AuthManager:
         if prompt_callback:
             kwargs["prompt_callback"] = prompt_callback
         if auth_record:
+            # azure-identity serves the record's identity, not this app's:
+            # with an authentication_record it IGNORES the client_id passed
+            # here and substitutes the record's own client_id and authority.
+            # The tenant_id above still applies — only client_id is
+            # overridden. That is what makes a per-instance record pin the
+            # mailbox this credential talks to.
             kwargs["authentication_record"] = auth_record
         return DeviceCodeCredential(**kwargs)
 
     def login_interactive(self) -> None:
         """Run the device code flow interactively in the terminal.
 
-        Uses get_token() which respects the token cache — if a valid
-        cached token exists, completes silently. Otherwise triggers the
-        device code flow. Saves the AuthenticationRecord for silent
-        token refresh by the MCP server.
+        Always prompts: with no AuthenticationRecord to seed the credential,
+        azure-identity's silent path cannot attempt a refresh, so the device
+        code is printed and polled even when the cache holds a valid token.
+        The flow still writes through to the persistent cache, and the saved
+        AuthenticationRecord is what lets the MCP server refresh silently
+        afterwards.
 
         Intended for CLI use (`outlook-mcp auth`), not MCP tools.
         """
@@ -241,7 +254,9 @@ class AuthManager:
             print("Waiting for you to complete sign-in in your browser...")
 
         cred = self._make_credential(prompt_callback=_on_device_code)
-        # get_token() uses cache first, falls back to interactive.
+        # get_token() consults the persistent cache first, but without a
+        # record the silent path always misses (see the docstring above), so
+        # this call is the interactive flow.
         # Must use .default scope to match what the Graph SDK requests.
         try:
             cred.get_token(*self.get_token_scopes())
