@@ -1,6 +1,9 @@
 """Tests for config management."""
 
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -82,3 +85,60 @@ def test_load_missing_config_returns_defaults(tmp_path):
 def test_unencrypted_token_cache_is_off_unless_asked_for():
     """The secure default has to survive a config file that never mentions it."""
     assert Config().allow_unencrypted_token_cache is False
+
+
+# ── OUTLOOK_MCP_CONFIG_DIR: one settings directory per process ──────────
+#
+# The directory constant is read once at import, so an override is exercised
+# in a subprocess — the same way a second instance gets its own value.
+
+_PROBE = (
+    "from outlook_mcp import auth, config\n"
+    "print(config.DEFAULT_CONFIG_DIR)\n"
+    "print(auth._auth_record_path())\n"
+    "print(config.Config().attachments_dir)\n"
+)
+
+
+def _paths_with_env(value: str | None) -> list[str]:
+    env = dict(os.environ)
+    if value is None:
+        env.pop("OUTLOOK_MCP_CONFIG_DIR", None)
+    else:
+        env["OUTLOOK_MCP_CONFIG_DIR"] = value
+    out = subprocess.run(
+        [sys.executable, "-c", _PROBE],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return out.stdout.strip().splitlines()
+
+
+def test_config_dir_env_moves_every_setting_with_it(tmp_path):
+    """config.json's directory, the auth record, and attachments move together."""
+    custom = str(tmp_path / "instance-net")
+    config_dir, record_path, attachments_dir = _paths_with_env(custom)
+
+    assert config_dir == custom
+    assert record_path == str(tmp_path / "instance-net" / "auth_record.json")
+    assert attachments_dir == str(tmp_path / "instance-net" / "attachments")
+
+
+def test_config_dir_env_empty_or_unset_keeps_the_default():
+    """Empty string is not a directory — it must mean "default", not ""."""
+    from outlook_mcp.config import DEFAULT_CONFIG_DIR
+
+    assert _paths_with_env(None)[0] == DEFAULT_CONFIG_DIR
+    assert _paths_with_env("")[0] == DEFAULT_CONFIG_DIR
+
+
+def test_auth_record_follows_the_settings_directory_not_a_second_home(tmp_path):
+    """The record path must derive from the config module constant — no second
+    hardcode could ever disagree with it, because there is no second one."""
+    custom = str(tmp_path / "instance-neko")
+    record_path = _paths_with_env(custom)[1]
+
+    assert "auth_record.json" in record_path
+    assert record_path.startswith(custom)

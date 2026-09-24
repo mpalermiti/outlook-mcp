@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 
 from outlook_mcp.auth import AuthManager
-from outlook_mcp.config import load_config
+from outlook_mcp.config import DEFAULT_CONFIG_DIR, load_config
 
 
 def _print_usage() -> None:
@@ -23,7 +23,7 @@ def cmd_auth() -> None:
     config = load_config()
     if not config.client_id:
         print("Error: client_id not configured.")
-        print("Set client_id in ~/.outlook-mcp/config.json")
+        print(f"Set client_id in {DEFAULT_CONFIG_DIR}/config.json")
         sys.exit(1)
 
     auth = AuthManager(config)
@@ -40,7 +40,7 @@ def cmd_status() -> None:
     """Check if a cached token exists and is usable."""
     config = load_config()
     if not config.client_id:
-        print("Not configured — set client_id in ~/.outlook-mcp/config.json")
+        print(f"Not configured — set client_id in {DEFAULT_CONFIG_DIR}/config.json")
         sys.exit(1)
 
     auth = AuthManager(config)

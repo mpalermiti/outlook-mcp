@@ -10,7 +10,27 @@ from pydantic import BaseModel, Field, field_validator
 from outlook_mcp.permissions import VALID_CATEGORIES
 
 DEFAULT_TENANT_ID = "consumers"
-DEFAULT_CONFIG_DIR = os.path.expanduser("~/.outlook-mcp")
+
+# The one directory every setting lives in: config.json here, and the auth
+# record next to it (auth._auth_record_path derives from DEFAULT_CONFIG_DIR).
+# Overriding it (and ONLY it) via OUTLOOK_MCP_CONFIG_DIR is how you run a
+# second instance against a different mailbox: the MSAL signal file stays at
+# ~/.IdentityService/, so both processes still share the lock-and-merge path
+# into the one Keychain item. Moving HOME instead would give each process its
+# own signal file, neither would see the other's write, and they would clobber
+# each other's token. Empty or unset leaves the default in place.
+CONFIG_DIR_ENV = "OUTLOOK_MCP_CONFIG_DIR"
+DEFAULT_CONFIG_DIR = os.path.expanduser(
+    os.environ.get(CONFIG_DIR_ENV) or "~/.outlook-mcp"
+)
+
+
+def _default_attachments_dir() -> str:
+    """Attachments live under the settings directory, wherever it was moved to."""
+    override = os.environ.get(CONFIG_DIR_ENV)
+    if override:
+        return os.path.join(override, "attachments")
+    return "~/.outlook-mcp/attachments"
 
 
 class AccountConfig(BaseModel):
@@ -44,11 +64,12 @@ class Config(BaseModel):
         ),
     )
     attachments_dir: str = Field(
-        default="~/.outlook-mcp/attachments",
+        default_factory=_default_attachments_dir,
         description=(
             "The only directory the attachment tools may read from or write to. "
             "Point it somewhere else to widen the surface; every path an agent "
-            "supplies is resolved and must land inside it."
+            "supplies is resolved and must land inside it. Defaults to an "
+            "`attachments` folder inside the settings directory."
         ),
     )
     allow_unencrypted_token_cache: bool = Field(

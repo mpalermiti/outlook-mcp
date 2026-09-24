@@ -90,6 +90,9 @@ GRAPH_DEFAULT_SCOPE = "https://graph.microsoft.com/.default"
 
 
 def _auth_record_path() -> Path:
+    # Derived from config.DEFAULT_CONFIG_DIR so the record sits next to
+    # config.json wherever OUTLOOK_MCP_CONFIG_DIR has moved the settings
+    # directory — this must stay the only place the record location is decided.
     return Path(DEFAULT_CONFIG_DIR) / AUTH_RECORD_FILE
 
 
@@ -207,7 +210,7 @@ class AuthManager:
         if not self.config.client_id:
             raise ValueError(
                 "client_id is not configured. Register an Azure AD app and set "
-                "client_id in ~/.outlook-mcp/config.json."
+                f"client_id in {DEFAULT_CONFIG_DIR}/config.json."
             )
 
         def _on_device_code(verification_uri: str, user_code: str, expires_on: object) -> None:

@@ -431,7 +431,7 @@ the body is fetched on use.
 
 ## Configuration
 
-Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions).
+Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions). Set the `OUTLOOK_MCP_CONFIG_DIR` environment variable to move that settings directory (config.json, auth record, and the attachments default move with it) — see [Two accounts, two instances](#two-accounts-two-instances-optional--outlook_mcp_config_dir) below.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -453,6 +453,35 @@ OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"
 ```
 
 Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`. Unset (the default) loads everything — fully backward compatible. This only affects which tools are advertised; enabled tools behave identically.
+
+### Two accounts, two instances (optional) — `OUTLOOK_MCP_CONFIG_DIR`
+
+One server process serves one mailbox. To work against two accounts, register **two client entries** and give each its own settings directory with `OUTLOOK_MCP_CONFIG_DIR` — pair it with `OUTLOOK_MCP_TOOLSETS` so each instance also only loads the tool groups it needs:
+
+```json
+{
+  "mcpServers": {
+    "outlook-net": {
+      "command": "outlook-mcp",
+      "env": {
+        "OUTLOOK_MCP_TOOLSETS": "mail,calendar,contacts",
+        "OUTLOOK_MCP_CONFIG_DIR": "~/.outlook-mcp-net"
+      }
+    },
+    "outlook-neko": {
+      "command": "outlook-mcp",
+      "env": {
+        "OUTLOOK_MCP_TOOLSETS": "todo",
+        "OUTLOOK_MCP_CONFIG_DIR": "~/.outlook-mcp-neko"
+      }
+    }
+  }
+}
+```
+
+Then run `outlook-mcp auth` once per instance, with the same env set, to write each auth record in its own directory. Each instance reads its own `config.json` (own `client_id`, `timezone`, permissions) from its own directory.
+
+**Only move the config directory — never `HOME`.** The token cache is not in it: it stays in the OS keyring, and on macOS every azure-identity cache on the host shares one Keychain item, coordinated through a signal file under `~/.IdentityService/`. Both processes must keep consulting that same signal file so their cache writes lock and merge into the one shared entry — which is exactly what moving the config directory preserves and redirecting `HOME` (or the cache location) would break: two signal files that each believe they own the Keychain item overwrite each other's token. `OUTLOOK_MCP_CONFIG_DIR` deliberately moves only where config.json, the auth record, and attachments live; unset or empty keeps the default `~/.outlook-mcp`.
 
 ### What `read_only` does and does not do
 
