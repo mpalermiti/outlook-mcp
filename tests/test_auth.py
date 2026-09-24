@@ -338,7 +338,14 @@ class TestUnencryptedCacheIsOptIn:
 
         # On the interactive path the same failure re-raises as the wrapped
         # ClientAuthenticationError azure-identity guarantees its callers.
+        # The fallback patch matters here too: a host with no encrypted store
+        # (the Linux CI runners) would refuse at credential construction,
+        # before the injected transient ever runs.
         with (
+            patch(
+                "outlook_mcp.auth._unencrypted_fallback_will_be_used",
+                return_value=False,
+            ),
             patch.object(DeviceCodeCredential, "_get_app", side_effect=transient),
             pytest.raises(ClientAuthenticationError) as exc,
         ):
