@@ -7,10 +7,9 @@ registered (see ``server.py``):
    (`ToolAnnotations`) so a client can auto-approve reads and gate destructive
    ops (delete mail, decline event) without a hardcoded allowlist.
 
-2. **Config-gated toolsets** — the 70 tool schemas cost ~13.2k chars/4 proxy
-   tokens of client context every turn (the budget test's yardstick; the
-   62-tool surface is ~11.7k under the same measure). A client that only
-   needs mail + calendar can set
+2. **Config-gated toolsets** — the full tool schemas cost chars/4 proxy tokens
+   of client context every turn (the budget test's yardstick and its header
+   hold the measured number). A client that only needs mail + calendar can set
    ``OUTLOOK_MCP_TOOLSETS=mail,calendar`` and load just those groups (~half the
    tokens for a mail+calendar agent). Account/auth tools are always available.
 
@@ -34,8 +33,6 @@ TOOL_GROUPS: dict[str, str] = {
     # account (always on)
     "outlook_auth_status": "account",
     "outlook_whoami": "account",
-    "outlook_list_accounts": "account",
-    "outlook_switch_account": "account",
     # mail
     "outlook_list_inbox": "mail",
     "outlook_read_message": "mail",
@@ -119,7 +116,6 @@ TOOL_GROUPS: dict[str, str] = {
 READ_ONLY: set[str] = {
     "outlook_auth_status",
     "outlook_whoami",
-    "outlook_list_accounts",
     "outlook_list_inbox",
     "outlook_read_message",
     "outlook_read_messages",
@@ -199,14 +195,13 @@ def select_kept_tools(names: list[str], enabled: set[str] | None) -> set[str]:
 # and a wrong entry here sends a second email or re-issues an invitation. The
 # reasoning for every exclusion is in tests/test_idempotent_hints.py, which fails
 # if this set changes. `openWorldHint` is deliberately absent — it is true by
-# default in the schema and true for all 70, so stating it is pure token cost.
+# default in the schema and true for every tool, so stating it is pure token cost.
 IDEMPOTENT: set[str] = {
     "outlook_flag_message",
     "outlook_mark_read",
     "outlook_categorize_message",
     "outlook_rename_folder",
     "outlook_set_inbox_override",
-    "outlook_switch_account",
     "outlook_download_attachment",
     "outlook_download_task_attachment",
     "outlook_update_checklist_item",

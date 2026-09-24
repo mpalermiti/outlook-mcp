@@ -1,13 +1,16 @@
 """Config file management for outlook-mcp."""
 
+import logging
 import os
 import stat
 import tempfile
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from outlook_mcp.permissions import VALID_CATEGORIES
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_TENANT_ID = "consumers"
 
@@ -33,12 +36,20 @@ def _default_attachments_dir() -> str:
     return "~/.outlook-mcp/attachments"
 
 
-class AccountConfig(BaseModel):
-    """Configuration for a single account."""
-
-    name: str
-    client_id: str
-    tenant_id: str = DEFAULT_TENANT_ID
+# Top-level keys an older release accepted. One process serves one account
+# now; a config carrying these still loads, the operator just hears about it.
+_LEGACY_KEYS = {
+    "accounts": (
+        "configuring multiple accounts in one process is no longer supported; "
+        "run one server per account and give each its own settings directory "
+        f"via the {CONFIG_DIR_ENV} environment variable"
+    ),
+    "default_account": (
+        "configuring multiple accounts in one process is no longer supported; "
+        "run one server per account and give each its own settings directory "
+        f"via the {CONFIG_DIR_ENV} environment variable"
+    ),
+}
 
 
 class Config(BaseModel):
@@ -81,8 +92,33 @@ class Config(BaseModel):
             "persisting a reusable Graph token in plaintext."
         ),
     )
-    accounts: list[AccountConfig] = Field(default_factory=list)
-    default_account: str | None = Field(default=None)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _warn_on_unknown_keys(cls, data: object) -> object:
+        """Accept-and-warn: unknown top-level keys are ignored, not silent.
+
+        A typo'd key used to vanish without a trace — the setting silently
+        kept its default while the operator believed they had changed it.
+        Unknown keys still don't fail the load (a config written for a newer
+        release should still boot an older one), but each one is named on
+        the way out. Known-legacy keys get the same treatment with a pointer
+        to what replaced them.
+        """
+        if not isinstance(data, dict):
+            return data
+        for key in data:
+            if key in _LEGACY_KEYS:
+                logger.warning(
+                    "Config key %r ignored: %s.", key, _LEGACY_KEYS[key]
+                )
+            elif key not in cls.model_fields:
+                logger.warning(
+                    "Unknown config key %r ignored — supported keys: %s.",
+                    key,
+                    ", ".join(sorted(cls.model_fields)),
+                )
+        return data
 
     @field_validator("allow_categories")
     @classmethod

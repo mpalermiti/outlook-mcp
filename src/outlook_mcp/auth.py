@@ -122,8 +122,6 @@ class AuthManager:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.credential: DeviceCodeCredential | None = None
-        self._credentials: dict[str, DeviceCodeCredential] = {}
-        self._active_account: str | None = config.default_account
         # Set when startup authentication failed for a reason the operator has
         # to fix in config rather than by running `outlook-mcp auth` — that
         # advice would just fail the same way. Surfaced by get_credential() so
@@ -276,43 +274,6 @@ class AuthManager:
                 raise self.startup_error
             raise AuthRequiredError()
         return self.credential
-
-    def list_accounts(self) -> list[dict]:
-        """List configured accounts with auth status."""
-        accounts = []
-        for acc in self.config.accounts:
-            accounts.append(
-                {
-                    "name": acc.name,
-                    "client_id": acc.client_id[:8] + "...",
-                    "tenant_id": acc.tenant_id,
-                    "authenticated": acc.name in self._credentials,
-                    "active": acc.name == self._active_account,
-                }
-            )
-        if self.config.client_id and not self.config.accounts:
-            accounts.append(
-                {
-                    "name": "default",
-                    "client_id": self.config.client_id[:8] + "...",
-                    "tenant_id": self.config.tenant_id,
-                    "authenticated": self.credential is not None,
-                    "active": True,
-                }
-            )
-        return accounts
-
-    def switch_account(self, name: str) -> dict:
-        """Switch active account."""
-        for acc in self.config.accounts:
-            if acc.name == name:
-                self._active_account = name
-                if name in self._credentials:
-                    self.credential = self._credentials[name]
-                else:
-                    self.credential = None
-                return {"status": "switched", "account": name}
-        raise ValueError(f"Account '{name}' not found in config")
 
     def logout(self) -> dict[str, str]:
         """Clear in-memory credentials and auth record."""

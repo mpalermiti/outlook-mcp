@@ -24,7 +24,7 @@ You'll like this if you're:
 - Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
 - Security-conscious: tokens in the OS keyring (Keychain on macOS, libsecret on Linux -- never cleartext unless you opt in), granular `allow_categories`, optional `read_only` mode, zero telemetry
 
-This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 70 tools — way more than you need for "read my inbox").
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 68 tools — way more than you need for "read my inbox").
 
 ### How it differs from other Outlook tools you'll find
 
@@ -44,7 +44,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 70 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 68 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -59,7 +59,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 ## Features
 
-**70 tools** across 13 categories:
+**68 tools** across 13 categories:
 
 - **Auth (1)** -- auth status check (login is via CLI)
 - **Mail Read (7)** -- list inbox (with Focused Inbox and uncategorized filters), read message, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
@@ -73,7 +73,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 - **Attachments (5)** -- list, download, send-with-attachments, attach-to-draft, remove-draft-attachment
 - **Folder Management (3)** -- create, rename, delete mail folders
 - **Threading and Batch (3)** -- list thread, copy message, batch triage
-- **User and Admin (6)** -- whoami, list calendars, list categories, mail tips, accounts
+- **User and Admin (4)** -- whoami, list calendars, list categories, mail tips
 
 **Design principles:**
 
@@ -445,10 +445,10 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions). 
 
 ### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`
 
-All 70 tool schemas load into the client's context every turn (~13.2k tokens by the chars/4 proxy `test_tool_surface_budget.py` measures with — a different yardstick than the ~8.6k o200k figure in ROADMAP; under this one, the 62-tool surface is ~11.7k, so the To Do detail tools add ~12%). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
+All 68 tool schemas load into the client's context every turn (the chars/4 proxy `test_tool_surface_budget.py` measures with; a different yardstick than the ~8.6k o200k figure in ROADMAP for the 62-tool surface). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
 
 ```bash
-# e.g. a recurring mail + calendar agent: ~30 tools instead of 70 (~57% fewer tool tokens/turn)
+# e.g. a recurring mail + calendar agent: ~30 tools instead of 68 (~55% fewer tool tokens/turn)
 OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"
 ```
 

@@ -142,3 +142,64 @@ def test_auth_record_follows_the_settings_directory_not_a_second_home(tmp_path):
 
     assert "auth_record.json" in record_path
     assert record_path.startswith(custom)
+
+
+# ── Legacy and unknown top-level keys load with a warning, never silently ──
+
+
+def _write_config(config_dir, payload: dict) -> None:
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.json").write_text(json.dumps(payload))
+
+
+def test_legacy_multi_account_fields_are_ignored_with_a_pointer(tmp_path, caplog):
+    """`accounts` / `default_account` no longer do anything — the config still
+    loads, and the warning names the replacement instead of leaving the
+    operator wondering why switching accounts does nothing."""
+    import logging
+
+    config_dir = tmp_path / ".outlook-mcp"
+    _write_config(
+        config_dir,
+        {
+            "client_id": "id-1",
+            "accounts": [{"name": "personal", "client_id": "id-2"}],
+            "default_account": "personal",
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="outlook_mcp.config"):
+        loaded = load_config(config_dir=str(config_dir))
+
+    assert loaded.client_id == "id-1"  # the rest of the config is intact
+    warnings = [r.getMessage() for r in caplog.records]
+    assert any("accounts" in w and "OUTLOOK_MCP_CONFIG_DIR" in w for w in warnings)
+    assert any("default_account" in w and "OUTLOOK_MCP_CONFIG_DIR" in w for w in warnings)
+
+
+def test_unknown_top_level_key_warns_instead_of_vanishing(tmp_path, caplog):
+    """A typo'd key used to be dropped without a trace while the operator
+    believed they had set it. It still loads — just not silently."""
+    import logging
+
+    config_dir = tmp_path / ".outlook-mcp"
+    _write_config(config_dir, {"client_id": "id-1", "time_zone": "UTC"})
+
+    with caplog.at_level(logging.WARNING, logger="outlook_mcp.config"):
+        loaded = load_config(config_dir=str(config_dir))
+
+    assert loaded.timezone == "UTC"  # the typo'd name never applied
+    assert any("time_zone" in r.getMessage() for r in caplog.records)
+
+
+def test_valid_config_produces_no_key_warnings(tmp_path, caplog):
+    import logging
+
+    config_dir = tmp_path / ".outlook-mcp"
+    _write_config(config_dir, {"client_id": "id-1", "timezone": "Asia/Tokyo"})
+
+    with caplog.at_level(logging.WARNING, logger="outlook_mcp.config"):
+        loaded = load_config(config_dir=str(config_dir))
+
+    assert loaded.timezone == "Asia/Tokyo"
+    assert caplog.records == []

@@ -31,7 +31,6 @@ EXPECTED_IDEMPOTENT = {
     "outlook_categorize_message",
     "outlook_rename_folder",
     "outlook_set_inbox_override",
-    "outlook_switch_account",
     "outlook_download_attachment",
     # Same audit as their mail twins: an absolute-value PATCH
     # (checklist check-off/rename) and a download that overwrites a fixed
@@ -98,8 +97,8 @@ def test_open_world_hint_is_left_to_the_default():
 
     Every one of the tools reaches Microsoft Graph, so the value would be `true`
     on all of them — which is exactly what a client already assumes when the
-    field is absent. On a surface measured at ~13k chars/4 proxy tokens a turn
-    (see test_tool_surface_budget.py), correct-but-inert metadata is not free.
+    field is absent. On a surface measured by the chars/4 proxy in
+    test_tool_surface_budget.py, correct-but-inert metadata is not free.
     """
     from outlook_mcp.toolsets import annotation_for
 

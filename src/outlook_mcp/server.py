@@ -79,8 +79,8 @@ Microsoft Outlook (personal accounts: outlook.com, hotmail.com, live.com) via Mi
 
 Working rules, each of which saves a round trip:
 
-- You are already signed in. Do not call outlook_whoami, outlook_list_accounts or
-  outlook_auth_status to check before doing something — just call the tool you need. If a call
+- You are already signed in. Do not call outlook_whoami or outlook_auth_status
+  to check before doing something — just call the tool you need. If a call
   does fail on authentication, its error says exactly what to run.
 - Folder and calendar parameters take display names directly ("Junk Email", "Purchases",
   "Work"), as well as well-known folder names ("inbox", "drafts") and Graph IDs. Do not list
@@ -138,9 +138,9 @@ def _get_graph_client(ctx: Context) -> GraphClient:
     Building a ``GraphServiceClient`` (auth provider, request adapter, TLS
     connection pool) on every tool call is wasteful on recurring agent loops.
     Cache one in the lifespan context and reuse it while the credential is
-    unchanged. A ``switch_account`` / re-auth swaps ``AuthManager.credential``
-    for a different object, so an identity check rebuilds the client
-    automatically — no explicit invalidation needed.
+    unchanged. A re-auth swaps ``AuthManager.credential`` for a different
+    object, so an identity check rebuilds the client automatically — no
+    explicit invalidation needed.
     """
     auth = _get_auth(ctx)
     credential = auth.get_credential()  # raises AuthRequiredError if unauthenticated
@@ -1674,30 +1674,11 @@ async def outlook_get_mail_tips(ctx: Context, emails: list[str]) -> dict:
     return await admin.get_mail_tips(client.sdk_client, emails)
 
 
-# ── Multi-Account Tools ───────────────────────────────
-
-
-@mcp.tool()
-@_wrap_tool_errors
-async def outlook_list_accounts(ctx: Context) -> dict:
-    """List all configured Outlook accounts and their authentication status."""
-    auth = _get_auth(ctx)
-    return {"accounts": auth.list_accounts()}
-
-
-@mcp.tool()
-@_wrap_tool_errors
-async def outlook_switch_account(ctx: Context, name: str) -> dict:
-    """Switch the active Outlook account by configured `name` (from outlook_list_accounts)."""
-    auth = _get_auth(ctx)
-    return auth.switch_account(name)
-
-
 # ── Annotations + config-gated toolsets ───────────────────────────────
 # Applied once, after every @mcp.tool above has registered. Sets read-only /
 # destructive annotations on all tools, and — when OUTLOOK_MCP_TOOLSETS is set
 # (e.g. "mail,calendar,digest,delta") — loads only those groups so clients that
-# don't need all 70 tools don't pay the per-turn context cost. Unset = all.
+# don't need the whole tool surface don't pay the per-turn context cost. Unset = all.
 toolsets.configure(mcp, toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")))
 
 
@@ -1711,7 +1692,7 @@ if __name__ == "__main__":
 
 # ── Workflow prompts ────────────────────────────────────
 #
-# Sequencing guidance is not per-tool knowledge, so it does not belong in 70
+# Sequencing guidance is not per-tool knowledge, so it does not belong in per-tool
 # docstrings that every client pays for on every turn. A prompt costs one line
 # in `prompts/list` until it is invoked — and unlike a SKILL.md, which is not
 # even shipped in the wheel, it reaches every MCP client. These three are the
