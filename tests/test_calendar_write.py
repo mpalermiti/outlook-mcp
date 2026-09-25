@@ -7,6 +7,7 @@ import pytest
 
 from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.tools._recurrence import build_event_recurrence
 from outlook_mcp.tools.calendar_write import (
     create_event,
     delete_event,
@@ -900,6 +901,212 @@ class TestEventTimezone:
                 f"{zone}: fixed-offset claim present={not expect_fixed and 'wrongly' or ''}"
             )
 
+    async def test_an_explicit_zone_re_anchors_both_ends(self):
+        """"Move this to Eastern" means the whole event, not one end of it.
+
+        Preserving a split only makes sense while the caller has named no zone;
+        once they have, applying it to one end and not the other leaves the
+        event in a state nobody asked for.
+        """
+        current = _current_event(
+            date_time="2026-11-10T13:00:00.0000000",
+            start_zone="America/New_York",
+            end_zone="America/Los_Angeles",
+        )
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-10T09:00:00",
+            end="2026-11-10T10:00:00",
+            timezone="Europe/London",
+            config=_CFG_LA,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.time_zone == "Europe/London"
+        assert patched.end.time_zone == "Europe/London"
+
+    async def test_a_zone_on_an_all_day_event_is_refused_not_ignored(self):
+        """Graph coerces an all-day anchor to UTC, so the zone cannot be applied.
+
+        Accepting it and substituting UTC reports `updated` for work not done —
+        the shape this project keeps four guards against, and the one the new
+        argument was most likely to reintroduce. Refused both ways: when the
+        caller says `is_all_day=True` outright, which costs no round trip, and
+        when only the stored event knows, which unavoidably costs one.
+        """
+        # Stated by the caller — refused before any network call.
+        builder = _make_event_builder()
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError) as excinfo:
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-10-22T00:00:00",
+                end="2026-10-23T00:00:00",
+                is_all_day=True,
+                timezone="America/New_York",
+                config=_CFG_LA,
+            )
+        assert "all-day" in str(excinfo.value)
+        assert builder.get.await_count == 0
+        builder.patch.assert_not_called()
+
+        # Known only from the stored event — refused after the one read.
+        builder = _make_event_builder()
+        builder.get = AsyncMock(
+            return_value=_current_event(
+                date_time="2026-10-22T00:00:00.0000000", is_all_day=True
+            )
+        )
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError) as excinfo:
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-10-22T00:00:00",
+                end="2026-10-23T00:00:00",
+                timezone="America/New_York",
+                config=_CFG_LA,
+            )
+        assert "all-day" in str(excinfo.value)
+        builder.patch.assert_not_called()
+
+    async def test_a_zone_with_no_times_to_apply_it_to_is_refused(self):
+        """A lone timezone would patch nothing and answer `updated`.
+
+        Graph rejects a start patch carrying no timeZone, so the zone is never
+        an independent edit; accepting it alone would be the silent no-op this
+        project keeps four guards against. Refused before any network call,
+        like every other input check here.
+        """
+        builder = _make_event_builder()
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError) as excinfo:
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                timezone="America/New_York",
+                config=_CFG_LA,
+            )
+
+        assert "requires start and end" in str(excinfo.value)
+        assert builder.get.await_count == 0
+        builder.patch.assert_not_called()
+
+    async def test_a_series_master_zone_change_brings_its_recurrence_along(self):
+        """Graph refuses the patch without it, and says nothing about zones.
+
+        `400 ErrorPropertyValidationFailure: At least one property failed
+        validation` is the whole of the message. Verified live: the identical
+        patch succeeds when the recurrence travels with it. Without this, every
+        series created before events carried a zone is unrepairable except by
+        deleting and rebuilding it.
+        """
+        from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
+
+        current = _current_event(
+            date_time="2026-10-28T16:00:00.0000000",
+            start_zone="UTC",
+            event_type="seriesMaster",
+            recurrence=build_event_recurrence("weekly", start="2026-10-28T16:00:00Z"),
+        )
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-10-28T09:00:00",
+            end="2026-10-28T10:00:00",
+            timezone="America/Los_Angeles",
+            config=_CFG_LA,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.time_zone == "America/Los_Angeles"
+        assert patched.recurrence is not None
+        assert patched.recurrence.pattern.type is RecurrencePatternType.Weekly
+        # Re-anchored on the new start rather than echoing the stored range, and
+        # the stale recurrenceTimeZone dropped so Graph re-derives it.
+        assert patched.recurrence.range.start_date == date(2026, 10, 28)
+        assert patched.recurrence.range.recurrence_time_zone is None
+
+    async def test_a_single_event_keeps_its_recurrence_untouched(self):
+        """The re-send is a workaround for one Graph rule, not a habit.
+
+        A single instance has no recurrence to carry, and sending one would turn
+        a time edit into a series — the opposite of a partial patch.
+        """
+        current = _current_event(
+            date_time="2026-10-28T16:00:00.0000000", start_zone="UTC", recurrence=None
+        )
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-10-28T09:00:00",
+            end="2026-10-28T10:00:00",
+            timezone="America/Los_Angeles",
+            config=_CFG_LA,
+        )
+
+        assert builder.patch.call_args[0][0].recurrence is None
+
+    async def test_an_unchanged_zone_does_not_resend_the_recurrence(self):
+        """The control. Same series, same zone, no re-send.
+
+        Without this the test above passes for a version that re-sends the
+        recurrence on every start patch, which would make each one a series
+        rewrite.
+        """
+        current = _current_event(
+            date_time="2026-10-28T16:00:00.0000000",
+            start_zone="America/Los_Angeles",
+            event_type="seriesMaster",
+            recurrence=build_event_recurrence("weekly", start="2026-10-28T09:00:00"),
+        )
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-10-28T11:00:00",
+            end="2026-10-28T12:00:00",
+            timezone="America/Los_Angeles",
+            config=_CFG_LA,
+        )
+
+        assert builder.patch.call_args[0][0].recurrence is None
+
     async def test_update_rejects_bad_input_without_asking_graph_anything(self):
         """Every input check belongs above the first `await`.
 
@@ -1235,31 +1442,59 @@ class TestEventTimezone:
         assert patched.recurrence.pattern.days_of_week == [DayOfWeek.Wednesday]
         assert patched.recurrence.range.start_date == date(2026, 10, 28)
 
-    async def test_a_windows_zone_evening_event_still_takes_the_utc_weekday(self):
-        """A known-wrong result, pinned deliberately so it stays visible.
+    async def test_a_windows_zone_evening_event_takes_its_local_weekday(self):
+        """An 18:00 Pacific event is next-day in UTC, and the series follows the local day.
 
-        An Outlook-created event at Wednesday 18:00 Pacific is stored as
-        Thursday 01:00 UTC with `originalStartTimeZone: "Pacific Standard
-        Time"`. That name maps to nothing in Python, so the date comes off the
-        text and the series is built for Thursday. **That is wrong**, and it is
-        wrong on `main` too: `event_start_date("2026-10-29T01:00:00.0000000")`
-        returns 2026-10-29 there as well, byte for byte.
+        This replaces a test that pinned the *wrong* answer. Graph returns the
+        stored start projected into UTC and names the event's zone in Windows
+        terms, which Python cannot map — so `2026-11-05T02:00:00Z` for a
+        Wednesday-evening event built a Thursday series, and Graph accepted it
+        and scheduled the whole thing a day late.
 
-        It is not fixed here because the fix is a second GET carrying
-        `Prefer: outlook.timezone`, letting Graph do the Windows-to-IANA
-        mapping only it has — machinery that belongs with the update-path work
-        this PR was narrowed to exclude, not bolted onto a create-path bug fix.
-        Events this server creates are unaffected: it sends IANA names, Graph
-        stores them verbatim, and they resolve.
-
-        The assertion is deliberately the wrong answer. If someone fixes this,
-        this test fails and they update it — which is the signal wanted. A test
-        asserting the *right* answer would simply be red for no one's benefit.
+        The mock answers the second read — the one carrying
+        `Prefer: outlook.timezone` — with the local wall clock, because that is
+        what Graph does. A `MagicMock` that ignores the header returns the UTC
+        value to both reads and the test passes against the unfixed code, which
+        is exactly how this went unnoticed once already.
         """
         from msgraph.generated.models.day_of_week import DayOfWeek
 
+        utc_view = _current_event(
+            date_time="2026-11-05T02:00:00.0000000", start_zone="Pacific Standard Time"
+        )
+        local_view = _current_event(
+            date_time="2026-11-04T18:00:00.0000000", start_zone="Pacific Standard Time"
+        )
+
+        def _get(request_configuration=None):
+            asked_for_local = request_configuration is not None
+            return local_view if asked_for_local else utc_view
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(side_effect=_get)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            recurrence="weekly",
+            config=_CFG_LA,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.recurrence.pattern.days_of_week == [DayOfWeek.Wednesday]
+        assert patched.recurrence.range.start_date == date(2026, 11, 4)
+
+    async def test_a_resolvable_zone_needs_no_second_read(self):
+        """The Prefer read is the fallback, not the default.
+
+        An IANA anchor converts locally, so paying for a second GET on every
+        recurrence-only update would be waste. The count is the assertion.
+        """
         current = _current_event(
-            date_time="2026-10-29T01:00:00.0000000", start_zone="Pacific Standard Time"
+            date_time="2026-11-05T02:00:00.0000000", start_zone="America/Los_Angeles"
         )
 
         builder = _make_event_builder()
@@ -1275,9 +1510,8 @@ class TestEventTimezone:
             config=_CFG_LA,
         )
 
-        patched = builder.patch.call_args[0][0]
-        assert patched.recurrence.pattern.days_of_week == [DayOfWeek.Thursday]
-        assert patched.recurrence.range.start_date == date(2026, 10, 29)
+        assert builder.get.await_count == 1
+        assert builder.patch.call_args[0][0].recurrence.range.start_date == date(2026, 11, 4)
 
     async def test_a_zone_less_start_is_accepted_with_an_unmappable_zone(self):
         """The control, and the remedy the refusal recommends.
