@@ -357,9 +357,19 @@ def _wide_window() -> tuple[str, str]:
 # function-scoped, so the cache is module-level rather than a fixture scope.
 _EVENT_WALK: dict = {}
 
-# Graph's `event.type`. Named once, used by the listing guard and the delta
-# guard, so the two cannot disagree about what a valid value is.
-_EVENT_TYPES = {"singleInstance", "occurrence", "exception", "seriesMaster"}
+
+def _event_types() -> set[str]:
+    """The valid `event.type` values, read off the SDK rather than typed here.
+
+    A hand-typed list beside a derived one drifts — #73's review made the point
+    about `FreeBusyStatus`, and `test_calendar_write.py` reads that enum for the
+    same reason. Derived once and shared by the listing guard and the delta
+    guard, so the two cannot disagree about what a valid value is, and so a
+    value Graph adds to the enum stops being a spurious failure here.
+    """
+    from msgraph.generated.models.event_type import EventType
+
+    return {member.value for member in EventType}
 
 
 async def _walk_events_for_select_fields(client):
@@ -455,7 +465,7 @@ async def test_the_event_listing_returns_the_type_it_selects(event_walk):
         )
 
     for event in event_walk["with_type"]:
-        assert event["type"] in _EVENT_TYPES, (
+        assert event["type"] in _event_types(), (
             f"Graph returned an unknown event type {event['type']!r}; the value set "
             f"named in SKILL.md, the README and this guard needs widening to match."
         )
@@ -497,7 +507,7 @@ async def test_the_event_delta_carries_type_without_a_select(real_graph_client):
         )
 
     for event in with_type:
-        assert event["type"] in _EVENT_TYPES, (
+        assert event["type"] in _event_types(), (
             f"Graph returned an unknown event type {event['type']!r} on the delta path."
         )
 
