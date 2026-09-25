@@ -28,7 +28,7 @@ This **isn't for you** if you need work/school M365 accounts (use Microsoft's of
 
 ### How it differs from other Outlook tools you'll find
 
-This is the only **first-class MCP server** in the personal-Outlook space — most alternatives are bash scripts or skill-shaped CLI wrappers the agent shells out to. That distinction matters: the agent gets typed tool schemas with structured args/returns, not stdout it has to parse. Other things you won't find elsewhere: `/$batch`-optimized triage (10-20× faster on bulk ops), recursive folder ops with name resolution, granular per-category permissions, multi-account support, and full attachment write paths including >3MB upload sessions for drafts.
+This is the only **first-class MCP server** in the personal-Outlook space — most alternatives are bash scripts or skill-shaped CLI wrappers the agent shells out to. That distinction matters: the agent gets typed tool schemas with structured args/returns, not stdout it has to parse. Other things you won't find elsewhere: `/$batch`-optimized triage (10-20× faster on bulk ops), recursive folder ops with name resolution, granular per-category permissions, multiple mailboxes (one server per account via `OUTLOOK_MCP_CONFIG_DIR`), and full attachment write paths including >3MB upload sessions for drafts.
 
 ---
 
@@ -407,8 +407,6 @@ configured `timezone`; responses are always UTC.
 | `outlook_list_calendars` | List available calendars. |
 | `outlook_list_categories` | List category definitions with colors. |
 | `outlook_get_mail_tips` | Pre-send check (OOF, delivery restrictions). |
-| `outlook_list_accounts` | List configured accounts. |
-| `outlook_switch_account` | Switch active account. |
 
 ---
 
