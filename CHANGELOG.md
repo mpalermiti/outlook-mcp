@@ -100,6 +100,43 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   constant now, and a guard reads the formatter's source and fails if a `$select` is narrower
   than the fields it feeds — or wider.
 
+- **`outlook_list_events` reports a real `type`, so a recurring series is distinguishable from a
+  one-off.** It has reported `type: ""` for every event on every call since 1.16.0 — the release
+  whose own entry claims "`outlook_list_events` carries `type`, so a series master is
+  distinguishable from a one-off without fetching each event". The formatter read `event.type`;
+  the listing's `$select` never asked Graph for it. Graph honoured the `$select`, the SDK left
+  the attribute `None`, and the formatter turned that into `""` — present, empty, and
+  indistinguishable from a genuine value. Seven releases, and a test named
+  `test_summary_carries_type_so_listings_can_tell_series_apart` that passed throughout, because
+  it handed the formatter a mock with `type` already set: a mock cannot tell an honoured
+  `$select` from an ignored one. `outlook_get_event` was never affected — it sends no `$select`,
+  so Graph returns everything. Reported and diagnosed against a live consumer mailbox in #69.
+
+  The same listing also *selected* `categories`, which no formatter on that path reads — the
+  bytes were fetched and discarded on every call. Both directions of that drift are now caught
+  by the guard built for it in 1.19.0: both calendar listing shapes have a row in
+  `tests/test_select_covers_the_formatter.py`, which had never been pointed at calendar. The two
+  `$select` strings are module constants rather than inline literals so the guard can see them,
+  and a new test asserts the listing really sends the constant the guard checks. Live guards
+  cover both `type` and `show_as` on the listing, and `type` on the delta path.
+
+### Changed
+
+- **Response shape: `outlook_list_events` and `outlook_list_events_delta` both carry `type`.**
+  Two changes, one contract. The listing's `type` key already existed and was always `""`; it
+  now carries `singleInstance` / `occurrence` / `exception` / `seriesMaster`, so a caller
+  branching on `type == ""` (or treating the field as never set) sees new behaviour.
+  `outlook_list_events_delta` gains a `type` key it has never had — its formatter's docstring
+  claimed to mirror the listing's field-for-field and did not, which mattered because `SKILL.md`
+  steers recurring work to the delta tool: an agent seeding from `outlook_list_events` and
+  refreshing from the delta tool would have hit a `KeyError` or a silent downgrade the moment
+  the listing started returning real values. The parity claim is now a key-set test rather than
+  a sentence, so a field added to either formatter fails until it is added to both.
+
+  `outlook_list_events` also stops fetching `categories`, which it never returned to anyone —
+  no response-shape change, purely bytes it was paying Graph for. `concise=True` omits `type`,
+  as it always has; `outlook_get_event` is unchanged and still returns `categories`.
+
 ### Added
 
 - **Events carry a "Show as" status, on both the write and the read side.** Graph's `showAs`

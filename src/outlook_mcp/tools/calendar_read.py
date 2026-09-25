@@ -25,6 +25,27 @@ from outlook_mcp.validation import (
 
 _UTC_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
+# A `$select` and the formatter that reads the response are one contract written
+# in two places and two spellings — camelCase on the wire, snake_case on the SDK
+# model. Nothing in the language connects them, so they drift silently: Graph
+# honours the `$select`, the SDK leaves the unasked-for attribute `None`, and the
+# formatter reports it as `""`. That is issue #69, where `type` was read by
+# `_format_event_summary` and never selected, so every listed event came back
+# `type: ""` from 1.16.0 on.
+#
+# Spelling each `$select` once, at module scope, is what lets
+# `tests/test_select_covers_the_formatter.py` hold the two halves together: both
+# pairs have a `_PAIRS` row, checked in both directions. Add a field to the
+# formatter and to its `$select`, or to neither.
+_SUMMARY_SELECT = (
+    "id,subject,start,end,location,isAllDay,organizer,responseStatus,isOnlineMeeting,showAs,type"
+)
+
+# Concise mode needs `attendees` and `isOrganizer` to compute its two derived
+# fields, and nothing else — keep it tight so a day-at-a-glance scan never pulls
+# event bodies.
+_CONCISE_SELECT = "id,subject,start,end,location,isAllDay,isOrganizer,isOnlineMeeting,attendees"
+
 
 def _clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
@@ -172,10 +193,11 @@ def _format_event_concise(event: Any) -> dict:
     """Return a token-efficient event dict for concise-mode listings.
 
     Keeps: id, subject, start, end, location, is_all_day, is_organizer,
-    is_online_meeting, attendees_count. Drops: body, organizer (object),
-    response_status, categories, full attendees list, `type`, and `show_as` —
-    concise mode is for day-at-a-glance scans where the series/one-off
-    distinction isn't worth the tokens; use the normal listing when it is.
+    is_online_meeting, attendees_count. Drops, relative to the normal listing:
+    organizer (object), response_status, `type` and `show_as` — concise mode is
+    for day-at-a-glance scans where the series/one-off distinction isn't worth
+    the tokens; use the normal listing when it is. (Body, the full attendees
+    list and categories are detail-only and on no listing shape.)
 
     `show_as` is dropped for the same reason and on the same terms as
     `response_status`: both are status fields this shape has always traded
@@ -223,8 +245,8 @@ async def list_events(
     relative to "now" in the configured timezone.
 
     concise: when True, return a compact event shape — drops ``organizer``,
-    ``response_status``, ``categories``, ``show_as``; adds ``is_organizer``
-    and ``attendees_count``. Default False preserves the existing shape.
+    ``response_status``, ``type``, ``show_as``; adds ``is_organizer`` and
+    ``attendees_count``. Default False preserves the existing shape.
 
     calendar: which calendar to read. None, blank or "primary" keeps the
     default calendar's ``/me/calendarView``; otherwise a display name or ID
@@ -252,17 +274,7 @@ async def list_events(
     query_params["start_date_time"] = start_utc
     query_params["end_date_time"] = end_utc
     query_params["$orderby"] = "start/dateTime"
-    if concise:
-        # We need attendees + isOrganizer to compute the concise fields.
-        # Keep the select tight to avoid pulling full event bodies.
-        query_params["$select"] = (
-            "id,subject,start,end,location,isAllDay,isOrganizer,isOnlineMeeting,attendees"
-        )
-    else:
-        query_params["$select"] = (
-            "id,subject,start,end,location,isAllDay,"
-            "organizer,responseStatus,isOnlineMeeting,categories,showAs"
-        )
+    query_params["$select"] = _CONCISE_SELECT if concise else _SUMMARY_SELECT
 
     from msgraph.generated.users.item.calendar_view.calendar_view_request_builder import (
         CalendarViewRequestBuilder,
