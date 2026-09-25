@@ -23,9 +23,23 @@ DEFAULT_TENANT_ID = "consumers"
 # own signal file, neither would see the other's write, and they would clobber
 # each other's token. Empty or unset leaves the default in place.
 CONFIG_DIR_ENV = "OUTLOOK_MCP_CONFIG_DIR"
-DEFAULT_CONFIG_DIR = os.path.expanduser(
-    os.environ.get(CONFIG_DIR_ENV) or "~/.outlook-mcp"
-)
+
+
+def _resolve_config_dir() -> str:
+    """Resolve the settings directory once, absolutely.
+
+    An override may be relative — a launch script's shorthand — and the
+    terminal that runs ``outlook-mcp auth`` and the client that starts the
+    server rarely share a working directory. A relative value left relative
+    names a different settings directory in each, and the server asks for
+    re-authentication forever. Anchoring at first use pins both to one
+    directory. Empty or unset leaves the default in place.
+    """
+    override = os.environ.get(CONFIG_DIR_ENV)
+    return os.path.abspath(os.path.expanduser(override or "~/.outlook-mcp"))
+
+
+DEFAULT_CONFIG_DIR = _resolve_config_dir()
 
 
 def _default_attachments_dir() -> str:
@@ -166,8 +180,25 @@ def save_config(config: Config, config_dir: str = DEFAULT_CONFIG_DIR) -> None:
     _atomic_write(file_path, config.model_dump_json(indent=2))
 
 
+def _refuse_non_directory(config_dir: str) -> None:
+    """Refuse a settings path that exists but is a file.
+
+    Surfaced here — at load, as a ``ValueError`` the server and CLI already
+    translate into a clean exit with the repair — instead of later, when
+    creating the settings directory would fail as a confusing
+    ``FileExistsError`` after part of a flow already ran.
+    """
+    if os.path.exists(config_dir) and not os.path.isdir(config_dir):
+        raise ValueError(
+            f"The settings path exists but is not a directory: {config_dir}. "
+            f"Move or remove it, or point {CONFIG_DIR_ENV} at a directory "
+            "(one is created if missing), then restart."
+        )
+
+
 def load_config(config_dir: str = DEFAULT_CONFIG_DIR) -> Config:
     """Load config from disk. Returns defaults if no config file exists."""
+    _refuse_non_directory(config_dir)
     file_path = Path(config_dir) / "config.json"
 
     if not file_path.exists():

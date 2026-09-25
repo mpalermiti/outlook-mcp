@@ -152,9 +152,8 @@ def test_default_config_confines_to_the_outlook_mcp_directory():
     )
     attachments_dir, config_dir = out.stdout.strip().splitlines()
 
-    assert attachments_dir == os.path.join(
-        os.path.expanduser("~/.outlook-mcp"), "attachments"
-    )
+    home_settings = os.path.abspath(os.path.expanduser("~/.outlook-mcp"))
+    assert attachments_dir == os.path.join(home_settings, "attachments")
     # and it derives from the one settings-directory constant, so a moved
     # settings directory can never strand the attachments behind
     assert attachments_dir == os.path.join(config_dir, "attachments")

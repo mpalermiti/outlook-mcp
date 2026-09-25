@@ -250,3 +250,17 @@ def test_main_exits_cleanly_on_a_symlinked_config(tmp_path):
         "Cannot load the config file",
         "symlink",
     )
+
+
+def test_main_exits_cleanly_when_the_settings_path_is_a_file(tmp_path):
+    """An override pointing at an existing file is refused at load, with the
+    repair — not later as a FileExistsError partway through a flow."""
+    not_a_dir = tmp_path / "settings.txt"
+    not_a_dir.write_text("occupied")
+
+    _assert_clean_exit(
+        _run_server_entry(not_a_dir),
+        "Cannot load the config file",
+        "not a directory",
+        "OUTLOOK_MCP_CONFIG_DIR",
+    )

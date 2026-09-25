@@ -134,12 +134,50 @@ def test_config_dir_env_empty_or_unset_keeps_the_default():
     constant while the probe (which drops the variable) still reports the
     default, and the test would fail for doing what it was told.
     """
-    default = os.path.join(os.path.expanduser("~/.outlook-mcp"), "attachments")
+    home_settings = os.path.abspath(os.path.expanduser("~/.outlook-mcp"))
 
-    assert _paths_with_env(None)[0] == os.path.expanduser("~/.outlook-mcp")
-    assert _paths_with_env("")[0] == os.path.expanduser("~/.outlook-mcp")
-    assert _paths_with_env(None)[2] == default
-    assert _paths_with_env("")[2] == default
+    assert _paths_with_env(None)[0] == home_settings
+    assert _paths_with_env("")[0] == home_settings
+    assert _paths_with_env(None)[2] == os.path.join(home_settings, "attachments")
+    assert _paths_with_env("")[2] == os.path.join(home_settings, "attachments")
+
+
+def test_a_relative_override_is_anchored_not_followed_around(tmp_path):
+    """`OUTLOOK_MCP_CONFIG_DIR=net` means the directory the launcher was in.
+
+    Left relative, the value would name a different settings directory in
+    the terminal that runs `outlook-mcp auth` and the client that starts the
+    server — and the server would ask for re-authentication forever.
+    """
+    env = dict(os.environ)
+    env["OUTLOOK_MCP_CONFIG_DIR"] = "net-instance"
+    out = subprocess.run(
+        [sys.executable, "-c", "from outlook_mcp import config; print(config.DEFAULT_CONFIG_DIR)"],
+        env=env,
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert out.stdout.strip() == str(tmp_path / "net-instance")
+
+
+def test_load_refuses_an_override_that_is_a_file(tmp_path):
+    """A settings path that exists but is a file fails at load, with the fix.
+
+    Refused here rather than as a FileExistsError later, when part of a flow
+    has already run. The ValueError arm is the one the server and CLI turn
+    into a clean exit with this message.
+    """
+    not_a_dir = tmp_path / "settings.txt"
+    not_a_dir.write_text("occupied")
+
+    with pytest.raises(ValueError) as exc:
+        load_config(config_dir=str(not_a_dir))
+
+    assert "not a directory" in str(exc.value)
+    assert "OUTLOOK_MCP_CONFIG_DIR" in str(exc.value)
 
 
 def test_auth_record_follows_the_settings_directory_not_a_second_home(tmp_path):
