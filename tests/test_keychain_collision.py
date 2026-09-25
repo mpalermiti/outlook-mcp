@@ -6,7 +6,10 @@ How the cache really works, from azure-identity's own persistence layer:
   Visual Studio's, the Azure CLI's — serializes into ONE Keychain item:
   service ``Microsoft.Developer.IdentityService``, account ``MSALCache``.
   ``TokenCachePersistenceOptions(name=...)`` does NOT buy a second Keychain
-  item. It buys a distinct *signal file* (``~/.IdentityService/<name>``),
+  item. It buys a distinct *signal file* — on disk
+  ``~/.IdentityService/outlook-mcp.nocae``: azure-identity appends a
+  suffix to every cache name (``.nocae`` non-CAE, ``.cae`` CAE), so the
+  name keys the signal file, never the storage —
   which is the lock-and-merge coordinator: a credential whose signal file
   says "changed" reloads the shared item, merges its accounts, and writes the
   whole view back under a lock. Windows (a DPAPI file per name) and Linux
