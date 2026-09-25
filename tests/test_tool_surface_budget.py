@@ -37,9 +37,11 @@ CHARS_PER_TOKEN = 4
 # grew create/get/update_event, not just `outlook_create_event`'s new
 # parameter) and the upload-session docstring note.
 #
-# 13,134 on the 68-tool surface: the two in-process account-switching tools
-# came off, but they were two of the smallest schemas on the surface (~20
-# tokens between them), so the ceiling barely moves with the removal.
+# 13,156 on the 68-tool surface: the two in-process account-switching tools
+# came off (barely ~20 tokens between them — two of the smallest schemas on
+# the surface), and the attachment-path docstrings stopped naming a default
+# an override moves anyway (+22). Ceiling 13,300 holds ~1% headroom: room
+# for a wording fix, not for another batch.
 TOOL_SURFACE_CEILING = 13_300
 
 # `prompts/list` is the cheap half of the bargain struck in 1.20.0: workflow
