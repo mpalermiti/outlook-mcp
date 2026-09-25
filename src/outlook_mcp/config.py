@@ -29,11 +29,13 @@ DEFAULT_CONFIG_DIR = os.path.expanduser(
 
 
 def _default_attachments_dir() -> str:
-    """Attachments live under the settings directory, wherever it was moved to."""
-    override = os.environ.get(CONFIG_DIR_ENV)
-    if override:
-        return os.path.join(override, "attachments")
-    return "~/.outlook-mcp/attachments"
+    """Attachments live under the settings directory, wherever it was moved to.
+
+    Derived from ``DEFAULT_CONFIG_DIR`` and nothing else — the same single
+    constant every other path derives from, so an override can never split
+    the settings directory from the attachments directory.
+    """
+    return os.path.join(DEFAULT_CONFIG_DIR, "attachments")
 
 
 # Top-level keys an older release accepted. One process serves one account

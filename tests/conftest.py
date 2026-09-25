@@ -161,11 +161,8 @@ def live_write_config(real_config, tmp_path):
 
     The config handed back is a sandboxed copy: `attachments_dir` is pointed
     at a per-test tmp_path so the attachment round-trip never stages files in
-    the user's real home. The default value is the literal string
-    "~/.outlook-mcp/attachments" — only `resolve_attachment_path` expands the
-    `~` — so without this, a test that builds a `Path(attachments_dir)`
-    creates a directory literally named `~` under pytest's CWD and can never
-    meet the file the tool resolves to.
+    the user's real settings directory (which a shell-exported
+    `OUTLOOK_MCP_CONFIG_DIR` may have moved somewhere with other uses).
     """
     if os.environ.get("OUTLOOK_MCP_LIVE_WRITE") != "1":
         pytest.skip(

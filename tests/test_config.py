@@ -127,11 +127,19 @@ def test_config_dir_env_moves_every_setting_with_it(tmp_path):
 
 
 def test_config_dir_env_empty_or_unset_keeps_the_default():
-    """Empty string is not a directory — it must mean "default", not ""."""
-    from outlook_mcp.config import DEFAULT_CONFIG_DIR
+    """Empty string is not a directory — it must mean "default", not "".
 
-    assert _paths_with_env(None)[0] == DEFAULT_CONFIG_DIR
-    assert _paths_with_env("")[0] == DEFAULT_CONFIG_DIR
+    Compared against the expanded default, not this process's constant: a
+    shell that exports the override would otherwise move the in-process
+    constant while the probe (which drops the variable) still reports the
+    default, and the test would fail for doing what it was told.
+    """
+    default = os.path.join(os.path.expanduser("~/.outlook-mcp"), "attachments")
+
+    assert _paths_with_env(None)[0] == os.path.expanduser("~/.outlook-mcp")
+    assert _paths_with_env("")[0] == os.path.expanduser("~/.outlook-mcp")
+    assert _paths_with_env(None)[2] == default
+    assert _paths_with_env("")[2] == default
 
 
 def test_auth_record_follows_the_settings_directory_not_a_second_home(tmp_path):
