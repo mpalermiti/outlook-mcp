@@ -54,17 +54,15 @@ def _default_attachments_dir() -> str:
 
 # Top-level keys an older release accepted. One process serves one account
 # now; a config carrying these still loads, the operator just hears about it.
+# Both keys described the same removed feature, so they share one sentence.
+_LEGACY_MULTI_ACCOUNT_MESSAGE = (
+    "configuring multiple accounts in one process is no longer supported; "
+    "run one server per account and give each its own settings directory "
+    f"via the {CONFIG_DIR_ENV} environment variable"
+)
 _LEGACY_KEYS = {
-    "accounts": (
-        "configuring multiple accounts in one process is no longer supported; "
-        "run one server per account and give each its own settings directory "
-        f"via the {CONFIG_DIR_ENV} environment variable"
-    ),
-    "default_account": (
-        "configuring multiple accounts in one process is no longer supported; "
-        "run one server per account and give each its own settings directory "
-        f"via the {CONFIG_DIR_ENV} environment variable"
-    ),
+    "accounts": _LEGACY_MULTI_ACCOUNT_MESSAGE,
+    "default_account": _LEGACY_MULTI_ACCOUNT_MESSAGE,
 }
 
 
@@ -157,7 +155,7 @@ def _ensure_dir(dir_path: str) -> Path:
     return path
 
 
-def _atomic_write(file_path: Path, data: str) -> None:
+def atomic_write(file_path: Path, data: str) -> None:
     """Write file atomically with fsync, set 0600 permissions."""
     dir_path = file_path.parent
     fd, tmp_path = tempfile.mkstemp(dir=str(dir_path), suffix=".tmp")
@@ -177,7 +175,7 @@ def save_config(config: Config, config_dir: str = DEFAULT_CONFIG_DIR) -> None:
     """Save config to disk."""
     dir_path = _ensure_dir(config_dir)
     file_path = dir_path / "config.json"
-    _atomic_write(file_path, config.model_dump_json(indent=2))
+    atomic_write(file_path, config.model_dump_json(indent=2))
 
 
 def config_repair_lines(exc: Exception) -> list[str]:

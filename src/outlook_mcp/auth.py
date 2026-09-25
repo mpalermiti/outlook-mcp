@@ -14,7 +14,7 @@ from azure.identity import (
     TokenCachePersistenceOptions,
 )
 
-from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config, _atomic_write, _ensure_dir
+from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config, _ensure_dir, atomic_write
 from outlook_mcp.errors import (
     AuthRequiredError,
     OutlookMCPError,
@@ -89,21 +89,16 @@ def _is_azure_unencrypted_refusal(exc: BaseException) -> bool:
     ``__cause__``. The persistent cache's refusal is a ``ValueError`` raised
     while building the cache inside those wrapped methods, so it never
     surfaces as a ``ValueError``: it arrives as a ``ClientAuthenticationError``
-    whose message embeds azure's own wording and whose cause is the original.
-    Matching the marker on the error and its cause covers both halves; the
-    bare-``ValueError`` arm can only fire for a caller that bypassed a real
-    credential.
+    whose message embeds azure's own wording — which is why matching the
+    marker on the message alone is sufficient: the wrapper embeds the
+    original's full text, cause included. The bare-``ValueError`` arm can
+    only fire for a caller that bypassed a real credential.
     """
     if isinstance(exc, ValueError) and _AZURE_UNENCRYPTED_MARKER in str(exc):
         return True
     if not isinstance(exc, ClientAuthenticationError):
         return False
-    if _AZURE_UNENCRYPTED_MARKER in str(exc):
-        return True
-    cause = exc.__cause__
-    return isinstance(cause, BaseException) and _AZURE_UNENCRYPTED_MARKER in str(
-        cause
-    )
+    return _AZURE_UNENCRYPTED_MARKER in str(exc)
 
 
 # The Graph SDK always requests .default scope internally, so we must
@@ -131,7 +126,7 @@ def _save_auth_record(record: AuthenticationRecord) -> None:
     # The settings directory is ours: create it 0700 like every other path
     # under it, not with the mkdir default that leaves group/other readable.
     _ensure_dir(str(path.parent))
-    _atomic_write(path, record.serialize())
+    atomic_write(path, record.serialize())
 
 
 def _load_auth_record() -> AuthenticationRecord | None:
@@ -298,17 +293,14 @@ class AuthManager:
             # Swallowing it here sends the operator round the `outlook-mcp auth`
             # loop with no idea what to change.
             raise
-        except ClientAuthenticationError as exc:
-            # What every failure inside get_token arrives as (see
-            # _is_azure_unencrypted_refusal). Either the host cannot store a
-            # token safely — a config problem, raised above — or this
-            # credential can no longer serve its identity, which re-running
-            # `outlook-mcp auth` actually fixes.
+        except Exception as exc:
+            # Either the host cannot store a token safely — a config problem
+            # with its own error, raised here — or this credential can no
+            # longer serve its identity, which re-running `outlook-mcp auth`
+            # actually fixes. Everything else is a stale-token-shaped failure
+            # with the same remedy.
             if _is_azure_unencrypted_refusal(exc):
                 raise UnencryptedTokenCacheError() from exc
-            logger.warning("Cached token refresh failed — re-run `outlook-mcp auth`.")
-            return False
-        except Exception:
             logger.warning("Cached token refresh failed — re-run `outlook-mcp auth`.")
             return False
 

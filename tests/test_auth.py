@@ -358,3 +358,22 @@ class TestUnencryptedCacheIsOptIn:
         ):
             auth.login_interactive()
         assert auth_module._is_azure_unencrypted_refusal(exc.value) is False
+
+    def test_the_wrapped_refusal_matches_on_the_message_alone(self):
+        """azure's wrapper embeds the original's whole text, cause included.
+
+        The refusal arrives as ``ClientAuthenticationError("Authentication
+        failed: <original>")`` with the original on ``__cause__`` — so the
+        message arm is the complete matcher. A marker living only on the
+        cause with a silent message does not occur on any real path and must
+        not match.
+        """
+        original = self.AZURE_REFUSAL
+        wrapped = ClientAuthenticationError(f"Authentication failed: {original}")
+        wrapped.__cause__ = original
+
+        assert auth_module._is_azure_unencrypted_refusal(wrapped) is True
+
+        quiet = ClientAuthenticationError("Authentication failed: something else")
+        quiet.__cause__ = original
+        assert auth_module._is_azure_unencrypted_refusal(quiet) is False
