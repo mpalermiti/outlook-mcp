@@ -14,7 +14,7 @@ from azure.identity import (
     TokenCachePersistenceOptions,
 )
 
-from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config, _atomic_write
+from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config, _atomic_write, _ensure_dir
 from outlook_mcp.errors import (
     AuthRequiredError,
     OutlookMCPError,
@@ -128,7 +128,9 @@ def _save_auth_record(record: AuthenticationRecord) -> None:
     that reads it concurrently.
     """
     path = _auth_record_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # The settings directory is ours: create it 0700 like every other path
+    # under it, not with the mkdir default that leaves group/other readable.
+    _ensure_dir(str(path.parent))
     _atomic_write(path, record.serialize())
 
 
