@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from outlook_mcp.config import Config
+from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config
 from outlook_mcp.permissions import (
     CATEGORY_MAIL_DRAFTS,
     CATEGORY_MAIL_SEND,
@@ -60,7 +60,7 @@ def resolve_attachment_path(path: str, attachments_dir: str) -> str:
         raise ValueError(
             f"Attachment path is outside the permitted directory: {path}. "
             f"Attachments may only be read from or written to {attachments_dir} "
-            f"(set `attachments_dir` in ~/.outlook-mcp/config.json to change it)."
+            f"(set `attachments_dir` in {DEFAULT_CONFIG_DIR}/config.json to change it)."
         )
     return str(resolved)
 

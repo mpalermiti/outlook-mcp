@@ -5,6 +5,18 @@ from __future__ import annotations
 from mcp.server.mcpserver.exceptions import ToolError
 
 
+def _config_dir() -> str:
+    """The settings directory remedies point at, imported lazily.
+
+    ``config`` imports ``permissions`` for its category validation, and
+    ``permissions`` imports this module for its error types — a cycle the
+    remedy strings close over the runtime value instead of the import.
+    """
+    from outlook_mcp.config import DEFAULT_CONFIG_DIR
+
+    return DEFAULT_CONFIG_DIR
+
+
 class OutlookMCPError(ToolError):
     """Base exception for all outlook-mcp errors.
 
@@ -49,7 +61,7 @@ class ReadOnlyError(OutlookMCPError):
         super().__init__(
             "read_only",
             f"Cannot use {tool_name} — server is in read-only mode.",
-            "Set read_only to false in ~/.outlook-mcp/config.json to enable write operations.",
+            f"Set read_only to false in {_config_dir()}/config.json to enable write operations.",
         )
 
 
@@ -61,7 +73,7 @@ class PermissionDeniedError(OutlookMCPError):
             "permission_denied",
             f"Cannot use {tool_name} — category '{category}' is not in allow_categories.",
             (
-                f"Add '{category}' to allow_categories in ~/.outlook-mcp/config.json, "
+                f"Add '{category}' to allow_categories in {_config_dir()}/config.json, "
                 "or unset allow_categories for full write access."
             ),
         )
@@ -133,7 +145,7 @@ class UnencryptedTokenCacheError(OutlookMCPError):
             "libsecret-1-0 python3-gi`) and re-create the venv with "
             "`--system-site-packages`, or accept plaintext storage by setting "
             '`"allow_unencrypted_token_cache": true` in '
-            "~/.outlook-mcp/config.json. See "
+            f"{_config_dir()}/config.json. See "
             "https://github.com/mpalermiti/outlook-mcp/issues/7.",
         )
 

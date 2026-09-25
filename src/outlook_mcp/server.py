@@ -1476,8 +1476,9 @@ async def outlook_download_attachment(
     """Download an attachment and write the decoded bytes to `save_path` on the host.
 
     `save_path` is resolved inside the configured attachments directory
-    (`attachments_dir`, default ~/.outlook-mcp/attachments) — a bare filename lands
-    there; a path outside it is refused. Same directory for reads and writes.
+    (`attachments_dir`, an `attachments` folder in the settings directory by
+    default) — a bare filename lands there; a path outside it is refused. Same
+    directory for reads and writes.
     """
     client = _get_graph_client(ctx)
     return await mail_attachments.download_attachment(
@@ -1506,9 +1507,9 @@ async def outlook_send_with_attachments(
     """Send an email with file attachments; auto-switches to upload-session for files >3MB.
 
     `attachment_paths` resolve inside the configured attachments directory
-    (`attachments_dir`, default ~/.outlook-mcp/attachments) — a bare filename is looked up
-    there, and a path outside it is refused. Pass reply_to to
-    route replies to a different address.
+    (`attachments_dir`, an `attachments` folder in the settings directory by
+    default) — a bare filename is looked up there, and a path outside it is
+    refused. Pass reply_to to route replies to a different address.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -1537,9 +1538,10 @@ async def outlook_attach_to_draft(
     """Add attachments to an existing draft; auto-switches to upload-session for files >3MB.
 
     `attachment_paths` resolve inside the configured attachments directory
-    (`attachments_dir`, default ~/.outlook-mcp/attachments) — a bare filename is looked up
-    there, and a path outside it is refused. Returns new
-    attachment IDs for later removal via outlook_remove_draft_attachment.
+    (`attachments_dir`, an `attachments` folder in the settings directory by
+    default) — a bare filename is looked up there, and a path outside it is
+    refused. Returns new attachment IDs for later removal via
+    outlook_remove_draft_attachment.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
