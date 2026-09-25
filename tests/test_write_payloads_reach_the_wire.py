@@ -329,6 +329,42 @@ class TestCalendarWrite:
         # field was sent at all.
         assert set(body) == {"@odata.type", "showAs"}
 
+    async def test_update_event_puts_a_requested_zone_on_the_wire(self):
+        """An explicit `timezone` is a value Graph reads, so assert it in the payload.
+
+        The fixture is anchored in `America/New_York` and the argument asks for
+        `Europe/London`, so neither the stored anchor nor a hardcoded `"UTC"`
+        can satisfy this. A model-level assertion on `start.time_zone` would
+        pass for a version that silently kept the stored zone.
+        """
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
+        current = MagicMock(type=MagicMock(value="singleInstance"))
+        current.start = MagicMock(date_time="2026-10-22T13:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "America/New_York"
+        current.original_end_time_zone = "America/New_York"
+        current.is_all_day = False
+        builder.get = AsyncMock(return_value=current)
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await calendar_write.update_event(
+            client,
+            event_id="AAMkAG123=",
+            subject="SENTINEL-SUBJECT-5d1",
+            start="2026-10-22T09:00:00",
+            end="2026-10-22T10:00:00",
+            timezone="Europe/London",
+            config=_CFG,
+        )
+
+        assert_on_wire(
+            builder.patch.call_args[0][0],
+            "SENTINEL-SUBJECT-5d1",
+            '"timeZone": "Europe/London"',
+            '"dateTime": "2026-10-22T09:00:00"',
+        )
+
     async def test_update_event_remove_recurrence_is_an_explicit_null(self):
         builder = MagicMock()
         builder.patch = AsyncMock(return_value=MagicMock(id="E1"))

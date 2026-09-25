@@ -1049,6 +1049,98 @@ class TestEventTimezone:
         assert patched.recurrence.range.start_date == date(2026, 10, 28)
         assert patched.recurrence.range.recurrence_time_zone is None
 
+    async def test_an_echoed_recurrence_loses_its_stale_range_zone(self):
+        """The read-modify-write round trip plus a new `timezone`.
+
+        `outlook_get_event` returns `recurrence` including
+        `range.recurrenceTimeZone`, and the docstring invites callers to hand it
+        straight back. Combined with an explicit `timezone`, that sends the old
+        zone beside the new anchor — which Graph refuses with
+        `400 ErrorPropertyValidationFailure`, turning an ordinary edit into an
+        opaque failure. The explicit argument is the more specific instruction,
+        so the stale field goes.
+
+        This is narrower than the general passthrough I declined to remove in
+        the create path: there a conflicting zone is caller error, loudly
+        refused. Here it is two arguments of the same call disagreeing, and the
+        call is one the tool advertises.
+        """
+        echoed = {
+            "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["wednesday"]},
+            "range": {
+                "type": "numbered",
+                "numberOfOccurrences": 2,
+                "recurrenceTimeZone": "Pacific Standard Time",
+            },
+        }
+
+        current = _current_event(
+            date_time="2026-10-28T16:00:00.0000000",
+            start_zone="America/Los_Angeles",
+            event_type="seriesMaster",
+        )
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-10-28T09:00:00",
+            end="2026-10-28T10:00:00",
+            recurrence=echoed,
+            timezone="America/New_York",
+            config=_CFG_LA,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.time_zone == "America/New_York"
+        assert patched.recurrence.range.recurrence_time_zone is None
+        assert patched.recurrence.range.number_of_occurrences == 2
+
+    async def test_an_echoed_recurrence_keeps_its_zone_without_an_explicit_one(self):
+        """The control, and the reason this is a flag rather than a rule.
+
+        With no `timezone` argument the caller's `recurrenceTimeZone` is the only
+        statement about the range's zone, and removing it would be the sanitizer
+        mistake — discarding input for no stated reason. It survives.
+        """
+        echoed = {
+            "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["wednesday"]},
+            "range": {
+                "type": "numbered",
+                "numberOfOccurrences": 2,
+                "recurrenceTimeZone": "Pacific Standard Time",
+            },
+        }
+
+        current = _current_event(
+            date_time="2026-10-28T16:00:00.0000000",
+            start_zone="America/Los_Angeles",
+            event_type="seriesMaster",
+        )
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-10-28T09:00:00",
+            end="2026-10-28T10:00:00",
+            recurrence=echoed,
+            config=_CFG_LA,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.recurrence.range.recurrence_time_zone == "Pacific Standard Time"
+
     async def test_a_single_event_keeps_its_recurrence_untouched(self):
         """The re-send is a workaround for one Graph rule, not a habit.
 
