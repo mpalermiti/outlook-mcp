@@ -21,6 +21,7 @@ def _raw_event(**overrides) -> dict:
         "organizer": {"emailAddress": {"address": "lead@test.com", "name": "Lead"}},
         "responseStatus": {"response": "accepted"},
         "isOnlineMeeting": True,
+        "type": "singleInstance",
         "showAs": "busy",
     }
     base.update(overrides)
@@ -103,30 +104,103 @@ class TestFormatEventDelta:
 
         assert _format_event_delta(raw)["show_as"] == ""
 
-    def test_show_as_matches_the_listing_formatter(self):
-        """A parity claim should be a test, not a docstring sentence (#63).
+    def test_carries_type(self):
+        """#69. Same reasoning as `show_as`, one field over.
 
-        Scoped to the field this change adds rather than the whole key set:
-        the two shapes also differ on `type`, which is issue #69 and not this
-        change's to fix. When #69 lands, this becomes a full key-set
-        comparison and the scoping note goes away.
+        The delta endpoint takes no `$select`, so `type` is in the raw JSON
+        whatever the listing asked for — the formatter simply never read it,
+        which is why an agent seeding from `outlook_list_events` and refreshing
+        from this tool saw the key disappear.
         """
+        out = _format_event_delta(_raw_event(type="seriesMaster"))
+        assert out["type"] == "seriesMaster"
+
+    def test_absent_type_is_an_empty_string_not_a_missing_key(self):
+        """The distinction the caller has to be able to make.
+
+        A missing key is a `KeyError` in a caller that read `type` off the
+        listing; an empty string is the listing's own convention for "Graph
+        didn't send it". Both formatters answer the same way.
+        """
+        raw = _raw_event()
+        del raw["type"]
+
+        assert _format_event_delta(raw)["type"] == ""
+
+
+class TestTheDeltaSummaryMirrorsTheListingSummary:
+    """The parity claim in `_format_event_delta`'s docstring, as a test.
+
+    `SKILL.md` and `outlook_changes_since` both steer recurring work to the
+    delta tool, so an agent seeds from `outlook_list_events` and refreshes from
+    this one. A key on one side and not the other either raises `KeyError` in
+    the caller or silently downgrades the field — which is exactly what #69
+    reported for `type`, and #63 reported for contacts one module over.
+
+    The docstring said "field-for-field" and nothing pinned it. #73 could only
+    scope its version of this to `show_as`, because `type` was still missing
+    and the full comparison would have failed for a reason that was not #73's
+    to fix. This is that test unscoped.
+
+    Parity is asserted between the two *formatters*. The tool's own output
+    carries one key more — `format_delta_item` appends `is_deleted` to every
+    live item, and collapses a tombstone to `{id, is_deleted: True}` without
+    calling the formatter at all. That envelope is shared with mail and
+    contacts and is not what drifted.
+    """
+
+    @staticmethod
+    def _listing_summary():
         from outlook_mcp.tools.calendar_read import _format_event_summary
 
-        sdk_event = MagicMock()
-        sdk_event.subject = "Standup"
-        sdk_event.location = MagicMock(display_name="Online")
-        sdk_event.organizer = None
-        sdk_event.response_status = None
-        sdk_event.start = None
-        sdk_event.end = None
-        sdk_event.type = None
-        sdk_event.show_as = MagicMock(value="oof")
+        # `spec` so the formatter cannot silently read an attribute this
+        # fixture never set: a plain MagicMock auto-creates one, and a field
+        # added to the summary would then land here as a truthy stub instead
+        # of the AttributeError that tells us to update both sides.
+        event = MagicMock(
+            spec=[
+                "id",
+                "subject",
+                "start",
+                "end",
+                "location",
+                "is_all_day",
+                "organizer",
+                "response_status",
+                "is_online_meeting",
+                "type",
+                "show_as",
+            ]
+        )
+        event.id = "EVT_AAA"
+        event.subject = "Standup"
+        event.start = MagicMock(date_time="2026-05-22T15:00:00.0000000", time_zone="UTC")
+        event.end = MagicMock(date_time="2026-05-22T15:30:00.0000000", time_zone="UTC")
+        event.location = MagicMock(display_name="Online")
+        event.is_all_day = False
+        # `name` is a MagicMock *constructor* keyword, not an attribute, so it
+        # has to be assigned after the fact or the formatter reads a mock repr.
+        event.organizer = MagicMock(email_address=MagicMock())
+        event.organizer.email_address.name = "Lead"
+        event.response_status = MagicMock(response=MagicMock(value="accepted"))
+        event.is_online_meeting = True
+        event.type = MagicMock(value="singleInstance")
+        event.show_as = MagicMock(value="busy")
+        return _format_event_summary(event)
 
-        summary = _format_event_summary(sdk_event)
-        delta = _format_event_delta(_raw_event(showAs="oof"))
+    def test_both_summaries_carry_the_same_keys(self):
+        assert set(_format_event_delta(_raw_event())) == set(self._listing_summary())
 
-        assert summary["show_as"] == delta["show_as"] == "oof"
+    def test_type_agrees_on_both_sides(self):
+        """Key-set equality alone would pass with both sides empty.
+
+        #69's defect was a key that was *present* and always `""`, so the
+        key-set test above would have been green throughout it. The value has
+        to be asserted too, from a source that carries a real one.
+        """
+        delta = _format_event_delta(_raw_event(type="singleInstance"))
+
+        assert delta["type"] == self._listing_summary()["type"] == "singleInstance"
 
 
 # ── First call ───────────────────────────────────────────────────────
@@ -206,7 +280,7 @@ async def test_missing_end_raises_value_error():
 @pytest.mark.asyncio
 async def test_cap_reached_returns_nextlink_and_has_more():
     page = lambda i, link: {  # noqa: E731
-        "value": [_raw_event(id=f"e{i*50 + n}") for n in range(50)],
+        "value": [_raw_event(id=f"e{i * 50 + n}") for n in range(50)],
         "@odata.nextLink": link,
     }
     responses = [
@@ -235,14 +309,18 @@ async def test_cap_reached_returns_nextlink_and_has_more():
 @pytest.mark.asyncio
 async def test_follows_nextlink_until_deltalink():
     responses = [
-        _http_response({
-            "value": [_raw_event(id="e1")],
-            "@odata.nextLink": "https://graph.microsoft.com/v1.0/p2",
-        }),
-        _http_response({
-            "value": [_raw_event(id="e2")],
-            "@odata.deltaLink": "https://graph.microsoft.com/v1.0/cal-delta-final",
-        }),
+        _http_response(
+            {
+                "value": [_raw_event(id="e1")],
+                "@odata.nextLink": "https://graph.microsoft.com/v1.0/p2",
+            }
+        ),
+        _http_response(
+            {
+                "value": [_raw_event(id="e2")],
+                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/cal-delta-final",
+            }
+        ),
     ]
     patch_client, fake_client, _ = _async_client_with(responses)
     with patch_client:

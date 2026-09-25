@@ -28,7 +28,7 @@ import textwrap
 
 import pytest
 
-from outlook_mcp.tools import contacts, mail_read
+from outlook_mcp.tools import calendar_read, contacts, mail_read
 
 # (label, formatter function, the $select string that feeds it)
 #
@@ -36,9 +36,25 @@ from outlook_mcp.tools import contacts, mail_read
 # one that can reach every field the formatter reads. The search path sends
 # `_SUMMARY_SELECT`, which is deliberately narrower, and the formatter omits the
 # key it cannot honour rather than reporting it empty (`with_categories`).
+#
+# Both calendar rows are the fix for #69, where this guard's own bug class had
+# shipped unseen for six releases because calendar had never been enrolled: the
+# listing read `type` without selecting it, and selected `categories` without
+# reading it — one row, failing in both directions at once.
+#
+# The concise row is here even though that pair has always agreed. It is not
+# coverage for its own sake: the `$select` it pins is one `list_events` already
+# sends, so nothing is invented to make the row possible — which is what was
+# ruled out when `outlook_get_contact`, which sends no `$select` at all, was
+# considered for a row. It also inherits a contract that used to have its own
+# test: #73 asserted that concise mode does not pay for `showAs`, and this
+# guard's second direction says that generally, for every field, so the one-off
+# could go.
 _PAIRS = [
     ("mail summary", mail_read._format_message_summary, mail_read.SUMMARY_SELECT),
     ("contact summary", contacts._format_contact_summary, contacts._LIST_SELECT),
+    ("event summary", calendar_read._format_event_summary, calendar_read._SUMMARY_SELECT),
+    ("event concise", calendar_read._format_event_concise, calendar_read._CONCISE_SELECT),
 ]
 
 # The SDK renames exactly one field to dodge the Python keyword.
