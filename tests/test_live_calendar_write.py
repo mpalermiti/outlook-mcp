@@ -985,3 +985,52 @@ class TestReAnchoringAnExistingEvent:
             )
         finally:
             await delete_event(real_graph_client.sdk_client, event_id, config=live_write_config)
+
+    async def test_an_echoed_recurrence_and_a_new_zone_are_accepted_together(
+        self, real_graph_client, live_write_config
+    ):
+        """The round trip this tool invites, plus the argument it just gained.
+
+        `outlook_get_event` returns `recurrence` carrying
+        `range.recurrenceTimeZone`; handing that straight back with a new
+        `timezone` sends the old zone beside the new anchor. Graph refuses that
+        pair, so only a live call shows whether the combination works — the
+        payload is well-formed to the SDK either way.
+        """
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" tz-echoed-recurrence",
+            start=f"{monday.isoformat()}T09:00:00",
+            end=f"{monday.isoformat()}T09:30:00",
+            timezone=_DST_ZONE,
+            recurrence={
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                "range": {"type": "numbered", "numberOfOccurrences": 2},
+            },
+        ) as event_id:
+            before = await get_event(real_graph_client.sdk_client, event_id)
+            echoed = before["recurrence"]
+            assert echoed["range"].get("recurrenceTimeZone"), (
+                "Graph stopped returning recurrenceTimeZone, so this test no longer "
+                "exercises the collision it exists for"
+            )
+
+            # Hand the recurrence straight back, as the docstring invites, while
+            # asking for a different zone.
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                start=f"{monday.isoformat()}T09:00:00",
+                end=f"{monday.isoformat()}T09:30:00",
+                recurrence=echoed,
+                timezone=_EAST,
+                config=live_write_config,
+            )
+
+            after = await get_event(real_graph_client.sdk_client, event_id)
+            assert after["type"] == "seriesMaster"
+            assert after["original_start_time_zone"] != _DST_ZONE
+            assert after["recurrence"]["range"]["numberOfOccurrences"] == 2

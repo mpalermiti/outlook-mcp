@@ -26,6 +26,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   so Graph re-derives them from the new anchor — echoing the stale zone back beside a new
   `start.timeZone` produces the same opaque 400 this exists to avoid.
 
+  Handing a recurrence straight back from `outlook_get_event` while asking for a new `timezone`
+  works. That round trip returns `range.recurrenceTimeZone`, and sending the old zone beside the
+  new anchor is a pair Graph refuses — so an ordinary read-modify-write became an opaque 400. The
+  explicit argument is the more specific instruction, so the stale range zone is dropped and Graph
+  re-derives it. Without an explicit `timezone` a caller-supplied range zone is still passed
+  through untouched: it is then the only statement about that zone, and discarding it would be a
+  sanitizer removing input for no stated reason.
+
   `timezone` is refused on an all-day event rather than ignored. Graph stores one anchored in UTC
   whatever zone it is sent, so there is nothing to apply and silently substituting UTC would
   report success for work not done.
@@ -63,14 +71,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   anchored in `America/Los_Angeles` is Wednesday the 28th at 18:00, and taking the date off the
   text built a Thursday series starting the 29th, which Graph accepted and scheduled a day late.
 
-  `outlook_update_event` gains no argument, but stops undoing the fix: a `start`/`end` patch now
-  keeps the zone the event is already anchored in instead of stamping `UTC` on it. Graph rejects
-  a `start` patch carrying no `timeZone` at all, so one has to be sent, and the event's own is
-  the only one that does not move it. Start and end are read separately because Graph stores
-  them separately — a flight that leaves New York and lands in Los Angeles keeps both ends.
-  Re-anchoring an event into a *different* zone is deliberately not here; it is a larger change
-  than it looks (Graph refuses to move a series master's zone unless the recurrence is re-sent
-  with it) and is proposed separately.
+  `outlook_update_event` stops undoing the fix: a `start`/`end` patch keeps the zone the event is
+  already anchored in instead of stamping `UTC` on it. Graph rejects a `start` patch carrying no
+  `timeZone` at all, so one has to be sent, and the event's own is the only one that does not move
+  it. Start and end are read separately because Graph stores them separately — a flight that
+  leaves New York and lands in Los Angeles keeps both ends. Re-anchoring an event into a
+  *different* zone is the `timezone` argument in the Added section above, which shipped in the
+  same release after being developed separately.
 
   **Behaviour change.** A zone-less `start`/`end` on `outlook_create_event`
   ("2026-10-28T09:00:00") now means that wall-clock time in the configured zone, where it

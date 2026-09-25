@@ -66,6 +66,20 @@ def _anchor_zones(event: Any) -> tuple[str | None, str | None]:
     )
 
 
+# Why `timezone` and an all-day event cannot be combined. One constant rather
+# than the same sentence in two branches: the check fires either before any
+# network call (the caller said `is_all_day=True`) or after one read (only the
+# stored event knew), and a refusal that drifts between those two paths would
+# read as two different rules.
+_ALL_DAY_ZONE_REFUSAL = (
+    "timezone cannot be applied to an all-day event. Graph stores one anchored in "
+    "UTC whatever zone it is sent — verified live — so there is no zone to "
+    "re-anchor it to, and accepting this would report success for nothing. "
+    "To turn it into a timed event instead, pass is_all_day=False with real "
+    "start and end times."
+)
+
+
 def _is_series_master(event: Any) -> bool:
     """Whether Graph considers this event the master of a recurring series.
 
@@ -144,9 +158,13 @@ def _resend_recurrence(event: Any, *, anchor: str | None, zone: str | None) -> A
             "for a timezone change; pass `start` and `end` alongside `timezone`."
         )
 
-    stale = {"startDate", "recurrenceTimeZone"}
-    payload["range"] = {k: v for k, v in (payload.get("range") or {}).items() if k not in stale}
-    return build_event_recurrence(payload, start=start, zone=zone)
+    # `startDate` is dropped here so the builder re-derives it from `start`;
+    # `recurrenceTimeZone` is dropped by the builder itself, which is the one
+    # place that knows why (see `drop_range_timezone`).
+    payload["range"] = {
+        k: v for k, v in (payload.get("range") or {}).items() if k != "startDate"
+    }
+    return build_event_recurrence(payload, start=start, zone=zone, drop_range_timezone=True)
 
 
 def _as_instant(date_time: str, projected_zone: str | None) -> str:
@@ -509,13 +527,7 @@ async def update_event(
     # there would have cost a full-event GET and surfaced a stale id's 404
     # ahead of the actionable input error.
     if timezone is not None and is_all_day:
-        raise ValueError(
-            "timezone cannot be applied to an all-day event. Graph stores one anchored in "
-            "UTC whatever zone it is sent — verified live — so there is no zone to "
-            "re-anchor it to, and accepting this would report success for nothing. "
-            "To turn it into a timed event instead, pass is_all_day=False with real "
-            "start and end times."
-        )
+        raise ValueError(_ALL_DAY_ZONE_REFUSAL)
     requested_zone = validate_event_timezone(timezone) if timezone is not None else None
 
     validated_attendees = None
@@ -582,13 +594,7 @@ async def update_event(
                 # Reached only when the caller left `is_all_day` alone and the
                 # stored event turns out to be all-day; the same refusal as
                 # above, one round trip later because nothing knew sooner.
-                raise ValueError(
-                    "timezone cannot be applied to an all-day event. Graph stores one anchored in "
-            "UTC whatever zone it is sent — verified live — so there is no zone to "
-            "re-anchor it to, and accepting this would report success for nothing. "
-            "To turn it into a timed event instead, pass is_all_day=False with real "
-            "start and end times."
-                )
+                raise ValueError(_ALL_DAY_ZONE_REFUSAL)
             start_zone = end_zone = "UTC"
 
     def _anchored(zone: str | None, which: str) -> str:
@@ -661,7 +667,17 @@ async def update_event(
                 localized = await _start_in_its_own_zone(graph_client, event_id, anchor_zone)
                 if localized:
                     anchor = localized
-        event.recurrence = build_event_recurrence(recurrence, start=anchor, zone=anchor_zone)
+        event.recurrence = build_event_recurrence(
+            recurrence,
+            start=anchor,
+            zone=anchor_zone,
+            # An explicit `timezone` in the same call names the event's zone, so
+            # a `recurrenceTimeZone` echoed back from `outlook_get_event` is the
+            # *old* one. Graph refuses the pair when they disagree, which makes
+            # the ordinary read-modify-write round trip a 400 rather than an
+            # edit. Dropped only here: the general passthrough stays deliberate.
+            drop_range_timezone=requested_zone is not None,
+        )
     elif start_zone is not None and not remove_recurrence:
         # A start/end patch that changes a series master's zone is refused with
         # `400 ErrorPropertyValidationFailure` unless the recurrence travels
