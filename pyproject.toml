@@ -23,6 +23,18 @@ classifiers = [
 dependencies = [
     "mcp[cli]>=2",
     "msgraph-sdk>=1.55",
+    # kiota 1.13.0 (2026-09-18) moved per-request options from a monkey-patched
+    # `request.options` attribute to `request.extensions["kiota_request_options"]`.
+    # msgraph-core 1.5.1 still reads the old attribute, so its UrlReplaceHandler
+    # never rewrites `/users/me-token-to-replace` to `/me` and every /me call
+    # 400s: "me-token-to-replace is invalid" (#80). The lock pins 1.12.3, which
+    # is why CI and every developer install were green while a fresh
+    # `uv tool install` broke. Lift these caps once a msgraph-core release
+    # carries microsoftgraph/msgraph-sdk-python-core#1129.
+    "microsoft-kiota-abstractions<1.13",
+    "microsoft-kiota-http<1.13",
+    "microsoft-kiota-authentication-azure<1.13",
+    "microsoft-kiota-serialization-json<1.13",
     "azure-identity>=1.25",
     "pydantic>=2.0",
     # zoneinfo reads the host's IANA time zone database. Windows ships none at

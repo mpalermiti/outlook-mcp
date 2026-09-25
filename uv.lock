@@ -1479,6 +1479,10 @@ source = { editable = "." }
 dependencies = [
     { name = "azure-identity" },
     { name = "mcp", extra = ["cli"] },
+    { name = "microsoft-kiota-abstractions" },
+    { name = "microsoft-kiota-authentication-azure" },
+    { name = "microsoft-kiota-http" },
+    { name = "microsoft-kiota-serialization-json" },
     { name = "msgraph-sdk" },
     { name = "pydantic" },
     { name = "tzdata" },
@@ -1503,6 +1507,10 @@ dev = [
 requires-dist = [
     { name = "azure-identity", specifier = ">=1.25" },
     { name = "mcp", extras = ["cli"], specifier = ">=2" },
+    { name = "microsoft-kiota-abstractions", specifier = "<1.13" },
+    { name = "microsoft-kiota-authentication-azure", specifier = "<1.13" },
+    { name = "microsoft-kiota-http", specifier = "<1.13" },
+    { name = "microsoft-kiota-serialization-json", specifier = "<1.13" },
     { name = "msgraph-sdk", specifier = ">=1.55" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
