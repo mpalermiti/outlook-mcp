@@ -40,8 +40,16 @@ class _FakeCredential:
         return AccessToken("not-a-real-token", 9_999_999_999)
 
 
-def sent_url_for_me() -> str:
-    """The absolute URL the real middleware pipeline sends for ``client.me.get()``.
+def sent_url_for_me(nested: bool = False) -> str:
+    """The absolute URL the real middleware pipeline sends for a ``/me`` call.
+
+    ``nested=True`` asks for ``/me/mailFolders/inbox/messages`` instead of bare
+    ``/me``. Both go through the same rewrite, but they fail differently against
+    the real service: Graph tolerates ``/users/<anything>`` one segment deep, so
+    a bare ``/me`` health check stays **200** with the placeholder in the URL
+    while every nested path 404s "The requested user ... is invalid". A canary
+    that only probed ``/me`` against Graph would have stayed green. Asserting on
+    the URL string catches both; the nested case is here so the reason is.
 
     Importable by the CI canaries, which run it against a fresh resolution.
     """
@@ -70,7 +78,10 @@ def sent_url_for_me() -> str:
     import asyncio
 
     async def call():
-        await client.me.get()
+        if nested:
+            await client.me.mail_folders.by_mail_folder_id("inbox").messages.get()
+        else:
+            await client.me.get()
 
     asyncio.run(call())
     assert sent, "the mock transport was never reached — the probe is wired to the wrong client"
@@ -88,7 +99,16 @@ def test_me_is_sent_as_me_not_as_the_placeholder():
     assert url.endswith("/v1.0/me"), url
 
 
+def test_a_nested_me_path_is_rewritten_too():
+    url = sent_url_for_me(nested=True)
+    assert "me-token-to-replace" not in url, url
+    assert "//" not in url.split("://", 1)[1], f"double slash left where the placeholder was: {url}"
+    assert url.endswith("/v1.0/me/mailFolders/inbox/messages"), url
+
+
 if __name__ == "__main__":  # so CI can run it as a script against a fresh venv
     print(sent_url_for_me())
+    print(sent_url_for_me(nested=True))
     test_me_is_sent_as_me_not_as_the_placeholder()
+    test_a_nested_me_path_is_rewritten_too()
     print("OK: /me reaches the wire as /me")
