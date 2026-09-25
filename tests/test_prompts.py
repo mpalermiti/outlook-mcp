@@ -1,7 +1,7 @@
 """Prompts carry the workflows; docstrings carry the tools.
 
 Sequencing guidance — which tools to call, in what order, carrying what forward —
-is not per-tool knowledge, so paying for it in 70 docstrings on every turn is the
+is not per-tool knowledge, so paying for it in every tool's docstring on every turn is the
 wrong shape. A prompt costs a name and one line in `prompts/list` until someone
 invokes it, and unlike a SKILL.md it reaches every MCP client rather than only
 the ones that load skills.

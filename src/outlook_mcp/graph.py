@@ -20,7 +20,13 @@ class GraphClient:
             raise AuthRequiredError()
         # Disable CAE (Continuous Access Evaluation) — the default enables it,
         # which forces a fresh interactive auth flow instead of using the
-        # cached token from `outlook-mcp auth`.
+        # cached token from `outlook-mcp auth`. It would also persist through
+        # a SECOND cache: every cache name gets a signal-file suffix in
+        # ~/.IdentityService (.nocae for this non-CAE cache, .cae for a CAE
+        # one), and the two suffixes are two signal files writing the same
+        # host-wide Keychain item — each believing it owns the item, they
+        # clobber each other's writes. One non-CAE cache, one signal file:
+        # ~/.IdentityService/outlook-mcp.nocae.
         auth_provider = AzureIdentityAuthenticationProvider(
             credential, is_cae_enabled=False
         )

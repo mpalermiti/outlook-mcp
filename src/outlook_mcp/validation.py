@@ -6,11 +6,13 @@ from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
+from outlook_mcp.config import DEFAULT_CONFIG_DIR
+
 logger = logging.getLogger(__name__)
 
 # Where a bad `config.timezone` is fixed. Kept next to the logger so the
 # read path and the write path quote the same sentence.
-CONFIG_REMEDY_TEXT = "Set `timezone` in ~/.outlook-mcp/config.json."
+CONFIG_REMEDY_TEXT = f"Set `timezone` in {DEFAULT_CONFIG_DIR}/config.json."
 
 
 @lru_cache(maxsize=1)
@@ -314,7 +316,8 @@ def resolve_config_event_timezone(name: str) -> str:
                 "config.timezone is %r, which Microsoft Graph rejects for calendar "
                 "events. Anchoring them in UTC, as this server did before it sent a "
                 "zone at all — so recurring events will still shift an hour across a "
-                "daylight-saving change. Set `timezone` in ~/.outlook-mcp/config.json "
+                "daylight-saving change. Set `timezone` in "
+                f"{DEFAULT_CONFIG_DIR}/config.json "
                 "to %s%s to fix that.",
                 key,
                 better,

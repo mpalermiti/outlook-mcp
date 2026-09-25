@@ -24,11 +24,11 @@ You'll like this if you're:
 - Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
 - Security-conscious: tokens in the OS keyring (Keychain on macOS, libsecret on Linux -- never cleartext unless you opt in), granular `allow_categories`, optional `read_only` mode, zero telemetry
 
-This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 70 tools — way more than you need for "read my inbox").
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 68 tools — way more than you need for "read my inbox").
 
 ### How it differs from other Outlook tools you'll find
 
-This is the only **first-class MCP server** in the personal-Outlook space — most alternatives are bash scripts or skill-shaped CLI wrappers the agent shells out to. That distinction matters: the agent gets typed tool schemas with structured args/returns, not stdout it has to parse. Other things you won't find elsewhere: `/$batch`-optimized triage (10-20× faster on bulk ops), recursive folder ops with name resolution, granular per-category permissions, multi-account support, and full attachment write paths including >3MB upload sessions for drafts.
+This is the only **first-class MCP server** in the personal-Outlook space — most alternatives are bash scripts or skill-shaped CLI wrappers the agent shells out to. That distinction matters: the agent gets typed tool schemas with structured args/returns, not stdout it has to parse. Other things you won't find elsewhere: `/$batch`-optimized triage (10-20× faster on bulk ops), recursive folder ops with name resolution, granular per-category permissions, multiple mailboxes (one server per account via `OUTLOOK_MCP_CONFIG_DIR`), and full attachment write paths including >3MB upload sessions for drafts.
 
 ---
 
@@ -44,7 +44,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 70 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 68 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -59,7 +59,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 ## Features
 
-**70 tools** across 13 categories:
+**68 tools** across 13 categories:
 
 - **Auth (1)** -- auth status check (login is via CLI)
 - **Mail Read (7)** -- list inbox (with Focused Inbox and uncategorized filters), read message, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
@@ -73,7 +73,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 - **Attachments (5)** -- list, download, send-with-attachments, attach-to-draft, remove-draft-attachment
 - **Folder Management (3)** -- create, rename, delete mail folders
 - **Threading and Batch (3)** -- list thread, copy message, batch triage
-- **User and Admin (6)** -- whoami, list calendars, list categories, mail tips, accounts
+- **User and Admin (4)** -- whoami, list calendars, list categories, mail tips
 
 **Design principles:**
 
@@ -407,8 +407,6 @@ configured `timezone`; responses are always UTC.
 | `outlook_list_calendars` | List available calendars. |
 | `outlook_list_categories` | List category definitions with colors. |
 | `outlook_get_mail_tips` | Pre-send check (OOF, delivery restrictions). |
-| `outlook_list_accounts` | List configured accounts. |
-| `outlook_switch_account` | Switch active account. |
 
 ---
 
@@ -431,7 +429,7 @@ the body is fetched on use.
 
 ## Configuration
 
-Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions).
+Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions). Set the `OUTLOOK_MCP_CONFIG_DIR` environment variable to move that settings directory (config.json, auth record, and the attachments default move with it) — see [Two accounts, two instances](#two-accounts-two-instances-optional--outlook_mcp_config_dir) below.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -445,14 +443,43 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions).
 
 ### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`
 
-All 70 tool schemas load into the client's context every turn (~13.2k tokens by the chars/4 proxy `test_tool_surface_budget.py` measures with — a different yardstick than the ~8.6k o200k figure in ROADMAP; under this one, the 62-tool surface is ~11.7k, so the To Do detail tools add ~12%). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
+All 68 tool schemas load into the client's context every turn (the chars/4 proxy `test_tool_surface_budget.py` measures with; a different yardstick than the ~8.6k o200k figure in ROADMAP for the 62-tool surface). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
 
 ```bash
-# e.g. a recurring mail + calendar agent: ~30 tools instead of 70 (~57% fewer tool tokens/turn)
+# e.g. a recurring mail + calendar agent: ~30 tools instead of 68 (~55% fewer tool tokens/turn)
 OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"
 ```
 
 Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`. Unset (the default) loads everything — fully backward compatible. This only affects which tools are advertised; enabled tools behave identically.
+
+### Two accounts, two instances (optional) — `OUTLOOK_MCP_CONFIG_DIR`
+
+One server process serves one mailbox. To work against two accounts, register **two client entries** and give each its own settings directory with `OUTLOOK_MCP_CONFIG_DIR` — pair it with `OUTLOOK_MCP_TOOLSETS` so each instance also only loads the tool groups it needs:
+
+```json
+{
+  "mcpServers": {
+    "outlook-net": {
+      "command": "outlook-mcp",
+      "env": {
+        "OUTLOOK_MCP_TOOLSETS": "mail,calendar,contacts",
+        "OUTLOOK_MCP_CONFIG_DIR": "~/.outlook-mcp-net"
+      }
+    },
+    "outlook-neko": {
+      "command": "outlook-mcp",
+      "env": {
+        "OUTLOOK_MCP_TOOLSETS": "todo",
+        "OUTLOOK_MCP_CONFIG_DIR": "~/.outlook-mcp-neko"
+      }
+    }
+  }
+}
+```
+
+Then run `outlook-mcp auth` once per instance, with the same env set, to write each auth record in its own directory. Each instance reads its own `config.json` (own `client_id`, `timezone`, permissions) from its own directory.
+
+**Only move the config directory — never `HOME`.** The token cache is not in it: it stays in the OS keyring, and on macOS every azure-identity cache on the host shares one Keychain item, coordinated through a signal file — on this server, `~/.IdentityService/outlook-mcp.nocae` (azure-identity appends `.nocae` to every non-CAE cache name; a CAE cache would be a different file over the same item). Both processes must keep consulting that same signal file so their cache writes lock and merge into the one shared entry — which is exactly what moving the config directory preserves and redirecting `HOME` (or the cache location) would break: two signal files that each believe they own the Keychain item overwrite each other's token. `OUTLOOK_MCP_CONFIG_DIR` deliberately moves only where config.json, the auth record, and attachments live; unset or empty keeps the default `~/.outlook-mcp`.
 
 ### What `read_only` does and does not do
 

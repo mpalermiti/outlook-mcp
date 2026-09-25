@@ -53,7 +53,7 @@ Stack-ranked agent-optimization work from a 2026-07 review, re-validated against
 Latency + token/API cost for the persistent single-agent recurring mail+calendar loop. All externally re-validated by the scan; none displaced by it. Items #1–#5 shipped in v1.12.0; #7 shipped in v1.16.0; #6 remains as a cheap follow-up.
 
 1. **Parallelize `outlook_changes_since`** — `digest.py` awaits mail → events → contacts sequentially though they're independent. `asyncio.gather` → ~2–3× lower latency on the most-used recurring tool. **Impact: high · Effort: low.**
-2. **Persistent Graph connection reuse** — `_get_graph_client` builds a new `GraphServiceClient` (+ TLS pool) per call; raw-httpx `$batch`/delta paths (`read_messages`, `fetch_delta_pages`) open ephemeral clients. Cache the client in the lifespan context (one per account, invalidate on `switch_account`) and share one long-lived httpx client for the raw paths. Compounds with #1. **Impact: high · Effort: med.**
+2. **Persistent Graph connection reuse** — `_get_graph_client` builds a new `GraphServiceClient` (+ TLS pool) per call; raw-httpx `$batch`/delta paths (`read_messages`, `fetch_delta_pages`) open ephemeral clients. Cache the client in the lifespan context (one per process, rebuilt when the credential changes) and share one long-lived httpx client for the raw paths. Compounds with #1. **Impact: high · Effort: med.**
 3. **Tool annotations** — set `readOnlyHint` / `destructiveHint` (`ToolAnnotations`, SDK-supported) on all 62 so clients auto-approve reads and gate destructive ops. Aligns with the 2025-11-25 spec. **Impact: med · Effort: low.**
 4. **Config-gated toolsets** — highest recurring-cost lever and the only one fixable purely server-side; validated by Microsoft's own Work-IQ 10-verb design. **Decision (from the measurement): a flexible toolset selector, NOT a two-package `core`/`admin` split** — the admin/override/batch group is only ~7% of tokens, so a binary split barely helps; real reduction comes from dropping whole *domains* a client doesn't use. Gate registration behind config (e.g. `OUTLOOK_MCP_TOOLSETS=mail,calendar,digest,delta`). For Neo's mail+calendar slice that's ~4,155 tok — **~52% off every turn.** Additive; no behavior change to enabled tools. **Impact: high · Effort: med.**
 5. **Throttling hardening on raw-httpx paths** *(promoted from "med" — the scan reframes it as a correctness bug, not just perf)*. The SDK path retries 429/503 via kiota's `RetryHandler`, but `read_messages` / `fetch_delta_pages` don't retry the batch/delta envelope, and `$batch` returns 200 even when sub-requests are throttled — currently recorded as a *permanent failure* instead of retried with `Retry-After`. Graph enforces a global 130,000 req/10s ceiling on top of per-mailbox limits; direct (non-SDK) callers must implement `Retry-After` + backoff themselves. **Impact: med–high · Effort: low–med.**
@@ -69,7 +69,7 @@ For the population installing this from the MCP registry, not for Neo. stdio sta
 - **Stateless Streamable-HTTP deployment** — the 2026-07-28 spec RC removed `Mcp-Session-Id`, so a remote server can scale behind a plain round-robin LB with no session store. Optional remote transport alongside stdio.
 - **OAuth discovery hardening** — OIDC Discovery, RFC 9728 Protected-Resource-Metadata, incremental scope consent (SEP-835), Client ID Metadata Documents (SEP-991). Load-bearing only when exposed as a remote OAuth resource.
 - ~~**`tools/list` caching** — SEP-2549 `ttlMs` / `cacheScope`~~ — ✅ shipped in v1.20.0. The precondition landed: `mcp` 2.1.1 emits both fields and `MCPServer(cache_hints=...)` sets them. Five minutes, private.
-- **Cross-provider / multi-account** — a competing server already unifies M365 + Outlook.com + Google in one MCP. The unused `config.accounts` array is the hook. Real but new; secondary to Tier 0.
+- **Cross-provider / multi-account** — a competing server already unifies M365 + Outlook.com + Google in one MCP. Several mailboxes are already served by one process per account (`OUTLOOK_MCP_CONFIG_DIR`); anything beyond that is new design. Real but new; secondary to Tier 0.
 
 **Caveat:** several Tier-1 surfaces are release-candidate / draft spec (statelessness RC, SEP-2549) — don't build against them until Claude / Cursor / OpenClaw actually honor them.
 
@@ -89,7 +89,7 @@ For the population installing this from the MCP registry, not for Neo. stdio sta
 - **Calendar find-meeting-times** — `/me/findMeetingTimes` for availability queries
 - **Category CRUD with colors** — first-class category management, not just assignment
 - **Calendar scope beyond reads** — `outlook_list_events` takes `calendar` (#62); `create_event`, `list_events_delta`, `changes_since` and the `morning_brief` prompt are still pinned to the default calendar, and an empty default-calendar listing gives no hint that other calendars exist. `calendar_resolver.resolve_calendar_id` is the shared piece
-- **Multi-account support** — `config.accounts` array already exists but is unused; wire up account-scoped tool calls
+- **Multi-account support** — served today as one process per account (`OUTLOOK_MCP_CONFIG_DIR` moves each instance's settings directory); cross-account tool calls would be new design on top
 
 ---
 

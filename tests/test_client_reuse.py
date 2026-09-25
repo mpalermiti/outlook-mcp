@@ -2,7 +2,7 @@
 
 `_get_graph_client` should cache one `GraphClient` in the lifespan context and
 reuse it while the credential is unchanged, rebuilding only when auth swaps the
-credential (switch_account / re-auth). Building a GraphServiceClient — auth
+credential for a new one (re-auth). Building a GraphServiceClient — auth
 provider, request adapter, TLS pool — per call is wasteful on recurring loops.
 """
 
@@ -31,11 +31,11 @@ def test_get_graph_client_reuses_instance_for_same_credential():
 
 
 def test_get_graph_client_rebuilds_when_credential_changes():
-    """A new credential (switch_account / re-auth) rebuilds the client."""
+    """A new credential (a re-auth) rebuilds the client."""
     cred1 = MagicMock()
     cred2 = MagicMock()
     auth = MagicMock()
-    # same cred twice, then a switched credential
+    # same cred twice, then a fresh credential
     auth.get_credential.side_effect = [cred1, cred1, cred2]
     ctx = _ctx_with_auth(auth)
 

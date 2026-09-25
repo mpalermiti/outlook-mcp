@@ -6,6 +6,43 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **`OUTLOOK_MCP_CONFIG_DIR` moves the settings directory — and only it.** Set it (per
+  process) and `config.json`, the auth record, and the attachments directory all move together;
+  unset or empty keeps the default `~/.outlook-mcp`. This is how a second mailbox is served: one
+  server process per account, each with its own settings directory. The MSAL signal file stays
+  at `~/.IdentityService/` on purpose — every azure-identity cache on the host shares one
+  Keychain item, and both processes must keep coordinating through the same signal file or their
+  cache writes clobber each other (which is why `HOME`, not this variable, is the wrong thing to
+  move). Relative values are anchored to an absolute path at startup, so the terminal that runs
+  `outlook-mcp auth` and the client that starts the server cannot end up on different settings
+  directories; a value that exists but is a file is refused with the repair.
+
+### Changed
+
+- **Legacy `accounts` / `default_account` config keys load with a warning instead of failing.**
+  One process serves one account now; a config written for the old multi-account shape still
+  boots, and each legacy key names what replaced it.
+- **The auth record is written atomically** (write-temp, fsync, `0600`, rename), like
+  `config.json` always was. The record identifies the signed-in account; a plain write leaves a
+  world-readable window and a half-written file for anything reading it concurrently.
+- **A config the server cannot load exits with the repair, not a traceback.** The entrypoint
+  validates the config before the transport starts: an invalid value, a refused symlink, an
+  unreadable file or directory, non-UTF-8 bytes, or a settings path that is a file each end with
+  exit code 1 and a note on stderr saying what to fix — stdout, the protocol channel, stays
+  empty. The CLI commands do the same. Reached through the lifespan directly, the same failures
+  degrade to a read-only boot whose every tool call carries the repair.
+
+### Removed
+
+- **`outlook_list_accounts` and `outlook_switch_account`** — the in-process account-switching
+  scaffolding. One process serving several accounts fought the host-wide token cache (every
+  azure-identity cache on a host shares one Keychain item; a "switch" rewrote the same item and
+  evicted the other account) and none of it was needed: one server per account with its own
+  `OUTLOOK_MCP_CONFIG_DIR` serves the same mailboxes without sharing a process. The tool count
+  goes 70 → 68 (the two schemas were among the smallest on the surface).
+
 ### Fixed
 
 - **Calendar events are anchored in a real time zone, so recurring series survive daylight

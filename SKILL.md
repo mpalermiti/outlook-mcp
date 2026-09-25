@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 70 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 68 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -73,7 +73,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `triage_folder(folder="inbox", count=50)` — one scan, sorted, applied in a single batch call
 - `catch_up(since="24h")` — what changed, via the delta path
 
-## Tools (70)
+## Tools (68)
 
 ### Auth
 - `outlook_auth_status` — Check authentication status and read-only mode
@@ -168,8 +168,6 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_list_calendars` — Available calendars
 - `outlook_list_categories` — Category definitions with colors
 - `outlook_get_mail_tips` — Pre-send check (OOF, delivery restrictions)
-- `outlook_list_accounts` — Configured accounts
-- `outlook_switch_account` — Switch active account
 
 ## Privacy
 - Zero telemetry, zero local caching
@@ -186,4 +184,4 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - Mail search uses KQL syntax
 - Start with `read_only: true`, flip when comfortable
 - **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 7 categories and example policies.
-- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context; unset loads all 70. Tools carry read-only / destructive annotations so clients can auto-approve reads.
+- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context; unset loads all 68. Tools carry read-only / destructive annotations so clients can auto-approve reads.

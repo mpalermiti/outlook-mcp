@@ -5,17 +5,25 @@ from __future__ import annotations
 import functools
 import logging
 import os
+import sys
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.caching import CacheHint
 from mcp.server.mcpserver import Context, MCPServer
+from pydantic import ValidationError
 
 from outlook_mcp import __version__, toolsets
 from outlook_mcp.auth import AuthManager
-from outlook_mcp.config import load_config
+from outlook_mcp.config import (
+    DEFAULT_CONFIG_DIR,
+    Config,
+    config_repair_lines,
+    load_config,
+)
 from outlook_mcp.errors import (
+    ConfigLoadError,
     OutlookMCPError,
     ToolInputError,
     UnencryptedTokenCacheError,
@@ -50,9 +58,34 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(server):
-    """Initialize server state: config, auth, and cached token."""
-    config = load_config()
+    """Initialize server state: config, auth, and cached token.
+
+    ``load_config`` fails for reasons the operator has to fix in the file
+    system or the config file: a ``ValidationError`` (a value no release
+    accepts), a ``PermissionError`` (the config is a symlink — refused on
+    purpose), an ``OSError`` around it (unreadable file, chmod-protected
+    directory), or a non-UTF-8 file (``UnicodeDecodeError``). ``main``
+    already exits with the repair spelled out before the transport starts;
+    this is the backstop for reaching the server without going through
+    ``main``. Exiting from inside the async lifespan surfaces as an
+    exception group nobody can read, so the backstop degrades instead:
+    boot read-only and carry the repair on every tool call.
+    """
+    config_load_error: Exception | None = None
+    try:
+        config = load_config()
+    except (ValidationError, OSError, ValueError) as exc:
+        for line in config_repair_lines(exc):
+            logger.error("%s", line)
+        config_load_error = exc
+        # Fail-safe substitute: writes stay refused until the real config
+        # loads again, and the startup error below says why on every call.
+        config = Config(read_only=True)
     auth = AuthManager(config)
+    if config_load_error is not None:
+        auth.startup_error = ConfigLoadError(config_load_error, DEFAULT_CONFIG_DIR)
+        yield {"config": config, "auth": auth}
+        return
     # Try to load cached token silently — if this fails, tools will
     # return an error telling the user to run `outlook-mcp auth`.
     try:
@@ -79,8 +112,8 @@ Microsoft Outlook (personal accounts: outlook.com, hotmail.com, live.com) via Mi
 
 Working rules, each of which saves a round trip:
 
-- You are already signed in. Do not call outlook_whoami, outlook_list_accounts or
-  outlook_auth_status to check before doing something — just call the tool you need. If a call
+- You are already signed in. Do not call outlook_whoami or outlook_auth_status
+  to check before doing something — just call the tool you need. If a call
   does fail on authentication, its error says exactly what to run.
 - Folder and calendar parameters take display names directly ("Junk Email", "Purchases",
   "Work"), as well as well-known folder names ("inbox", "drafts") and Graph IDs. Do not list
@@ -138,9 +171,9 @@ def _get_graph_client(ctx: Context) -> GraphClient:
     Building a ``GraphServiceClient`` (auth provider, request adapter, TLS
     connection pool) on every tool call is wasteful on recurring agent loops.
     Cache one in the lifespan context and reuse it while the credential is
-    unchanged. A ``switch_account`` / re-auth swaps ``AuthManager.credential``
-    for a different object, so an identity check rebuilds the client
-    automatically — no explicit invalidation needed.
+    unchanged. A re-auth swaps ``AuthManager.credential`` for a different
+    object, so an identity check rebuilds the client automatically — no
+    explicit invalidation needed.
     """
     auth = _get_auth(ctx)
     credential = auth.get_credential()  # raises AuthRequiredError if unauthenticated
@@ -1415,8 +1448,9 @@ async def outlook_download_attachment(
     """Download an attachment and write the decoded bytes to `save_path` on the host.
 
     `save_path` is resolved inside the configured attachments directory
-    (`attachments_dir`, default ~/.outlook-mcp/attachments) — a bare filename lands
-    there; a path outside it is refused. Same directory for reads and writes.
+    (`attachments_dir`, an `attachments` folder in the settings directory by
+    default) — a bare filename lands there; a path outside it is refused. Same
+    directory for reads and writes.
     """
     client = _get_graph_client(ctx)
     return await mail_attachments.download_attachment(
@@ -1445,9 +1479,9 @@ async def outlook_send_with_attachments(
     """Send an email with file attachments; auto-switches to upload-session for files >3MB.
 
     `attachment_paths` resolve inside the configured attachments directory
-    (`attachments_dir`, default ~/.outlook-mcp/attachments) — a bare filename is looked up
-    there, and a path outside it is refused. Pass reply_to to
-    route replies to a different address.
+    (`attachments_dir`, an `attachments` folder in the settings directory by
+    default) — a bare filename is looked up there, and a path outside it is
+    refused. Pass reply_to to route replies to a different address.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -1476,9 +1510,10 @@ async def outlook_attach_to_draft(
     """Add attachments to an existing draft; auto-switches to upload-session for files >3MB.
 
     `attachment_paths` resolve inside the configured attachments directory
-    (`attachments_dir`, default ~/.outlook-mcp/attachments) — a bare filename is looked up
-    there, and a path outside it is refused. Returns new
-    attachment IDs for later removal via outlook_remove_draft_attachment.
+    (`attachments_dir`, an `attachments` folder in the settings directory by
+    default) — a bare filename is looked up there, and a path outside it is
+    refused. Returns new attachment IDs for later removal via
+    outlook_remove_draft_attachment.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -1673,34 +1708,26 @@ async def outlook_get_mail_tips(ctx: Context, emails: list[str]) -> dict:
     return await admin.get_mail_tips(client.sdk_client, emails)
 
 
-# ── Multi-Account Tools ───────────────────────────────
-
-
-@mcp.tool()
-@_wrap_tool_errors
-async def outlook_list_accounts(ctx: Context) -> dict:
-    """List all configured Outlook accounts and their authentication status."""
-    auth = _get_auth(ctx)
-    return {"accounts": auth.list_accounts()}
-
-
-@mcp.tool()
-@_wrap_tool_errors
-async def outlook_switch_account(ctx: Context, name: str) -> dict:
-    """Switch the active Outlook account by configured `name` (from outlook_list_accounts)."""
-    auth = _get_auth(ctx)
-    return auth.switch_account(name)
-
-
 # ── Annotations + config-gated toolsets ───────────────────────────────
 # Applied once, after every @mcp.tool above has registered. Sets read-only /
 # destructive annotations on all tools, and — when OUTLOOK_MCP_TOOLSETS is set
 # (e.g. "mail,calendar,digest,delta") — loads only those groups so clients that
-# don't need all 70 tools don't pay the per-turn context cost. Unset = all.
+# don't need the whole tool surface don't pay the per-turn context cost. Unset = all.
 toolsets.configure(mcp, toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")))
 
 
 def main():
+    # Validate the config before the transport starts. In here, a failure
+    # ends as a clean exit code with the repair on stderr — the protocol
+    # channel (stdout) stays empty. The same failure raised from the async
+    # lifespan instead tears through the transport's task group and lands
+    # as an exception-group traceback that tells the operator nothing.
+    try:
+        load_config()
+    except (ValidationError, OSError, ValueError) as exc:
+        for line in config_repair_lines(exc):
+            print(line, file=sys.stderr)
+        sys.exit(1)
     mcp.run(transport="stdio")
 
 
@@ -1710,7 +1737,7 @@ if __name__ == "__main__":
 
 # ── Workflow prompts ────────────────────────────────────
 #
-# Sequencing guidance is not per-tool knowledge, so it does not belong in 70
+# Sequencing guidance is not per-tool knowledge, so it does not belong in per-tool
 # docstrings that every client pays for on every turn. A prompt costs one line
 # in `prompts/list` until it is invoked — and unlike a SKILL.md, which is not
 # even shipped in the wheel, it reaches every MCP client. These three are the

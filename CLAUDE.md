@@ -74,7 +74,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   suppressed the entire hierarchy from 1.14.0 to 1.19.0 while every type assertion stayed green.
   A new error type inherits from `OutlookMCPError`, and `__str__` carries the `action` hint
   because that string is what the agent reads. Guarded by `test_error_text_reaches_client.py`
-- Cross-tool guidance goes in `INSTRUCTIONS` (sent once per session) or a prompt, never into 70
+- Cross-tool guidance goes in `INSTRUCTIONS` (sent once per session) or a prompt, never into 68
   docstrings — a docstring is paid for on every turn by every client. A docstring stays
   self-sufficient for using *that* tool; sequencing across tools does not belong there
 - Anything taking a host filesystem path routes through `resolve_attachment_path`. Paths come
@@ -82,9 +82,8 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   resolving, never by string comparison
 - Tool schemas are a per-turn cost with a measured baseline — two yardsticks, never compared
   with each other: ~8,644 **o200k** tokens for the 62-tool surface (real tokenizer, ROADMAP
-  2026-07) and ~13.2k **chars/4 proxy** tokens for the 70-tool surface with the To Do detail
-  tools (the budget test's own measure; under the same yardstick the 62-tool surface is
-  ~11.7k, so the To Do detail set costs ~+12% per turn).
+  2026-07) and the budget test's own **chars/4 proxy** measure for the current surface (the
+  To Do detail tools added ~+12% per turn; the budget test header records the measured value).
   Metadata that is correct but inert — `openWorldHint`, which is `true` by default anyway, or
   titles that restate the tool name — is not free. `test_tool_surface_budget.py` holds the line
 - Datetimes: UTC in responses, config timezone for input interpretation

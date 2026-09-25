@@ -129,10 +129,34 @@ def test_empty_or_null_bytes_rejected(attachments_dir, hostile):
 
 
 def test_default_config_confines_to_the_outlook_mcp_directory():
-    """The shipped default must be a directory we own, not the whole host."""
-    from outlook_mcp.config import Config
+    """The shipped default must be a directory we own, not the whole host.
 
-    assert Config().attachments_dir == "~/.outlook-mcp/attachments"
+    Checked in a subprocess with any exported override dropped: the shipped
+    default only exists where nothing overrides it, and a shell-exported
+    OUTLOOK_MCP_CONFIG_DIR moves the in-process constant out from under an
+    in-process comparison.
+    """
+    import os
+    import subprocess
+    import sys
+
+    probe = (
+        "from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config\n"
+        "print(Config().attachments_dir)\n"
+        "print(DEFAULT_CONFIG_DIR)\n"
+    )
+    env = dict(os.environ)
+    env.pop("OUTLOOK_MCP_CONFIG_DIR", None)
+    out = subprocess.run(
+        [sys.executable, "-c", probe], env=env, capture_output=True, text=True, check=True
+    )
+    attachments_dir, config_dir = out.stdout.strip().splitlines()
+
+    home_settings = os.path.abspath(os.path.expanduser("~/.outlook-mcp"))
+    assert attachments_dir == os.path.join(home_settings, "attachments")
+    # and it derives from the one settings-directory constant, so a moved
+    # settings directory can never strand the attachments behind
+    assert attachments_dir == os.path.join(config_dir, "attachments")
 
 
 @pytest.mark.asyncio
