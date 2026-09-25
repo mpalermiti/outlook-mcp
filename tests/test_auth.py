@@ -313,6 +313,13 @@ class TestUnencryptedCacheIsOptIn:
         auth = AuthManager(Config(client_id="test-id"))
 
         with (
+            # Pin the environment probe: on a Linux runner without PyGObject
+            # it returns True on its own, and the environment refusal would
+            # satisfy this test before the injected refusal is ever reached.
+            patch(
+                "outlook_mcp.auth._unencrypted_fallback_will_be_used",
+                return_value=False,
+            ),
             patch.object(
                 DeviceCodeCredential, "_get_app", side_effect=self.AZURE_REFUSAL
             ),
