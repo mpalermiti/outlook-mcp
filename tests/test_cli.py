@@ -51,8 +51,61 @@ def test_auth_without_config_exits_with_the_fix(capsys, monkeypatch):
     assert "client_id" in capsys.readouterr().out
 
 
-def test_logout_prints_keychain_guidance(capsys, monkeypatch):
+@pytest.mark.parametrize("command", [cli.cmd_auth, cli.cmd_status, cli.cmd_logout])
+def test_an_unloadable_config_exits_with_the_repair_not_a_traceback(
+    command, capsys, monkeypatch
+):
+    """Whatever the server's pre-run check catches, the CLI catches too."""
+    monkeypatch.setattr(
+        cli, "load_config", lambda: (_ for _ in ()).throw(OSError(13, "Permission denied"))
+    )
+    with pytest.raises(SystemExit) as exc:
+        command()
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "cannot start" in err
+    assert "Traceback" not in err
+
+
+def test_auth_reports_a_structured_failure_with_its_remedy(capsys, monkeypatch):
+    """The unencrypted-cache refusal arrives as an OutlookMCPError whose text
+    already says what to change — print that, not a traceback."""
+    from unittest.mock import patch
+
+    from outlook_mcp.errors import UnencryptedTokenCacheError
+
     monkeypatch.setattr(cli, "load_config", lambda: Config(client_id="test-id"))
-    cli.cmd_logout()  # must not raise, must not touch any files
+    with (
+        patch(
+            "outlook_mcp.auth.AuthManager.login_interactive",
+            side_effect=UnencryptedTokenCacheError(),
+        ),
+        pytest.raises(SystemExit) as exc,
+    ):
+        cli.cmd_auth()
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "allow_unencrypted_token_cache" in err
+    assert "Traceback" not in err
+
+
+def test_logout_removes_this_instances_record_and_says_what_stays(capsys, monkeypatch):
+    from outlook_mcp import auth as auth_module
+
+    monkeypatch.setattr(cli, "load_config", lambda: Config(client_id="test-id"))
+    record = auth_module._auth_record_path()  # the autouse fixture's tmp path
+    record.write_text("{}")
+
+    cli.cmd_logout()
+
+    assert not record.exists()  # the record this instance serves from is gone
     out = capsys.readouterr().out
-    assert "Keychain" in out or "credential store" in out
+    assert "auth_record.json" in out
+    assert "outlook-mcp auth" in out  # next start asks for auth again
+    # the OS cache entry is shared and stays — and the old advice ("remove
+    # 'outlook-mcp' from Keychain Access") named an entry that never existed
+    assert "Microsoft.Developer.IdentityService" in out
+    assert "left in place" in out
+    assert "remove 'outlook-mcp'" not in out

@@ -180,6 +180,42 @@ def save_config(config: Config, config_dir: str = DEFAULT_CONFIG_DIR) -> None:
     _atomic_write(file_path, config.model_dump_json(indent=2))
 
 
+def config_repair_lines(exc: Exception) -> list[str]:
+    """Operator-facing repair guidance for a config the server cannot load.
+
+    Written for stderr, one line per entry, by every entry point that can
+    hit an unloadable config: the server's ``main`` (before the transport
+    starts), its lifespan backstop, and the CLI. No traceback — every line
+    is something the operator can act on.
+    """
+    from pydantic import ValidationError
+
+    lines: list[str]
+    if isinstance(exc, ValidationError):
+        lines = ["The config file is invalid — the server cannot start:"]
+        for e in exc.errors():
+            field = ".".join(str(p) for p in e["loc"]) or "config"
+            lines.append(f"  {field}: {e['msg']}")
+        lines.append(f"Fix {DEFAULT_CONFIG_DIR}/config.json and restart the server.")
+    elif isinstance(exc, PermissionError):
+        # load_config refuses a symlinked config with PermissionError.
+        lines = [
+            f"Cannot load the config file — the server cannot start: {exc}",
+            "A symlinked config.json is refused on purpose: replace it with "
+            "a real file, then restart the server.",
+        ]
+    else:
+        # OSError: unreadable file or directory, chmod-protected path.
+        # ValueError: non-UTF-8 bytes in the file, or a settings path that
+        # exists but is not a directory.
+        lines = [
+            f"Cannot load the config file — the server cannot start: {exc}",
+            "Check the file and its directory are readable and owned by you, "
+            f"in {DEFAULT_CONFIG_DIR}, then restart the server.",
+        ]
+    return lines
+
+
 def _refuse_non_directory(config_dir: str) -> None:
     """Refuse a settings path that exists but is a file.
 

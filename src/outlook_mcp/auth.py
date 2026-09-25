@@ -318,10 +318,17 @@ class AuthManager:
             raise AuthRequiredError()
         return self.credential
 
-    def logout(self) -> dict[str, str]:
-        """Clear in-memory credentials and auth record."""
+    def logout(self) -> dict[str, str | bool]:
+        """Clear in-memory credentials and remove this instance's auth record.
+
+        The OS-level encrypted cache (Keychain item / DPAPI file / libsecret
+        entry that azure-identity maintains) is shared across apps and is NOT
+        touched — its tokens age out on their own. Callers report that part;
+        this stays mechanical.
+        """
         self.credential = None
         path = _auth_record_path()
-        if path.exists():
+        removed = path.exists()
+        if removed:
             path.unlink()
-        return {"status": "logged_out", "message": "Credentials cleared."}
+        return {"status": "logged_out", "record_removed": removed}
