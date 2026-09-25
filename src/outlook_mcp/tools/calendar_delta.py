@@ -38,6 +38,11 @@ def _format_event_delta(raw: dict) -> dict:
     until it is added to both. The sentence used to stand alone and was false
     for ``type`` — issue #69, and #63 one module over.
 
+    Key-for-key is a statement about this function, not about the tool's
+    output: ``format_delta_item`` appends ``is_deleted`` to every live item it
+    formats, and returns a tombstone as ``{id, is_deleted: True}`` without
+    calling this at all.
+
     Neither ``type`` nor ``show_as`` needs a ``$select`` change on this path:
     the delta endpoint is called without one, so Graph returns every property
     and both are already in the raw JSON.
