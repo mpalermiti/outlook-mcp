@@ -755,6 +755,7 @@ async def outlook_update_event(
     attendees: list[str] | None = None,
     is_all_day: bool | None = None,
     show_as: str | None = None,
+    timezone: str | None = None,
 ) -> dict:
     """Update fields on an existing event (partial patch — only provided fields change).
 
@@ -766,8 +767,9 @@ async def outlook_update_event(
     invitations to everyone on it plus cancellations to anyone dropped — pass the full
     intended list; [] removes everyone. `is_all_day` REQUIRES start and end in the same
     call, both on midnight boundaries. Patching a time keeps the zone the event is
-    anchored in. Omitting an argument leaves it unchanged, so False and [] are
-    instructions, not absences.
+    anchored in; pass `timezone` (with start and end) to re-anchor it somewhere else.
+    Omitting an argument leaves it unchanged, so False and [] are instructions, not
+    absences.
     `show_as` is Outlook's "Show as" — same values as outlook_create_event — and patches
     on its own; unlike is_all_day it needs nothing resent alongside it.
     """
@@ -786,6 +788,7 @@ async def outlook_update_event(
         attendees,
         is_all_day,
         show_as,
+        timezone,
         config=config,
     )
 

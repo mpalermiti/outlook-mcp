@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from outlook_mcp.tools._recurrence import maybe_zone
 from outlook_mcp.tools.calendar_read import get_event, list_events
 from outlook_mcp.tools.calendar_write import create_event, delete_event, update_event
 from tests.conftest import LIVE_WRITE_SUBJECT
@@ -807,3 +808,229 @@ class TestShowAsIsHonoured:
             assert after["show_as"] == "free"
             assert after["location"] == "Room 101"
             assert "21:00:00" in after["start"]
+
+
+class TestReAnchoringAnExistingEvent:
+    """The capability #76 deferred: moving an event into a different zone.
+
+    Two Graph rules make this more than an argument passthrough, and neither is
+    documented. A `start` patch carrying no `timeZone` is refused outright, so
+    the zone travels with the times. And a patch that would change a *series
+    master's* zone is refused with `400 ErrorPropertyValidationFailure` —
+    naming neither the zone nor the property — unless the recurrence is re-sent
+    alongside it. Only a live call sees either: the payloads are well-formed to
+    the SDK in every case.
+    """
+
+    async def test_a_single_event_moves_to_another_zone(
+        self, real_graph_client, live_write_config
+    ):
+        """The simple half, and the control for the series case below."""
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" tz-reanchor-single",
+            start=f"{monday.isoformat()}T09:00:00",
+            end=f"{monday.isoformat()}T09:30:00",
+            timezone=_EAST,
+        ) as event_id:
+            assert (await get_event(real_graph_client.sdk_client, event_id))[
+                "original_start_time_zone"
+            ] == _EAST
+
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                start=f"{monday.isoformat()}T09:00:00",
+                end=f"{monday.isoformat()}T09:30:00",
+                timezone=_DST_ZONE,
+                config=live_write_config,
+            )
+
+            after = await get_event(real_graph_client.sdk_client, event_id)
+            assert after["original_start_time_zone"] != _EAST
+            # 09:00 Pacific is three hours later in UTC than 09:00 Eastern, so
+            # the instant moved with the anchor rather than being preserved.
+            assert _utc_instant(after["start"]) != "13:00:00"
+
+    async def test_a_utc_series_can_be_re_anchored_into_a_zone(
+        self, real_graph_client, live_write_config
+    ):
+        """Every series created before events carried a zone is stored in UTC.
+
+        This is the repair path, and the reason the recurrence has to be
+        re-sent: without it this exact call is the opaque 400.
+        """
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" tz-reanchor-series",
+            start=f"{monday.isoformat()}T16:00:00Z",
+            end=f"{monday.isoformat()}T16:30:00Z",
+            timezone="UTC",
+            recurrence={
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                "range": {"type": "numbered", "numberOfOccurrences": 2},
+            },
+        ) as event_id:
+            before = await get_event(real_graph_client.sdk_client, event_id)
+            assert before["type"] == "seriesMaster"
+            assert before["original_start_time_zone"] == "UTC"
+
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                start=f"{monday.isoformat()}T09:00:00",
+                end=f"{monday.isoformat()}T09:30:00",
+                timezone=_DST_ZONE,
+                config=live_write_config,
+            )
+
+            after = await get_event(real_graph_client.sdk_client, event_id)
+            assert after["type"] == "seriesMaster", "the re-sent recurrence kept it a series"
+            assert after["original_start_time_zone"] != "UTC"
+            assert after["recurrence"]["range"]["numberOfOccurrences"] == 2
+
+    async def test_a_zone_with_no_times_never_reaches_graph(
+        self, real_graph_client, live_write_config
+    ):
+        """We refuse this locally; the point is that the local rule matches Graph's.
+
+        Graph answers a `start` patch carrying no `timeZone` with
+        `TimeZoneNotSupportedException` on the empty string, so there is no
+        shape in which a lone zone is a valid patch.
+        """
+        with pytest.raises(ValueError, match="requires start and end"):
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id="AAMkAGdoesnotmatter=",
+                timezone=_DST_ZONE,
+                config=live_write_config,
+            )
+
+    async def test_a_windows_anchored_evening_series_uses_its_local_day(
+        self, real_graph_client, live_write_config
+    ):
+        """#77 item 2, against real Graph rather than a mock that models the header.
+
+        An 18:00 Pacific event is next-day in UTC. Graph returns the stored
+        start projected into UTC and names the zone in Windows terms for
+        anything it was not handed an IANA name for, so the local day is
+        underivable here — and a series built from the UTC text lands a day
+        late, which Graph accepts silently.
+
+        The event is created through raw Graph with a Windows zone name, because
+        that is the shape the fallback exists for: events this server creates
+        carry IANA names and convert locally without a second read.
+        """
+        import httpx
+
+        # A Wednesday, 18:00 Pacific — next-day in UTC either side of the
+        # transition, so the test does not depend on which offset applies.
+        wednesday = _anchor_monday() + timedelta(days=2)
+        token = real_graph_client.credential.get_token(
+            "https://graph.microsoft.com/.default"
+        ).token
+        auth = {"Authorization": f"Bearer {token}"}
+        subject = LIVE_WRITE_SUBJECT + " tz-windows-anchor"
+
+        created = httpx.post(
+            "https://graph.microsoft.com/v1.0/me/events",
+            headers={**auth, "Content-Type": "application/json"},
+            json={
+                "subject": subject,
+                "start": {
+                    "dateTime": f"{wednesday.isoformat()}T18:00:00",
+                    "timeZone": "Pacific Standard Time",
+                },
+                "end": {
+                    "dateTime": f"{wednesday.isoformat()}T19:00:00",
+                    "timeZone": "Pacific Standard Time",
+                },
+            },
+            timeout=30,
+        )
+        created.raise_for_status()
+        event_id = created.json()["id"]
+
+        try:
+            before = await get_event(real_graph_client.sdk_client, event_id)
+            if maybe_zone(before["original_start_time_zone"]) is not None:
+                pytest.skip(
+                    "this mailbox returned an IANA anchor "
+                    f"({before['original_start_time_zone']}), which converts locally — "
+                    "there is no unmappable name here for the fallback to handle"
+                )
+            assert _utc_instant(before["start"]) != "18:00:00", (
+                "the stored start is not UTC-projected, so this test proves nothing"
+            )
+
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                recurrence={
+                    "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["wednesday"]},
+                    "range": {"type": "numbered", "numberOfOccurrences": 2},
+                },
+                config=live_write_config,
+            )
+
+            after = await get_event(real_graph_client.sdk_client, event_id)
+            assert after["recurrence"]["range"]["startDate"] == wednesday.isoformat(), (
+                "the range began on the UTC date rather than the event's own"
+            )
+        finally:
+            await delete_event(real_graph_client.sdk_client, event_id, config=live_write_config)
+
+    async def test_an_echoed_recurrence_and_a_new_zone_are_accepted_together(
+        self, real_graph_client, live_write_config
+    ):
+        """The round trip this tool invites, plus the argument it just gained.
+
+        `outlook_get_event` returns `recurrence` carrying
+        `range.recurrenceTimeZone`; handing that straight back with a new
+        `timezone` sends the old zone beside the new anchor. Graph refuses that
+        pair, so only a live call shows whether the combination works — the
+        payload is well-formed to the SDK either way.
+        """
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" tz-echoed-recurrence",
+            start=f"{monday.isoformat()}T09:00:00",
+            end=f"{monday.isoformat()}T09:30:00",
+            timezone=_DST_ZONE,
+            recurrence={
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                "range": {"type": "numbered", "numberOfOccurrences": 2},
+            },
+        ) as event_id:
+            before = await get_event(real_graph_client.sdk_client, event_id)
+            echoed = before["recurrence"]
+            assert echoed["range"].get("recurrenceTimeZone"), (
+                "Graph stopped returning recurrenceTimeZone, so this test no longer "
+                "exercises the collision it exists for"
+            )
+
+            # Hand the recurrence straight back, as the docstring invites, while
+            # asking for a different zone.
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                start=f"{monday.isoformat()}T09:00:00",
+                end=f"{monday.isoformat()}T09:30:00",
+                recurrence=echoed,
+                timezone=_EAST,
+                config=live_write_config,
+            )
+
+            after = await get_event(real_graph_client.sdk_client, event_id)
+            assert after["type"] == "seriesMaster"
+            assert after["original_start_time_zone"] != _DST_ZONE
+            assert after["recurrence"]["range"]["numberOfOccurrences"] == 2

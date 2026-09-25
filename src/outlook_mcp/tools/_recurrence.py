@@ -257,7 +257,13 @@ def _reconcile_range(payload: dict, start: date) -> dict:
     return {**payload, "range": rng}
 
 
-def build_event_recurrence(recurrence: dict | str, *, start: str, zone: str | None = None) -> Any:
+def build_event_recurrence(
+    recurrence: dict | str,
+    *,
+    start: str,
+    zone: str | None = None,
+    drop_range_timezone: bool = False,
+) -> Any:
     """Build a typed PatternedRecurrence for a calendar event.
 
     Accepts the Graph recurrence object, a JSON-encoded string of one, or a
@@ -270,7 +276,20 @@ def build_event_recurrence(recurrence: dict | str, *, start: str, zone: str | No
     which is right only while the two agree; see ``event_start_date`` for the
     case where they do not.
 
-    ``range.recurrenceTimeZone`` is passed through rather than stripped, and
+    ``drop_range_timezone`` removes ``range.recurrenceTimeZone`` from the
+    payload. Set it when the caller has named the event's zone by another route
+    — an explicit ``timezone`` on ``update_event`` — because the two then
+    describe the same thing and Graph refuses the pair when they disagree. The
+    read-modify-write round trip makes that collision ordinary rather than
+    exotic: ``outlook_get_event`` hands back ``recurrenceTimeZone``, so a caller
+    echoing a recurrence while asking for a new zone sends the old zone with it.
+    Graph re-derives the range's zone from the event's own when the field is
+    absent, so dropping it is lossless.
+
+    Off by default, because the general passthrough below is deliberate; this
+    resolves one specific conflict rather than reversing that decision.
+
+    ``range.recurrenceTimeZone`` is otherwise passed through rather than stripped, and
     that is a decision, not an oversight. Graph derives the range's zone from
     the event's own when the field is absent, so supplying one can only agree
     (redundant) or disagree — and a disagreement is refused outright with
@@ -308,6 +327,11 @@ def build_event_recurrence(recurrence: dict | str, *, start: str, zone: str | No
             f"or one of: {list(_SHORTHANDS)}"
         )
 
+    if drop_range_timezone and payload.get("range"):
+        payload = {
+            **payload,
+            "range": {k: v for k, v in payload["range"].items() if k != "recurrenceTimeZone"},
+        }
     return build_patterned_recurrence(_reconcile_range(payload, start_date))
 
 
