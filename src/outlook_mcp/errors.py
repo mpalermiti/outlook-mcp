@@ -138,6 +138,25 @@ class UnencryptedTokenCacheError(OutlookMCPError):
         )
 
 
+class ConfigLoadError(OutlookMCPError):
+    """The settings file could not be loaded; the server booted fail-safe.
+
+    ``main`` validates the config before the transport starts and exits with
+    the repair on stderr. This error is the lifespan's backstop for the same
+    condition when the server is reached without going through ``main``:
+    raising there surfaces as an exception group nobody can read, so the
+    server boots read-only instead and every tool call carries the repair.
+    """
+
+    def __init__(self, reason: Exception, config_dir: str):
+        super().__init__(
+            "config_load_failed",
+            f"The settings file could not be loaded ({reason}); the server "
+            "booted read-only.",
+            f"Fix {config_dir}/config.json and restart the server.",
+        )
+
+
 class UntrustedURLError(OutlookMCPError):
     """Raised when a URL that would receive a Graph token isn't a Graph URL.
 

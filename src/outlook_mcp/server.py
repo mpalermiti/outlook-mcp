@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
+import sys
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -15,8 +16,9 @@ from pydantic import ValidationError
 
 from outlook_mcp import __version__, toolsets
 from outlook_mcp.auth import AuthManager
-from outlook_mcp.config import DEFAULT_CONFIG_DIR, load_config
+from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config, load_config
 from outlook_mcp.errors import (
+    ConfigLoadError,
     OutlookMCPError,
     ToolInputError,
     UnencryptedTokenCacheError,
@@ -49,6 +51,38 @@ from outlook_mcp.tools import (
 logger = logging.getLogger(__name__)
 
 
+def _config_repair_lines(exc: Exception) -> list[str]:
+    """Operator-facing repair guidance for a config the server cannot load.
+
+    Written for stderr, one line per entry, by both callers that can hit an
+    unloadable config: ``main`` (before the transport starts) and the lifespan
+    backstop. No traceback — every line is something the operator can act on.
+    """
+    lines: list[str]
+    if isinstance(exc, ValidationError):
+        lines = ["The config file is invalid — the server cannot start:"]
+        for e in exc.errors():
+            field = ".".join(str(p) for p in e["loc"]) or "config"
+            lines.append(f"  {field}: {e['msg']}")
+        lines.append(f"Fix {DEFAULT_CONFIG_DIR}/config.json and restart the server.")
+    elif isinstance(exc, PermissionError):
+        # load_config refuses a symlinked config with PermissionError.
+        lines = [
+            f"Cannot load the config file — the server cannot start: {exc}",
+            "A symlinked config.json is refused on purpose: replace it with "
+            "a real file, then restart the server.",
+        ]
+    else:
+        # OSError: unreadable file or directory, chmod-protected path.
+        # ValueError: non-UTF-8 bytes in the file (UnicodeDecodeError).
+        lines = [
+            f"Cannot load the config file — the server cannot start: {exc}",
+            "Check the file and its directory are readable and owned by you, "
+            f"in {DEFAULT_CONFIG_DIR}, then restart the server.",
+        ]
+    return lines
+
+
 @asynccontextmanager
 async def lifespan(server):
     """Initialize server state: config, auth, and cached token.
@@ -56,33 +90,29 @@ async def lifespan(server):
     ``load_config`` fails for reasons the operator has to fix in the file
     system or the config file: a ``ValidationError`` (a value no release
     accepts), a ``PermissionError`` (the config is a symlink — refused on
-    purpose), or an ``OSError`` around it (unreadable file, chmod-protected
-    directory). None of those improve by retrying, and an unhandled raise
-    here reaches the client as a dead process with a traceback nobody reads.
-    So each one exits with the repair spelled out instead — on stderr, never
-    stdout, which is the protocol channel.
+    purpose), an ``OSError`` around it (unreadable file, chmod-protected
+    directory), or a non-UTF-8 file (``UnicodeDecodeError``). ``main``
+    already exits with the repair spelled out before the transport starts;
+    this is the backstop for reaching the server without going through
+    ``main``. Exiting from inside the async lifespan surfaces as an
+    exception group nobody can read, so the backstop degrades instead:
+    boot read-only and carry the repair on every tool call.
     """
+    config_load_error: Exception | None = None
     try:
         config = load_config()
-    except ValidationError as exc:
-        logger.error("The config file is invalid — the server cannot start:")
-        for e in exc.errors():
-            field = ".".join(str(p) for p in e["loc"]) or "config"
-            logger.error("  %s: %s", field, e["msg"])
-        logger.error(
-            "Fix %s/config.json and restart the server.", DEFAULT_CONFIG_DIR
-        )
-        raise SystemExit(1) from exc
-    except OSError as exc:  # includes the symlink PermissionError
-        logger.error("Cannot load the config file — the server cannot start: %s", exc)
-        logger.error(
-            "A symlinked config.json is refused on purpose: replace it with a "
-            "real file. For any other error above, check the file and its "
-            "directory are readable and owned by you, in %s, then restart.",
-            DEFAULT_CONFIG_DIR,
-        )
-        raise SystemExit(1) from exc
+    except (ValidationError, OSError, ValueError) as exc:
+        for line in _config_repair_lines(exc):
+            logger.error("%s", line)
+        config_load_error = exc
+        # Fail-safe substitute: writes stay refused until the real config
+        # loads again, and the startup error below says why on every call.
+        config = Config(read_only=True)
     auth = AuthManager(config)
+    if config_load_error is not None:
+        auth.startup_error = ConfigLoadError(config_load_error, DEFAULT_CONFIG_DIR)
+        yield {"config": config, "auth": auth}
+        return
     # Try to load cached token silently — if this fails, tools will
     # return an error telling the user to run `outlook-mcp auth`.
     try:
@@ -1713,6 +1743,17 @@ toolsets.configure(mcp, toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOL
 
 
 def main():
+    # Validate the config before the transport starts. In here, a failure
+    # ends as a clean exit code with the repair on stderr — the protocol
+    # channel (stdout) stays empty. The same failure raised from the async
+    # lifespan instead tears through the transport's task group and lands
+    # as an exception-group traceback that tells the operator nothing.
+    try:
+        load_config()
+    except (ValidationError, OSError, ValueError) as exc:
+        for line in _config_repair_lines(exc):
+            print(line, file=sys.stderr)
+        sys.exit(1)
     mcp.run(transport="stdio")
 
 
