@@ -32,12 +32,16 @@ Reintroducing per-instance cache names, or losing the per-instance record,
 fails loudly here instead of only in a live run against a real Keychain.
 """
 
+import os
+import subprocess
+import sys
+
 from azure.core.credentials import AccessToken
 from azure.core.exceptions import ClientAuthenticationError
 from azure.identity import AuthenticationRecord
 
 from outlook_mcp import auth as auth_module
-from outlook_mcp.auth import CACHE_NAME, AuthManager
+from outlook_mcp.auth import AuthManager
 from outlook_mcp.config import Config
 
 GRAPH_SCOPE = "https://graph.microsoft.com/.default"
@@ -160,7 +164,7 @@ class _TwoInstances:
     as on a real host.
     """
 
-    def __init__(self, monkeypatch, tmp_path) -> None:
+    def __init__(self, monkeypatch) -> None:
         self.store = _MacKeychainStore()
         self._records: dict[str, AuthenticationRecord] = {}
         self._active: str | None = None
@@ -208,23 +212,72 @@ class _TwoInstances:
         return manager
 
 
+# Instance B runs as a real second process: its own settings directory via
+# OUTLOOK_MCP_CONFIG_DIR, exactly how a second server is deployed. It reports
+# the cache name its credential was constructed with and stops there — the
+# construction is the fact under test, not the flow.
+_INSTANCE_B = """
+from unittest.mock import patch
+
+from outlook_mcp import auth as auth_module
+from outlook_mcp.auth import AuthManager
+from outlook_mcp.config import Config
+
+
+def probe(**kwargs):
+    print(kwargs["cache_persistence_options"].name)
+    raise SystemExit(0)
+
+
+with (
+    patch.object(auth_module, "DeviceCodeCredential", probe),
+    # the encrypted-store probe is a host property, not a property of the
+    # name under test
+    patch.object(auth_module, "_unencrypted_fallback_will_be_used", lambda: False),
+):
+    AuthManager(Config(client_id="id2-efgh")).login_interactive()
+"""
+
+
+def _run_instance_b(settings_dir) -> str:
+    env = dict(os.environ)
+    env["OUTLOOK_MCP_CONFIG_DIR"] = str(settings_dir)
+    out = subprocess.run(
+        [sys.executable, "-c", _INSTANCE_B],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=60,
+    )
+    return out.stdout.strip()
+
+
 def test_every_write_goes_through_the_one_cache_name(monkeypatch, tmp_path):
     """Invariant 1: one cache name, however many instances.
+
+    Asserted as the literal every host uses — not the module constant, which
+    a per-instance renaming would move along with the test — for both the
+    in-process writer (the store audits every save) and a second process
+    with its own settings directory constructing its credential the way a
+    second deployed server would.
 
     A distinct name per instance would not isolate anything on macOS — the
     Keychain item is the same — it would only split the signal file, and each
     writer would then reload-through-its-own-lock believing it owns the item.
     """
-    two = _TwoInstances(monkeypatch, tmp_path)
+    two = _TwoInstances(monkeypatch)
 
     two.as_instance("net").login_interactive()
-    two.as_instance("neko").login_interactive()
+    assert set(two.store.written_names) == {"outlook-mcp"}
+    assert set(two.store.constructed_cache_names) == {"outlook-mcp"}
 
-    assert set(two.store.written_names) == {CACHE_NAME}
-    assert set(two.store.constructed_cache_names) == {CACHE_NAME}
+    settings_dir = tmp_path / "instance-neko"
+    settings_dir.mkdir()
+    assert _run_instance_b(settings_dir) == "outlook-mcp"
 
 
-def test_second_instance_does_not_evict_the_first(monkeypatch, tmp_path):
+def test_second_instance_does_not_evict_the_first(monkeypatch):
     """Invariant 2: auth B after A, then a restart of A: BOTH still work.
 
     With per-instance cache names this is the live-only macOS failure: B's
@@ -232,7 +285,7 @@ def test_second_instance_does_not_evict_the_first(monkeypatch, tmp_path):
     item, and A's silent refresh came back empty. Here that runs offline, so
     the regression cannot ship quietly again.
     """
-    two = _TwoInstances(monkeypatch, tmp_path)
+    two = _TwoInstances(monkeypatch)
 
     # Day 1: each instance's operator runs `outlook-mcp auth`.
     two.as_instance("net").login_interactive()
@@ -251,7 +304,7 @@ def test_second_instance_does_not_evict_the_first(monkeypatch, tmp_path):
     assert token.token == "token-for-neko-home-id"
 
 
-def test_each_instances_record_pins_its_own_identity(monkeypatch, tmp_path):
+def test_each_instances_record_pins_its_own_identity(monkeypatch):
     """Invariant 3: the record, not the client, selects the identity.
 
     Both identities live in the one merged item; what keeps instance A from
@@ -259,7 +312,7 @@ def test_each_instances_record_pins_its_own_identity(monkeypatch, tmp_path):
     A's AuthenticationRecord. A record pinned to the wrong identity — or no
     record at all, where the client_id would pick a default — fails here.
     """
-    two = _TwoInstances(monkeypatch, tmp_path)
+    two = _TwoInstances(monkeypatch)
 
     two.as_instance("net").login_interactive()
     two.as_instance("neko").login_interactive()
