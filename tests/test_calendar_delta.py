@@ -111,6 +111,17 @@ class TestFormatEventDelta:
         whatever the listing asked for — the formatter simply never read it,
         which is why an agent seeding from `outlook_list_events` and refreshing
         from this tool saw the key disappear.
+
+        `seriesMaster` is deliberately the fixture value, and it is the one
+        place in this change where it is the *right* one. `/me/calendarView`
+        returns expanded instances and never a master, so `outlook_list_events`
+        cannot report one; `/me/calendarView/delta` is a different endpoint and
+        does. Measured over one ±180-day window: the listing gave 276
+        `occurrence` / 206 `singleInstance` / 18 `exception` and no masters,
+        the delta gave 212 `singleInstance` / 94 `seriesMaster` / 94
+        `occurrence`, three of which were read back by id and confirmed as
+        masters with a real recurrence. That asymmetry is why a caller seeding
+        from the listing and refreshing from here sees ids the seed never held.
         """
         out = _format_event_delta(_raw_event(type="seriesMaster"))
         assert out["type"] == "seriesMaster"
@@ -157,6 +168,13 @@ class TestTheDeltaSummaryMirrorsTheListingSummary:
         # fixture never set: a plain MagicMock auto-creates one, and a field
         # added to the summary would then land here as a truthy stub instead
         # of the AttributeError that tells us to update both sides.
+        #
+        # That is also why this does not call `test_calendar_read`'s
+        # `_make_mock_event`, which is otherwise the same object: it is
+        # deliberately unspecced, because the detail tests it serves need the
+        # auto-attribute. Reusing it would keep both `test_both_summaries_…`
+        # assertions green while a new summary read went unnoticed on this
+        # side — the one thing this fixture exists to prevent.
         event = MagicMock(
             spec=[
                 "id",
@@ -201,6 +219,18 @@ class TestTheDeltaSummaryMirrorsTheListingSummary:
         delta = _format_event_delta(_raw_event(type="singleInstance"))
 
         assert delta["type"] == self._listing_summary()["type"] == "singleInstance"
+
+    def test_show_as_agrees_on_both_sides(self):
+        """The value comparison #73's `test_show_as_matches_the_listing_formatter` made.
+
+        Generalising that test to a key set was a widening in one direction and
+        a narrowing in another: key sets agreeing says nothing about the values
+        agreeing, which is the half `show_as` had. Kept beside the general
+        claim rather than replaced by it.
+        """
+        delta = _format_event_delta(_raw_event(showAs="busy"))
+
+        assert delta["show_as"] == self._listing_summary()["show_as"] == "busy"
 
 
 # ── First call ───────────────────────────────────────────────────────

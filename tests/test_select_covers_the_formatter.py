@@ -38,9 +38,11 @@ from outlook_mcp.tools import calendar_read, contacts, mail_read
 # key it cannot honour rather than reporting it empty (`with_categories`).
 #
 # Both calendar rows are the fix for #69, where this guard's own bug class had
-# shipped unseen for six releases because calendar had never been enrolled: the
-# listing read `type` without selecting it, and selected `categories` without
-# reading it — one row, failing in both directions at once.
+# shipped unseen for seven releases — 1.16.0 through 1.22.0 — because calendar
+# had never been enrolled: the listing read `type` without selecting it, and
+# selected `categories` without reading it — one row, failing in both directions
+# at once. `test_every_select_constant_is_enrolled` below is why the next module
+# cannot be forgotten the same way.
 #
 # The concise row is here even though that pair has always agreed. It is not
 # coverage for its own sake: the `$select` it pins is one `list_events` already
@@ -177,6 +179,80 @@ def test_a_field_read_through_a_helper_still_counts_as_read():
     assert "mobile_phone" in reads, "read through _primary_phone"
     assert "home_phones" in reads, "read through _primary_phone"
     assert "categories" in reads, "read through _categories"
+
+
+# A ``*_SELECT`` constant that deliberately has no ``_PAIRS`` row, and why.
+# Keep this as small as the reasons justify: every entry is a `$select` nothing
+# compares against its formatter.
+_UNENROLLED = {
+    (
+        "outlook_mcp.tools.contacts",
+        "_SUMMARY_SELECT",
+    ): (
+        "the search path's select, deliberately narrower than the listing's. "
+        "`_format_contact_summary` omits the `categories` key entirely when the "
+        "field was not selected, rather than reporting it empty, so the second "
+        "direction of the guard would fail on a contract that is correct. The "
+        "listing's `_LIST_SELECT` — the widest one that formatter is used with "
+        "— carries the row."
+    ),
+}
+
+
+def _select_constants() -> dict[tuple[str, str], str]:
+    """Every module-level ``*_SELECT`` string under ``outlook_mcp.tools``."""
+    import importlib
+    import pkgutil
+
+    import outlook_mcp.tools
+
+    found: dict[tuple[str, str], str] = {}
+    for info in pkgutil.iter_modules(outlook_mcp.tools.__path__):
+        module = importlib.import_module(f"outlook_mcp.tools.{info.name}")
+        for name, value in vars(module).items():
+            if name.endswith("_SELECT") and isinstance(value, str):
+                found[(module.__name__, name)] = value
+    return found
+
+
+def test_every_select_constant_is_enrolled():
+    """The general form of #69, which was one module's worth of the same gap.
+
+    Adding a ``_PAIRS`` row for calendar fixes the instance. It does nothing
+    about the next module to hoist a ``$select`` to a constant and not think of
+    this file — which is precisely how calendar shipped unguarded for seven
+    releases while the guard it needed already existed, built for #65.
+
+    So the enrolment is derived rather than remembered: every module-level
+    ``*_SELECT`` under ``outlook_mcp.tools`` must appear in ``_PAIRS`` or be
+    named in ``_UNENROLLED`` with a reason. Matching is by value, because that
+    is what a row actually checks — a second constant holding a string already
+    enrolled is the same contract under another name, and is covered.
+
+    ``_UNENROLLED`` is asserted to be live in both directions: an entry naming a
+    constant that no longer exists is removed rather than left as a comment
+    about nothing.
+    """
+    constants = _select_constants()
+    enrolled = {select for _, _, select in _PAIRS}
+
+    stale = sorted(key for key in _UNENROLLED if key not in constants)
+    assert not stale, (
+        f"_UNENROLLED names {stale}, which no longer exist. Drop the entry — an "
+        f"exemption for a constant that is gone reads as coverage."
+    )
+
+    missing = sorted(
+        f"{module.split('.')[-1]}.{name}"
+        for (module, name), select in constants.items()
+        if select not in enrolled and (module, name) not in _UNENROLLED
+    )
+    assert not missing, (
+        f"{missing} is a $select with no _PAIRS row, so nothing checks it against "
+        f"the formatter that reads its response. That is #65 and #69 — both shipped "
+        f"exactly this way. Add a row, or add it to _UNENROLLED with the reason an "
+        f"honest row is impossible."
+    )
 
 
 def test_the_summary_select_is_spelled_in_exactly_one_place():

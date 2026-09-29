@@ -561,10 +561,19 @@ class TestEventDetailRecurrence:
     def test_missing_type_is_empty_string(self):
         assert self._detail()["type"] == ""
 
-    def test_summary_carries_type_so_listings_can_tell_series_apart(self):
-        summary = _format_event_summary(_make_mock_event(type=MagicMock(value="seriesMaster")))
+    def test_summary_carries_type_so_listings_can_tell_an_occurrence_apart(self):
+        """`occurrence`, not `seriesMaster` — which is what a listing sees.
 
-        assert summary["type"] == "seriesMaster"
+        This formatter feeds both shapes, so a master is a real value *for
+        `outlook_get_event`* (asserted above). `list_events` reads
+        `calendarView`, which returns expanded instances, so what tells
+        recurring work apart there is `occurrence`/`exception` against
+        `singleInstance`. The old name and fixture said otherwise, and an
+        agent filtering a listing for `seriesMaster` matches nothing.
+        """
+        summary = _format_event_summary(_make_mock_event(type=MagicMock(value="occurrence")))
+
+        assert summary["type"] == "occurrence"
 
     def test_summary_still_omits_the_recurrence_object(self):
         """`type` is one short string; the full pattern stays detail-only."""
@@ -645,17 +654,14 @@ class TestTheListingSendsTheSelectTheGuardChecks:
     """
 
     @staticmethod
-    def _sent_select(**kwargs):
+    async def _sent_select(**kwargs):
         mock_client = MagicMock()
         response = MagicMock(value=[], odata_next_link=None)
         mock_client.me.calendar_view.get = AsyncMock(return_value=response)
         mock_client.me.calendars = MagicMock()
 
-        async def _run():
-            await list_events(mock_client, days=1, **kwargs)
-            return _query_params(mock_client.me.calendar_view.get).select
-
-        return _run()
+        await list_events(mock_client, days=1, **kwargs)
+        return _query_params(mock_client.me.calendar_view.get).select
 
     async def test_the_normal_listing_sends_the_summary_select(self):
         from outlook_mcp.tools.calendar_read import _SUMMARY_SELECT

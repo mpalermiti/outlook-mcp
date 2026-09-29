@@ -104,9 +104,14 @@ def _format_event_summary(event: Any) -> dict:
     if event.end:
         end_str = f"{event.end.date_time} ({event.end.time_zone})"
 
-    # `type` distinguishes a seriesMaster from a singleInstance / occurrence /
-    # exception. Without it a listing cannot tell a recurring event from a
-    # one-off without fetching each one.
+    # `type` tells a recurring event from a one-off without fetching each one.
+    # Which values can actually appear depends on the caller: this formatter
+    # feeds both `list_events`, which reads `calendarView` and therefore sees
+    # only `occurrence` / `exception` / `singleInstance`, and
+    # `_format_event_detail`, which reads one event by id and can also see
+    # `seriesMaster`. Documenting the master as a listing value would send an
+    # agent filtering for recurring meetings to a value the listing never
+    # returns — #69's silent wrong answer, one value over.
     event_type = ""
     if event.type is not None:
         event_type = event.type.value if hasattr(event.type, "value") else str(event.type)

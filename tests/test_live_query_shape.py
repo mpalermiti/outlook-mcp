@@ -42,6 +42,8 @@ from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
 
 import pytest
+from msgraph.generated.models.event_type import EventType
+from msgraph.generated.models.free_busy_status import FreeBusyStatus
 
 from outlook_mcp.tools.calendar_delta import list_events_delta
 from outlook_mcp.tools.calendar_read import list_events
@@ -358,18 +360,19 @@ def _wide_window() -> tuple[str, str]:
 _EVENT_WALK: dict = {}
 
 
-def _event_types() -> set[str]:
-    """The valid `event.type` values, read off the SDK rather than typed here.
+def _sdk_enum_values(enum) -> set[str]:
+    """The values of an SDK enum, read off the SDK rather than typed here.
 
     A hand-typed list beside a derived one drifts — #73's review made the point
-    about `FreeBusyStatus`, and `test_calendar_write.py` reads that enum for the
-    same reason. Derived once and shared by the listing guard and the delta
-    guard, so the two cannot disagree about what a valid value is, and so a
-    value Graph adds to the enum stops being a spurious failure here.
-    """
-    from msgraph.generated.models.event_type import EventType
+    about `FreeBusyStatus`, and `test_calendar_write.py` reads that same enum
+    for the same reason. Deriving both sets here means the listing guard, the
+    delta guard and the write path cannot disagree about what a valid value is,
+    and a value Microsoft adds to an enum stops being a spurious failure.
 
-    return {member.value for member in EventType}
+    Call it once per test and keep the result: it is a fixed set, and rebuilding
+    it inside a 500-event loop says the loop depends on something it does not.
+    """
+    return {member.value for member in enum}
 
 
 async def _walk_events_for_select_fields(client):
@@ -433,7 +436,7 @@ async def test_the_event_listing_returns_the_show_as_it_selects(event_walk):
             f"that was not honoured, not a mailbox without the data."
         )
 
-    valid = {"free", "tentative", "busy", "oof", "workingElsewhere", "unknown"}
+    valid = _sdk_enum_values(FreeBusyStatus)
     for event in event_walk["with_status"]:
         assert event["show_as"] in valid, (
             f"Graph returned an unknown freeBusyStatus {event['show_as']!r}; "
@@ -447,13 +450,24 @@ async def test_the_event_listing_returns_the_type_it_selects(event_walk):
     `_format_event_summary` has read `event.type` since 1.16.0 and the listing's
     `$select` never named it, so Graph honoured the `$select`, the SDK left the
     attribute `None`, and every listed event reported `type: ""` — present,
-    empty, and indistinguishable from a real value. Six releases, a CHANGELOG
-    entry claiming the opposite, and a green offline suite throughout, because
-    a mock cannot tell an honoured `$select` from an ignored one.
+    empty, and indistinguishable from a real value. Seven releases (1.16.0
+    through 1.22.0), a CHANGELOG entry claiming the opposite, and a green
+    offline suite throughout, because a mock cannot tell an honoured `$select`
+    from an ignored one.
 
     All-empty is a `fail`, not a `skip`: Graph assigns every event a type
     (`singleInstance` at minimum), so there is no such thing as a mailbox whose
     events genuinely have none. An empty walk is the only honest skip.
+
+    That `fail` is the load-bearing half. The membership check after it cannot
+    fail on this path and is kept for its error text rather than its coverage:
+    kiota maps a value outside `EventType` to `None`, `_format_event_summary`
+    renders that `""`, and `with_type` has already filtered it out — so a value
+    Microsoft invents arrives here as an absence, caught by the `fail` above.
+    The identical-looking check in the delta test *is* load-bearing: that path
+    reads raw JSON, so a new string reaches the assertion verbatim.
+
+    The values a listing can actually carry are the sibling test below.
     """
     if not event_walk["seen"]:
         pytest.skip("No events in a ±180-day window — nothing to assert against")
@@ -464,11 +478,59 @@ async def test_the_event_listing_returns_the_type_it_selects(event_walk):
             f"honoured, not a mailbox without the data — issue #69, returned."
         )
 
+    valid = _sdk_enum_values(EventType)
     for event in event_walk["with_type"]:
-        assert event["type"] in _event_types(), (
+        assert event["type"] in valid, (
             f"Graph returned an unknown event type {event['type']!r}; the value set "
             f"named in SKILL.md, the README and this guard needs widening to match."
         )
+
+
+async def test_the_event_listing_never_returns_a_series_master(event_walk):
+    """`SKILL.md`, the README and the CHANGELOG tell an agent this; pin it.
+
+    `calendarView` returns expanded instances, so the discriminator on a
+    listing is `occurrence`/`exception` against `singleInstance`. An agent that
+    filters a listing for `seriesMaster` to find its recurring meetings matches
+    nothing and reports there are none — #69's silent wrong answer, one value
+    over, which is why the docs now say so and why this holds them to it.
+
+    Unlike the concise-omission guard rejected at the foot of this file, this
+    one *can* fail: `_format_event_summary` reports whatever `type` Graph
+    sends, so a master appearing on `calendarView` would carry through to the
+    key and redden here.
+
+    It is the *listing* that has this property, not calendarView-in-general.
+    `/me/calendarView/delta` is a different endpoint and does return masters,
+    which is why the test below deliberately does not forbid them. Measured
+    over one ±180-day window: the listing gave 276 `occurrence`, 206
+    `singleInstance`, 18 `exception` and no masters; the delta gave 212
+    `singleInstance`, 94 `seriesMaster` and 94 `occurrence`, three of which
+    were read back by id and confirmed as masters carrying a real recurrence.
+
+    Reuses the cached walk, so this costs no extra round trips.
+    """
+    if not event_walk["seen"]:
+        pytest.skip("No events in a ±180-day window — nothing to assert against")
+
+    # Premise: without an expanded instance in the walk this mailbox has no
+    # series in the window, and an absence of masters would prove nothing
+    # (#63's page-one lesson). Skip loudly with the tally rather than pass.
+    instances = [e for e in event_walk["with_type"] if e["type"] in {"occurrence", "exception"}]
+    if not instances:
+        pytest.skip(
+            f"walked {event_walk['seen']} events, none of them an occurrence or exception "
+            f"— no expanded series in this window, so an absence of masters says nothing"
+        )
+
+    masters = [e for e in event_walk["with_type"] if e["type"] == "seriesMaster"]
+    assert not masters, (
+        f"calendarView returned {len(masters)} seriesMaster item(s) among "
+        f"{len(event_walk['with_type'])} typed events, e.g. {masters[0]['subject']!r}, "
+        f"alongside {len(instances)} expanded instance(s). Graph has started returning "
+        f"series masters on the listing, so SKILL.md, the README and the CHANGELOG are "
+        f"now wrong to tell an agent that only `outlook_get_event` shows one."
+    )
 
 
 async def test_the_event_delta_carries_type_without_a_select(real_graph_client):
@@ -476,10 +538,13 @@ async def test_the_event_delta_carries_type_without_a_select(real_graph_client):
 
     `/me/calendarView/delta` takes no `$select`, so the claim is that Graph
     returns `type` regardless. That is a claim about an external service, and
-    those expire — #70 is the precedent, where Graph began honouring
-    `isOnlineMeeting` after years of ignoring it and a test was the only thing
-    that noticed. **If this test fails, Graph has stopped sending `type` on the
-    delta endpoint**, and `outlook_list_events_delta` is silently reporting
+    those expire: #68's consumer-vs-work lesson is that what Graph does for one
+    account type is not what it does for another, and the same field can change
+    under you. (#70 reports exactly that happening to `isOnlineMeeting` — but
+    it is **open**, this repo's live pin still asserts the old behaviour, and
+    nothing here should be read as its ruling.) **If this test fails, Graph has
+    stopped sending `type` on the delta endpoint**, and
+    `outlook_list_events_delta` is silently reporting
     `""` for a field `outlook_list_events` still populates — the key-set parity
     test cannot see that, because the key would still be there.
 
@@ -487,6 +552,10 @@ async def test_the_event_delta_carries_type_without_a_select(real_graph_client):
     removed item to `{id, is_deleted: True}` without ever calling the
     formatter, so counting them here would assert summary parity against a
     shape that is exempt from it by design.
+
+    `seriesMaster` is a value this path really does carry, unlike its non-delta
+    sibling above — so nothing here forbids it, and the docs say to expect
+    master ids that a listing-seeded map never held.
     """
     after, before = _wide_window()
     page = await list_events_delta(real_graph_client, start=after, end=before, page_size=100)
@@ -506,9 +575,12 @@ async def test_the_event_delta_carries_type_without_a_select(real_graph_client):
             f"including `type` in the raw JSON — not a mailbox without the data."
         )
 
+    valid = _sdk_enum_values(EventType)
     for event in with_type:
-        assert event["type"] in _event_types(), (
-            f"Graph returned an unknown event type {event['type']!r} on the delta path."
+        assert event["type"] in valid, (
+            f"Graph returned an unknown event type {event['type']!r} on the delta path. "
+            f"This path reads raw JSON, so the value arrives verbatim — unlike the "
+            f"listing guard, where kiota would have turned it into an absence."
         )
 
 

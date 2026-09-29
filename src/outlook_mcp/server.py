@@ -618,8 +618,9 @@ async def outlook_list_events(
 
     Use for one-shot queries; use outlook_list_events_delta for polling/recurring agents.
 
-    Pass concise=True to drop large fields (body, attendees, organizer, categories) — ~10x fewer
-    tokens for day-at-a-glance scans.
+    Pass concise=True for day-at-a-glance scans: drops organizer, response_status,
+    type and show_as; adds is_organizer and attendees_count; spells is_online as
+    is_online_meeting.
 
     `calendar`: a display name or an ID from outlook_list_calendars; omit for the default calendar.
     A cursor continues the listing it came from.
