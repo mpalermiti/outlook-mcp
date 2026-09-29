@@ -47,6 +47,9 @@ def resolve_attachment_path(path: str, attachments_dir: str) -> str:
     base.mkdir(parents=True, exist_ok=True)
     if created:
         # Ours to lock down. Never chmod a directory the user pointed us at.
+        # POSIX-only: on Windows os.chmod sets nothing but the read-only attribute, so this
+        # cannot enforce owner-only access and the path's Windows ACL governs instead — see
+        # the note above `_ensure_dir` in config.py (#85).
         base.chmod(0o700)
     base = base.resolve()
 

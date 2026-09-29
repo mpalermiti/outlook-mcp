@@ -441,7 +441,7 @@ the body is fetched on use.
 
 ## Configuration
 
-Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions). Set the `OUTLOOK_MCP_CONFIG_DIR` environment variable to move that settings directory (config.json, auth record, and the attachments default move with it) — see [Two accounts, two instances](#two-accounts-two-instances-optional--outlook_mcp_config_dir) below.
+Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions on macOS and Linux; see **Config permissions** below for Windows). Set the `OUTLOOK_MCP_CONFIG_DIR` environment variable to move that settings directory (config.json, auth record, and the attachments default move with it) — see [Two accounts, two instances](#two-accounts-two-instances-optional--outlook_mcp_config_dir) below.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -575,7 +575,7 @@ When `allow_categories` is set, any tool in a non-allowed category returns a per
 - **Zero third-party calls.** The server only talks to `graph.microsoft.com` and `login.microsoftonline.com`.
 - **Token storage.** OAuth tokens are persisted via `azure-identity`'s `TokenCachePersistenceOptions`. On macOS the OS Keychain is used; on Windows, DPAPI; on Linux with PyGObject/libsecret available, gnome-keyring. On Linux *without* libsecret (e.g. the isolated venv created by `uv tool install`), tokens fall back to a `0600` plaintext file at `~/.IdentityService/` and the MCP logs a one-time warning at startup. For encrypted storage on Linux, install `python3-gi gnome-keyring libsecret-1-0` and re-create the venv with `--system-site-packages`.
 - **No logging of sensitive data.** Message bodies, recipient addresses, and tokens are never logged.
-- **Config permissions.** Config directory is `0700`, config file is `0600`. Symlinked configs are rejected.
+- **Config permissions.** On macOS and Linux the config directory is created `0700` and the config file `0600`, and a loose mode on the file is repaired on load. On Windows those POSIX modes cannot be enforced — `os.chmod` there sets only the read-only attribute — so access is governed by the path's Windows ACL, including whatever it inherits from the directory it was created under, which this server neither applies nor verifies. Symlinked configs are rejected on every platform.
 - **Input validation.** All user inputs (email addresses, Graph IDs, OData filters, KQL queries, datetimes) are validated and sanitized before reaching the Graph API.
 
 ---

@@ -6,6 +6,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **Four tests no longer fail on every Windows run, and `load_config` stops re-`chmod`ing the
+  config file on every load.** Two separate causes. `os.chmod` on Windows honours only the
+  read-only attribute, so `0o700` and `0o600` are not representable there (measured: `0o777`
+  and `0o666`) and three mode assertions could never pass; `ntpath.expanduser` resolves `~`
+  from `USERPROFILE` rather than `HOME`, so a fourth test's `monkeypatch.setenv("HOME", ...)`
+  fixture had no effect. Those assertions are now `skipif(sys.platform == "win32")` with the
+  reason in the marker, and the portable halves of two of them — that the directory is created,
+  and that an attachment path stays confined to it — keep running on Windows rather than being
+  skipped along with the mode.
+
+  **Behaviour change.** `load_config` read the config file's mode and re-applied `0o600` when it
+  differed. On Windows the mode never reads back as `0o600`, so that check could never converge
+  and re-`chmod`ed on every single load; it is now skipped where the bits cannot be enforced.
+  One consequence worth naming: a `config.json` the user had marked **read-only** used to have
+  that attribute cleared by any load, because `chmod` on Windows does honour read-only. It now
+  stays read-only, so the lock holds and `save_config` fails rather than silently succeeding
+  after a load has unlocked the file.
+
+  The hardening itself is unchanged, but each site now records what it can and cannot do: on
+  Windows these calls cannot enforce owner-only access, and what governs the path is its Windows
+  ACL — including whatever it inherits from the directory it was created under — which this code
+  neither applies nor verifies. The README's "directory is `0700`, file is `0600`" claim is
+  qualified to match. Applying a real Windows DACL is deliberately not part of this change.
+
 ## [1.23.0] — 2026-09-30
 
 The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made
