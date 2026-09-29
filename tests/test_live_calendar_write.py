@@ -993,6 +993,22 @@ class TestReAnchoringAnExistingEvent:
                 "has nothing to pin its patch to"
             )
 
+            # The join between the offline guards and this one. Those mock an
+            # event whose change key sits in `additional_data["@odata.etag"]`,
+            # which is where the production branch reads it — a mock cannot tell
+            # us the SDK still puts it there. If msgraph relocates or drops the
+            # annotation, `if_match` silently becomes None, the patch goes
+            # unpinned, and every offline test still passes. This is the
+            # assertion that reddens instead.
+            via_sdk = await real_graph_client.sdk_client.me.events.by_event_id(event_id).get()
+            sdk_extras = getattr(via_sdk, "additional_data", None) or {}
+            assert sdk_extras.get("@odata.etag"), (
+                "the SDK no longer exposes the change key at "
+                'additional_data["@odata.etag"], so the recurrence re-send is '
+                "sending an unpinned patch and the offline guards cannot see it. "
+                f"additional_data keys: {sorted(sdk_extras)}"
+            )
+
             stale = httpx.patch(
                 url,
                 headers={**headers, "If-Match": 'W/"AAAAAAAAAAAAAAAAAAAAAAAAAAAA"'},
