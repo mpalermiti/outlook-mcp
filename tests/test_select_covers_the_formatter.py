@@ -30,7 +30,15 @@ import pytest
 
 from outlook_mcp.tools import calendar_read, contacts, mail_read
 
-# (label, formatter function, the $select string that feeds it)
+# (label, formatter function, the $select string that feeds it, where that
+# string lives — `module._NAME`, relative to `outlook_mcp.tools`)
+#
+# The fourth column exists for `test_every_select_constant_is_enrolled`, which
+# has to enrol a *constant*, not a string value. Two constants can hold one
+# value — `DETAIL_SELECT = _SUMMARY_SELECT` is the same object, not just an
+# equal one — while feeding different formatters that read different fields, and
+# only one of them would have a row. `test_each_pair_names_the_constant_it_pins`
+# keeps the name honest, since a name beside a value is the thing that drifts.
 #
 # `_format_contact_summary` is paired with the listing's wider select: it is the
 # one that can reach every field the formatter reads. The search path sends
@@ -53,10 +61,30 @@ from outlook_mcp.tools import calendar_read, contacts, mail_read
 # guard's second direction says that generally, for every field, so the one-off
 # could go.
 _PAIRS = [
-    ("mail summary", mail_read._format_message_summary, mail_read.SUMMARY_SELECT),
-    ("contact summary", contacts._format_contact_summary, contacts._LIST_SELECT),
-    ("event summary", calendar_read._format_event_summary, calendar_read._SUMMARY_SELECT),
-    ("event concise", calendar_read._format_event_concise, calendar_read._CONCISE_SELECT),
+    (
+        "mail summary",
+        mail_read._format_message_summary,
+        mail_read.SUMMARY_SELECT,
+        "mail_read.SUMMARY_SELECT",
+    ),
+    (
+        "contact summary",
+        contacts._format_contact_summary,
+        contacts._LIST_SELECT,
+        "contacts._LIST_SELECT",
+    ),
+    (
+        "event summary",
+        calendar_read._format_event_summary,
+        calendar_read._SUMMARY_SELECT,
+        "calendar_read._SUMMARY_SELECT",
+    ),
+    (
+        "event concise",
+        calendar_read._format_event_concise,
+        calendar_read._CONCISE_SELECT,
+        "calendar_read._CONCISE_SELECT",
+    ),
 ]
 
 # The SDK renames exactly one field to dodge the Python keyword.
@@ -141,8 +169,8 @@ def _fields_read_from(func, _seen: frozenset[str] = frozenset()) -> set[str]:
     return found
 
 
-@pytest.mark.parametrize("label,formatter,select", _PAIRS, ids=[p[0] for p in _PAIRS])
-def test_the_select_covers_every_field_its_formatter_reads(label, formatter, select):
+@pytest.mark.parametrize("label,formatter,select,_constant", _PAIRS, ids=[p[0] for p in _PAIRS])
+def test_the_select_covers_every_field_its_formatter_reads(label, formatter, select, _constant):
     selected = {field.strip() for field in select.split(",")}
     required = {_graph_name(attr) for attr in _fields_read_from(formatter)}
 
@@ -155,8 +183,8 @@ def test_the_select_covers_every_field_its_formatter_reads(label, formatter, sel
     )
 
 
-@pytest.mark.parametrize("label,formatter,select", _PAIRS, ids=[p[0] for p in _PAIRS])
-def test_the_select_asks_for_nothing_its_formatter_ignores(label, formatter, select):
+@pytest.mark.parametrize("label,formatter,select,_constant", _PAIRS, ids=[p[0] for p in _PAIRS])
+def test_the_select_asks_for_nothing_its_formatter_ignores(label, formatter, select, _constant):
     """The other end of the same mistake: paying Graph for unread fields."""
     selected = {field.strip() for field in select.split(",")}
     read = {_graph_name(attr) for attr in _fields_read_from(formatter)}
@@ -181,14 +209,11 @@ def test_a_field_read_through_a_helper_still_counts_as_read():
     assert "categories" in reads, "read through _categories"
 
 
-# A ``*_SELECT`` constant that deliberately has no ``_PAIRS`` row, and why.
-# Keep this as small as the reasons justify: every entry is a `$select` nothing
-# compares against its formatter.
+# A ``*_SELECT`` constant that deliberately has no ``_PAIRS`` row, and why,
+# spelled the same way as ``_PAIRS``' fourth column. Keep this as small as the
+# reasons justify: every entry is a `$select` nothing compares to its formatter.
 _UNENROLLED = {
-    (
-        "outlook_mcp.tools.contacts",
-        "_SUMMARY_SELECT",
-    ): (
+    "contacts._SUMMARY_SELECT": (
         "the search path's select, deliberately narrower than the listing's. "
         "`_format_contact_summary` omits the `categories` key entirely when the "
         "field was not selected, rather than reporting it empty, so the second "
@@ -199,20 +224,64 @@ _UNENROLLED = {
 }
 
 
-def _select_constants() -> dict[tuple[str, str], str]:
-    """Every module-level ``*_SELECT`` string under ``outlook_mcp.tools``."""
+def _select_constants() -> dict[str, str]:
+    """Every module-level ``*_SELECT`` string *defined* under ``outlook_mcp.tools``.
+
+    Keyed ``module._NAME``, which is how ``_PAIRS`` and ``_UNENROLLED`` spell a
+    constant, so all three compare without a second convention.
+
+    Defined, not merely present: ``vars(module)`` also returns imported names, so
+    ``mail_drafts`` and ``mail_thread`` — which do
+    ``from mail_read import SUMMARY_SELECT`` and hand it to ``mail_read``'s own
+    formatter — would each look like an unenrolled constant. Demanding a row for
+    those asks for three rows pinning one pair, which is the duplication #65
+    removed. The assignment is read off the module's own AST instead, so a
+    re-export is invisible and a genuine second constant is not.
+    """
     import importlib
     import pkgutil
 
     import outlook_mcp.tools
 
-    found: dict[tuple[str, str], str] = {}
+    found: dict[str, str] = {}
     for info in pkgutil.iter_modules(outlook_mcp.tools.__path__):
         module = importlib.import_module(f"outlook_mcp.tools.{info.name}")
-        for name, value in vars(module).items():
+        tree = ast.parse(inspect.getsource(module))
+        assigned = {
+            target.id
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        } | {
+            node.target.id
+            for node in tree.body
+            if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
+        }
+        for name in assigned:
+            value = getattr(module, name, None)
             if name.endswith("_SELECT") and isinstance(value, str):
-                found[(module.__name__, name)] = value
+                found[f"{info.name}.{name}"] = value
     return found
+
+
+def test_each_pair_names_the_constant_it_pins():
+    """``_PAIRS``' fourth column is a name beside a value, so it gets a guard.
+
+    Nothing in the language ties ``"calendar_read._SUMMARY_SELECT"`` to the
+    object in the row. Let them drift and the enrolment test below would count a
+    constant as covered while the row it credits pins a different string — the
+    same two-halves-of-one-contract shape this whole file exists for.
+    """
+    import importlib
+
+    for label, _, select, constant in _PAIRS:
+        module_name, attr = constant.split(".")
+        module = importlib.import_module(f"outlook_mcp.tools.{module_name}")
+        assert getattr(module, attr) is select, (
+            f"{label}: the row names {constant}, which is not the string the row "
+            f"actually checks. One of the two was edited without the other."
+        )
 
 
 def test_every_select_constant_is_enrolled():
@@ -224,34 +293,36 @@ def test_every_select_constant_is_enrolled():
     releases while the guard it needed already existed, built for #65.
 
     So the enrolment is derived rather than remembered: every module-level
-    ``*_SELECT`` under ``outlook_mcp.tools`` must appear in ``_PAIRS`` or be
-    named in ``_UNENROLLED`` with a reason. Matching is by value, because that
-    is what a row actually checks — a second constant holding a string already
-    enrolled is the same contract under another name, and is covered.
+    ``*_SELECT`` under ``outlook_mcp.tools`` is named in ``_PAIRS`` or in
+    ``_UNENROLLED`` with a reason.
 
-    ``_UNENROLLED`` is asserted to be live in both directions: an entry naming a
+    Enrolment is **by constant, not by value.** Matching values looks equivalent
+    and is not: ``DETAIL_SELECT = _SUMMARY_SELECT`` is the same object, so a new
+    formatter reading a field the shared string does not name would be counted
+    as covered by the *other* formatter's row while nothing checked it. A row
+    pins a (formatter, select) pair, so two formatters sharing one select need
+    two rows.
+
+    ``_UNENROLLED`` is asserted live in both directions: an entry naming a
     constant that no longer exists is removed rather than left as a comment
     about nothing.
     """
     constants = _select_constants()
-    enrolled = {select for _, _, select in _PAIRS}
+    enrolled = {constant for *_, constant in _PAIRS}
 
-    stale = sorted(key for key in _UNENROLLED if key not in constants)
+    stale = sorted(set(_UNENROLLED) - set(constants))
     assert not stale, (
         f"_UNENROLLED names {stale}, which no longer exist. Drop the entry — an "
         f"exemption for a constant that is gone reads as coverage."
     )
 
-    missing = sorted(
-        f"{module.split('.')[-1]}.{name}"
-        for (module, name), select in constants.items()
-        if select not in enrolled and (module, name) not in _UNENROLLED
-    )
+    missing = sorted(set(constants) - enrolled - set(_UNENROLLED))
     assert not missing, (
         f"{missing} is a $select with no _PAIRS row, so nothing checks it against "
         f"the formatter that reads its response. That is #65 and #69 — both shipped "
         f"exactly this way. Add a row, or add it to _UNENROLLED with the reason an "
-        f"honest row is impossible."
+        f"honest row is impossible. Sharing a value with an enrolled constant is "
+        f"not coverage: a row pins a formatter, and yours is a different one."
     )
 
 
