@@ -107,6 +107,29 @@ def test_wrap_404_item_not_found_hint():
     assert "stale" in wrapped.action.lower() or "re-list" in wrapped.action.lower()
 
 
+def test_wrap_412_conflict_says_nothing_changed_and_to_re_read():
+    """412 is the one status a caller reaches by losing a race, not by being wrong.
+
+    `outlook_update_event` pins its recurrence re-send to the version it read, so
+    a concurrent edit conflicts instead of being silently reverted. Graph's own
+    message talks about "change keys", which tells an agent nothing about what to
+    do — the hint has to say that nothing was written and the retry is a re-read.
+    """
+    exc = _make_odata_error(
+        412,
+        "ErrorIrresolvableConflict",
+        "The send or update operation could not be performed because the change key "
+        "passed in the request does not match the current change key for the item.",
+    )
+    wrapped = wrap_graph_error(exc)
+    assert wrapped.status_code == 412
+    assert wrapped.action is not None
+    # Both halves matter: a retry hint that does not say the write was refused
+    # invites the agent to assume a partial update it then has to reconcile.
+    assert "nothing was modified" in wrapped.action.lower()
+    assert "re-read" in wrapped.action.lower()
+
+
 def test_wrap_429_rate_limit_hint():
     """429 mentions Retry-After and backoff."""
     exc = _make_odata_error(429, "TooManyRequests", "Rate limited")

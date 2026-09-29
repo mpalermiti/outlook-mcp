@@ -49,15 +49,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   whatever zone it is sent, so there is nothing to apply and silently substituting UTC would
   report success for work not done.
 
-  **A recurrence-only update now uses the event's own day, not UTC's.** Graph returns the stored
-  start projected into UTC and names the event's zone in Windows terms ("Pacific Standard Time")
-  for anything it was not handed an IANA name for — which Python maps to nothing. So an
-  Outlook-created event at 18:00 Pacific, stored as `02:00Z` the next day, built a series on the
-  wrong weekday, a full day late, and Graph accepted it. Rather than carry a Windows-to-IANA
-  table, the event is re-read with `Prefer: outlook.timezone` and Graph does the projection —
-  verified live to be honoured on the SDK's own request builder, so this adds no raw-HTTP path and
-  inherits kiota's retries. The second read happens only when the anchor cannot be resolved
-  locally; events this server creates carry IANA names and need one GET as before.
+  Re-sending the recurrence is the only place this tool hands back state it read rather than state
+  the caller supplied, so that patch is pinned to the version it read (`If-Match`). A client that
+  re-patterns the series between the read and the write now gets `412` — with a hint saying nothing
+  was modified and to re-read — instead of having its change silently reverted to the pattern this
+  call happened to see. Every other field is still last-writer-wins: the caller supplied those and
+  means them. Verified live on a consumer mailbox, on the SDK's own request builder.
 
   Completes items 1 and 2 of #77. Split start/end zones on *creation* (item 3) remain deferred:
   `outlook_create_event` still takes one `timezone`, and `outlook_update_event` preserves a split
@@ -88,6 +85,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   goes 70 → 68 (the two schemas were among the smallest on the surface).
 
 ### Fixed
+
+- **A recurrence-only `outlook_update_event` built the series on UTC's day, not the event's.**
+  Graph returns the stored start projected into UTC and names the event's zone in Windows terms
+  ("Pacific Standard Time") for anything it was not handed an IANA name for — which Python maps to
+  nothing. So an Outlook-created event at 18:00 Pacific, stored as `02:00Z` the next day, became a
+  series on the wrong weekday, a full day late, and Graph accepted it silently. Rather than carry a
+  Windows-to-IANA table, the event is re-read with `Prefer: outlook.timezone` and Graph does the
+  projection — verified live to be honoured on the SDK's own request builder, so this adds no
+  raw-HTTP path and inherits kiota's retries. The second read happens only when the anchor cannot
+  be resolved locally; events this server creates carry IANA names and need one GET as before.
+  This is item 2 of #77, and it replaces a test that pinned the wrong answer deliberately.
 
 - **Calendar events are anchored in a real time zone, so recurring series survive daylight
   saving.** `outlook_create_event` labelled every `start` and `end` with the literal

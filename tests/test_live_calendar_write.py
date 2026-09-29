@@ -895,22 +895,126 @@ class TestReAnchoringAnExistingEvent:
             assert after["original_start_time_zone"] != "UTC"
             assert after["recurrence"]["range"]["numberOfOccurrences"] == 2
 
-    async def test_a_zone_with_no_times_never_reaches_graph(
+    async def test_graph_refuses_a_start_patch_that_carries_no_zone(
         self, real_graph_client, live_write_config
     ):
-        """We refuse this locally; the point is that the local rule matches Graph's.
+        """The rule the `timezone` argument's whole shape rests on, pinned live.
 
-        Graph answers a `start` patch carrying no `timeZone` with
-        `TimeZoneNotSupportedException` on the empty string, so there is no
-        shape in which a lone zone is a valid patch.
+        `update_event` refuses a lone `timezone` locally, and the reason given in
+        four docstrings is that Graph rejects a `start` patch carrying no
+        `timeZone` — so the zone can never be an independent edit. That claim is
+        about someone else's service and nothing verified it: the offline test
+        asserts our refusal, which would keep passing if Graph relaxed the rule
+        and the argument's shape became unnecessary.
+
+        Probed through raw Graph rather than the tool, because the tool cannot
+        construct the payload under test. Both shapes answer the same way, so
+        the omitted key is not a special case:
+
+            {"start": {"dateTime": ...}}                 -> 400 …not supported: ''
+            {"start": {"dateTime": ..., "timeZone": ""}} -> 400 …not supported: ''
         """
-        with pytest.raises(ValueError, match="requires start and end"):
-            await update_event(
-                real_graph_client.sdk_client,
-                event_id="AAMkAGdoesnotmatter=",
-                timezone=_DST_ZONE,
-                config=live_write_config,
+        import httpx
+
+        monday = _anchor_monday()
+        token = real_graph_client.credential.get_token(
+            "https://graph.microsoft.com/.default"
+        ).token
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" tz-zoneless-start",
+            start=f"{monday.isoformat()}T09:00:00",
+            end=f"{monday.isoformat()}T09:30:00",
+            timezone=_EAST,
+        ) as event_id:
+            for payload in (
+                {"dateTime": f"{monday.isoformat()}T11:00:00"},
+                {"dateTime": f"{monday.isoformat()}T11:00:00", "timeZone": ""},
+            ):
+                refused = httpx.patch(
+                    f"https://graph.microsoft.com/v1.0/me/events/{event_id}",
+                    headers=headers,
+                    json={"start": payload},
+                    timeout=30,
+                )
+                assert refused.status_code == 400, (
+                    f"Graph accepted a start patch with no usable timeZone "
+                    f"({payload}) — it answered {refused.status_code}. The local "
+                    "refusal in `update_event` may no longer be needed; re-probe "
+                    "before relaxing it."
+                )
+                assert refused.json()["error"]["code"] == "TimeZoneNotSupportedException"
+
+            # And the local refusal still matches, so the tool never builds it.
+            with pytest.raises(ValueError, match="requires start and end"):
+                await update_event(
+                    real_graph_client.sdk_client,
+                    event_id=event_id,
+                    timezone=_DST_ZONE,
+                    config=live_write_config,
+                )
+
+    async def test_a_resent_recurrence_is_pinned_to_the_version_it_read(
+        self, real_graph_client, live_write_config
+    ):
+        """`If-Match` is honoured on a consumer event, so the re-send cannot clobber.
+
+        The re-anchor path reads a series master's recurrence and sends it back,
+        which is the one thing in this tool that can revert an edit nobody asked
+        to overwrite. It pins the patch to the change key it read; this is the
+        live proof that Graph enforces the pin rather than ignoring the header —
+        a header Graph ignored would make the offline guards describe protection
+        that does not exist.
+        """
+        import httpx
+
+        monday = _anchor_monday()
+        token = real_graph_client.credential.get_token(
+            "https://graph.microsoft.com/.default"
+        ).token
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" tz-if-match",
+            start=f"{monday.isoformat()}T09:00:00",
+            end=f"{monday.isoformat()}T09:30:00",
+            timezone=_EAST,
+        ) as event_id:
+            url = f"https://graph.microsoft.com/v1.0/me/events/{event_id}"
+            current = httpx.get(url, headers=headers, timeout=30).json()
+            etag = current.get("@odata.etag")
+            assert etag, (
+                "Graph stopped returning @odata.etag on an event, so the re-send "
+                "has nothing to pin its patch to"
             )
+
+            stale = httpx.patch(
+                url,
+                headers={**headers, "If-Match": 'W/"AAAAAAAAAAAAAAAAAAAAAAAAAAAA"'},
+                json={"subject": current["subject"]},
+                timeout=30,
+            )
+            assert stale.status_code == 412, (
+                f"Graph ignored a stale If-Match (answered {stale.status_code}), so "
+                "pinning the recurrence re-send protects nothing — a concurrent "
+                "re-patterning would be silently reverted."
+            )
+            assert stale.json()["error"]["code"] == "ErrorIrresolvableConflict"
+
+            # The control: the same patch with the current change key is accepted,
+            # so the pin refuses conflicts rather than refusing everything.
+            fresh = httpx.patch(
+                url,
+                headers={**headers, "If-Match": etag},
+                json={"subject": current["subject"]},
+                timeout=30,
+            )
+            assert fresh.status_code == 200, fresh.text
 
     async def test_a_windows_anchored_evening_series_uses_its_local_day(
         self, real_graph_client, live_write_config

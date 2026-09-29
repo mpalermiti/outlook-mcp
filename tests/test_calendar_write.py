@@ -35,6 +35,12 @@ def _posted(mock_client):
     return mock_client.me.events.post.call_args[0][0]
 
 
+#: The change key Graph returns in `additional_data["@odata.etag"]`, in its real
+#: shape. Tests that assert the recurrence re-send pins its patch compare
+#: against this rather than re-typing it.
+CURRENT_ETAG = 'W/"a0B0kEE/hUqXUZYaDD6+nQAJKU6nXA=="'
+
+
 def _current_event(
     date_time: str = "2026-09-07T12:30:00.0000000",
     start_zone: str = "UTC",
@@ -42,6 +48,7 @@ def _current_event(
     event_type: str = "singleInstance",
     recurrence=None,
     is_all_day: bool = False,
+    etag: str | None = CURRENT_ETAG,
 ):
     """An event as Graph returns it from a plain GET.
 
@@ -64,6 +71,11 @@ def _current_event(
     # `update_event` reads this to decide whether to anchor the patch in UTC.
     # Left implicit, every mocked event looks like an all-day one.
     event.is_all_day = is_all_day
+    # Explicit for the same reason as `is_all_day`, and it bites harder: left to
+    # MagicMock, `additional_data` is truthy and `.get("@odata.etag")` hands back
+    # another MagicMock, so code reading the change key gets a value no Graph
+    # response contains and every assertion about it passes vacuously.
+    event.additional_data = {"@odata.etag": etag} if etag is not None else {}
     return event
 
 
@@ -1168,6 +1180,78 @@ class TestEventTimezone:
 
         assert builder.patch.call_args[0][0].recurrence is None
 
+    async def test_a_resent_recurrence_pins_the_patch_to_the_version_it_read(self):
+        """The re-send echoes back state it read, so it must not clobber a newer one.
+
+        Every other field in this patch is something the caller supplied; the
+        recurrence is the one thing read from Graph and handed straight back. A
+        concurrent re-patterning between the GET and the PATCH would therefore be
+        silently reverted to whatever this call read. `If-Match` turns that into
+        `412 ErrorIrresolvableConflict` instead, which `errors._HINT_TABLE`
+        answers with "re-read the item and send the update again".
+
+        Verified live on a consumer mailbox: a stale change key is refused and
+        the current one succeeds, on the SDK's own request builder.
+        """
+        current = _current_event(
+            date_time="2026-10-28T16:00:00.0000000",
+            start_zone="UTC",
+            event_type="seriesMaster",
+            recurrence=build_event_recurrence("weekly", start="2026-10-28T16:00:00Z"),
+        )
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-10-28T09:00:00",
+            end="2026-10-28T10:00:00",
+            timezone="America/Los_Angeles",
+            config=_CFG_LA,
+        )
+
+        # The header, not merely "a request configuration was passed" — a config
+        # carrying nothing, or the wrong change key, would pass that.
+        config_sent = builder.patch.call_args.kwargs["request_configuration"]
+        assert config_sent.headers.get("If-Match") == {CURRENT_ETAG}
+        # And the recurrence really did travel, so this is the pin on that patch
+        # rather than a header on an unrelated one.
+        assert builder.patch.call_args[0][0].recurrence is not None
+
+    async def test_a_patch_that_echoes_nothing_back_is_not_pinned(self):
+        """The control. Pinning every patch would be a different tool.
+
+        `update_event` is last-writer-wins by design everywhere else: the caller
+        supplied those values and means them. Only the read-and-echo path can
+        lose work nobody asked to overwrite, so only it conflicts.
+        """
+        current = _current_event(
+            date_time="2026-10-28T16:00:00.0000000", start_zone="America/Los_Angeles"
+        )
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            subject="Renamed",
+            start="2026-10-28T09:00:00",
+            end="2026-10-28T10:00:00",
+            timezone="America/New_York",
+            config=_CFG_LA,
+        )
+
+        assert "request_configuration" not in builder.patch.call_args.kwargs
+
     async def test_an_unchanged_zone_does_not_resend_the_recurrence(self):
         """The control. Same series, same zone, no re-send.
 
@@ -1558,9 +1642,19 @@ class TestEventTimezone:
             date_time="2026-11-04T18:00:00.0000000", start_zone="Pacific Standard Time"
         )
 
+        # Graph answers the local wall clock only when the request actually
+        # carries `Prefer: outlook.timezone` naming the event's own zone, so the
+        # mock keys on the header rather than on a request config being present
+        # at all: a version that sent an empty config, a misspelled preference
+        # or someone else's zone would otherwise pass this.
+        prefers = []
+
         def _get(request_configuration=None):
-            asked_for_local = request_configuration is not None
-            return local_view if asked_for_local else utc_view
+            preference = None
+            if request_configuration is not None:
+                preference = request_configuration.headers.get("Prefer")
+            prefers.append(preference)
+            return local_view if preference else utc_view
 
         builder = _make_event_builder()
         builder.get = AsyncMock(side_effect=_get)
@@ -1575,6 +1669,9 @@ class TestEventTimezone:
             config=_CFG_LA,
         )
 
+        assert prefers == [None, {'outlook.timezone="Pacific Standard Time"'}], (
+            f"the second read did not ask for the event's own zone: {prefers}"
+        )
         patched = builder.patch.call_args[0][0]
         assert patched.recurrence.pattern.days_of_week == [DayOfWeek.Wednesday]
         assert patched.recurrence.range.start_date == date(2026, 11, 4)

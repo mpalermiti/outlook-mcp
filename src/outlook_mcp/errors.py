@@ -228,6 +228,11 @@ _HINT_TABLE: dict[tuple[int, str | None], str] = {
     (404, "ErrorItemNotFound"): (
         "Resource not found. The ID may be stale — re-list to get current IDs."
     ),
+    (412, "ErrorIrresolvableConflict"): (
+        "Something else changed the item while this update was in flight, so Graph "
+        "refused it rather than overwrite that change. Nothing was modified — "
+        "re-read the item and send the update again."
+    ),
     (429, None): (
         "Rate limited by Microsoft Graph. "
         "Back off and retry; respect any Retry-After header."

@@ -108,9 +108,11 @@ async def _start_in_its_own_zone(graph_client: Any, event_id: str, zone: str) ->
     is honoured on the SDK's own request builder, so this needs no raw-httpx
     path and inherits kiota's retry handling rather than owing its own.
 
-    Returns ``None`` rather than raising if anything about the second read is
-    unusable — the caller then falls back to the date as written, which is what
-    it did before this existed.
+    Returns ``None`` when the second read comes back without a start — the
+    caller then falls back to the date as written, which is what it did before
+    this existed. A *failed* read is deliberately not caught: falling back
+    silently would rebuild the series on the UTC date, which is the wrong-day
+    bug this exists to fix, so the update fails instead of quietly doing that.
     """
     from kiota_abstractions.base_request_configuration import RequestConfiguration
 
@@ -568,6 +570,9 @@ async def update_event(
 
     start_zone: str | None = None
     end_zone: str | None = None
+    # Set only by the recurrence re-send below, which is the one path that
+    # echoes back state it read; see there for why the patch gets pinned.
+    if_match: str | None = None
     if start is not None or end is not None:
         existing_event = await current_event()
         if requested_zone is not None:
@@ -698,11 +703,30 @@ async def update_event(
         # rather than being filtered out by a truthiness check.
         if stored_zone != start_zone and _is_series_master(existing):
             event.recurrence = _resend_recurrence(existing, anchor=start, zone=start_zone)
+            # This is the only path here that sends back state it read rather
+            # than state the caller supplied, so it is the only one that can
+            # *lose* a concurrent edit: between the GET above and the PATCH
+            # below another client can re-pattern the series, and echoing the
+            # recurrence we read would silently restore the old pattern. Pin the
+            # patch to the version we read so Graph refuses instead —
+            # `412 ErrorIrresolvableConflict`, which `_HINT_TABLE` answers with
+            # what to do about it. Verified live on a consumer mailbox: a stale
+            # change key is refused and the current one succeeds, on the SDK's
+            # own request builder, so this owes no raw-HTTP path.
+            if_match = (getattr(existing, "additional_data", None) or {}).get("@odata.etag")
 
     if resolved_show_as is not None:
         event.show_as = resolved_show_as
 
-    response = await graph_client.me.events.by_event_id(event_id).patch(event)
+    request_builder = graph_client.me.events.by_event_id(event_id)
+    if if_match:
+        from kiota_abstractions.base_request_configuration import RequestConfiguration
+
+        patch_config = RequestConfiguration()
+        patch_config.headers.add("If-Match", if_match)
+        response = await request_builder.patch(event, request_configuration=patch_config)
+    else:
+        response = await request_builder.patch(event)
 
     return {
         "status": "updated",
