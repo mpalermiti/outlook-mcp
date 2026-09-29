@@ -582,7 +582,9 @@ class TestEventDetailRecurrence:
     def test_concise_mode_omits_type(self):
         from outlook_mcp.tools.calendar_read import _format_event_concise
 
-        concise = _format_event_concise(_make_mock_event(type=MagicMock(value="seriesMaster")))
+        # `occurrence`, like its sibling above: this formatter only ever sees a
+        # calendarView response, which never carries a master.
+        concise = _format_event_concise(_make_mock_event(type=MagicMock(value="occurrence")))
 
         assert "type" not in concise
 
