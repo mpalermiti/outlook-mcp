@@ -51,6 +51,36 @@ _SHORTHANDS = ("daily", "weekdays", "weekly", "monthly", "yearly")
 _OVERLONG_FRACTION = re.compile(r"(\.\d{6})\d+")
 
 
+def _object(value: Any, label: str) -> dict:
+    """``value`` as a JSON object, or a refusal naming ``label``.
+
+    ``None`` reads as absent. Anything else that is not a dict is refused rather
+    than probed: ``"type" in "daily"`` is a substring test, so a string where an
+    object belongs would otherwise build an empty pattern without complaint.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"recurrence {label} must be an object; got {type(value).__name__}")
+    return value
+
+
+def _integer(value: Any, label: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"recurrence {label} must be a whole number; got {value!r:.50}") from e
+
+
+def _iso_date(value: Any, label: str) -> date:
+    if not isinstance(value, str):
+        raise ValueError(f"recurrence {label} must be a YYYY-MM-DD string; got {value!r:.50}")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as e:
+        raise ValueError(f"recurrence {label} must be YYYY-MM-DD; got {value[:50]!r}") from e
+
+
 def build_patterned_recurrence(recurrence: dict) -> Any:
     """Convert a Graph JSON-shape recurrence dict into a typed PatternedRecurrence.
 
@@ -71,12 +101,15 @@ def build_patterned_recurrence(recurrence: dict) -> Any:
     if not isinstance(recurrence, dict):
         raise ValueError("recurrence must be a dict with 'pattern' and 'range' keys")
 
-    pattern_in = recurrence.get("pattern") or {}
-    range_in = recurrence.get("range") or {}
+    pattern_in = _object(recurrence.get("pattern"), "pattern")
+    range_in = _object(recurrence.get("range"), "range")
     if not pattern_in or not range_in:
         raise ValueError("recurrence must include both 'pattern' and 'range'")
 
     def _enum_lookup(enum_cls: Any, value: str, label: str) -> Any:
+        valid = [m.value for m in enum_cls]
+        if not isinstance(value, str):
+            raise ValueError(f"Invalid {label} {value!r:.50}. Must be one of: {valid}")
         # SDK enum members are PascalCase; Graph JSON uses camelCase
         try:
             return enum_cls(value)
@@ -85,19 +118,23 @@ def build_patterned_recurrence(recurrence: dict) -> Any:
             try:
                 return enum_cls[target]
             except KeyError as e:
-                valid = [m.value for m in enum_cls]
                 raise ValueError(f"Invalid {label} '{value}'. Must be one of: {valid}") from e
 
     pattern = RecurrencePattern()
     if "type" in pattern_in:
         pattern.type = _enum_lookup(RecurrencePatternType, pattern_in["type"], "pattern.type")
     if "interval" in pattern_in:
-        pattern.interval = int(pattern_in["interval"])
+        pattern.interval = _integer(pattern_in["interval"], "pattern.interval")
     if "month" in pattern_in:
-        pattern.month = int(pattern_in["month"])
+        pattern.month = _integer(pattern_in["month"], "pattern.month")
     if "dayOfMonth" in pattern_in:
-        pattern.day_of_month = int(pattern_in["dayOfMonth"])
+        pattern.day_of_month = _integer(pattern_in["dayOfMonth"], "pattern.dayOfMonth")
     if "daysOfWeek" in pattern_in:
+        if not isinstance(pattern_in["daysOfWeek"], list):
+            raise ValueError(
+                "recurrence pattern.daysOfWeek must be a list of day names, "
+                'e.g. ["monday"]'
+            )
         pattern.days_of_week = [
             _enum_lookup(DayOfWeek, d, "pattern.daysOfWeek") for d in pattern_in["daysOfWeek"]
         ]
@@ -112,12 +149,16 @@ def build_patterned_recurrence(recurrence: dict) -> Any:
     if "type" in range_in:
         rng.type = _enum_lookup(RecurrenceRangeType, range_in["type"], "range.type")
     if "startDate" in range_in:
-        rng.start_date = date.fromisoformat(range_in["startDate"])
+        rng.start_date = _iso_date(range_in["startDate"], "range.startDate")
     if "endDate" in range_in:
-        rng.end_date = date.fromisoformat(range_in["endDate"])
+        rng.end_date = _iso_date(range_in["endDate"], "range.endDate")
     if "numberOfOccurrences" in range_in:
-        rng.number_of_occurrences = int(range_in["numberOfOccurrences"])
+        rng.number_of_occurrences = _integer(
+            range_in["numberOfOccurrences"], "range.numberOfOccurrences"
+        )
     if "recurrenceTimeZone" in range_in:
+        if not isinstance(range_in["recurrenceTimeZone"], str):
+            raise ValueError("recurrence range.recurrenceTimeZone must be a zone name string")
         rng.recurrence_time_zone = range_in["recurrenceTimeZone"]
 
     pr = PatternedRecurrence()
@@ -231,7 +272,7 @@ def _reconcile_range(payload: dict, start: date) -> dict:
     default it; when they do send one, a mismatch is a mistake worth naming
     here rather than surfacing as an opaque 400.
     """
-    rng = dict(payload.get("range") or {})
+    rng = dict(_object(payload.get("range"), "range"))
     rng.setdefault("type", "noEnd")
 
     given = rng.get("startDate")
@@ -293,7 +334,7 @@ def check_recurrence_shape(recurrence: dict | str) -> None:
     arbitrary date here, since only the shape is kept.
     """
     payload = event_recurrence_payload(recurrence, date(2000, 1, 3))
-    rng = {k: v for k, v in (payload.get("range") or {}).items() if k != "startDate"}
+    rng = {k: v for k, v in _object(payload.get("range"), "range").items() if k != "startDate"}
     rng.setdefault("type", "noEnd")
     build_patterned_recurrence({**payload, "range": rng})
 
@@ -463,7 +504,11 @@ def build_event_recurrence(
     if drop_range_timezone and payload.get("range"):
         payload = {
             **payload,
-            "range": {k: v for k, v in payload["range"].items() if k != "recurrenceTimeZone"},
+            "range": {
+                k: v
+                for k, v in _object(payload["range"], "range").items()
+                if k != "recurrenceTimeZone"
+            },
         }
     return build_patterned_recurrence(_reconcile_range(payload, start_date))
 

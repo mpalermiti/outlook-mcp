@@ -418,3 +418,45 @@ class TestSamePattern:
 
         base = {"type": "weekly", "interval": 1, "daysOfWeek": ["thursday"]}
         assert same_pattern({**base, "firstDayOfWeek": "monday"}, base)
+
+
+_WRONG_TYPES = [
+    ({"pattern": {"type": "daily"}, "range": "invalid"}, "range must be an object"),
+    ({"pattern": {"type": "daily"}, "range": ["noEnd"]}, "range must be an object"),
+    ({"pattern": "daily", "range": {"type": "noEnd"}}, "pattern must be an object"),
+    ({"pattern": {"type": "daily", "interval": None}, "range": {"type": "noEnd"}},
+     "pattern.interval must be a whole number"),
+    ({"pattern": {"type": "weekly", "daysOfWeek": "monday"}, "range": {"type": "noEnd"}},
+     "daysOfWeek must be a list"),
+    ({"pattern": {"type": "weekly", "daysOfWeek": [1]}, "range": {"type": "noEnd"}},
+     "Invalid pattern.daysOfWeek 1"),
+    ({"pattern": {"type": 7}, "range": {"type": "noEnd"}}, "Invalid pattern.type 7"),
+    ({"pattern": {"type": "daily"}, "range": {"type": "numbered", "numberOfOccurrences": None}},
+     "numberOfOccurrences must be a whole number"),
+    ({"pattern": {"type": "daily"}, "range": {"type": "endDate", "endDate": 20270101}},
+     "endDate must be a YYYY-MM-DD string"),
+    ({"pattern": {"type": "daily"}, "range": {"type": "noEnd", "recurrenceTimeZone": 5}},
+     "recurrenceTimeZone must be a zone name string"),
+]
+
+
+class TestWrongJsonTypesAreRefusedByName:
+    """A value of the wrong JSON type is caller input, so it gets an input error.
+
+    These used to escape as `TypeError` / `AttributeError`, which the server
+    reports as a crash with the message withheld — or, for a string where the
+    pattern object belongs, were accepted: `"type" in "daily"` is a substring
+    test, so the converter built an empty pattern without complaint.
+    """
+
+    @pytest.mark.parametrize("recurrence,message", _WRONG_TYPES)
+    def test_the_converter_names_the_field(self, recurrence, message):
+        with pytest.raises(ValueError, match=message):
+            build_event_recurrence(recurrence, start=_START)
+
+    @pytest.mark.parametrize("recurrence,message", _WRONG_TYPES)
+    def test_the_up_front_shape_check_names_it_too(self, recurrence, message):
+        from outlook_mcp.tools._recurrence import check_recurrence_shape
+
+        with pytest.raises(ValueError, match=message):
+            check_recurrence_shape(recurrence)

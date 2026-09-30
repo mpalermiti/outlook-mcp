@@ -1561,6 +1561,10 @@ class TestEventTimezone:
                                 "range": {"type": "noEnd"}}},
                 "pattern.daysOfWeek",
             ),
+            (
+                {"recurrence": {"pattern": {"type": "daily"}, "range": "invalid"}},
+                "range must be an object",
+            ),
         ]
         for kwargs, expected in cases:
             builder = _make_event_builder()
