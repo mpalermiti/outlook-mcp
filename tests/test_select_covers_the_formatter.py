@@ -221,6 +221,14 @@ _UNENROLLED = {
         "listing's `_LIST_SELECT` — the widest one that formatter is used with "
         "— carries the row."
     ),
+    "calendar_write._OCCURRENCE_SELECT": (
+        "`subject` and `start` are read off the nested `exceptionOccurrences` "
+        "items, not off the master this guard models, and the nested projection "
+        "follows the top-level `$select` — verified live: without them each "
+        "exception comes back with both `None`. So the second direction would "
+        "demand dropping two fields the refusal needs. The refusal tests in "
+        "`test_calendar_write.py` pin all four selected fields instead."
+    ),
 }
 
 

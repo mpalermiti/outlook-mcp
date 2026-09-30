@@ -257,6 +257,139 @@ def _reconcile_range(payload: dict, start: date) -> dict:
     return {**payload, "range": rng}
 
 
+def event_recurrence_payload(recurrence: dict | str, start_date: date) -> dict:
+    """Any accepted recurrence shape, as the Graph JSON object it stands for.
+
+    A dict is copied, a JSON string decoded, and a shorthand expanded against
+    ``start_date``. Nothing is reconciled yet — that is ``build_event_recurrence``'s
+    job — so a caller can adjust the payload in between.
+    """
+    if isinstance(recurrence, dict):
+        return dict(recurrence)
+    if not isinstance(recurrence, str):
+        raise ValueError(
+            "recurrence must be a Graph recurrence object, a JSON string of one, "
+            f"or one of: {list(_SHORTHANDS)}"
+        )
+    text = recurrence.strip()
+    if not text.startswith(("{", "[")):
+        return _expand_shorthand(text, start_date)
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"recurrence is not valid JSON: {e}") from e
+    if not isinstance(parsed, dict):
+        raise ValueError("recurrence JSON must be an object with 'pattern' and 'range' keys")
+    return parsed
+
+
+def _pattern_key(pattern: Any) -> tuple | None:
+    """The fields that decide which days a pattern lands on, for comparison.
+
+    Graph fills in defaults on read — a weekly pattern comes back carrying
+    ``month: 0``, ``dayOfMonth: 0`` and ``index: "first"`` — so comparing whole
+    dicts would call a hand-written pattern different from the stored one it
+    describes. Only the fields the pattern's type actually reads take part.
+    """
+    if not isinstance(pattern, dict) or not pattern.get("type"):
+        return None
+    kind = str(pattern["type"])
+    key: tuple = (kind.lower(), int(pattern.get("interval") or 1))
+    if kind in ("weekly", "relativeMonthly", "relativeYearly"):
+        key += (frozenset(str(d).lower() for d in pattern.get("daysOfWeek") or ()),)
+    if kind in ("absoluteMonthly", "absoluteYearly"):
+        key += (pattern.get("dayOfMonth"),)
+    if kind in ("absoluteYearly", "relativeYearly"):
+        key += (pattern.get("month"),)
+    if kind in ("relativeMonthly", "relativeYearly"):
+        key += (str(pattern.get("index") or "first").lower(),)
+    return key
+
+
+def same_pattern(a: Any, b: Any) -> bool:
+    """Whether two Graph patterns schedule the same days."""
+    key = _pattern_key(a)
+    return key is not None and key == _pattern_key(b)
+
+
+def _refuse_move(kind: str, old: date, new: date, why: str) -> ValueError:
+    return ValueError(
+        f"This series' {kind} pattern was set up for a series starting "
+        f"{old.isoformat()}, and the new start falls on {new.isoformat()} in the "
+        f"event's zone. {why} Pass `recurrence` with the pattern you want alongside "
+        f"`start`, and it is sent as given."
+    )
+
+
+def move_pattern(payload: dict, *, old: date, new: date) -> dict:
+    """``payload``'s pattern moved from a series starting ``old`` to one starting ``new``.
+
+    A series' pattern names days — ``daysOfWeek``, ``dayOfMonth`` — and those
+    days belong to its start date. Re-deriving ``range.startDate`` alone moves
+    the range and leaves the pattern behind: a Thursday 02:00Z series
+    re-anchored to Los Angeles starts on Wednesday at 18:00 but still says
+    ``daysOfWeek: ["thursday"]``, and Graph schedules every occurrence on
+    Thursday. Verified live — reported as ``updated``, every instance a day late.
+
+    So the pattern moves by the same number of days the start did. Weekly days
+    shift together, and ``firstDayOfWeek`` with them, so a fortnightly
+    Sunday-and-Monday series stays one block rather than being split across
+    the week boundary. Absolute patterns take the new date's day (and month,
+    for yearly), provided the stored pattern was anchored on the old one.
+
+    Refused, rather than approximated, where the moved series has no exact
+    expression: a relative pattern ("the first Thursday") whose day moves, and a
+    monthly one pushed into a neighbouring month — the day before "the 1st" is
+    not any one ``dayOfMonth``.
+    """
+    delta = (new - old).days
+    pattern = dict(payload.get("pattern") or {})
+    kind = str(pattern.get("type") or "")
+    if delta == 0 or kind == "daily":
+        return payload
+
+    if kind == "weekly":
+
+        def shifted(day: Any) -> str:
+            return _WEEKDAYS[(_WEEKDAYS.index(str(day).lower()) + delta) % 7]
+
+        pattern["daysOfWeek"] = [shifted(d) for d in pattern.get("daysOfWeek") or ()]
+        if pattern.get("firstDayOfWeek"):
+            pattern["firstDayOfWeek"] = shifted(pattern["firstDayOfWeek"])
+    elif kind in ("absoluteMonthly", "absoluteYearly"):
+        anchored = pattern.get("dayOfMonth") == old.day and (
+            kind == "absoluteMonthly" or pattern.get("month") == old.month
+        )
+        if not anchored:
+            raise _refuse_move(
+                kind,
+                old,
+                new,
+                "Its day does not match that start date, so there is no telling what "
+                "moving it should mean.",
+            )
+        if kind == "absoluteMonthly" and (new.year, new.month) != (old.year, old.month):
+            raise _refuse_move(
+                kind,
+                old,
+                new,
+                "That crosses into a different month, which no single dayOfMonth "
+                "expresses.",
+            )
+        pattern["dayOfMonth"] = new.day
+        if kind == "absoluteYearly":
+            pattern["month"] = new.month
+    else:
+        raise _refuse_move(
+            kind or "unknown",
+            old,
+            new,
+            "A relative pattern cannot be moved by a day and stay exact: the day "
+            "before the first Thursday is not always the first Wednesday.",
+        )
+    return {**payload, "pattern": pattern}
+
+
 def build_event_recurrence(
     recurrence: dict | str,
     *,
@@ -304,28 +437,7 @@ def build_event_recurrence(
     (``errors._HINT_TABLE``).
     """
     start_date = event_start_date(start, zone)
-
-    if isinstance(recurrence, str):
-        text = recurrence.strip()
-        if text.startswith(("{", "[")):
-            try:
-                parsed = json.loads(text)
-            except json.JSONDecodeError as e:
-                raise ValueError(f"recurrence is not valid JSON: {e}") from e
-            if not isinstance(parsed, dict):
-                raise ValueError(
-                    "recurrence JSON must be an object with 'pattern' and 'range' keys"
-                )
-            payload = parsed
-        else:
-            payload = _expand_shorthand(text, start_date)
-    elif isinstance(recurrence, dict):
-        payload = dict(recurrence)
-    else:
-        raise ValueError(
-            "recurrence must be a Graph recurrence object, a JSON string of one, "
-            f"or one of: {list(_SHORTHANDS)}"
-        )
+    payload = event_recurrence_payload(recurrence, start_date)
 
     if drop_range_timezone and payload.get("range"):
         payload = {

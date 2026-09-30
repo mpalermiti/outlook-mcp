@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from outlook_mcp.config import Config
 from outlook_mcp.permissions import CATEGORY_CALENDAR_WRITE, check_permission
 from outlook_mcp.tools._recurrence import (
     build_event_recurrence,
+    event_recurrence_payload,
+    event_start_date,
     maybe_zone,
+    move_pattern,
+    same_pattern,
     serialize_recurrence,
 )
 from outlook_mcp.validation import (
@@ -113,6 +118,12 @@ async def _start_in_its_own_zone(graph_client: Any, event_id: str, zone: str) ->
     this existed. A *failed* read is deliberately not caught: falling back
     silently would rebuild the series on the UTC date, which is the wrong-day
     bug this exists to fix, so the update fails instead of quietly doing that.
+
+    For the same reason a start projected into any zone but the one asked for is
+    refused. Graph echoes the requested name back verbatim in ``start.timeZone``
+    — verified live for both a Windows and an IANA name — so a mismatch means the
+    header was not honoured, and the text beside it is UTC or worse. Read as
+    local time it builds a wrong-day series that looks like success.
     """
     from kiota_abstractions.base_request_configuration import RequestConfiguration
 
@@ -121,8 +132,125 @@ async def _start_in_its_own_zone(graph_client: Any, event_id: str, zone: str) ->
     localized = await graph_client.me.events.by_event_id(event_id).get(
         request_configuration=request_config
     )
-    date_time = getattr(getattr(localized, "start", None), "date_time", None)
-    return str(date_time) if date_time else None
+    start = getattr(localized, "start", None)
+    date_time = getattr(start, "date_time", None)
+    if not date_time:
+        return None
+    projected = getattr(start, "time_zone", None)
+    if projected != zone:
+        raise ValueError(
+            f"Asked Graph for this event's start in {zone!r} and got it in "
+            f"{projected!r}, so the day its series falls on cannot be trusted. "
+            f"Nothing was modified. Pass `start` alongside `recurrence` to anchor "
+            f"the series explicitly."
+        )
+    return str(date_time)
+
+
+# Graph discards a series' edited and deleted occurrences whenever its master's
+# times or recurrence change, and says nothing. Measured live on a consumer
+# mailbox, one edited and one deleted occurrence each time: moving the start an
+# hour in the same zone, moving only the end, re-anchoring into another zone,
+# extending the range and adding a weekday all restored both, while a subject
+# patch and a recurrence re-sent unchanged kept them. So the loss follows the
+# change to the series' shape, not the recurrence a zone change carries along.
+#
+# A plain GET leaves both collections out, so they are asked for by name; the
+# nested exceptions take the same projection, which is why `subject` and `start`
+# are here. `_occurrences_a_series_change_discards` is the half that reads them.
+_OCCURRENCE_SELECT = "subject,start,cancelledOccurrences,exceptionOccurrences"
+
+
+def _cancelled_date(occurrence_id: Any) -> str:
+    """The date Graph encodes at the end of a cancelled occurrence's id.
+
+    Graph lists a deleted occurrence as ``OID.<master id>.2026-11-16`` rather
+    than as an event, so the date is the only thing there is to name.
+    """
+    return str(occurrence_id).rsplit(".", 1)[-1]
+
+
+def _occurrences_a_series_change_discards(master: Any) -> list[str]:
+    """Each edited or deleted occurrence of ``master``, described for a refusal.
+
+    Fails closed: a read that omits either collection cannot say the series is
+    clean, and a guess here is how data goes missing without an error.
+    """
+    cancelled = getattr(master, "cancelled_occurrences", None)
+    edited = getattr(master, "exception_occurrences", None)
+    if cancelled is None or edited is None:
+        raise ValueError(
+            "Could not read which occurrences of this series have been edited or "
+            "deleted, and changing a series' times or recurrence discards them. "
+            "Nothing was modified."
+        )
+    return [
+        f"edited {getattr(getattr(e, 'start', None), 'date_time', '?')} UTC "
+        f"({getattr(e, 'subject', None) or 'no subject'})"
+        for e in edited
+    ] + [f"deleted {_cancelled_date(c)}" for c in cancelled]
+
+
+async def _refuse_to_discard_occurrences(graph_client: Any, event_id: str) -> None:
+    """Refuse a times or recurrence change to a master with edited or deleted occurrences."""
+    from kiota_abstractions.base_request_configuration import RequestConfiguration
+    from msgraph.generated.users.item.events.item.event_item_request_builder import (
+        EventItemRequestBuilder,
+    )
+
+    query = EventItemRequestBuilder.EventItemRequestBuilderGetQueryParameters(
+        select=_OCCURRENCE_SELECT.split(",")
+    )
+    master = await graph_client.me.events.by_event_id(event_id).get(
+        request_configuration=RequestConfiguration(query_parameters=query)
+    )
+    lost = _occurrences_a_series_change_discards(master)
+    if not lost:
+        return
+    raise ValueError(
+        f"Changing this series' times or recurrence would discard {len(lost)} "
+        f"occurrence change(s) — Graph restores every edited and deleted occurrence "
+        f"when a series is reshaped, without saying so: {'; '.join(lost)}. Nothing was "
+        f"modified. To keep them, change individual occurrences instead. To accept "
+        f"losing them, make the change in Outlook, which asks before discarding."
+    )
+
+
+def _follow_new_start(payload: dict, existing: Any, *, start: str, zone: str | None) -> dict:
+    """A recurrence payload made to agree with a new ``start``.
+
+    ``range.startDate`` is dropped so the builder re-derives it from ``start``:
+    a series whose start moves has to move its range with it, and Graph refuses
+    a range beginning on a different day than the first occurrence.
+
+    The pattern moves too when it is the series' own — the one Graph holds,
+    whether read back here for a zone change or handed back by the caller from
+    ``outlook_get_event``. Its days belong to the stored start, so they move by
+    as many days as the start did; see ``move_pattern``. A pattern that differs
+    from the stored one is the caller's new instruction, written for the new
+    start, and is sent as given.
+    """
+    rng = {k: v for k, v in (payload.get("range") or {}).items() if k != "startDate"}
+    payload = {**payload, "range": rng}
+
+    stored = serialize_recurrence(getattr(existing, "recurrence", None)) or {}
+    if not _is_series_master(existing) or not same_pattern(
+        payload.get("pattern"), stored.get("pattern")
+    ):
+        return payload
+
+    stored_start = (stored.get("range") or {}).get("startDate")
+    if not stored_start:
+        raise ValueError(
+            "Could not read the date this series currently starts on, so there is no "
+            "telling whether its days have to move with the new start. Pass "
+            "`recurrence` with the pattern you want alongside `start`."
+        )
+    return move_pattern(
+        payload,
+        old=date.fromisoformat(str(stored_start)),
+        new=event_start_date(start, zone),
+    )
 
 
 def _resend_recurrence(event: Any, *, anchor: str | None, zone: str | None) -> Any:
@@ -135,13 +263,14 @@ def _resend_recurrence(event: Any, *, anchor: str | None, zone: str | None) -> A
     ``serialize_recurrence`` omits what is unset, and the strict builder then
     produces a fresh model carrying only the fields Graph actually sent.
 
-    Two range fields are dropped rather than echoed:
+    It never returns ``None``. A master that comes back without a readable
+    recurrence cannot have its zone changed at all — Graph refuses the patch
+    unless one travels with it — and assigning ``None`` to ``event.recurrence``
+    is the unsendable-null shape from #63/#64 besides.
 
-    ``startDate``, so the builder re-derives it from ``anchor`` — a patch that
-    moves the series to a different day has to move the range with it, and Graph
-    refuses a range beginning on a different day than the first occurrence.
-
-    ``recurrenceTimeZone``, because it is the *old* zone. Sending it back beside
+    ``startDate`` is dropped and the pattern moved with the start; see
+    ``_follow_new_start``. ``recurrenceTimeZone`` is dropped because it is the
+    *old* zone. Sending it back beside
     a new ``start.timeZone`` is a self-contradictory patch, and Graph answers
     the contradiction with the same opaque ``400
     ErrorPropertyValidationFailure`` this function exists to avoid. Omitted,
@@ -151,7 +280,11 @@ def _resend_recurrence(event: Any, *, anchor: str | None, zone: str | None) -> A
     """
     payload = serialize_recurrence(getattr(event, "recurrence", None))
     if not payload:
-        return None
+        raise ValueError(
+            "This series came back without a readable recurrence, and Graph refuses "
+            "to change a series' zone unless its recurrence travels with the patch. "
+            "Nothing was modified. Pass `recurrence` alongside `timezone`."
+        )
 
     start = anchor or getattr(getattr(event, "start", None), "date_time", None)
     if not start:
@@ -160,12 +293,9 @@ def _resend_recurrence(event: Any, *, anchor: str | None, zone: str | None) -> A
             "for a timezone change; pass `start` and `end` alongside `timezone`."
         )
 
-    # `startDate` is dropped here so the builder re-derives it from `start`;
     # `recurrenceTimeZone` is dropped by the builder itself, which is the one
     # place that knows why (see `drop_range_timezone`).
-    payload["range"] = {
-        k: v for k, v in (payload.get("range") or {}).items() if k != "startDate"
-    }
+    payload = _follow_new_start(payload, event, start=start, zone=zone)
     return build_event_recurrence(payload, start=start, zone=zone, drop_range_timezone=True)
 
 
@@ -453,6 +583,13 @@ async def update_event(
     as controls. When the caller has not supplied a new recurrence the event's
     existing one is read and sent back, so a series created before events
     carried a zone can be repaired in place rather than deleted and rebuilt.
+    Its days move with the start's local date (``_follow_new_start``): a
+    Thursday 02:00Z series re-anchored to Los Angeles becomes a Wednesday one.
+
+    Any ``start``, ``end`` or ``recurrence`` patch to a series master that has
+    edited or deleted occurrences is refused, naming them. Graph restores every
+    one of them when a master's times or pattern change — zone or not — and
+    reports success. Measured live; see ``_OCCURRENCE_SELECT``.
 
     It cannot be combined with an all-day event, and that is refused rather than
     ignored: Graph stores an all-day event anchored in UTC whatever zone it is
@@ -468,7 +605,10 @@ async def update_event(
     Setting ``recurrence`` turns a single event into a series, or replaces the
     pattern of an existing one. It takes the same shapes as ``create_event``.
     Graph anchors the range on the series master's start, so when ``start``
-    isn't part of the same patch the event's current start is read first.
+    isn't part of the same patch the event's current start is read first. When
+    it is, a supplied ``range.startDate`` is dropped and re-derived from it, and
+    a pattern equal to the stored one moves with it — so ``outlook_get_event``'s
+    recurrence can be handed back beside a new start and zone.
     Passing ``None`` leaves any existing recurrence untouched — this is a
     partial patch.
 
@@ -602,6 +742,14 @@ async def update_event(
                 raise ValueError(_ALL_DAY_ZONE_REFUSAL)
             start_zone = end_zone = "UTC"
 
+    # Last of the checks, because it is the only one that costs a second read,
+    # and only a master can have occurrences to lose. `remove_recurrence` is left
+    # out on purpose: collapsing the series is what it asks for.
+    if (start is not None or end is not None or recurrence is not None) and (
+        _is_series_master(await current_event())
+    ):
+        await _refuse_to_discard_occurrences(graph_client, event_id)
+
     def _anchored(zone: str | None, which: str) -> str:
         if zone is None:
             raise ValueError(
@@ -672,6 +820,17 @@ async def update_event(
                 localized = await _start_in_its_own_zone(graph_client, event_id, anchor_zone)
                 if localized:
                     anchor = localized
+        else:
+            # A new start re-derives the range, so a `startDate` handed back from
+            # `outlook_get_event` is stale by definition rather than a mistake to
+            # refuse — and when the pattern is the series' own, its days move
+            # with the start. One place, shared with the zone-change re-send.
+            recurrence = _follow_new_start(
+                event_recurrence_payload(recurrence, event_start_date(anchor, anchor_zone)),
+                await current_event(),
+                start=anchor,
+                zone=anchor_zone,
+            )
         event.recurrence = build_event_recurrence(
             recurrence,
             start=anchor,

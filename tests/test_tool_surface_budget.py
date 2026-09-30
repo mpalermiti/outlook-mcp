@@ -42,6 +42,11 @@ CHARS_PER_TOKEN = 4
 # the surface), and the attachment-path docstrings stopped naming a default
 # an override moves anyway (+22). Ceiling 13,300 holds ~1% headroom: room
 # for a wording fix, not for another batch.
+#
+# 13,211 with `outlook_update_event`'s `timezone` argument and the one docstring
+# sentence that says it re-anchors (+55). Its refusals — occurrences a time move
+# would discard, a pattern that cannot move exactly — carry their own remedies
+# in the error text rather than in the schema every turn pays for.
 TOOL_SURFACE_CEILING = 13_300
 
 # `prompts/list` is the cheap half of the bargain struck in 1.20.0: workflow

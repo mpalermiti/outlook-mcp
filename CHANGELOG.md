@@ -37,13 +37,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   so Graph re-derives them from the new anchor — echoing the stale zone back beside a new
   `start.timeZone` produces the same opaque 400 this exists to avoid.
 
+  The pattern's days move with the anchor's local date. A US evening series stored as Thursday
+  02:00Z is Wednesday 18:00 in Los Angeles; re-deriving only `startDate` sent a Wednesday start
+  beside `daysOfWeek: ["thursday"]`, and Graph put every occurrence on Thursday, reported as
+  `updated`. Weekly days shift together (with `firstDayOfWeek`, so a fortnightly block stays one
+  block), and absolute monthly and yearly patterns take the new date's day. Where the moved series
+  has no exact expression — a relative pattern such as "the first Thursday", or a monthly one
+  pushed into the neighbouring month — the update is refused, asking for the pattern explicitly.
+
   Handing a recurrence straight back from `outlook_get_event` while asking for a new `timezone`
-  works. That round trip returns `range.recurrenceTimeZone`, and sending the old zone beside the
-  new anchor is a pair Graph refuses — so an ordinary read-modify-write became an opaque 400. The
-  explicit argument is the more specific instruction, so the stale range zone is dropped and Graph
-  re-derives it. Without an explicit `timezone` a caller-supplied range zone is still passed
-  through untouched: it is then the only statement about that zone, and discarding it would be a
-  sanitizer removing input for no stated reason.
+  works, including across a date boundary. That round trip returns `range.recurrenceTimeZone`, and
+  sending the old zone beside the new anchor is a pair Graph refuses — so an ordinary
+  read-modify-write became an opaque 400. The explicit argument is the more specific instruction,
+  so the stale range zone is dropped and Graph re-derives it. Without an explicit `timezone` a
+  caller-supplied range zone is still passed through untouched: it is then the only statement
+  about that zone, and discarding it would be a sanitizer removing input for no stated reason.
+  Whenever `start` is given, a supplied `range.startDate` is re-derived from it rather than refused
+  as a mismatch, and a pattern equal to the stored one moves with the start as above; a pattern
+  that differs is the caller's new instruction and is sent as given.
 
   `timezone` is refused on an all-day event rather than ignored. Graph stores one anchored in UTC
   whatever zone it is sent, so there is nothing to apply and silently substituting UTC would
@@ -86,6 +97,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Reshaping a series no longer discards its edited and deleted occurrences silently.** Graph
+  restores every changed occurrence of a series when its master's `start`, `end` or recurrence
+  changes, and reports success. Measured live with one edited and one deleted occurrence: moving
+  the start an hour in the same zone, moving only the end, re-anchoring into another zone,
+  extending the range and adding a weekday each brought both back, while a subject patch and a
+  recurrence re-sent unchanged kept them — so the loss follows the change to the series' shape,
+  and it predates `timezone`. `outlook_update_event` now reads the master's
+  `cancelledOccurrences` and `exceptionOccurrences` before any `start`, `end` or `recurrence`
+  patch to a series and refuses, naming each one that would be lost, rather than patching. It
+  fails closed: a read that omits either collection is refused rather than taken as a clean
+  series. `remove_recurrence` is unaffected — collapsing the series is what it asks for.
+  **Behaviour change:** such a patch used to succeed and quietly undo those changes; it is now
+  refused, with the remedy — change individual occurrences, or make the change in Outlook, which
+  asks before discarding them.
+
 - **A recurrence-only `outlook_update_event` built the series on UTC's day, not the event's.**
   Graph returns the stored start projected into UTC and names the event's zone in Windows terms
   ("Pacific Standard Time") for anything it was not handed an IANA name for — which Python maps to
@@ -95,6 +121,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   projection — verified live to be honoured on the SDK's own request builder, so this adds no
   raw-HTTP path and inherits kiota's retries. The second read happens only when the anchor cannot
   be resolved locally; events this server creates carry IANA names and need one GET as before.
+  Graph echoes the requested zone in `start.timeZone`, so a reply in any other zone means the
+  header was not honoured, and it is refused rather than read as local time.
   This is item 2 of #77, and it replaces a test that pinned the wrong answer deliberately.
 
 - **Calendar events are anchored in a real time zone, so recurring series survive daylight
