@@ -710,8 +710,8 @@ async def update_event(
 
     start_zone: str | None = None
     end_zone: str | None = None
-    # Set only by the recurrence re-send below, which is the one path that
-    # echoes back state it read; see there for why the patch gets pinned.
+    # Set only when the patch reshapes a series master; see the occurrence check
+    # below for why that patch gets pinned.
     if_match: str | None = None
     if start is not None or end is not None:
         existing_event = await current_event()
@@ -749,6 +749,20 @@ async def update_event(
         _is_series_master(await current_event())
     ):
         await _refuse_to_discard_occurrences(graph_client, event_id)
+        # Both halves of this patch rest on state read before it: the check just
+        # made, and — for a zone change — the recurrence re-sent below, echoed
+        # from the first read. Between those reads and the PATCH another client
+        # can edit an occurrence (which this patch would then discard) or
+        # re-pattern the series (which the echo would revert). Editing or
+        # deleting an occurrence moves the master's change key, as does any
+        # master edit — verified live — so pinning to the *first* read's key
+        # covers everything after it; Graph refuses a stale one with
+        # `412 ErrorIrresolvableConflict`, which `_HINT_TABLE` answers. On the
+        # SDK's own request builder, so this owes no raw-HTTP path. A missing key
+        # degrades to the last-writer-wins every other write has (#87).
+        if_match = (getattr(await current_event(), "additional_data", None) or {}).get(
+            "@odata.etag"
+        )
 
     def _anchored(zone: str | None, which: str) -> str:
         if zone is None:
@@ -861,18 +875,9 @@ async def update_event(
         # opaque 400 this branch exists to prevent, so None compares as different
         # rather than being filtered out by a truthiness check.
         if stored_zone != start_zone and _is_series_master(existing):
+            # Echoes state read above, so the patch is pinned; see the
+            # occurrence check, which set `if_match` for every master reshape.
             event.recurrence = _resend_recurrence(existing, anchor=start, zone=start_zone)
-            # This is the only path here that sends back state it read rather
-            # than state the caller supplied, so it is the only one that can
-            # *lose* a concurrent edit: between the GET above and the PATCH
-            # below another client can re-pattern the series, and echoing the
-            # recurrence we read would silently restore the old pattern. Pin the
-            # patch to the version we read so Graph refuses instead —
-            # `412 ErrorIrresolvableConflict`, which `_HINT_TABLE` answers with
-            # what to do about it. Verified live on a consumer mailbox: a stale
-            # change key is refused and the current one succeeds, on the SDK's
-            # own request builder, so this owes no raw-HTTP path.
-            if_match = (getattr(existing, "additional_data", None) or {}).get("@odata.etag")
 
     if resolved_show_as is not None:
         event.show_as = resolved_show_as

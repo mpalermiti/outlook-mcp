@@ -1275,8 +1275,9 @@ class TestEventTimezone:
         """The control. Pinning every patch would be a different tool.
 
         `update_event` is last-writer-wins by design everywhere else: the caller
-        supplied those values and means them. Only the read-and-echo path can
-        lose work nobody asked to overwrite, so only it conflicts.
+        supplied those values and means them. Only a patch that reshapes a series
+        master rests on state it read — the occurrence check, and the echoed
+        recurrence — so only it conflicts. This one is a single event.
         """
         current = _current_event(
             date_time="2026-10-28T16:00:00.0000000", start_zone="America/Los_Angeles"
@@ -1299,6 +1300,30 @@ class TestEventTimezone:
         )
 
         assert "request_configuration" not in builder.patch.call_args.kwargs
+
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"start": "2026-11-05T03:00:00Z", "end": "2026-11-05T03:30:00Z"},
+            {"recurrence": "weekly"},
+        ],
+        ids=["same-zone-move", "recurrence-only"],
+    )
+    async def test_a_master_reshape_is_pinned_even_without_a_resend(self, change):
+        """The occurrence check is a read the patch depends on, so the patch is pinned to it.
+
+        Without the pin, an occurrence edited in another client after the check
+        found none would be discarded by this patch, silently — the exact loss
+        the check exists to prevent. Editing or deleting an occurrence moves the
+        master's change key (verified live), so `If-Match` turns that race into
+        a 412. The key is the *first* read's: the re-send echoes that one.
+        """
+        builder, mock_client = _series_master_builder(_thursday_utc_series())
+
+        await update_event(mock_client, event_id="AAMkAG123=", config=_CFG_LA, **change)
+
+        config_sent = builder.patch.call_args.kwargs["request_configuration"]
+        assert config_sent.headers.get("If-Match") == {CURRENT_ETAG}
 
     async def test_an_unchanged_zone_does_not_resend_the_recurrence(self):
         """The control. Same series, same zone, no re-send.

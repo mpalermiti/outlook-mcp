@@ -60,12 +60,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   whatever zone it is sent, so there is nothing to apply and silently substituting UTC would
   report success for work not done.
 
-  Re-sending the recurrence is the only place this tool hands back state it read rather than state
-  the caller supplied, so that patch is pinned to the version it read (`If-Match`). A client that
-  re-patterns the series between the read and the write now gets `412` — with a hint saying nothing
-  was modified and to re-read — instead of having its change silently reverted to the pattern this
-  call happened to see. Every other field is still last-writer-wins: the caller supplied those and
-  means them. Verified live on a consumer mailbox, on the SDK's own request builder.
+  Re-sending the recurrence hands back state this tool read rather than state the caller supplied,
+  so that patch is pinned to the version it read (`If-Match`). A client that re-patterns the series
+  between the read and the write now gets `412` — with a hint saying nothing was modified and to
+  re-read — instead of having its change silently reverted to the pattern this call happened to
+  see. The same pin covers every patch that reshapes a series master, because each one rests on the
+  occurrence check below: editing or deleting an occurrence moves the master's change key, so one
+  edited in another client after the check is refused rather than discarded. Every other patch is
+  still last-writer-wins: the caller supplied those values and means them. Verified live on a
+  consumer mailbox, on the SDK's own request builder.
 
   Completes items 1 and 2 of #77. Split start/end zones on *creation* (item 3) remain deferred:
   `outlook_create_event` still takes one `timezone`, and `outlook_update_event` preserves a split

@@ -1364,6 +1364,49 @@ class TestOccurrenceChangesAreNotDiscardedSilently:
                 await _instances(sdk, event_id, monday, _EAST), edited_day, deleted_day
             )
 
+    async def test_changing_an_occurrence_moves_the_masters_change_key(
+        self, real_graph_client, live_write_config
+    ):
+        """Why pinning the reshape to the master's change key closes the race.
+
+        `update_event` checks for changed occurrences and then patches the
+        master with `If-Match`. That only protects an occurrence edited *between*
+        the two if editing it moves the master's key; if Graph ever stopped
+        doing that, the pin would still be sent and would protect nothing.
+        """
+        from msgraph.generated.models.event import Event
+
+        sdk = real_graph_client.sdk_client
+        monday = _anchor_monday()
+
+        async def key(event_id):
+            master = await sdk.me.events.by_event_id(event_id).get()
+            return (master.additional_data or {}).get("@odata.etag")
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" tz-occurrence-etag",
+            start=f"{monday.isoformat()}T09:00:00",
+            end=f"{monday.isoformat()}T09:30:00",
+            timezone=_EAST,
+            recurrence={
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                "range": {"type": "numbered", "numberOfOccurrences": 3},
+            },
+        ) as event_id:
+            fresh = await key(event_id)
+            second, third = (await _instances(sdk, event_id, monday, _EAST))[1:3]
+            edit = Event()
+            edit.subject = LIVE_WRITE_SUBJECT + " EDITED"
+            await sdk.me.events.by_event_id(second.id).patch(edit)
+            edited = await key(event_id)
+            await sdk.me.events.by_event_id(third.id).delete()
+            deleted = await key(event_id)
+
+            assert fresh and edited != fresh, "editing an occurrence left the master's key alone"
+            assert deleted != edited, "deleting an occurrence left the master's key alone"
+
     @pytest.mark.parametrize("change", ["time", "range"])
     async def test_graph_still_discards_them_when_a_series_is_reshaped(
         self, real_graph_client, live_write_config, change
