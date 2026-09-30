@@ -426,6 +426,10 @@ _WRONG_TYPES = [
     ({"pattern": "daily", "range": {"type": "noEnd"}}, "pattern must be an object"),
     ({"pattern": {"type": "daily", "interval": None}, "range": {"type": "noEnd"}},
      "pattern.interval must be a whole number"),
+    ({"pattern": {"type": "daily", "interval": 2.5}, "range": {"type": "noEnd"}},
+     "pattern.interval must be a whole number"),
+    ({"pattern": {"type": "daily", "interval": True}, "range": {"type": "noEnd"}},
+     "pattern.interval must be a whole number"),
     ({"pattern": {"type": "weekly", "daysOfWeek": "monday"}, "range": {"type": "noEnd"}},
      "daysOfWeek must be a list"),
     ({"pattern": {"type": "weekly", "daysOfWeek": [1]}, "range": {"type": "noEnd"}},
@@ -495,3 +499,14 @@ class TestPatternTypeSpelling:
             new=date(2026, 11, 4),
         )
         assert moved["pattern"]["daysOfWeek"] == ["wednesday"]
+
+
+def test_a_whole_number_in_another_spelling_is_still_accepted():
+    """The control: a digit string and an integral float were accepted before, and still are."""
+    built = build_event_recurrence(
+        {"pattern": {"type": "daily", "interval": "2"},
+         "range": {"type": "numbered", "numberOfOccurrences": 3.0}},
+        start=_START,
+    )
+    assert built.pattern.interval == 2
+    assert built.range.number_of_occurrences == 3

@@ -119,8 +119,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   converter as `TypeError` or `AttributeError`, which reach the model as a crash with the message
   withheld. Worse, a string where the `pattern` object belongs was *accepted*: `"type" in "daily"`
   is a substring test, so an empty pattern was built. Each now raises an input error naming the
-  field. The converter is shared, so this covers `outlook_create_event`, `outlook_update_event`
-  and the To Do tools alike.
+  field. A fractional or boolean count (`2.5`, `true`) is refused too rather than truncated to
+  `2` or `1`. The converter is shared, so this covers `outlook_create_event`,
+  `outlook_update_event` and the To Do tools alike.
 
 - **A recurrence-only `outlook_update_event` built the series on UTC's day, not the event's.**
   Graph returns the stored start projected into UTC and names the event's zone in Windows terms

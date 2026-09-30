@@ -66,10 +66,19 @@ def _object(value: Any, label: str) -> dict:
 
 
 def _integer(value: Any, label: str) -> int:
+    """``value`` as a whole number, or a refusal naming ``label``.
+
+    A digit string is accepted, as it always was. A bool or a fractional float
+    is refused rather than coerced: ``int(True)`` is 1 and ``int(2.5)`` is 2, and
+    silently reinterpreting what the caller asked for is worse than saying so.
+    """
+    refusal = ValueError(f"recurrence {label} must be a whole number; got {value!r:.50}")
+    if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+        raise refusal
     try:
         return int(value)
     except (TypeError, ValueError) as e:
-        raise ValueError(f"recurrence {label} must be a whole number; got {value!r:.50}") from e
+        raise refusal from e
 
 
 def _iso_date(value: Any, label: str) -> date:
