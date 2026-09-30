@@ -49,9 +49,16 @@ jobs:
         run: |
           "$RUNNER_TEMP/fresh/bin/python" - <<'PY'
           import importlib.metadata as md
-          for name in ("mcp", "msgraph-sdk", "azure-identity", "pydantic"):
+          for name in ("mcp", "msgraph-sdk", "microsoft-kiota-http", "azure-identity", "pydantic"):
               print(f"{name}=={md.version(name)}")
           PY
+      - name: /me must reach the wire as /me (#80)
+        # The import and tool-count checks below pass on an install whose every
+        # Graph call is broken: kiota 1.13 did exactly that to 1.22.0 (#80). This
+        # sends /me through the real msgraph middleware, against whatever this
+        # lock-free resolve picked, and asserts on the URL it would put on the wire.
+        run: |
+          "$RUNNER_TEMP/fresh/bin/python" tests/test_me_rewrite_reaches_the_wire.py
       - name: Server must import and register its full tool surface
         run: |
           "$RUNNER_TEMP/fresh/bin/python" - <<'PY'
@@ -85,6 +92,8 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
+      # Only for the /me script below — the package under test comes from PyPI.
+      - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.13"
@@ -96,9 +105,14 @@ jobs:
         run: |
           "$RUNNER_TEMP/pypi/bin/python" - <<'PY'
           import importlib.metadata as md
-          for name in ("outlook-graph-mcp", "mcp", "msgraph-sdk", "azure-identity", "pydantic"):
+          for name in ("outlook-graph-mcp", "mcp", "msgraph-sdk", "microsoft-kiota-http", "azure-identity", "pydantic"):
               print(f"{name}=={md.version(name)}")
           PY
+      - name: /me must reach the wire as /me (#80)
+        # Same check as fresh-install, against what PyPI serves today: catches an
+        # upstream release that breaks request routing with nothing pushed here.
+        run: |
+          "$RUNNER_TEMP/pypi/bin/python" tests/test_me_rewrite_reaches_the_wire.py
       - name: Published server must import and register its full tool surface
         # 62 is what the *published* release registers — not a typo for the
         # working tree's count. Update this number only when a release ships
@@ -108,8 +122,8 @@ jobs:
           import outlook_mcp.server as s
           tools = [a for a in dir(s) if a.startswith("outlook_")]
           # This asserts the count in the *published* release, not this branch's.
-          # Bump at release time to whatever PyPI is serving (62 while 1.22.0 is
-          # latest; 68 once the account-tool removal ships) — this file is in
+          # Bump at release time to whatever PyPI is serving (62 while 1.22.x is
+          # latest; 68 once 1.23.0 ships the account-tool removal) — this file is in
           # RELEASING.md §3's lockstep
           # list precisely so the weekly canary doesn't go permanently red the
           # moment a release publishes.
