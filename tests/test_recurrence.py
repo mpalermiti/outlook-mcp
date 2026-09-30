@@ -460,3 +460,38 @@ class TestWrongJsonTypesAreRefusedByName:
 
         with pytest.raises(ValueError, match=message):
             check_recurrence_shape(recurrence)
+
+
+class TestPatternTypeSpelling:
+    """The converter accepts `weekly` and the SDK's `Weekly`; comparison and moves must too.
+
+    Seen case-sensitively, a `Weekly` pattern skipped every type-specific field,
+    so an edited Monday pattern compared equal to a stored Thursday one and was
+    shifted as if it were the series' own.
+    """
+
+    def test_a_pascal_case_pattern_on_a_different_day_is_a_different_pattern(self):
+        from outlook_mcp.tools._recurrence import same_pattern
+
+        assert not same_pattern(
+            {"type": "Weekly", "daysOfWeek": ["monday"]},
+            {"type": "weekly", "interval": 1, "daysOfWeek": ["thursday"]},
+        )
+
+    def test_a_pascal_case_echo_is_the_same_pattern(self):
+        from outlook_mcp.tools._recurrence import same_pattern
+
+        assert same_pattern(
+            {"type": "Weekly", "daysOfWeek": ["thursday"]},
+            {"type": "weekly", "interval": 1, "daysOfWeek": ["thursday"]},
+        )
+
+    def test_a_pascal_case_pattern_moves_like_any_other(self):
+        from outlook_mcp.tools._recurrence import move_pattern
+
+        moved = move_pattern(
+            {"pattern": {"type": "Weekly", "daysOfWeek": ["thursday"]}, "range": {}},
+            old=date(2026, 11, 5),
+            new=date(2026, 11, 4),
+        )
+        assert moved["pattern"]["daysOfWeek"] == ["wednesday"]

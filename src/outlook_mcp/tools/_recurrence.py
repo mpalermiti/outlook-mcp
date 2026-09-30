@@ -339,6 +339,22 @@ def check_recurrence_shape(recurrence: dict | str) -> None:
     build_patterned_recurrence({**payload, "range": rng})
 
 
+def _pattern_type(pattern: dict) -> str:
+    """The pattern's type in Graph's own spelling, however the caller cased it.
+
+    The converter accepts both `weekly` and `Weekly` (the SDK's member name), so
+    anything that branches on the type has to see one spelling, or a PascalCase
+    pattern skips every type-specific comparison and move.
+    """
+    from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
+
+    raw = str(pattern.get("type") or "")
+    for member in RecurrencePatternType:
+        if member.value.lower() == raw.lower():
+            return member.value
+    return raw
+
+
 def _pattern_key(pattern: Any) -> tuple | None:
     """The fields that decide which days a pattern lands on, for comparison.
 
@@ -349,8 +365,8 @@ def _pattern_key(pattern: Any) -> tuple | None:
     """
     if not isinstance(pattern, dict) or not pattern.get("type"):
         return None
-    kind = str(pattern["type"])
-    key: tuple = (kind.lower(), int(pattern.get("interval") or 1))
+    kind = _pattern_type(pattern)
+    key: tuple = (kind, int(pattern.get("interval") or 1))
     if kind in ("weekly", "relativeMonthly", "relativeYearly"):
         key += (frozenset(str(d).lower() for d in pattern.get("daysOfWeek") or ()),)
     if kind == "weekly" and key[1] > 1:
@@ -406,7 +422,7 @@ def move_pattern(payload: dict, *, old: date, new: date) -> dict:
     """
     delta = (new - old).days
     pattern = dict(payload.get("pattern") or {})
-    kind = str(pattern.get("type") or "")
+    kind = _pattern_type(pattern)
     if delta == 0 or kind == "daily":
         return payload
 
