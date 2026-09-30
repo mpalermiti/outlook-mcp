@@ -8,19 +8,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- **A fresh install was broken: every `/me` call failed with "me-token-to-replace is invalid".**
-  `uv tool install outlook-graph-mcp` resolved `microsoft-kiota-* 1.13+` (released 2026-09-18),
-  which moved per-request options from `request.options` to `request.extensions`; `msgraph-core`
-  1.5.1 still reads the old attribute, so its rewrite of `/users/me-token-to-replace` → `/me` never
-  fires. Nothing capped kiota, and the lock file pinned 1.12.3 — so CI and every developer install
-  were green while every new user's install was not. kiota is now capped below 1.13 until a
-  `msgraph-core` release carries the upstream fix (msgraph-sdk-python-core#1129), and the
-  fresh-install and published-install jobs assert the resolved kiota version is inside the tested
-  range, so a dependency drifting outside it fails the canary instead of the user. Reported in #80.
-
-
-### Fixed
-
 - **Calendar events are anchored in a real time zone, so recurring series survive daylight
   saving.** `outlook_create_event` labelled every `start` and `end` with the literal
   `timeZone: "UTC"` while passing the caller's datetime through unchanged. For a single event
@@ -295,6 +282,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the full five-part write returned 200. Caught by the live write tier; the offline guard that now
   pins it has to serialize through the backing-store proxy, because the bare `JsonSerializationWriter`
   cannot see the difference.
+
+## [1.22.1] — 2026-09-29
+
+A hotfix cut from 1.22.0 (branch `release/1.22.x`) carrying only this fix; the entries under
+[Unreleased] above ship in 1.23.0.
+
+### Fixed
+
+- **A fresh install was broken: every `/me` call failed with "me-token-to-replace is invalid".**
+  `uv tool install outlook-graph-mcp` resolved `microsoft-kiota-* 1.13+` (released 2026-09-18),
+  which moved per-request options from `request.options` to `request.extensions`; `msgraph-core`
+  1.5.1 still reads the old attribute, so its rewrite of `/users/me-token-to-replace` → `/me` never
+  fires. Nothing capped kiota, and the lock file pinned 1.12.3 — so CI and every developer install
+  were green while every new user's install was not. kiota is now capped below 1.13 until a
+  `msgraph-core` release carries the upstream fix (msgraph-sdk-python-core#1129).
+  `tests/test_me_rewrite_reaches_the_wire.py` builds the client the way msgraph does and asserts
+  on the URL the real middleware pipeline sends, for a bare and a nested `/me` path, against
+  whatever versions the environment resolved. Reported in #80.
 
 ## [1.22.0] — 2026-09-12
 
