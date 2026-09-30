@@ -297,6 +297,12 @@ def _pattern_key(pattern: Any) -> tuple | None:
     key: tuple = (kind.lower(), int(pattern.get("interval") or 1))
     if kind in ("weekly", "relativeMonthly", "relativeYearly"):
         key += (frozenset(str(d).lower() for d in pattern.get("daysOfWeek") or ()),)
+    if kind == "weekly" and key[1] > 1:
+        # Only a multi-week interval reads the week boundary: it decides which
+        # days share a week, so moving it reshapes a fortnightly Sunday-and-Monday
+        # series. Every week, it changes nothing, and counting it would call an
+        # echo that dropped the field an edit. Graph's default is Sunday.
+        key += (str(pattern.get("firstDayOfWeek") or "sunday").lower(),)
     if kind in ("absoluteMonthly", "absoluteYearly"):
         key += (pattern.get("dayOfMonth"),)
     if kind in ("absoluteYearly", "relativeYearly"):

@@ -211,8 +211,9 @@ async def _refuse_to_discard_occurrences(graph_client: Any, event_id: str) -> No
         f"Changing this series' times or recurrence would discard {len(lost)} "
         f"occurrence change(s) — Graph restores every edited and deleted occurrence "
         f"when a series is reshaped, without saying so: {'; '.join(lost)}. Nothing was "
-        f"modified. To keep them, change individual occurrences instead. To accept "
-        f"losing them, make the change in Outlook, which asks before discarding."
+        f"modified. To keep them, change individual occurrences instead, and omit "
+        f"`recurrence` if it is unchanged. To accept losing them, make the change in "
+        f"Outlook, which asks before discarding."
     )
 
 

@@ -397,3 +397,24 @@ class TestSamePattern:
         from outlook_mcp.tools._recurrence import same_pattern
 
         assert not same_pattern(None, None)
+
+    def test_a_moved_week_boundary_is_a_different_fortnightly_pattern(self):
+        """Every other week, `firstDayOfWeek` decides which days share a week.
+
+        A caller who changed only the boundary has written a new schedule, so it
+        must not be taken for the stored one and shifted a second time.
+        """
+        from outlook_mcp.tools._recurrence import same_pattern
+
+        base = {"type": "weekly", "interval": 2, "daysOfWeek": ["sunday", "monday"]}
+        assert not same_pattern(
+            {**base, "firstDayOfWeek": "monday"}, {**base, "firstDayOfWeek": "sunday"}
+        )
+        # Graph's default is Sunday, so omitting it is the same boundary.
+        assert same_pattern(base, {**base, "firstDayOfWeek": "sunday"})
+
+    def test_the_week_boundary_does_not_matter_every_week(self):
+        from outlook_mcp.tools._recurrence import same_pattern
+
+        base = {"type": "weekly", "interval": 1, "daysOfWeek": ["thursday"]}
+        assert same_pattern({**base, "firstDayOfWeek": "monday"}, base)
