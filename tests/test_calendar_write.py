@@ -1862,6 +1862,34 @@ class TestEventTimezone:
         assert "'UTC'" in str(excinfo.value)
         builder.patch.assert_not_called()
 
+    async def test_a_second_read_without_a_start_is_refused(self):
+        """The same wrong-day outcome as an ignored header, reached another way.
+
+        Falling back to the date as written means the UTC date, which is the
+        bug the second read exists to fix. So a reply with no start refuses too.
+        """
+        utc_view = _current_event(
+            date_time="2026-11-05T02:00:00.0000000", start_zone="Pacific Standard Time"
+        )
+        startless = _current_event(start_zone="Pacific Standard Time")
+        startless.start = None
+
+        def _get(request_configuration=None):
+            prefers = request_configuration and request_configuration.headers.get("Prefer")
+            return startless if prefers else utc_view
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(side_effect=_get)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError, match="no start at all"):
+            await update_event(
+                mock_client, event_id="AAMkAG123=", recurrence="weekly", config=_CFG_LA
+            )
+        builder.patch.assert_not_called()
+
     async def test_a_windows_zone_evening_event_takes_its_local_weekday(self):
         """An 18:00 Pacific event is next-day in UTC, and the series follows the local day.
 

@@ -97,8 +97,8 @@ def _is_series_master(event: Any) -> bool:
     return (getattr(event_type, "value", None) or str(event_type)) == "seriesMaster"
 
 
-async def _start_in_its_own_zone(graph_client: Any, event_id: str, zone: str) -> str | None:
-    """The event's start as local wall clock in ``zone``, or ``None``.
+async def _start_in_its_own_zone(graph_client: Any, event_id: str, zone: str) -> str:
+    """The event's start as local wall clock in ``zone``.
 
     Graph returns ``start.dateTime`` projected into UTC unless the request asks
     otherwise, and it names the event's own zone in Windows terms
@@ -113,14 +113,11 @@ async def _start_in_its_own_zone(graph_client: Any, event_id: str, zone: str) ->
     is honoured on the SDK's own request builder, so this needs no raw-httpx
     path and inherits kiota's retry handling rather than owing its own.
 
-    Returns ``None`` when the second read comes back without a start — the
-    caller then falls back to the date as written, which is what it did before
-    this existed. A *failed* read is deliberately not caught: falling back
-    silently would rebuild the series on the UTC date, which is the wrong-day
-    bug this exists to fix, so the update fails instead of quietly doing that.
-
-    For the same reason a start projected into any zone but the one asked for is
-    refused. Graph echoes the requested name back verbatim in ``start.timeZone``
+    Every way this read can fail to deliver that is refused rather than papered
+    over, because the only fallback is the date as written — the UTC date, which
+    is the wrong-day bug this exists to fix. A failed read is not caught; a reply
+    without a start is refused; and so is a start projected into any zone but
+    the one asked for. Graph echoes the requested name back verbatim in ``start.timeZone``
     — verified live for both a Windows and an IANA name — so a mismatch means the
     header was not honoured, and the text beside it is UTC or worse. Read as
     local time it builds a wrong-day series that looks like success.
@@ -134,15 +131,13 @@ async def _start_in_its_own_zone(graph_client: Any, event_id: str, zone: str) ->
     )
     start = getattr(localized, "start", None)
     date_time = getattr(start, "date_time", None)
-    if not date_time:
-        return None
     projected = getattr(start, "time_zone", None)
-    if projected != zone:
+    if not date_time or projected != zone:
+        got = f"it in {projected!r}" if date_time else "no start at all"
         raise ValueError(
-            f"Asked Graph for this event's start in {zone!r} and got it in "
-            f"{projected!r}, so the day its series falls on cannot be trusted. "
-            f"Nothing was modified. Pass `start` alongside `recurrence` to anchor "
-            f"the series explicitly."
+            f"Asked Graph for this event's start in {zone!r} and got {got}, so the "
+            f"day its series falls on cannot be trusted. Nothing was modified. Pass "
+            f"`start` alongside `recurrence` to anchor the series explicitly."
         )
     return str(date_time)
 
@@ -832,9 +827,7 @@ async def update_event(
                 # cannot be converted here. Ask Graph for the local wall clock
                 # instead of guessing; a naive value needs no conversion, so
                 # `event_start_date` then reads the date straight off it.
-                localized = await _start_in_its_own_zone(graph_client, event_id, anchor_zone)
-                if localized:
-                    anchor = localized
+                anchor = await _start_in_its_own_zone(graph_client, event_id, anchor_zone)
         else:
             # A new start re-derives the range, so a `startDate` handed back from
             # `outlook_get_event` is stale by definition rather than a mistake to

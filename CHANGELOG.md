@@ -125,7 +125,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   raw-HTTP path and inherits kiota's retries. The second read happens only when the anchor cannot
   be resolved locally; events this server creates carry IANA names and need one GET as before.
   Graph echoes the requested zone in `start.timeZone`, so a reply in any other zone means the
-  header was not honoured, and it is refused rather than read as local time.
+  header was not honoured, and it is refused rather than read as local time — as is a reply with
+  no start, since the only fallback is the UTC date this read exists to avoid.
   This is item 2 of #77, and it replaces a test that pinned the wrong answer deliberately.
 
 - **Calendar events are anchored in a real time zone, so recurring series survive daylight
