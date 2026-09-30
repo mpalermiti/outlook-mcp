@@ -29,7 +29,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 - `src/outlook_mcp/server.py` — `MCPServer` entry point, lifespan context
 - `src/outlook_mcp/auth.py` — Device code OAuth2 via azure-identity
 - `src/outlook_mcp/graph.py` — Graph client factory
-- `src/outlook_mcp/config.py` — Config file management (~/.outlook-mcp/)
+- `src/outlook_mcp/config.py` — Config file management (`~/.outlook-mcp/`, or `OUTLOOK_MCP_CONFIG_DIR` — one directory per server instance, one instance per account)
 - `src/outlook_mcp/validation.py` — Input validation (OData, KQL, IDs, datetimes, time zones)
 - `src/outlook_mcp/errors.py` — Exception hierarchy. `OutlookMCPError` inherits the SDK's `ToolError`; this is load-bearing, not cosmetic (see Conventions)
 - `src/outlook_mcp/pagination.py` — Cursor-based pagination
@@ -88,4 +88,4 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   titles that restate the tool name — is not free. `test_tool_surface_budget.py` holds the line
 - Datetimes: UTC in responses, config timezone for input interpretation
 - Delete: soft delete (move to Deleted Items) by default
-- Dependency bounds: an unbounded requirement can break every fresh install without a single commit. `mcp[cli]` with no upper bound shipped a package that could not be installed for five weeks (2026-07-28 → 09-03) while CI stayed green — `uv sync` resolves through `uv.lock`, so the `test` job never sees what a new user actually gets. The `fresh-install` (per push) and `published-install` (weekly cron) jobs in `ci.yml` are the guard against this class; keep them working
+- Dependency bounds: an unbounded requirement can break every fresh install without a single commit. `mcp[cli]` with no upper bound shipped a package that could not be installed for five weeks (2026-07-28 → 09-03) while CI stayed green — `uv sync` resolves through `uv.lock`, so the `test` job never sees what a new user actually gets. The `fresh-install` (per push) and `published-install` (weekly cron) jobs in `ci.yml` are the guard against this class; keep them working. They are necessary, not sufficient: in 2026-09 a *transitive* dependency (`microsoft-kiota-*` 1.13) broke every `/me` call on fresh installs of 1.22.0 (#80) while both jobs stayed green, because they check that the package imports and registers its tools — never what reaches Graph. `tests/test_me_rewrite_reaches_the_wire.py` checks the URL the real middleware sends, against whatever versions the environment resolved. When a dependency's new release breaks us, cap it with a comment naming the upstream fix that lifts the cap

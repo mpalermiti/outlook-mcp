@@ -233,6 +233,18 @@ uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude
 
 ## Troubleshooting
 
+### `me-token-to-replace is invalid` on every call
+
+You're on 1.22.0 installed after 2026-09-18. A fresh install of that version resolves `microsoft-kiota-*` 1.13 or later, which `msgraph-core` doesn't yet handle, so every `/me` request reaches Graph as `/users/me-token-to-replace`. Fixed in 1.22.1, which caps kiota below 1.13 ([#80](https://github.com/mpalermiti/outlook-mcp/issues/80)):
+
+```bash
+uv tool upgrade outlook-graph-mcp
+# or: pipx upgrade outlook-graph-mcp
+# or: pip install --upgrade outlook-graph-mcp
+```
+
+Your config and sign-in are untouched; no re-auth needed.
+
 ### `SSL: CERTIFICATE_VERIFY_FAILED` on Linux
 
 If auth fails with `[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate`, your Python environment can't find the system CA bundle. This is common on minimal/container Linux images and with the isolated venv from `uv tool install`.

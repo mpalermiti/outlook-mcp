@@ -65,7 +65,7 @@ uv run pytest --tb=no -q
 uv run ruff check src/ tests/
 ```
 
-The default run is the offline unit suite only — `addopts` deselects the `integration` and `live` markers, so this needs no network or token. Expect `N passed, 22 deselected` and zero failures.
+The default run is the offline unit suite only — `addopts` deselects the `integration`, `live` and `live_write` markers, so this needs no network or token. Expect zero failures; the deselected count is those three tiers, and grows as they do.
 
 ## 3. Version bump
 
@@ -111,6 +111,21 @@ gh workflow run publish.yml
 
 > The workflow deliberately does **not** run the live tier — those need real credentials. Step 1 is still yours, and still the step that matters: a green offline suite is exactly what shipped 1.13.0 and 1.13.1 broken.
 
+### Hotfix — when `main` isn't ready to ship
+
+When a published release needs an urgent fix but `main` carries merged work that hasn't been through the live tier, cut the patch from the tag instead of from `main`. 1.22.1 was released this way, from `v1.22.0`:
+
+```bash
+git fetch origin --tags
+git push origin "vX.Y.Z^{commit}:refs/heads/release/X.Y.x"   # release branch at the published tag
+git switch -c hotfix/X.Y.Z+1 origin/release/X.Y.x
+git cherry-pick <fix commit(s) from main>                    # then the §3 version bump, in its own commit
+gh pr create --base release/X.Y.x                            # CI runs on it like any PR; merge when green
+gh release create vX.Y.Z+1 --target release/X.Y.x --title "vX.Y.Z+1" --notes-file <notes>
+```
+
+Run steps 1–1c from the hotfix branch, not `main`. After publishing, open a PR against `main` that moves the fix's CHANGELOG entry out of `[Unreleased]` into a `## [X.Y.Z+1]` section. Leave `main`'s `pyproject.toml` and `server.json` versions alone; the next release from `main` bumps past both. ClawHub (§6) publishes from a checkout of the hotfix branch — mind §6b's `--slug`.
+
 ## 6. Publish to ClawHub (the one manual channel)
 
 ClawHub has no OIDC equivalent, so it stays hand-run. Three steps, and the first and last are the ones that matter.
@@ -127,8 +142,11 @@ Site discovery advertises `minCliVersion: "0.1.0"`, so an arbitrarily old client
 **6b. Publish.**
 
 ```bash
-clawhub publish "$(pwd)" --version X.Y.Z --tags latest --changelog "<one-liner>"
+clawhub publish "$(pwd)" --slug outlook-mcp --name outlook-mcp --version X.Y.Z --tags latest --changelog "<one-liner>" --dry-run
+# must print: Would publish outlook-mcp@X.Y.Z — then run it again without --dry-run
 ```
+
+**`--slug` and `--name` are not optional.** Without them the CLI names the skill after the folder. That's harmless from a clone called `outlook-mcp`, but 1.22.1, published from a worktree called `hotfix-1.22.1`, went out as a brand-new skill `hotfix-1-22-1` — and the CLI printed "Update submitted" exactly as it does for the real one. An owner can't delete a skill while its scan is pending, so the stray could only be removed after it went public. The dry run is the one place the slug is visible before it matters.
 
 Expect it to take a minute or two and to say **pending security scans**. That is success. The scan has taken ~12 min to ~1 h in practice; the version is not public until it clears.
 
@@ -156,6 +174,15 @@ gh repo edit mpalermiti/outlook-mcp --description "MCP server for Microsoft Outl
 ```bash
 curl -s https://pypi.org/pypi/outlook-graph-mcp/X.Y.Z/json | python3 -c "import json,sys; print(json.load(sys.stdin)['info']['version'])"
 ```
+
+Then install what a new user gets — the published package, into a clean venv, without the lock file — and send `/me` through it:
+
+```bash
+uv venv "$TMPDIR/pypi-check" && uv pip install --python "$TMPDIR/pypi-check/bin/python" --refresh outlook-graph-mcp==X.Y.Z
+"$TMPDIR/pypi-check/bin/python" tests/test_me_rewrite_reaches_the_wire.py   # expect: OK: /me reaches the wire as /me
+```
+
+This is the step that proves the release. `uv.lock` keeps every CI job and developer install on tested versions, so only a lock-free install sees what dependency resolution hands a new user today — the five-week `mcp` outage (2026-07) and #80 (2026-09) both shipped under a fully green suite. `--refresh` matters: uv's index cache once made a just-published version look missing.
 
 And confirm the MCP registry shows the new version as `(latest)`:
 
