@@ -510,3 +510,30 @@ def test_a_whole_number_in_another_spelling_is_still_accepted():
     )
     assert built.pattern.interval == 2
     assert built.range.number_of_occurrences == 3
+
+
+class TestNumbersInAnotherSpelling:
+    """The converter reads `"15"` as 15, so comparison and moves have to as well.
+
+    Compared raw, an echoed monthly pattern carrying `"15"` was taken for an edit
+    of the stored 15 and sent unmoved across a date boundary, and a move of it
+    was refused as not anchored on its own start.
+    """
+
+    def test_a_string_day_is_the_same_day(self):
+        from outlook_mcp.tools._recurrence import same_pattern
+
+        assert same_pattern(
+            {"type": "absoluteMonthly", "interval": "1", "dayOfMonth": "15"},
+            {"type": "absoluteMonthly", "interval": 1, "dayOfMonth": 15},
+        )
+
+    def test_a_string_day_moves(self):
+        from outlook_mcp.tools._recurrence import move_pattern
+
+        moved = move_pattern(
+            {"pattern": {"type": "absoluteMonthly", "dayOfMonth": "15"}, "range": {}},
+            old=date(2026, 11, 15),
+            new=date(2026, 11, 14),
+        )
+        assert moved["pattern"]["dayOfMonth"] == 14

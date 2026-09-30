@@ -364,6 +364,16 @@ def _pattern_type(pattern: dict) -> str:
     return raw
 
 
+def _whole(pattern: dict, field: str) -> int | None:
+    """``pattern[field]`` read the way the converter reads it, or ``None`` if absent.
+
+    The converter accepts ``"15"`` for 15, so a comparison or a move that took the
+    raw value would call an echoed ``"15"`` a different day from the stored 15.
+    """
+    value = pattern.get(field)
+    return None if value is None else _integer(value, f"pattern.{field}")
+
+
 def _pattern_key(pattern: Any) -> tuple | None:
     """The fields that decide which days a pattern lands on, for comparison.
 
@@ -375,7 +385,7 @@ def _pattern_key(pattern: Any) -> tuple | None:
     if not isinstance(pattern, dict) or not pattern.get("type"):
         return None
     kind = _pattern_type(pattern)
-    key: tuple = (kind, int(pattern.get("interval") or 1))
+    key: tuple = (kind, _whole(pattern, "interval") or 1)
     if kind in ("weekly", "relativeMonthly", "relativeYearly"):
         key += (frozenset(str(d).lower() for d in pattern.get("daysOfWeek") or ()),)
     if kind == "weekly" and key[1] > 1:
@@ -385,9 +395,9 @@ def _pattern_key(pattern: Any) -> tuple | None:
         # echo that dropped the field an edit. Graph's default is Sunday.
         key += (str(pattern.get("firstDayOfWeek") or "sunday").lower(),)
     if kind in ("absoluteMonthly", "absoluteYearly"):
-        key += (pattern.get("dayOfMonth"),)
+        key += (_whole(pattern, "dayOfMonth"),)
     if kind in ("absoluteYearly", "relativeYearly"):
-        key += (pattern.get("month"),)
+        key += (_whole(pattern, "month"),)
     if kind in ("relativeMonthly", "relativeYearly"):
         key += (str(pattern.get("index") or "first").lower(),)
     return key
@@ -444,8 +454,8 @@ def move_pattern(payload: dict, *, old: date, new: date) -> dict:
         if pattern.get("firstDayOfWeek"):
             pattern["firstDayOfWeek"] = shifted(pattern["firstDayOfWeek"])
     elif kind in ("absoluteMonthly", "absoluteYearly"):
-        anchored = pattern.get("dayOfMonth") == old.day and (
-            kind == "absoluteMonthly" or pattern.get("month") == old.month
+        anchored = _whole(pattern, "dayOfMonth") == old.day and (
+            kind == "absoluteMonthly" or _whole(pattern, "month") == old.month
         )
         if not anchored:
             raise _refuse_move(

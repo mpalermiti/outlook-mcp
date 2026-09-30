@@ -802,8 +802,8 @@ async def outlook_update_event(
     intended list; [] removes everyone. `is_all_day` REQUIRES start and end in the same
     call, both on midnight boundaries. Patching a time keeps the zone the event is
     anchored in; pass `timezone` (with start and end) to re-anchor it somewhere else.
-    Changing a series' times or pattern is refused while it has edited or deleted
-    occurrences, which Graph would discard.
+    A start, end or recurrence patch to a series with edited or deleted occurrences
+    is refused, since Graph would discard them.
     Omitting an argument leaves it unchanged, so False and [] are instructions, not
     absences.
     `show_as` is Outlook's "Show as" — same values as outlook_create_event — and patches
