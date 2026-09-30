@@ -4,6 +4,24 @@ All notable changes to outlook-graph-mcp are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.1] — 2026-09-29
+
+A hotfix cut from 1.22.0 that carries this one fix and nothing else. The work merged to `main`
+since 1.22.0 ships in 1.23.0.
+
+### Fixed
+
+- **A fresh install was broken: every `/me` call failed with "me-token-to-replace is invalid".**
+  `uv tool install outlook-graph-mcp` resolved `microsoft-kiota-* 1.13+` (released 2026-09-18),
+  which moved per-request options from `request.options` to `request.extensions`; `msgraph-core`
+  1.5.1 still reads the old attribute, so its rewrite of `/users/me-token-to-replace` → `/me` never
+  fires. Nothing capped kiota, and the lock file pinned 1.12.3 — so CI and every developer install
+  were green while every new user's install was not. kiota is now capped below 1.13 until a
+  `msgraph-core` release carries the upstream fix (msgraph-sdk-python-core#1129).
+  `tests/test_me_rewrite_reaches_the_wire.py` builds the client the way msgraph does and asserts
+  on the URL the real middleware pipeline sends, for a bare and a nested `/me` path, against
+  whatever versions the environment resolved. Reported in #80.
+
 ## [1.22.0] — 2026-09-12
 
 ### Fixed
