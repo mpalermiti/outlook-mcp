@@ -112,8 +112,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   fails closed: a read that omits either collection is refused rather than taken as a clean
   series. `remove_recurrence` is unaffected — collapsing the series is what it asks for.
   **Behaviour change:** such a patch used to succeed and quietly undo those changes; it is now
-  refused, with the remedy — change individual occurrences, or make the change in Outlook, which
-  asks before discarding them.
+  refused, naming what would be lost and saying to change individual occurrences instead.
 
 - **A recurrence-only `outlook_update_event` built the series on UTC's day, not the event's.**
   Graph returns the stored start projected into UTC and names the event's zone in Windows terms

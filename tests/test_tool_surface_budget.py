@@ -43,10 +43,11 @@ CHARS_PER_TOKEN = 4
 # an override moves anyway (+22). Ceiling 13,300 holds ~1% headroom: room
 # for a wording fix, not for another batch.
 #
-# 13,211 with `outlook_update_event`'s `timezone` argument and the one docstring
-# sentence that says it re-anchors (+55). Its refusals — occurrences a time move
-# would discard, a pattern that cannot move exactly — carry their own remedies
-# in the error text rather than in the schema every turn pays for.
+# 13,243 with `outlook_update_event`'s `timezone` argument and the sentence that
+# says it re-anchors (+55), and one sentence saying a series with edited or
+# deleted occurrences will not be reshaped (+32) — silent data loss, so it goes
+# where the model reads it. The other refusals carry their remedies in the error
+# text rather than in the schema every turn pays for.
 TOOL_SURFACE_CEILING = 13_300
 
 # `prompts/list` is the cheap half of the bargain struck in 1.20.0: workflow

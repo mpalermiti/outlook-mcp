@@ -1553,6 +1553,14 @@ class TestEventTimezone:
             ({"end": "also-not-a-date"}, "Invalid datetime"),
             ({"is_all_day": True}, "requires start and end"),
             ({"recurrence": "weekly", "remove_recurrence": True}, "not both"),
+            # Checked before the reads a recurrence patch needs, so a bad shape
+            # is named as one rather than surfacing as the occurrence refusal.
+            ({"recurrence": "fortnightly"}, "Invalid recurrence"),
+            (
+                {"recurrence": {"pattern": {"type": "weekly", "daysOfWeek": ["funday"]},
+                                "range": {"type": "noEnd"}}},
+                "pattern.daysOfWeek",
+            ),
         ]
         for kwargs, expected in cases:
             builder = _make_event_builder()

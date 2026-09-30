@@ -283,6 +283,21 @@ def event_recurrence_payload(recurrence: dict | str, start_date: date) -> dict:
     return parsed
 
 
+def check_recurrence_shape(recurrence: dict | str) -> None:
+    """Refuse a malformed recurrence without needing the event's start.
+
+    Everything except ``range.startDate`` can be checked before a single read:
+    the JSON, the shorthand name, both sections present, every enum and date.
+    ``startDate`` is left to ``build_event_recurrence``, which is the only place
+    that knows the date it has to match. A shorthand is expanded against an
+    arbitrary date here, since only the shape is kept.
+    """
+    payload = event_recurrence_payload(recurrence, date(2000, 1, 3))
+    rng = {k: v for k, v in (payload.get("range") or {}).items() if k != "startDate"}
+    rng.setdefault("type", "noEnd")
+    build_patterned_recurrence({**payload, "range": rng})
+
+
 def _pattern_key(pattern: Any) -> tuple | None:
     """The fields that decide which days a pattern lands on, for comparison.
 

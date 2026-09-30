@@ -9,6 +9,7 @@ from outlook_mcp.config import Config
 from outlook_mcp.permissions import CATEGORY_CALENDAR_WRITE, check_permission
 from outlook_mcp.tools._recurrence import (
     build_event_recurrence,
+    check_recurrence_shape,
     event_recurrence_payload,
     event_start_date,
     maybe_zone,
@@ -207,8 +208,8 @@ async def _refuse_to_discard_occurrences(graph_client: Any, event_id: str) -> No
         f"occurrence change(s) — Graph restores every edited and deleted occurrence "
         f"when a series is reshaped, without saying so: {'; '.join(lost)}. Nothing was "
         f"modified. To keep them, change individual occurrences instead, and omit "
-        f"`recurrence` if it is unchanged. To accept losing them, make the change in "
-        f"Outlook, which asks before discarding."
+        f"`recurrence` if it is unchanged. If the user accepts losing them, the change "
+        f"has to be made outside this tool."
     )
 
 
@@ -678,6 +679,11 @@ async def update_event(
     # that a recurrence or a time patch triggers. Validating before any await
     # is the rule this function already follows for datetimes and attendees.
     resolved_show_as = _free_busy(show_as) if show_as is not None else None
+    # The same for a malformed recurrence, and sharper since the occurrence
+    # check: on a series with changed occurrences, a bad shape would otherwise
+    # surface as that refusal, two reads later, instead of as the input error.
+    if recurrence is not None:
+        check_recurrence_shape(recurrence)
 
     # The event as Graph currently holds it, fetched at most once and only when
     # something actually needs it: the zone a start/end patch must carry, the
