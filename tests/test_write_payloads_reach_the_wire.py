@@ -368,8 +368,9 @@ class TestCalendarWrite:
     async def test_a_re_anchored_series_puts_its_moved_days_on_the_wire(self):
         """The moved pattern is a value Graph reads, so assert it in the payload.
 
-        A Thursday 02:00Z weekly series re-anchored to Wednesday 18:00 in Los
-        Angeles has to go out as a Wednesday series. A model-level assertion on
+        A fortnightly Thursday 02:00Z series re-anchored to Wednesday 18:00 in
+        Los Angeles has to go out as a Wednesday series, its week boundary moved
+        with it. A model-level assertion on
         `days_of_week` cannot see what the backing store serializes; this does,
         and `assert_on_wire` also refuses any stray null or snake_case key the
         rebuilt recurrence might leak.
@@ -390,7 +391,7 @@ class TestCalendarWrite:
             {
                 "pattern": {
                     "type": "weekly",
-                    "interval": 1,
+                    "interval": 2,
                     "daysOfWeek": ["thursday"],
                     "firstDayOfWeek": "sunday",
                 },

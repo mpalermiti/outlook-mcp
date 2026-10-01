@@ -1268,6 +1268,51 @@ class TestMovingASeriesKeepsItsDays:
             assert after["recurrence"]["pattern"]["daysOfWeek"] == ["wednesday"]
             assert after["recurrence"]["range"]["startDate"] == wednesday.isoformat()
 
+    async def test_a_fortnightly_block_without_a_week_boundary_stays_one_block(
+        self, real_graph_client, live_write_config
+    ):
+        """A hand-written fortnightly Sunday-and-Monday pattern, moved back a day.
+
+        It omits `firstDayOfWeek`, so Graph reads the boundary as Sunday. Moving
+        the days to Saturday-and-Sunday without moving the boundary splits them
+        across it, and every Sunday lands a week after its Saturday.
+        """
+        sunday = _anchor_monday() + timedelta(days=6)
+        saturday = sunday - timedelta(days=1)
+        recurrence = {
+            "pattern": {"type": "weekly", "interval": 2, "daysOfWeek": ["sunday", "monday"]},
+            "range": {"type": "numbered", "numberOfOccurrences": 4},
+        }
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" tz-fortnight-boundary",
+            start=f"{sunday.isoformat()}T02:00:00Z",
+            end=f"{sunday.isoformat()}T02:30:00Z",
+            timezone="UTC",
+            recurrence=recurrence,
+        ) as event_id:
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                start=f"{saturday.isoformat()}T18:00:00",
+                end=f"{saturday.isoformat()}T18:30:00",
+                recurrence=recurrence,
+                timezone=_DST_ZONE,
+                config=live_write_config,
+            )
+
+            occurrences = await _instances(
+                real_graph_client.sdk_client, event_id, saturday, _DST_ZONE
+            )
+            days = [date.fromisoformat(o.start.date_time[:10]) for o in occurrences]
+            expected = [saturday + timedelta(days=n) for n in (0, 1, 14, 15)]
+            assert days == expected, (
+                "a fortnightly Saturday-and-Sunday block should keep each pair in one "
+                f"week; got {[d.isoformat() for d in days]}"
+            )
+
 
 class TestOccurrenceChangesAreNotDiscardedSilently:
     """Reshaping a series makes Graph restore every changed occurrence.

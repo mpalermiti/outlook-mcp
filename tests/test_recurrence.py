@@ -301,6 +301,37 @@ class TestMovePattern:
         assert moved["daysOfWeek"] == ["saturday", "sunday"]
         assert moved["firstDayOfWeek"] == "saturday"
 
+    def test_a_missing_week_boundary_is_graphs_sunday_and_moves_too(self):
+        """A hand-written fortnightly pattern that omits `firstDayOfWeek`.
+
+        Graph reads the omission as Sunday. Shifting the days and leaving the
+        boundary unset kept it on Sunday, so `[saturday, sunday]` straddled it
+        and the Sundays landed a week late. Graph's own read-back always carries
+        the field, so only a pattern a caller wrote can reach this.
+        """
+        moved = self._move(
+            {"type": "weekly", "interval": 2, "daysOfWeek": ["sunday", "monday"]},
+            old=date(2026, 11, 8),
+            new=date(2026, 11, 7),
+        )
+        assert moved["daysOfWeek"] == ["saturday", "sunday"]
+        assert moved["firstDayOfWeek"] == "saturday"
+
+    @pytest.mark.parametrize("boundary", [{"firstDayOfWeek": "sunday"}, {}], ids=["set", "omitted"])
+    def test_every_week_the_boundary_is_left_as_it_was(self, boundary):
+        """Every week, the boundary schedules nothing — only the week start shown.
+
+        `same_pattern` ignores it at `interval == 1` for the same reason, so
+        moving it here would change a field the comparison calls irrelevant.
+        """
+        moved = self._move(
+            {"type": "weekly", "interval": 1, "daysOfWeek": ["thursday"], **boundary},
+            old=date(2026, 11, 5),
+            new=date(2026, 11, 4),
+        )
+        assert moved["daysOfWeek"] == ["wednesday"]
+        assert moved.get("firstDayOfWeek") == boundary.get("firstDayOfWeek")
+
     def test_weekly_wraps_forward_across_the_week(self):
         moved = self._move(
             {"type": "weekly", "interval": 1, "daysOfWeek": ["saturday"]},

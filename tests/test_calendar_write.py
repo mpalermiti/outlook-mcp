@@ -1363,7 +1363,9 @@ class TestEventTimezone:
         `startDate` sent a Wednesday start and `startDate` beside
         `daysOfWeek: ["thursday"]`, and Graph scheduled every occurrence on
         Thursday — verified live, reported as `updated`. The days move by as
-        many days as the start did, and `firstDayOfWeek` with them.
+        many days as the start did. Every week, `firstDayOfWeek` schedules
+        nothing, so it stays where it was rather than moving the week start
+        Outlook displays.
         """
         from msgraph.generated.models.day_of_week import DayOfWeek
 
@@ -1380,7 +1382,7 @@ class TestEventTimezone:
 
         sent = builder.patch.call_args[0][0].recurrence
         assert sent.pattern.days_of_week == [DayOfWeek.Wednesday]
-        assert sent.pattern.first_day_of_week is DayOfWeek.Saturday
+        assert sent.pattern.first_day_of_week is DayOfWeek.Sunday
         assert sent.range.start_date == date(2026, 11, 4)
         assert sent.range.number_of_occurrences == 3
 

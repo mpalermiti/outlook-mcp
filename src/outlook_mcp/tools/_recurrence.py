@@ -374,6 +374,20 @@ def _whole(pattern: dict, field: str) -> int | None:
     return None if value is None else _integer(value, f"pattern.{field}")
 
 
+def _week_boundary(pattern: dict) -> str | None:
+    """The day a weekly pattern's weeks start on, or ``None`` where it decides nothing.
+
+    Only a multi-week interval reads the week boundary: it decides which days
+    share a week, so moving it reshapes a fortnightly Sunday-and-Monday series.
+    Every week, it changes no occurrence, only the week start Outlook displays.
+    A pattern that omits it gets Graph's default, Sunday — which only a
+    hand-written pattern does, since Graph's read-back always carries it.
+    """
+    if (_whole(pattern, "interval") or 1) <= 1:
+        return None
+    return str(pattern.get("firstDayOfWeek") or "sunday").lower()
+
+
 def _pattern_key(pattern: Any) -> tuple | None:
     """The fields that decide which days a pattern lands on, for comparison.
 
@@ -388,12 +402,10 @@ def _pattern_key(pattern: Any) -> tuple | None:
     key: tuple = (kind, _whole(pattern, "interval") or 1)
     if kind in ("weekly", "relativeMonthly", "relativeYearly"):
         key += (frozenset(str(d).lower() for d in pattern.get("daysOfWeek") or ()),)
-    if kind == "weekly" and key[1] > 1:
-        # Only a multi-week interval reads the week boundary: it decides which
-        # days share a week, so moving it reshapes a fortnightly Sunday-and-Monday
-        # series. Every week, it changes nothing, and counting it would call an
-        # echo that dropped the field an edit. Graph's default is Sunday.
-        key += (str(pattern.get("firstDayOfWeek") or "sunday").lower(),)
+    if kind == "weekly" and (boundary := _week_boundary(pattern)):
+        # Counting the boundary every week would call an echo that dropped the
+        # field an edit.
+        key += (boundary,)
     if kind in ("absoluteMonthly", "absoluteYearly"):
         key += (_whole(pattern, "dayOfMonth"),)
     if kind in ("absoluteYearly", "relativeYearly"):
@@ -429,9 +441,12 @@ def move_pattern(payload: dict, *, old: date, new: date) -> dict:
     Thursday. Verified live — reported as ``updated``, every instance a day late.
 
     So the pattern moves by the same number of days the start did. Weekly days
-    shift together, and ``firstDayOfWeek`` with them, so a fortnightly
-    Sunday-and-Monday series stays one block rather than being split across
-    the week boundary. Absolute patterns take the new date's day (and month,
+    shift together, and a multi-week pattern's ``firstDayOfWeek`` with them —
+    Sunday when the pattern omits it — so a fortnightly Sunday-and-Monday series
+    stays one block rather than being split across the week boundary. Every
+    week, the boundary is left as it was: it schedules nothing there, and
+    shifting it would only move the week start Outlook displays. Absolute
+    patterns take the new date's day (and month,
     for yearly), provided the stored pattern was anchored on the old one.
 
     Refused, rather than approximated, where the moved series has no exact
@@ -451,8 +466,8 @@ def move_pattern(payload: dict, *, old: date, new: date) -> dict:
             return _WEEKDAYS[(_WEEKDAYS.index(str(day).lower()) + delta) % 7]
 
         pattern["daysOfWeek"] = [shifted(d) for d in pattern.get("daysOfWeek") or ()]
-        if pattern.get("firstDayOfWeek"):
-            pattern["firstDayOfWeek"] = shifted(pattern["firstDayOfWeek"])
+        if boundary := _week_boundary(pattern):
+            pattern["firstDayOfWeek"] = shifted(boundary)
     elif kind in ("absoluteMonthly", "absoluteYearly"):
         anchored = _whole(pattern, "dayOfMonth") == old.day and (
             kind == "absoluteMonthly" or _whole(pattern, "month") == old.month

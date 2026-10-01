@@ -6,6 +6,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **A fortnightly series moved to another day keeps each block within one week, even when its
+  pattern omits `firstDayOfWeek`.** When `outlook_update_event` moves a series' days with its start
+  (1.23.0), it moved the week boundary only if the pattern named one. A hand-written pattern
+  repeating every two or more weeks, on several days and with no `firstDayOfWeek`, therefore kept
+  Graph's default Sunday boundary while its days moved. A fortnightly Sunday-and-Monday series
+  moved back a day became Saturday-and-Sunday split across that boundary, and every Sunday landed a
+  week after its Saturday — verified live, reported as `updated`. A missing boundary is now treated
+  as Graph's Sunday and moved with the days. Patterns read back from Graph always carry the field,
+  so only patterns a caller wrote were affected. Every week (`interval` 1) the boundary is now left
+  as it was: it schedules nothing there, and moving it only changed the week start Outlook shows.
+
 ## [1.23.0] — 2026-09-30
 
 The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made
