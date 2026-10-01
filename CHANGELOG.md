@@ -22,9 +22,11 @@ it happen. It is now refused, and the refusal names what would be lost. Also in 
 **Breaking:** `outlook_list_accounts` and `outlook_switch_account` are removed (70 → 68 tools).
 Run one server per account with `OUTLOOK_MCP_CONFIG_DIR` instead.
 
-**Known:** Graph now honours `is_online` on personal accounts and creates a real Teams meeting,
-but `outlook_create_event`'s description and the README still say it has no effect. The
-correction, and `is_online` on `outlook_update_event`, are in progress (#70).
+**Known:** `is_online` behaves differently from one personal account to another. On two
+contributors' mailboxes Graph now honours it and creates a real Teams meeting. On the
+maintainer's it is still ignored, re-checked on 2026-09-30. `outlook_create_event`'s description
+and the README say it has no effect, which is wrong for some users. Check `is_online` in the
+event you get back. The docs correction, and `is_online` on `outlook_update_event`, are in progress (#70).
 
 ### Added
 
