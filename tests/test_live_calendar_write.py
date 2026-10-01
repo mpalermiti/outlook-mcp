@@ -1293,6 +1293,10 @@ class TestMovingASeriesKeepsItsDays:
             timezone="UTC",
             recurrence=recurrence,
         ) as event_id:
+            # The premise: Graph fills the omitted boundary in, and with Sunday.
+            stored = (await get_event(real_graph_client.sdk_client, event_id))["recurrence"]
+            assert stored["pattern"].get("firstDayOfWeek") == "sunday"
+
             await update_event(
                 real_graph_client.sdk_client,
                 event_id=event_id,
