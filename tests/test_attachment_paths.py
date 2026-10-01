@@ -120,14 +120,14 @@ def test_the_created_directory_is_restricted_to_its_owner(tmp_path):
     assert oct(base.stat().st_mode)[-3:] == "700"
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason="the fixture cannot work on Windows: ntpath.expanduser resolves ~ from USERPROFILE "
-    "rather than HOME, so monkeypatch.setenv('HOME', ...) leaves the real home in place "
-    "(measured: C:/Users/<me>/attach) (#85).",
-)
 def test_user_home_is_expanded(tmp_path, monkeypatch):
+    """`~` is expanded before confinement, on every platform.
+
+    Both variables, because each platform reads a different one: posixpath.expanduser
+    uses HOME, ntpath.expanduser uses USERPROFILE and ignores HOME (#89).
+    """
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     resolved = resolve_attachment_path("out.pdf", "~/attach")
     assert resolved == str((tmp_path / "attach").resolve() / "out.pdf")
 

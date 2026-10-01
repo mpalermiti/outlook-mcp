@@ -11,12 +11,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Four tests no longer fail on every Windows run, and `load_config` stops re-`chmod`ing the
   config file on every load.** Two separate causes. `os.chmod` on Windows honours only the
   read-only attribute, so `0o700` and `0o600` are not representable there (measured: `0o777`
-  and `0o666`) and three mode assertions could never pass; `ntpath.expanduser` resolves `~`
-  from `USERPROFILE` rather than `HOME`, so a fourth test's `monkeypatch.setenv("HOME", ...)`
-  fixture had no effect. Those assertions are now `skipif(sys.platform == "win32")` with the
-  reason in the marker, and the portable halves of two of them — that the directory is created,
-  and that an attachment path stays confined to it — keep running on Windows rather than being
-  skipped along with the mode.
+  and `0o666`) and three mode assertions could never pass. Those are now
+  `skipif(sys.platform == "win32")` with the reason in the marker, and the portable halves of two
+  of them — that the directory is created, and that an attachment path stays confined to it —
+  keep running on Windows rather than being skipped along with the mode. The fourth test,
+  `~`-expansion on the attachment-confinement path, was a fixture bug rather than an impossible
+  assertion: `ntpath.expanduser` resolves `~` from `USERPROFILE`, not `HOME`, so patching `HOME`
+  alone had no effect. It now patches both and runs on every platform (#89).
 
   **Behaviour change.** `load_config` read the config file's mode and re-applied `0o600` when it
   differed. On Windows the mode never reads back as `0o600`, so that check could never converge
