@@ -6,6 +6,26 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.23.0] — 2026-09-30
+
+The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made
+Graph silently undo every occurrence someone had edited or deleted, and `outlook_update_event` let
+it happen. It is now refused, and the refusal names what would be lost. Also in this release:
+
+- Events are anchored in a real time zone, so recurring series survive daylight-saving changes.
+- An event can be re-anchored into another zone on update.
+- To Do tasks gain sub-steps, detail reads and attachments.
+- `outlook_list_events` reads secondary calendars and reports each event's `type`.
+- Events carry a "Show as" status.
+- Contacts round-trip their addresses, categories and notes.
+
+**Breaking:** `outlook_list_accounts` and `outlook_switch_account` are removed (70 → 68 tools).
+Run one server per account with `OUTLOOK_MCP_CONFIG_DIR` instead.
+
+**Known:** Graph now honours `is_online` on personal accounts and creates a real Teams meeting,
+but `outlook_create_event`'s description and the README still say it has no effect. The
+correction, and `is_online` on `outlook_update_event`, are in progress (#70).
+
 ### Added
 
 - **`OUTLOOK_MCP_CONFIG_DIR` moves the settings directory — and only it.** Set it (per
@@ -74,6 +94,78 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `outlook_create_event` still takes one `timezone`, and `outlook_update_event` preserves a split
   it finds without being able to author one.
 
+- **Events carry a "Show as" status, on both the write and the read side.** Graph's `showAs`
+  — Outlook's free/busy field — was reachable through neither: `outlook_create_event` and
+  `outlook_update_event` had no way to set it, and every read path dropped it. There was no
+  way to create a tentative hold, mark a block as free, or say "working elsewhere". This was
+  never an API limitation: `showAs` is a writable property on `microsoft.graph.event`, and a
+  live probe against a consumer mailbox confirmed Graph stores all six values (`free`,
+  `tentative`, `busy`, `oof`, `workingElsewhere`, `unknown`) on POST and on PATCH, each read
+  back on a fresh GET — no value is accepted and then silently dropped. `show_as` accepts
+  those values case-insensitively plus the spellings an agent reads off the Outlook menu
+  (`out of office`, `working elsewhere`); anything else is refused with the valid set named,
+  rather than passed through to a Graph 400 that lists nothing. Omitting it leaves Graph's
+  own default of `busy` — and, on update, the event's current status — untouched.
+
+  **Response-shape change:** `outlook_list_events`, `outlook_get_event` and
+  `outlook_list_events_delta` each gain a `show_as` key. Additive, and `show_as` is `""` only
+  when Graph did not return the field. `concise=True` deliberately does *not* carry it, on the
+  same terms as `response_status`, so the highest-volume listing costs no more than before.
+
+- **`outlook_list_events(calendar=…)` reads secondary calendars.** Every calendar read went to
+  the default calendar, so events in a class schedule or a shared team calendar were
+  unreachable — an empty listing with no hint why. `calendar` takes a display name
+  (case-insensitive) or an ID from `outlook_list_calendars`; omit it, or pass `"primary"`, for
+  the default calendar and the unchanged single round-trip. Names are matched before anything
+  is assumed about IDs — "Kids + School" and "Calendar - Jane Smith (…)" are names, however
+  ID-like they look — and an ID that is not one of the user's calendars is refused with the
+  real list rather than sent to Graph. A listing is resolved once: the cursor carries the
+  calendar, so a later page neither re-lists `/me/calendars` nor drifts to the default calendar
+  when `calendar` is omitted. `/me/calendars` is now read in full (paged) here and in
+  `outlook_list_calendars`.
+
+  Thanks to **@Nyaecho** for the feature (#62).
+
+- **To Do tasks grew sub-steps, detail reads, and attachments (8 new tools).**
+  `outlook_get_task` reads one task in full — notes, due, recurrence flag, and its checklist
+  items via `$expand=checklistItems`, ordered unchecked-first with creation time as the
+  tiebreak (deterministic, so the first open item stably reads as "the next step").
+  `outlook_add_checklist_item`, `outlook_update_checklist_item` (partial
+  patch: `is_checked` or rename) and `outlook_delete_checklist_item` manage those sub-steps.
+  Task attachments are their own resource, not mail FileAttachments: creation is an inline
+  base64 POST of a `taskFileAttachment` — verified live on a consumer outlook.com mailbox
+  from 64 bytes to the full 20 MiB ceiling. (The upload-session route exists on those
+  accounts too — `createUploadSession` answers 201 — but its upload URL is a Graph route,
+  so every chunk PUT needs `Authorization` and `Content-Type` headers, response checking,
+  and `nextExpectedRanges` handling; inline stays the simpler, verified path at these
+  sizes and sessions are the documented future route above 20 MiB.) The client-side
+  ceiling is **1 byte – 20 MiB**: Graph rejects request bodies over 30 MB and base64
+  inflates the file 4/3. Downloads read `contentBytes` off the attachment entity and
+  write atomically (temp
+  file + replace), so a failed fetch can never truncate a file already staged in
+  `attachments_dir`. `outlook_list_task_attachments` paginates (`$top` + cursor) like every
+  other list tool; uploads and downloads are confined to `attachments_dir`, same as mail
+  attachments. Tool count: 62 → 70.
+
+- **`outlook_update_contact` can write the addresses it can now read** — `home_address`,
+  `business_address` and `other_address`, each taking the same shape `outlook_get_contact`
+  returns (any subset of `street`, `city`, `state`, `postal_code`, `country_or_region`). One
+  vocabulary for both halves, so keeping the parts you are not changing is handing the address
+  straight back rather than renaming five keys. Graph **replaces** the whole address object
+  rather than merging into it, so parts not supplied come back empty; the tool docstring, README
+  and SKILL.md say so, and a live guard pins it. Omitting an address leaves it untouched, and an
+  address that carries no content is an error rather than a PATCH that reports `updated` having
+  done nothing — this tool cannot clear an address.
+
+  A part that was not supplied is now left unset rather than assigned `None`: the Graph request
+  adapter serializes through the backing store, which emits an explicitly-`None` field — and for a
+  nested model emits it onto the *parent*, under its Python name. Every partial address therefore
+  went out as `{"country_or_region": null, …, "homeAddress": {…}}` and came back
+  `400 The property 'country_or_region' does not exist on type 'microsoft.graph.contact'`, while
+  the full five-part write returned 200. Caught by the live write tier; the offline guard that now
+  pins it has to serialize through the backing-store proxy, because the bare `JsonSerializationWriter`
+  cannot see the difference.
+
 ### Changed
 
 - **Legacy `accounts` / `default_account` config keys load with a warning instead of failing.**
@@ -88,6 +180,64 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   exit code 1 and a note on stderr saying what to fix — stdout, the protocol channel, stays
   empty. The CLI commands do the same. Reached through the lifespan directly, the same failures
   degrade to a read-only boot whose every tool call carries the repair.
+
+- **Response shape: `outlook_list_events` and `outlook_list_events_delta` both carry `type`.**
+  Two changes, one contract. The listing's `type` key already existed and was always `""`; it
+  now carries `occurrence` or `exception` for an instance of a recurring series and
+  `singleInstance` for a one-off, so a caller branching on `type == ""` (or treating the field as
+  never set) sees new behaviour.
+
+  **The two tools do not carry the same *values*, which is worth knowing before branching on
+  them.** `outlook_list_events` is `/me/calendarView`, which returns expanded instances, so a
+  `seriesMaster` never appears on it — the discriminator there is `occurrence`/`exception`
+  against `singleInstance`, and an agent filtering a listing for `seriesMaster` to find recurring
+  meetings matches nothing. `outlook_list_events_delta` is `/me/calendarView/delta`, a different
+  endpoint, and it *does* return masters alongside instances. Both measured live over one
+  ±180-day window: the listing gave 276 `occurrence`, 206 `singleInstance`, 18 `exception` and
+  no masters; the delta gave 212 `singleInstance`, 94 `seriesMaster` and 94 `occurrence`, three
+  of which were read back by id and confirmed as masters carrying a real recurrence. So a caller
+  that seeds from the listing and refreshes from the delta should expect master ids the seed
+  never held.
+  `outlook_list_events_delta` gains a `type` key it has never had — its formatter's docstring
+  claimed to mirror the listing's field-for-field and did not, which mattered because `SKILL.md`
+  steers recurring work to the delta tool: an agent seeding from `outlook_list_events` and
+  refreshing from the delta tool would have hit a `KeyError` or a silent downgrade the moment
+  the listing started returning real values. That parity is between the delta and the
+  **default** listing shape — `concise=True` has its own, narrower keys and has never matched
+  the delta, which is why the README and `SKILL.md` now say "the default listing" rather than
+  "`outlook_list_events`". The parity claim is now a key-set test rather than
+  a sentence, so a field added to either formatter fails until it is added to both.
+
+  `outlook_list_events` also stops fetching `categories`, which it never returned to anyone —
+  no response-shape change, purely bytes it was paying Graph for. `concise=True` omits `type`,
+  as it always has; `outlook_get_event` is unchanged and still returns `categories`.
+
+- **The five existing To Do tools got stricter inputs and ISO datetimes.** `outlook_list_tasks`,
+  `outlook_get_task`, `outlook_create_task`, `outlook_update_task`, `outlook_complete_task` and
+  `outlook_delete_task` (and the new detail tools) share one `list_id` resolver, and it changed
+  in ways clients can observe. An empty `list_id` string is now **rejected** instead of
+  silently falling back to the default list — clients that fill every optional string with `""`
+  were quietly targeting the default list; the error names the fix (omit the argument). An
+  explicit `list_id` is now validated as a Graph id, so a mistyped id fails locally with the
+  offending value instead of as an opaque Graph 400. The default list is resolved **once per
+  process** rather than on every call (halving the request count of a normal checklist flow);
+  only a found `defaultList` is cached — the first-list fallback re-resolves. Response
+  timestamps (`created`, `completed`, `checked_at`) are now real ISO 8601 with a `T`
+  (`2026-09-15T09:00:00+00:00`), not Python's `str(datetime)` with a space separator, so they
+  sort and parse as datetimes.
+
+- **SKILL.md installs from PyPI instead of cloning `main`.** The OpenClaw install manifest
+  ran `git clone … && uv sync`, which fetches whatever is on the default branch at install
+  time — unpinned, unversioned, and not what any release was tested as. It now runs
+  `uv tool install outlook-graph-mcp`: the released wheel, hash-pinned by the index, which
+  exposes the same `outlook-mcp` binary the manifest declares. The setup steps moved with it,
+  so registration is `openclaw mcp set outlook '{"command":"outlook-mcp"}'` and auth is plain
+  `outlook-mcp auth` with no clone path to substitute. Contributors get a pointer to the
+  source workflow instead.
+
+  README already recommended the PyPI install as Option A, so SKILL.md was the outlier.
+  Flagged by the ClawHub scanner against 1.22.0: *"its OpenClaw install command fetches
+  mutable source code from GitHub."*
 
 ### Removed
 
@@ -247,125 +397,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and a new test asserts the listing really sends the constant the guard checks. Live guards
   cover both `type` and `show_as` on the listing, and `type` on the delta path.
 
-### Changed
-
-- **Response shape: `outlook_list_events` and `outlook_list_events_delta` both carry `type`.**
-  Two changes, one contract. The listing's `type` key already existed and was always `""`; it
-  now carries `occurrence` or `exception` for an instance of a recurring series and
-  `singleInstance` for a one-off, so a caller branching on `type == ""` (or treating the field as
-  never set) sees new behaviour.
-
-  **The two tools do not carry the same *values*, which is worth knowing before branching on
-  them.** `outlook_list_events` is `/me/calendarView`, which returns expanded instances, so a
-  `seriesMaster` never appears on it — the discriminator there is `occurrence`/`exception`
-  against `singleInstance`, and an agent filtering a listing for `seriesMaster` to find recurring
-  meetings matches nothing. `outlook_list_events_delta` is `/me/calendarView/delta`, a different
-  endpoint, and it *does* return masters alongside instances. Both measured live over one
-  ±180-day window: the listing gave 276 `occurrence`, 206 `singleInstance`, 18 `exception` and
-  no masters; the delta gave 212 `singleInstance`, 94 `seriesMaster` and 94 `occurrence`, three
-  of which were read back by id and confirmed as masters carrying a real recurrence. So a caller
-  that seeds from the listing and refreshes from the delta should expect master ids the seed
-  never held.
-  `outlook_list_events_delta` gains a `type` key it has never had — its formatter's docstring
-  claimed to mirror the listing's field-for-field and did not, which mattered because `SKILL.md`
-  steers recurring work to the delta tool: an agent seeding from `outlook_list_events` and
-  refreshing from the delta tool would have hit a `KeyError` or a silent downgrade the moment
-  the listing started returning real values. That parity is between the delta and the
-  **default** listing shape — `concise=True` has its own, narrower keys and has never matched
-  the delta, which is why the README and `SKILL.md` now say "the default listing" rather than
-  "`outlook_list_events`". The parity claim is now a key-set test rather than
-  a sentence, so a field added to either formatter fails until it is added to both.
-
-  `outlook_list_events` also stops fetching `categories`, which it never returned to anyone —
-  no response-shape change, purely bytes it was paying Graph for. `concise=True` omits `type`,
-  as it always has; `outlook_get_event` is unchanged and still returns `categories`.
-
-### Added
-
-- **Events carry a "Show as" status, on both the write and the read side.** Graph's `showAs`
-  — Outlook's free/busy field — was reachable through neither: `outlook_create_event` and
-  `outlook_update_event` had no way to set it, and every read path dropped it. There was no
-  way to create a tentative hold, mark a block as free, or say "working elsewhere". This was
-  never an API limitation: `showAs` is a writable property on `microsoft.graph.event`, and a
-  live probe against a consumer mailbox confirmed Graph stores all six values (`free`,
-  `tentative`, `busy`, `oof`, `workingElsewhere`, `unknown`) on POST and on PATCH, each read
-  back on a fresh GET — no value is accepted and then silently dropped. `show_as` accepts
-  those values case-insensitively plus the spellings an agent reads off the Outlook menu
-  (`out of office`, `working elsewhere`); anything else is refused with the valid set named,
-  rather than passed through to a Graph 400 that lists nothing. Omitting it leaves Graph's
-  own default of `busy` — and, on update, the event's current status — untouched.
-
-  **Response-shape change:** `outlook_list_events`, `outlook_get_event` and
-  `outlook_list_events_delta` each gain a `show_as` key. Additive, and `show_as` is `""` only
-  when Graph did not return the field. `concise=True` deliberately does *not* carry it, on the
-  same terms as `response_status`, so the highest-volume listing costs no more than before.
-
-- **`outlook_list_events(calendar=…)` reads secondary calendars.** Every calendar read went to
-  the default calendar, so events in a class schedule or a shared team calendar were
-  unreachable — an empty listing with no hint why. `calendar` takes a display name
-  (case-insensitive) or an ID from `outlook_list_calendars`; omit it, or pass `"primary"`, for
-  the default calendar and the unchanged single round-trip. Names are matched before anything
-  is assumed about IDs — "Kids + School" and "Calendar - Jane Smith (…)" are names, however
-  ID-like they look — and an ID that is not one of the user's calendars is refused with the
-  real list rather than sent to Graph. A listing is resolved once: the cursor carries the
-  calendar, so a later page neither re-lists `/me/calendars` nor drifts to the default calendar
-  when `calendar` is omitted. `/me/calendars` is now read in full (paged) here and in
-  `outlook_list_calendars`.
-
-  Thanks to **@Nyaecho** for the feature (#62).
-
-- **To Do tasks grew sub-steps, detail reads, and attachments (8 new tools).**
-  `outlook_get_task` reads one task in full — notes, due, recurrence flag, and its checklist
-  items via `$expand=checklistItems`, ordered unchecked-first with creation time as the
-  tiebreak (deterministic, so the first open item stably reads as "the next step").
-  `outlook_add_checklist_item`, `outlook_update_checklist_item` (partial
-  patch: `is_checked` or rename) and `outlook_delete_checklist_item` manage those sub-steps.
-  Task attachments are their own resource, not mail FileAttachments: creation is an inline
-  base64 POST of a `taskFileAttachment` — verified live on a consumer outlook.com mailbox
-  from 64 bytes to the full 20 MiB ceiling. (The upload-session route exists on those
-  accounts too — `createUploadSession` answers 201 — but its upload URL is a Graph route,
-  so every chunk PUT needs `Authorization` and `Content-Type` headers, response checking,
-  and `nextExpectedRanges` handling; inline stays the simpler, verified path at these
-  sizes and sessions are the documented future route above 20 MiB.) The client-side
-  ceiling is **1 byte – 20 MiB**: Graph rejects request bodies over 30 MB and base64
-  inflates the file 4/3. Downloads read `contentBytes` off the attachment entity and
-  write atomically (temp
-  file + replace), so a failed fetch can never truncate a file already staged in
-  `attachments_dir`. `outlook_list_task_attachments` paginates (`$top` + cursor) like every
-  other list tool; uploads and downloads are confined to `attachments_dir`, same as mail
-  attachments. Tool count: 62 → 70.
-
-### Changed
-
-- **The five existing To Do tools got stricter inputs and ISO datetimes.** `outlook_list_tasks`,
-  `outlook_get_task`, `outlook_create_task`, `outlook_update_task`, `outlook_complete_task` and
-  `outlook_delete_task` (and the new detail tools) share one `list_id` resolver, and it changed
-  in ways clients can observe. An empty `list_id` string is now **rejected** instead of
-  silently falling back to the default list — clients that fill every optional string with `""`
-  were quietly targeting the default list; the error names the fix (omit the argument). An
-  explicit `list_id` is now validated as a Graph id, so a mistyped id fails locally with the
-  offending value instead of as an opaque Graph 400. The default list is resolved **once per
-  process** rather than on every call (halving the request count of a normal checklist flow);
-  only a found `defaultList` is cached — the first-list fallback re-resolves. Response
-  timestamps (`created`, `completed`, `checked_at`) are now real ISO 8601 with a `T`
-  (`2026-09-15T09:00:00+00:00`), not Python's `str(datetime)` with a space separator, so they
-  sort and parse as datetimes.
-
-- **SKILL.md installs from PyPI instead of cloning `main`.** The OpenClaw install manifest
-  ran `git clone … && uv sync`, which fetches whatever is on the default branch at install
-  time — unpinned, unversioned, and not what any release was tested as. It now runs
-  `uv tool install outlook-graph-mcp`: the released wheel, hash-pinned by the index, which
-  exposes the same `outlook-mcp` binary the manifest declares. The setup steps moved with it,
-  so registration is `openclaw mcp set outlook '{"command":"outlook-mcp"}'` and auth is plain
-  `outlook-mcp auth` with no clone path to substitute. Contributors get a pointer to the
-  source workflow instead.
-
-  README already recommended the PyPI install as Option A, so SKILL.md was the outlier.
-  Flagged by the ClawHub scanner against 1.22.0: *"its OpenClaw install command fetches
-  mutable source code from GitHub."*
-
-### Fixed
-
 - **`outlook_get_contact` returns the addresses, categories and notes Graph was already sending.**
   The tool sends no `$select`, so Graph returns the whole contact — and the detail formatter read
   12 fields of it. A contact with a home address, two categories and a note read back as having
@@ -389,27 +420,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   either `KeyError` on the key or report every changed contact as uncategorised, which is the
   same "empty means absent" lie this entry exists to fix, one module over.
   `/me/contacts/delta` takes no `$select`, so Graph was already sending it.
-
-### Added
-
-- **`outlook_update_contact` can write the addresses it can now read** — `home_address`,
-  `business_address` and `other_address`, each taking the same shape `outlook_get_contact`
-  returns (any subset of `street`, `city`, `state`, `postal_code`, `country_or_region`). One
-  vocabulary for both halves, so keeping the parts you are not changing is handing the address
-  straight back rather than renaming five keys. Graph **replaces** the whole address object
-  rather than merging into it, so parts not supplied come back empty; the tool docstring, README
-  and SKILL.md say so, and a live guard pins it. Omitting an address leaves it untouched, and an
-  address that carries no content is an error rather than a PATCH that reports `updated` having
-  done nothing — this tool cannot clear an address.
-
-  A part that was not supplied is now left unset rather than assigned `None`: the Graph request
-  adapter serializes through the backing store, which emits an explicitly-`None` field — and for a
-  nested model emits it onto the *parent*, under its Python name. Every partial address therefore
-  went out as `{"country_or_region": null, …, "homeAddress": {…}}` and came back
-  `400 The property 'country_or_region' does not exist on type 'microsoft.graph.contact'`, while
-  the full five-part write returned 200. Caught by the live write tier; the offline guard that now
-  pins it has to serialize through the backing-store proxy, because the bare `JsonSerializationWriter`
-  cannot see the difference.
 
 ## [1.22.1] — 2026-09-29
 
