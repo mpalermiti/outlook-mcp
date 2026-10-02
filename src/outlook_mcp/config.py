@@ -3,6 +3,7 @@
 import logging
 import os
 import stat
+import sys
 import tempfile
 from pathlib import Path
 
@@ -147,16 +148,24 @@ class Config(BaseModel):
         return value
 
 
+# The 0o700 directory and 0o600 file modes below are POSIX-only. On Windows os.chmod can set
+# nothing but the read-only attribute, so these calls cannot enforce the owner-only access they
+# ask for. What governs the path there is its Windows ACL, including whatever it inherits from
+# the directory it was created under — which this code neither applies nor verifies, and which
+# is not necessarily the user profile's: both the config directory and attachments_dir are
+# configurable and may sit on another drive or a network share. auth.py writes the auth record
+# through these same two helpers, so this covers that file too. Recorded rather than pretended
+# (#85); applying a real DACL is a separate change.
 def _ensure_dir(dir_path: str) -> Path:
-    """Create config directory with 0700 permissions."""
+    """Create the config directory, restricted to 0700 where the platform can enforce it."""
     path = Path(dir_path)
     path.mkdir(parents=True, exist_ok=True)
-    path.chmod(0o700)
+    path.chmod(0o700)  # POSIX-only; see the note above.
     return path
 
 
 def atomic_write(file_path: Path, data: str) -> None:
-    """Write file atomically with fsync, set 0600 permissions."""
+    """Write file atomically with fsync, restricted to 0600 where the platform can enforce it."""
     dir_path = file_path.parent
     fd, tmp_path = tempfile.mkstemp(dir=str(dir_path), suffix=".tmp")
     try:
@@ -164,7 +173,7 @@ def atomic_write(file_path: Path, data: str) -> None:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
-        os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+        os.chmod(tmp_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600, POSIX-only; see the note above.
         os.replace(tmp_path, str(file_path))
     except Exception:
         os.unlink(tmp_path)
@@ -241,9 +250,16 @@ def load_config(config_dir: str = DEFAULT_CONFIG_DIR) -> Config:
     if file_path.is_symlink():
         raise PermissionError(f"Refusing to load symlinked config: {file_path}")
 
-    mode = file_path.stat().st_mode & 0o777
-    if mode != 0o600:
-        file_path.chmod(0o600)
+    # Windows cannot represent 0o600, so the mode never reads back as 0o600 there and this
+    # check re-chmodded the file on every single load without ever converging. Skipped where
+    # the bits do not apply. That carries one real behaviour change: a config.json the user
+    # has marked read-only used to have that attribute cleared here — chmod on Windows does
+    # honour read-only, so 0o444 became 0o666 — and it now stays read-only. See the note
+    # above _ensure_dir.
+    if sys.platform != "win32":
+        mode = file_path.stat().st_mode & 0o777
+        if mode != 0o600:
+            file_path.chmod(0o600)
 
     data = file_path.read_text()
     return Config.model_validate_json(data)

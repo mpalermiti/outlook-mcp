@@ -11,6 +11,7 @@ Confinement is resolved, not textual: ``..`` and a symlink pointing out of the
 directory both have to fail, which a string check cannot do.
 """
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -103,11 +104,30 @@ def test_directory_is_created_on_demand(tmp_path):
 
     assert base.is_dir()
     assert resolved.startswith(str(base.resolve()))
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="os.chmod on Windows honours only the read-only attribute, so 0o700 is not "
+    "representable there (measured: 0o777). The POSIX guarantee is real and stays asserted "
+    "where it holds (#85).",
+)
+def test_the_created_directory_is_restricted_to_its_owner(tmp_path):
+    """A directory we create is ours to lock down, so it is 0700 where modes are enforceable."""
+    base = tmp_path / "never-created"
+    resolve_attachment_path("out.pdf", str(base))
+
     assert oct(base.stat().st_mode)[-3:] == "700"
 
 
 def test_user_home_is_expanded(tmp_path, monkeypatch):
+    """`~` is expanded before confinement, on every platform.
+
+    Both variables, because each platform reads a different one: posixpath.expanduser
+    uses HOME, ntpath.expanduser uses USERPROFILE and ignores HOME (#89).
+    """
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     resolved = resolve_attachment_path("out.pdf", "~/attach")
     assert resolved == str((tmp_path / "attach").resolve() / "out.pdf")
 

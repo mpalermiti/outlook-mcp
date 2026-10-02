@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -20,15 +21,33 @@ def test_default_config():
 
 
 def test_config_dir_created(tmp_path, monkeypatch):
-    """Config directory is created with 0700 permissions."""
+    """Config directory is created on save."""
     config_dir = tmp_path / ".outlook-mcp"
     monkeypatch.setenv("OUTLOOK_MCP_CONFIG_DIR", str(config_dir))
     save_config(Config(), config_dir=str(config_dir))
     assert config_dir.exists()
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="os.chmod on Windows honours only the read-only attribute, so 0o700 is not "
+    "representable there (measured: 0o777). The POSIX guarantee is real and stays asserted "
+    "where it holds (#85).",
+)
+def test_config_dir_is_restricted_to_its_owner(tmp_path):
+    """The directory holds a token-adjacent file, so it is 0700 where modes are enforceable."""
+    config_dir = tmp_path / ".outlook-mcp"
+    save_config(Config(), config_dir=str(config_dir))
     assert oct(config_dir.stat().st_mode & 0o777) == "0o700"
 
 
-def test_config_file_permissions(tmp_path, monkeypatch):
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="os.chmod on Windows honours only the read-only attribute, so 0o600 is not "
+    "representable there (measured: 0o666). The POSIX guarantee is real and stays asserted "
+    "where it holds (#85).",
+)
+def test_config_file_permissions(tmp_path):
     """Config file is written with 0600 permissions."""
     config_dir = tmp_path / ".outlook-mcp"
     config_dir.mkdir(mode=0o700)
@@ -249,3 +268,70 @@ def test_valid_config_produces_no_key_warnings(tmp_path, caplog):
 
     assert loaded.timezone == "Asia/Tokyo"
     assert caplog.records == []
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the repair asserts a POSIX mode, and os.chmod on Windows cannot set 0o600 (#85).",
+)
+def test_a_loose_mode_is_repaired_on_load(tmp_path):
+    """The hardening is self-repairing where the bits apply: 0o644 on disk, 0o600 after a load."""
+    config_dir = tmp_path / ".outlook-mcp"
+    save_config(Config(), config_dir=str(config_dir))
+    config_file = config_dir / "config.json"
+
+    os.chmod(config_file, 0o644)
+    assert oct(config_file.stat().st_mode & 0o777) == "0o644"  # premise
+
+    load_config(config_dir=str(config_dir))
+    assert oct(config_file.stat().st_mode & 0o777) == "0o600"
+
+
+def test_the_repair_is_skipped_where_the_mode_bits_do_not_apply(tmp_path, monkeypatch):
+    """On Windows the mode never reads back as 0o600, so the check could never converge.
+
+    It re-chmodded the file on every single load instead — the defect in #85. This runs on
+    every platform: the branch is driven by monkeypatching the expression the product
+    actually evaluates, not by the host it happens to run on.
+    """
+    config_dir = tmp_path / ".outlook-mcp"
+    save_config(Config(client_id="sentinel-from-disk"), config_dir=str(config_dir))
+    config_file = config_dir / "config.json"
+
+    os.chmod(config_file, 0o644)  # a no-op on Windows, which is the point
+    assert oct(config_file.stat().st_mode & 0o777) != "0o600"  # premise, on both platforms
+
+    calls = []
+    monkeypatch.setattr(Path, "chmod", lambda self, mode, **kw: calls.append((self, mode)))
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    # The sentinel, not a default: Config().tenant_id is "consumers" too, so asserting that
+    # would have passed against a file that was never read at all. Twice, because the defect
+    # is per load rather than on the first one.
+    for _ in range(2):
+        assert load_config(config_dir=str(config_dir)).client_id == "sentinel-from-disk"
+
+    assert calls == []
+
+
+def test_the_repair_still_runs_where_the_mode_bits_apply(tmp_path, monkeypatch):
+    """The mirror of the test above: the guard must not disable the repair everywhere.
+
+    Runs on every platform for the same reason, and is what fails if the guard is ever
+    inverted — a direction the POSIX outcome test cannot demonstrate on Windows, where it
+    is skipped.
+    """
+    config_dir = tmp_path / ".outlook-mcp"
+    save_config(Config(), config_dir=str(config_dir))
+    config_file = config_dir / "config.json"
+
+    os.chmod(config_file, 0o644)  # a no-op on Windows; either way the mode is not 0o600
+    assert oct(config_file.stat().st_mode & 0o777) != "0o600"  # premise, on both platforms
+
+    calls = []
+    monkeypatch.setattr(Path, "chmod", lambda self, mode, **kw: calls.append((self, mode)))
+    monkeypatch.setattr(sys, "platform", "linux")
+
+    load_config(config_dir=str(config_dir))
+
+    assert calls == [(config_file, 0o600)]
