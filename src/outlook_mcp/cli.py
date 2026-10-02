@@ -16,7 +16,8 @@ def _load_config_or_exit() -> Config:
 
     The same failure set the server exits on before its transport starts:
     an invalid value, a refused symlink, an unreadable file or directory,
-    non-UTF-8 bytes, a settings path that is a file.
+    a file that is neither UTF-8 nor a valid config in the machine's code
+    page, a settings path that is a file.
     """
     try:
         return load_config()

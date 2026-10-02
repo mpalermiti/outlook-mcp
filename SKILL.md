@@ -36,7 +36,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 
 1. **Create a free Azure account** at [azure.microsoft.com/free](https://azure.microsoft.com/free) (sign up with your `@outlook.com` address)
 2. **Register an Azure AD app** (see README for step-by-step)
-3. **Configure:** Create `~/.outlook-mcp/config.json`:
+3. **Configure:** Create `~/.outlook-mcp/config.json`, saved as UTF-8:
    ```json
    {
      "client_id": "YOUR-APP-CLIENT-ID",

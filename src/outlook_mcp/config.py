@@ -1,5 +1,6 @@
 """Config file management for outlook-mcp."""
 
+import locale
 import logging
 import os
 import stat
@@ -7,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from outlook_mcp.permissions import VALID_CATEGORIES
 
@@ -169,7 +170,9 @@ def atomic_write(file_path: Path, data: str) -> None:
     dir_path = file_path.parent
     fd, tmp_path = tempfile.mkstemp(dir=str(dir_path), suffix=".tmp")
     try:
-        with os.fdopen(fd, "w") as f:
+        # UTF-8, never the locale default (cp1252 on Windows): this writes both config.json and
+        # the auth record, and neither file's bytes should depend on the machine that wrote it.
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
@@ -195,8 +198,6 @@ def config_repair_lines(exc: Exception) -> list[str]:
     starts), its lifespan backstop, and the CLI. No traceback — every line
     is something the operator can act on.
     """
-    from pydantic import ValidationError
-
     lines: list[str]
     if isinstance(exc, ValidationError):
         lines = ["The config file is invalid — the server cannot start:"]
@@ -211,10 +212,21 @@ def config_repair_lines(exc: Exception) -> list[str]:
             "A symlinked config.json is refused on purpose: replace it with "
             "a real file, then restart the server.",
         ]
+    elif isinstance(exc, UnicodeDecodeError):
+        # A file that is neither UTF-8 nor a valid config in this machine's code
+        # page: UTF-16 (what Windows PowerShell 5.1's `>` and Out-File write),
+        # bytes that are not text at all, or a code-page file that also fails
+        # validation, whose value error shows once it is re-saved. Checked
+        # before the generic branch, which it would otherwise fall into as a
+        # ValueError.
+        lines = [
+            f"Cannot load the config file — the server cannot start: {exc}",
+            "config.json must be saved as UTF-8 (a byte-order mark is accepted). "
+            f"Re-save it as UTF-8 in {DEFAULT_CONFIG_DIR}, then restart the server.",
+        ]
     else:
         # OSError: unreadable file or directory, chmod-protected path.
-        # ValueError: non-UTF-8 bytes in the file, or a settings path that
-        # exists but is not a directory.
+        # ValueError: a settings path that exists but is not a directory.
         lines = [
             f"Cannot load the config file — the server cannot start: {exc}",
             "Check the file and its directory are readable and owned by you, "
@@ -261,5 +273,49 @@ def load_config(config_dir: str = DEFAULT_CONFIG_DIR) -> Config:
         if mode != 0o600:
             file_path.chmod(0o600)
 
-    data = file_path.read_text()
+    raw = file_path.read_bytes()
+    try:
+        # config.json is written by hand and copied between machines, so it is UTF-8 whatever
+        # this machine's locale is (#99). utf-8-sig also accepts the byte-order mark that
+        # Windows PowerShell 5.1's `Set-Content -Encoding utf8` writes.
+        data = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        legacy = _load_legacy_locale_config(raw, file_path)
+        if legacy is None:
+            raise
+        return legacy
     return Config.model_validate_json(data)
+
+
+def _load_legacy_locale_config(raw: bytes, file_path: Path) -> Config | None:
+    """Read a config.json saved in this machine's code page, as releases before #99 did.
+
+    Those releases decoded the file in the locale encoding, so a config written in the ANSI
+    code page — Windows PowerShell 5.1's `Set-Content` default — with an accented value
+    loaded correctly. Refusing it now would stop a working install from starting, so it keeps
+    loading, with a warning asking for a re-save as UTF-8.
+
+    A locale fallback for an otherwise valid configuration, nothing more. It runs only on
+    bytes that are not UTF-8, and it accepts only a result that validates, which is what
+    turns everything else away without a case of its own. Where the locale is UTF-8, the
+    decode fails again. UTF-16, which is what Windows PowerShell 5.1's `>` and `Out-File`
+    write, decodes as cp1252 byte for byte, but its NULs can never parse as JSON. Validating
+    proves the text is a usable config, not which encoding wrote it. A legacy file whose
+    bytes also happen to be valid UTF-8 never reaches this; it is read as UTF-8, which is the
+    inherent limit of a UTF-8 file format. None means "no rescue": the caller re-raises the
+    UTF-8 error, whose remedy names the fix.
+    """
+    # Exactly what Path.read_text() used before #99: locale.getencoding() outside UTF-8 mode,
+    # UTF-8 inside it.
+    encoding = locale.getpreferredencoding(False)
+    try:
+        config = Config.model_validate_json(raw.decode(encoding))
+    except (LookupError, UnicodeDecodeError, ValidationError):  # LookupError: unknown codec
+        return None
+    logger.warning(
+        "%s is not UTF-8; read it in this machine's code page (%s), as earlier releases did. "
+        "Re-save it as UTF-8 so it reads the same on every machine.",
+        file_path,
+        encoding,
+    )
+    return config

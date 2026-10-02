@@ -1,14 +1,18 @@
 """Tests for config management."""
 
+import codecs
 import json
+import locale
+import logging
 import os
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
 
-from outlook_mcp.config import Config, load_config, save_config
+from outlook_mcp.config import Config, config_repair_lines, load_config, save_config
 
 
 def test_default_config():
@@ -335,3 +339,217 @@ def test_the_repair_still_runs_where_the_mode_bits_apply(tmp_path, monkeypatch):
     load_config(config_dir=str(config_dir))
 
     assert calls == [(config_file, 0o600)]
+
+
+# ── config.json is UTF-8, whatever the machine's locale (#99) ──
+#
+# The locale encoding is cp1252 on a typical Windows install and UTF-8 on macOS and Linux, so
+# the first test below can only fail on a host whose locale is not UTF-8. The fallback tests
+# monkeypatch the locale, and the EncodingWarning subprocess guard does not depend on it at all;
+# those are the ones that can fail on a UTF-8 CI runner.
+
+_NON_ASCII_DIR = "C:/Users/Zoë/中文/att"
+
+
+def _write_config_bytes(config_dir, raw: bytes) -> None:
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "config.json").write_bytes(raw)
+
+
+def _pretend_the_locale_is(monkeypatch, encoding: str) -> None:
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda do_setlocale=True: encoding)
+
+
+def test_a_non_ascii_value_round_trips_as_utf8_on_disk(tmp_path):
+    """Save then load keeps the value, and what is on disk is plain UTF-8 with no BOM.
+
+    The bytes are asserted too, so a reader and writer sharing one wrong encoding cannot
+    pass by agreeing with each other. `中文` is outside cp1252: before #99 the save itself
+    raised UnicodeEncodeError on Windows.
+    """
+    config_dir = tmp_path / ".outlook-mcp"
+    save_config(Config(client_id="x", attachments_dir=_NON_ASCII_DIR), config_dir=str(config_dir))
+
+    raw = (config_dir / "config.json").read_bytes()
+    assert not raw.startswith(codecs.BOM_UTF8)
+    assert _NON_ASCII_DIR in raw.decode("utf-8")
+    assert load_config(config_dir=str(config_dir)).attachments_dir == _NON_ASCII_DIR
+
+
+def test_a_utf8_config_written_elsewhere_reads_the_same(tmp_path, monkeypatch, caplog):
+    """A hand-edited or copied UTF-8 config means the same thing on a cp1252 machine.
+
+    Before #99 this read `Zoë` as `ZoÃ«` on Windows — a different attachments directory,
+    silently. The locale is pinned to cp1252 so the legacy fallback is armed: UTF-8 must still
+    win, with no migration warning.
+    """
+    _pretend_the_locale_is(monkeypatch, "cp1252")
+    config_dir = tmp_path / ".outlook-mcp"
+    payload = json.dumps({"attachments_dir": _NON_ASCII_DIR}, ensure_ascii=False)
+    _write_config_bytes(config_dir, payload.encode("utf-8"))
+
+    with caplog.at_level(logging.WARNING, logger="outlook_mcp.config"):
+        loaded = load_config(config_dir=str(config_dir))
+
+    assert loaded.attachments_dir == _NON_ASCII_DIR
+    assert caplog.records == []
+
+
+def test_a_utf8_bom_is_accepted(tmp_path):
+    """Windows PowerShell 5.1's `Set-Content -Encoding utf8` writes a byte-order mark."""
+    config_dir = tmp_path / ".outlook-mcp"
+    _write_config_bytes(config_dir, codecs.BOM_UTF8 + b'{"client_id": "from-bom-file"}')
+
+    assert load_config(config_dir=str(config_dir)).client_id == "from-bom-file"
+
+
+def test_a_legacy_ansi_config_still_loads_and_asks_for_a_resave(tmp_path, monkeypatch, caplog):
+    """Windows PowerShell 5.1's `Set-Content` writes the ANSI code page by default.
+
+    Such a file with an accented value loaded correctly before #99, so it keeps loading, read
+    in the machine's own code page exactly as before, and the warning asks for a re-save.
+    """
+    _pretend_the_locale_is(monkeypatch, "cp1252")
+    config_dir = tmp_path / ".outlook-mcp"
+    _write_config_bytes(config_dir, '{"attachments_dir": "C:/Users/Zoë/att"}'.encode("cp1252"))
+
+    with caplog.at_level(logging.WARNING, logger="outlook_mcp.config"):
+        loaded = load_config(config_dir=str(config_dir))
+
+    assert loaded.attachments_dir == "C:/Users/Zoë/att"
+    warnings = [r.getMessage() for r in caplog.records]
+    assert len(warnings) == 1
+    assert "cp1252" in warnings[0]
+    assert "UTF-8" in warnings[0]
+
+
+def test_no_legacy_fallback_where_the_locale_is_already_utf8(tmp_path, monkeypatch):
+    """Where the old code read UTF-8 too, the same bytes failed before and fail now."""
+    _pretend_the_locale_is(monkeypatch, "UTF-8")
+    config_dir = tmp_path / ".outlook-mcp"
+    _write_config_bytes(config_dir, '{"attachments_dir": "C:/Users/Zoë/att"}'.encode("cp1252"))
+
+    with pytest.raises(UnicodeDecodeError):
+        load_config(config_dir=str(config_dir))
+
+
+def test_a_utf16_config_is_refused_not_misread_as_ansi(tmp_path, monkeypatch):
+    """`>` and `Out-File` in Windows PowerShell 5.1 write UTF-16LE with a BOM.
+
+    Every byte of that is valid cp1252, so the fallback decodes it. The result, `ÿþ{` with
+    NULs between the characters, can never validate. So the operator gets the UTF-8 error and
+    its re-save remedy, where before #99 a Windows install reported invalid JSON.
+    """
+    _pretend_the_locale_is(monkeypatch, "cp1252")
+    config_dir = tmp_path / ".outlook-mcp"
+    raw = codecs.BOM_UTF16_LE + '{"client_id": "x"}'.encode("utf-16-le")
+    _write_config_bytes(config_dir, raw)
+
+    with pytest.raises(UnicodeDecodeError):
+        load_config(config_dir=str(config_dir))
+
+
+def test_the_fallback_only_accepts_a_valid_config(tmp_path, monkeypatch):
+    """Bytes that decode in the code page but do not validate get the UTF-8 error, not a
+    validation error about text the operator never wrote in that encoding."""
+    _pretend_the_locale_is(monkeypatch, "cp1252")
+    config_dir = tmp_path / ".outlook-mcp"
+    raw = '{"attachments_dir": "Zoë", "allow_categories": ["not-a-category"]}'.encode("cp1252")
+    _write_config_bytes(config_dir, raw)
+
+    with pytest.raises(UnicodeDecodeError):
+        load_config(config_dir=str(config_dir))
+
+
+def test_an_unknown_locale_codec_means_no_fallback(tmp_path, monkeypatch):
+    _pretend_the_locale_is(monkeypatch, "no-such-codec")
+    config_dir = tmp_path / ".outlook-mcp"
+    _write_config_bytes(config_dir, '{"attachments_dir": "Zoë"}'.encode("cp1252"))
+
+    with pytest.raises(UnicodeDecodeError):
+        load_config(config_dir=str(config_dir))
+
+
+def test_a_legacy_file_that_is_also_valid_utf8_is_read_as_utf8(tmp_path, monkeypatch, caplog):
+    """The accepted limit of a UTF-8 config file, pinned so it is a decision and not a surprise.
+
+    The cp1252 encoding of the literal text `ZoÃ«` is `5a 6f c3 ab`, which is also UTF-8 for
+    `Zoë`. Bytes alone cannot tell the two apart, so it reads as UTF-8 with no warning. A strict
+    UTF-8 reader with no fallback reads it identically; the fallback neither causes this case
+    nor can detect it.
+    """
+    _pretend_the_locale_is(monkeypatch, "cp1252")
+    config_dir = tmp_path / ".outlook-mcp"
+    raw = '{"attachments_dir": "ZoÃ«"}'.encode("cp1252")
+    assert raw.decode("utf-8") == '{"attachments_dir": "Zoë"}'  # premise: the bytes are ambiguous
+    _write_config_bytes(config_dir, raw)
+
+    with caplog.at_level(logging.WARNING, logger="outlook_mcp.config"):
+        loaded = load_config(config_dir=str(config_dir))
+
+    assert loaded.attachments_dir == "Zoë"
+    assert caplog.records == []
+
+
+def test_an_undecodable_config_gets_the_utf8_remedy_not_the_permissions_one():
+    """UnicodeDecodeError is a ValueError, and used to fall into the generic branch, which
+    tells the operator to check ownership and permissions: the wrong fix."""
+    decode_lines = config_repair_lines(
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    )
+    assert decode_lines[0].startswith("Cannot load the config file")
+    assert any("UTF-8" in line for line in decode_lines)
+    assert not any("readable and owned" in line for line in decode_lines)
+
+    # The generic branch keeps its remedy for the causes it is true of.
+    # EIO, not EACCES: OSError(13, ...) constructs a PermissionError, which is the symlink branch.
+    os_lines = config_repair_lines(OSError(5, "Input/output error"))
+    assert any("readable and owned" in line for line in os_lines)
+
+
+_ENCODING_GUARD = textwrap.dedent(
+    """
+    import warnings
+    warnings.filterwarnings("error", category=EncodingWarning, module=r"outlook_mcp(\\.|$)")
+
+    from azure.identity import AuthenticationRecord
+    from outlook_mcp import auth
+    from outlook_mcp.config import Config, load_config, save_config
+
+    value = "C:/Users/Zoë/中文/att"
+    save_config(Config(client_id="x", attachments_dir=value))
+    assert load_config().attachments_dir == value, "config did not round-trip"
+
+    auth._save_auth_record(
+        AuthenticationRecord("tenant", "client", "login.example", "home", "zoë@example.com")
+    )
+    # _load_auth_record swallows every exception and returns None, so an EncodingWarning
+    # promoted to an error there is only visible through what it returns.
+    loaded = auth._load_auth_record()
+    assert loaded is not None and loaded.username == "zoë@example.com", "record did not load"
+    """
+)
+
+
+def test_settings_files_never_use_the_locale_encoding(tmp_path):
+    """Every settings read and write names its encoding — checked on any host.
+
+    `-X warn_default_encoding` makes Python emit EncodingWarning wherever text I/O falls back
+    to the locale encoding, whatever that encoding is, and the child promotes it to an error
+    for outlook_mcp's own modules. That makes this the #99 test that fails on a UTF-8 Linux
+    runner: drop `encoding=` from the config read, the shared writer or the auth record read
+    and it reddens there too.
+    """
+    env = dict(os.environ)
+    env["OUTLOOK_MCP_CONFIG_DIR"] = str(tmp_path / "settings")
+    proc = subprocess.run(
+        [sys.executable, "-X", "warn_default_encoding", "-c", _ENCODING_GUARD],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stderr

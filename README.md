@@ -441,7 +441,7 @@ the body is fetched on use.
 
 ## Configuration
 
-Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions on macOS and Linux; see **Config permissions** below for Windows). Set the `OUTLOOK_MCP_CONFIG_DIR` environment variable to move that settings directory (config.json, auth record, and the attachments default move with it) — see [Two accounts, two instances](#two-accounts-two-instances-optional--outlook_mcp_config_dir) below.
+Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions on macOS and Linux; see **Config permissions** below for Windows). It is read as UTF-8 on every platform, and a byte-order mark is accepted. Set the `OUTLOOK_MCP_CONFIG_DIR` environment variable to move that settings directory (config.json, auth record, and the attachments default move with it) — see [Two accounts, two instances](#two-accounts-two-instances-optional--outlook_mcp_config_dir) below.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|

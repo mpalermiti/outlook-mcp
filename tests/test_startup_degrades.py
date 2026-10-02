@@ -146,8 +146,10 @@ async def test_symlinked_config_boots_the_same_way(caplog):
 
 @pytest.mark.asyncio
 async def test_unreadable_or_non_utf8_config_boots_the_same_way(caplog):
-    """chmod/read failures are OSErrors and non-UTF-8 bytes are ValueErrors —
-    both arms have to land in the same degraded boot, not escape the lifespan."""
+    """chmod/read failures are OSErrors and undecodable bytes are ValueErrors —
+    both arms have to land in the same degraded boot, not escape the lifespan.
+    They share the boot, not the remedy: config_repair_lines gives the decode
+    failure its own (test_config.py)."""
     import logging
 
     failures = (
@@ -227,11 +229,15 @@ def test_main_exits_cleanly_on_a_non_utf8_config(tmp_path):
     config_dir.mkdir()
     (config_dir / "config.json").write_bytes(b'\xff\xfe{"client_id": "x"}')
 
+    proc = _run_server_entry(config_dir)
     _assert_clean_exit(
-        _run_server_entry(config_dir),
+        proc,
         "Cannot load the config file",
+        "must be saved as UTF-8",
         str(config_dir),  # the repair names the directory to check
     )
+    # The generic remedy is the wrong one for an encoding (#99).
+    assert "readable and owned" not in proc.stderr
 
 
 def test_main_exits_cleanly_on_a_symlinked_config(tmp_path):

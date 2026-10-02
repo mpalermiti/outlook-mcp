@@ -135,7 +135,9 @@ def _load_auth_record() -> AuthenticationRecord | None:
     if not path.exists():
         return None
     try:
-        return AuthenticationRecord.deserialize(path.read_text())
+        # Pairs with atomic_write's UTF-8. The record is ASCII JSON today (serialize() escapes
+        # non-ASCII), so this is consistency with the writer, not a fix (#99).
+        return AuthenticationRecord.deserialize(path.read_text(encoding="utf-8"))
     except Exception:
         logger.warning("Failed to load auth record from %s", path)
         return None

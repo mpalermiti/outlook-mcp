@@ -44,6 +44,31 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   so only patterns a caller wrote were affected. Every week (`interval` 1) the boundary is now left
   as it was: it schedules nothing there, and moving it only changed the week start Outlook shows.
 
+- **`config.json` is read and written as UTF-8 on every platform, so a non-ASCII value means the
+  same thing on Windows (#99).** The config was read and written in the locale encoding, which is
+  cp1252 on a typical Windows install. A UTF-8 config, which is what an editor or a copy from
+  another machine produces, was decoded as cp1252 there, so `"attachments_dir": "C:/Users/Zoë/att"`
+  silently became `C:/Users/ZoÃ«/att`: a different directory. A value outside cp1252, such as
+  `中文`, could not be saved at all (`UnicodeEncodeError`). The shared writer now always emits
+  UTF-8, which covers the auth record too. That record is ASCII, so it is unaffected. The reader
+  accepts UTF-8, with or without the byte-order mark that Windows PowerShell 5.1's
+  `Set-Content -Encoding utf8` writes.
+
+  **Behaviour change.** A config the server cannot decode now gets a remedy that names the
+  encoding: "config.json must be saved as UTF-8". Before, it was told to check that the file is
+  readable and owned by you. One case this newly reaches is a UTF-16 file, which is what Windows
+  PowerShell 5.1's `>` and `Out-File` write. On Windows, that file used to be reported as invalid
+  JSON.
+
+  A config saved in the Windows ANSI code page, Windows PowerShell 5.1's `Set-Content` default,
+  loaded correctly before on the machine that wrote it. It keeps loading. When a file is not
+  valid UTF-8, it is read in the machine's own code page as before, but only if the result is a
+  valid config. A warning then asks for a re-save as UTF-8. This is a best-effort fallback for
+  files that are *not* valid UTF-8, with one limit that bytes alone cannot resolve. A legacy file
+  whose bytes also happen to form valid UTF-8 is read as UTF-8, without a warning: the cp1252 bytes
+  for the literal text `ZoÃ«` are UTF-8 for `Zoë`. A UTF-8-only reader would read them identically.
+  Plain accented text such as `Zoë` in cp1252 is not valid UTF-8, so it does reach the fallback.
+
 ## [1.23.0] — 2026-09-30
 
 The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made
