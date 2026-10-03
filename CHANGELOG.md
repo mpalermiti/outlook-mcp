@@ -6,6 +6,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **CI runs the test suite on Windows (#88).** Every job ran on `ubuntu-latest`, so failures
+  that are deterministic on Windows and impossible on Linux could not surface: the four test
+  failures in #85, and the locale-encoded `config.json` in #99, were each found by hand.
+  The `test` job now has one `windows-latest` entry, on Python 3.12, beside the four Linux
+  versions, and a failing entry no longer cancels the others, so a Windows-only failure shows
+  as one. The install jobs stay on Linux. What it cannot do is find hardening that was never
+  asserted: the `0o700`/`0o600` calls in #85 were inert on Windows for the life of the file, and
+  no test on any platform said so.
+
 ### Fixed
 
 - **Four tests no longer fail on every Windows run, and `load_config` stops re-`chmod`ing the
