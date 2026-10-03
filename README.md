@@ -126,6 +126,7 @@ Microsoft has deprecated app registration for personal accounts without an Azure
    - `Mail.ReadWrite`, `Mail.Send`
    - `Calendars.ReadWrite`
    - `Contacts.ReadWrite`, `Tasks.ReadWrite`
+   - `MailboxSettings.Read`
    - `User.Read`, `offline_access`
 
 No client secret is needed. The device code flow uses public client auth.
