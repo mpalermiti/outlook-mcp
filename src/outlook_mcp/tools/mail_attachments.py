@@ -36,21 +36,33 @@ def _network_path_outside(path: str, bases: tuple[str, ...]) -> bool:
     So this one class is judged by its text, and resolving stays the authority
     for everything else.
 
-    A drive that begins with two separators covers UNC (``\\host\share``,
+    A path that begins with two separators covers UNC (``\\host\share``,
     ``//host/share``), the long-path form (``\\?\UNC\host\share``) and the
-    device namespace (``\\.\…``). An ``attachments_dir`` that itself sits on a
-    share is the operator's choice, so a path lexically inside one of ``bases``
-    goes through to the resolver.
+    device namespace (``\\.\…``). The two leading characters are read
+    straight off the string rather than from ``ntpath.splitdrive``: before
+    Python 3.12 that function finds no drive in some of these spellings that
+    pathlib then treats as one, and the check has to agree with what gets
+    resolved, on every version.
+
+    An ``attachments_dir`` that itself sits on a share is the operator's
+    choice, so a path lexically inside one of ``bases`` goes through to the
+    resolver. Only a base that is a network path can vouch for one — a local
+    root normalises to an empty prefix, which every path starts with.
     """
-    drive, _ = ntpath.splitdrive(path)
-    if len(drive) < 2 or drive[0] not in "\\/" or drive[1] not in "\\/":
+    if not _starts_with_two_separators(path):
         return False
     target = ntpath.normcase(ntpath.normpath(path))
     for base in bases:
+        if not _starts_with_two_separators(base):
+            continue
         root = ntpath.normcase(ntpath.normpath(base)).rstrip("\\")
-        if target == root or target.startswith(root + "\\"):
+        if root and (target == root or target.startswith(root + "\\")):
             return False
     return True
+
+
+def _starts_with_two_separators(path: str) -> bool:
+    return len(path) >= 2 and path[0] in "\\/" and path[1] in "\\/"
 
 
 def resolve_attachment_path(path: str, attachments_dir: str) -> str:

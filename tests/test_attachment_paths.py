@@ -242,6 +242,13 @@ NETWORK_PATHS = [
     r"\\?\UNC\attacker-host\share\a.pdf",
     r"\\attacker-host@SSL\share\a.pdf",
     r"\\.\pipe\attacker-host",
+    # Shapes `ntpath.splitdrive` reads differently from pathlib before Python
+    # 3.12 — it finds no drive at all in them — so a check that asked it would
+    # pass these on to `resolve()` on 3.10 and 3.11.
+    r"\\?\\UNC\attacker-host\share\a.pdf",
+    r"\\?\\attacker-host\share\a.pdf",
+    r"\/attacker-host/share/a.pdf",
+    r"\\\attacker-host\share\a.pdf",
 ]
 
 
@@ -289,6 +296,18 @@ def test_network_check_is_lexical_and_admits_only_the_configured_share():
     assert _network_path_outside(r"\\nas\share\attachments\..\secret.txt", share)
     assert _network_path_outside(r"\\nas\share\attachments-evil\x.pdf", share)
     assert _network_path_outside(r"\\elsewhere\share\attachments\x.pdf", share)
+
+
+@pytest.mark.parametrize("local_base", ["\\", "/", "C:\\", r"C:\att", "", r"\\", "//"])
+def test_a_local_attachments_dir_admits_no_network_path(local_base):
+    """Only a base that is itself on a named share can vouch for a network path.
+
+    A root — one separator or two — normalises to an empty prefix, which every
+    path starts with.
+    """
+    from outlook_mcp.tools.mail_attachments import _network_path_outside
+
+    assert _network_path_outside(r"\\attacker-host\share\a.pdf", (local_base,))
 
 
 @pytest.mark.parametrize("local_path", [r"C:\Users\me\x.pdf", r"D:x.pdf", r"\x.pdf", "x.pdf"])
