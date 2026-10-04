@@ -91,16 +91,15 @@ _ALL_DAY_ZONE_REFUSAL = (
 )
 
 
-def _notifies_attendees(event: Any) -> bool:
-    """True when an edit to this event is mailed on to other people.
+def _has_attendees(event: Any) -> bool:
+    """True when this event has other people on it, whoever organizes it.
 
-    That is a meeting the mailbox owner organizes: Exchange sends its attendees
-    the update. An attendee's edit to their own copy goes nowhere. A missing
-    ``isOrganizer`` is read as the organizer's, the side that refuses.
+    The organizer's edit is mailed to the attendees as an update. An attendee's
+    edit stays in their own calendar — but the response Exchange sends when
+    they later accept or decline is built from that copy, so its text reaches
+    the organizer all the same. Neither side is exempt.
     """
-    return bool(getattr(event, "attendees", None)) and (
-        getattr(event, "is_organizer", None) is not False
-    )
+    return bool(getattr(event, "attendees", None))
 
 
 def _is_series_master(event: Any) -> bool:
@@ -719,15 +718,16 @@ async def update_event(
             _current = await graph_client.me.events.by_event_id(event_id).get()
         return _current
 
-    # A reworded meeting is mailed to the people already on it, so rewording one
-    # needs `mail_send` as inviting them did. Only the organizer's edit is sent
-    # on, and only a restricted policy pays for the read that finds out.
+    # A reworded meeting reaches the other people on it — as the organizer's
+    # update, or in an attendee's next response — so rewording one needs
+    # `mail_send` as inviting them did. Only a restricted policy pays for the
+    # read that finds out.
     if mail_send_withheld(config) and not (subject is None and body is None and location is None):
-        if _notifies_attendees(await current_event()):
+        if _has_attendees(await current_event()):
             check_sends_mail(
                 config,
                 "outlook_update_event",
-                "change the subject, body or location of a meeting that has attendees",
+                "change the subject, body or location of an event that has attendees",
             )
 
     from msgraph.generated.models.attendee import Attendee

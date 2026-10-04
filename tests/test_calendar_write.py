@@ -85,6 +85,10 @@ def _current_event(
     # fixture answers both reads and only that one is looked at for them.
     event.cancelled_occurrences = cancelled if cancelled is not None else []
     event.exception_occurrences = edited if edited is not None else []
+    # Explicit once more: under a policy without `mail_send`, `update_event`
+    # reads this to decide whether a reword is mailed on, and a truthy
+    # MagicMock would make every mocked event a meeting with guests.
+    event.attendees = []
     return event
 
 
@@ -2386,16 +2390,23 @@ class TestCalendarWritesThatSendEmail:
         assert result["status"] == "updated"
         builder.patch.assert_called_once()
 
-    async def test_rewording_your_copy_of_someone_elses_meeting_stays_calendar_only(self):
-        """Only the organizer's edit is sent on; an attendee's stays in their calendar."""
-        builder, client = _client_with(_meeting(is_organizer=False))
+    @pytest.mark.parametrize("is_organizer", [True, False, None])
+    async def test_whose_meeting_it_is_makes_no_difference(self, is_organizer):
+        """An attendee's own copy is not exempt.
 
-        result = await update_event(
-            client, event_id="AAMkAG123=", subject="My note", config=_CFG_CAL_ONLY
-        )
+        The edit itself stays in their calendar, but the response Exchange
+        sends when they accept or decline is built from that copy — so a
+        reworded subject followed by a bare RSVP reaches the organizer, who is
+        whoever sent the invite. Any event with other people on it is refused.
+        """
+        builder, client = _client_with(_meeting(is_organizer=is_organizer))
 
-        assert result["status"] == "updated"
-        builder.patch.assert_called_once()
+        with pytest.raises(PermissionDeniedError):
+            await update_event(
+                client, event_id="AAMkAG123=", subject="mailbox contents", config=_CFG_CAL_ONLY
+            )
+
+        builder.patch.assert_not_called()
 
     async def test_clearing_attendees_stays_calendar_only(self):
         """A cancellation carries no caller-written text."""

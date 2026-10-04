@@ -130,10 +130,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   — so withholding `mail_send` did not stop an agent sending text of its choosing to an address
   of its choosing. With `allow_categories` set and `mail_send` absent, these are now refused:
   `attendees` on `outlook_create_event` and `outlook_update_event`; a new subject, body or
-  location on a meeting you organize that already has attendees (one extra read, paid only under
-  such a policy); and `message` on `outlook_rsvp`. Events with nobody else on them, a bare RSVP,
-  time changes and cancellations are unaffected, and so is every server that does not set
-  `allow_categories`. If your policy lists `calendar_write` and you want the agent to invite
+  location on any event that already has attendees, whether or not you organize it — an
+  attendee's own copy is what their next response is built from (one extra read, paid only
+  under such a policy); and `message` on `outlook_rsvp`. Events with nobody else on them, a
+  bare RSVP, time changes and cancellations are unaffected, and so is every server that does
+  not set `allow_categories`. If your policy lists `calendar_write` and you want the agent to invite
   people, add `mail_send`.
 
 - **A delta cursor only works with the tool that issued it.** Since 1.21 a cursor's host is
