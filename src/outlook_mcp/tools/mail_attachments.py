@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import mimetypes
+import ntpath
 import os
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,36 @@ from outlook_mcp.validation import validate_email, validate_graph_id
 _LARGE_FILE_THRESHOLD = 3 * 1024 * 1024
 # Chunk size for upload sessions (320 KiB aligned, as required by Graph)
 _UPLOAD_CHUNK_SIZE = 320 * 1024 * 10  # 3.2 MB chunks
+
+# Where resolving a path can reach the network — see _network_path_outside.
+_WINDOWS = os.name == "nt"
+
+
+def _network_path_outside(path: str, bases: tuple[str, ...]) -> bool:
+    r"""True if ``path`` names a network or device location outside every base.
+
+    Windows only, and lexical on purpose — ``ntpath`` reads the string and never
+    the filesystem. ``Path.resolve()`` opens a path to canonicalise it, and for
+    ``\\host\share\x`` that means connecting to ``host`` and signing in as the
+    logged-in user, before the confinement check has had its chance to refuse.
+    So this one class is judged by its text, and resolving stays the authority
+    for everything else.
+
+    A drive that begins with two separators covers UNC (``\\host\share``,
+    ``//host/share``), the long-path form (``\\?\UNC\host\share``) and the
+    device namespace (``\\.\…``). An ``attachments_dir`` that itself sits on a
+    share is the operator's choice, so a path lexically inside one of ``bases``
+    goes through to the resolver.
+    """
+    drive, _ = ntpath.splitdrive(path)
+    if len(drive) < 2 or drive[0] not in "\\/" or drive[1] not in "\\/":
+        return False
+    target = ntpath.normcase(ntpath.normpath(path))
+    for base in bases:
+        root = ntpath.normcase(ntpath.normpath(base)).rstrip("\\")
+        if target == root or target.startswith(root + "\\"):
+            return False
+    return True
 
 
 def resolve_attachment_path(path: str, attachments_dir: str) -> str:
@@ -38,11 +69,17 @@ def resolve_attachment_path(path: str, attachments_dir: str) -> str:
     A relative path is taken as relative to ``attachments_dir``, so an agent that
     passes a bare filename lands somewhere predictable instead of the process's
     working directory.
+
+    One class is refused by its text first: on Windows a network path is turned
+    away before it is resolved, because there resolving is itself the harm (see
+    ``_network_path_outside``). That check only ever adds a refusal — whatever
+    it lets through still has to resolve inside the directory.
     """
     if not path or not path.strip() or "\x00" in path:
         raise ValueError("Attachment path must be a non-empty path containing no null bytes.")
 
-    base = Path(os.path.expanduser(attachments_dir))
+    configured = Path(os.path.expanduser(attachments_dir))
+    base = configured
     created = not base.exists()
     base.mkdir(parents=True, exist_ok=True)
     if created:
@@ -53,7 +90,15 @@ def resolve_attachment_path(path: str, attachments_dir: str) -> str:
         base.chmod(0o700)
     base = base.resolve()
 
-    candidate = Path(os.path.expanduser(path))
+    expanded = os.path.expanduser(path)
+    # Before resolve(), which on Windows is what makes the connection.
+    if _WINDOWS and _network_path_outside(expanded, (str(configured), str(base))):
+        raise ValueError(
+            f"Attachment path is a network or device location outside the permitted "
+            f"directory: {path}. Attachments may only be read from or written to "
+            f"{attachments_dir}."
+        )
+    candidate = Path(expanded)
     if not candidate.is_absolute():
         candidate = base / candidate
     # strict=False by default: download writes a file that does not exist yet.

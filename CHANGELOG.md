@@ -103,6 +103,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   says to log in again, because the error's own text suggests a retry that cannot work
   (#82).
 
+### Security
+
+- **On Windows, a network path is refused before it is resolved.** The attachment tools confine
+  every path by resolving it and checking the result, which is right everywhere except for one
+  input: on Windows, resolving `\\host\share\file` opens it, and opening it connects to `host` and
+  signs in as the logged-in user. The refusal came one step after that. A path whose drive is a
+  network share or a device namespace (`\\host\share`, `//host/share`, `\\?\UNC\…`, `\\.\…`) is
+  now turned away by its text, before the filesystem is asked anything — unless it sits inside
+  an `attachments_dir` the operator put on a share themselves. Resolving remains the authority
+  for every path that gets past that. macOS and Linux were never affected.
+
 ## [1.23.0] — 2026-09-30
 
 The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made
