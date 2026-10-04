@@ -6,7 +6,12 @@ from datetime import date
 from typing import Any
 
 from outlook_mcp.config import Config
-from outlook_mcp.permissions import CATEGORY_CALENDAR_WRITE, check_permission
+from outlook_mcp.permissions import (
+    CATEGORY_CALENDAR_WRITE,
+    check_permission,
+    check_sends_mail,
+    mail_send_withheld,
+)
 from outlook_mcp.tools._recurrence import (
     build_event_recurrence,
     check_recurrence_shape,
@@ -84,6 +89,17 @@ _ALL_DAY_ZONE_REFUSAL = (
     "To turn it into a timed event instead, pass is_all_day=False with real "
     "start and end times."
 )
+
+
+def _has_attendees(event: Any) -> bool:
+    """True when this event has other people on it, whoever organizes it.
+
+    The organizer's edit is mailed to the attendees as an update. An attendee's
+    edit stays in their own calendar — but the response Exchange sends when
+    they later accept or decline is built from that copy, so its text reaches
+    the organizer all the same. Neither side is exempt.
+    """
+    return bool(getattr(event, "attendees", None))
 
 
 def _is_series_master(event: Any) -> bool:
@@ -429,6 +445,9 @@ async def create_event(
     green suite proves nothing about it.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_create_event")
+    if attendees:
+        # Graph emails the subject and body to every attendee.
+        check_sends_mail(config, "outlook_create_event", "invite attendees")
 
     # Validate datetime inputs
     validate_datetime(start)
@@ -630,6 +649,8 @@ async def update_event(
     there is no value that clears one, because Graph has no such state.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_update_event")
+    if attendees:
+        check_sends_mail(config, "outlook_update_event", "invite attendees")
     event_id = validate_graph_id(event_id)
 
     # Everything that can reject this call without asking Graph anything goes
@@ -696,6 +717,18 @@ async def update_event(
         if _current is None:
             _current = await graph_client.me.events.by_event_id(event_id).get()
         return _current
+
+    # A reworded meeting reaches the other people on it — as the organizer's
+    # update, or in an attendee's next response — so rewording one needs
+    # `mail_send` as inviting them did. Only a restricted policy pays for the
+    # read that finds out.
+    if mail_send_withheld(config) and not (subject is None and body is None and location is None):
+        if _has_attendees(await current_event()):
+            check_sends_mail(
+                config,
+                "outlook_update_event",
+                "change the subject, body or location of an event that has attendees",
+            )
 
     from msgraph.generated.models.attendee import Attendee
     from msgraph.generated.models.body_type import BodyType
@@ -926,6 +959,9 @@ async def rsvp(
     response must be one of: accept, decline, tentative.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_rsvp")
+    if message:
+        # The comment is mailed to the organizer; the bare response is not text.
+        check_sends_mail(config, "outlook_rsvp", "send a message with the response")
     event_id = validate_graph_id(event_id)
 
     event_builder = graph_client.me.events.by_event_id(event_id)

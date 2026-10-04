@@ -66,12 +66,25 @@ class ReadOnlyError(OutlookMCPError):
 
 
 class PermissionDeniedError(OutlookMCPError):
-    """Raised when a write tool is not in the user's allow_categories."""
+    """Raised when a write tool is not in the user's allow_categories.
 
-    def __init__(self, tool_name: str, category: str):
+    ``doing`` names the part of a call that needs ``category`` when the tool
+    as a whole does not — inviting attendees from a calendar tool needs
+    ``mail_send`` — so the refusal says which argument to drop, not just that
+    the tool was refused.
+    """
+
+    def __init__(self, tool_name: str, category: str, doing: str | None = None):
+        if doing:
+            message = (
+                f"Cannot use {tool_name} to {doing} — that sends email, and category "
+                f"'{category}' is not in allow_categories."
+            )
+        else:
+            message = f"Cannot use {tool_name} — category '{category}' is not in allow_categories."
         super().__init__(
             "permission_denied",
-            f"Cannot use {tool_name} — category '{category}' is not in allow_categories.",
+            message,
             (
                 f"Add '{category}' to allow_categories in {_config_dir()}/config.json, "
                 "or unset allow_categories for full write access."
@@ -180,6 +193,26 @@ class StaleConsentError(OutlookMCPError):
         )
 
 
+class ClientIdMismatchError(OutlookMCPError):
+    """Raised when the saved sign-in was made with a different app registration.
+
+    azure-identity serves the *record's* client id and ignores the one it is
+    constructed with, so a `client_id` changed in config.json went unnoticed:
+    the old app's session kept being used, and status printed the new id beside
+    "authenticated". That matters most for the one reason to change it — moving
+    to an app that holds fewer permissions — because the wider session stayed.
+    """
+
+    def __init__(self, configured: str, saved: str):
+        super().__init__(
+            "client_id_mismatch",
+            f"The saved sign-in was made with a different app registration "
+            f"(client_id {saved[:8]}…) than the one now in config.json "
+            f"({configured[:8]}…), so it was not used.",
+            "Run `outlook-mcp auth` on the host to sign in with the configured app.",
+        )
+
+
 class ConfigLoadError(OutlookMCPError):
     """The settings file could not be loaded; the server booted fail-safe.
 
@@ -220,6 +253,42 @@ class UntrustedURLError(OutlookMCPError):
             "this cursor and start a fresh sync by calling again with no "
             "delta_token.",
         )
+        self.source = source
+
+
+class ForeignCursorError(OutlookMCPError):
+    """Raised when a delta cursor points somewhere other than its tool's endpoint.
+
+    The host check (``UntrustedURLError``) keeps the token on Graph. It does not
+    keep a tool on its own data: a cursor is a whole URL, so with only the host
+    pinned, any Graph path handed back as a cursor was fetched and returned —
+    mail through the calendar tool, tasks through the contacts tool. A cursor is
+    only good for the endpoint that issued it.
+    """
+
+    def __init__(self, source: str, url: str, resource: str):
+        shown = url[:120] if url else "(empty)"
+        if source == "initial_url":
+            # The first URL is built here, from the tool's own arguments — there
+            # is no cursor to blame, and telling the caller to discard one would
+            # send it looking for something it never passed.
+            message = (
+                f"Could not build a {resource} delta link from this call's arguments: {shown!r}."
+            )
+            action = (
+                "Check the folder or id passed to this tool; for mail, pass the folder's "
+                "display name or a well-known name such as inbox."
+            )
+        else:
+            message = (
+                f"Refusing a cursor that is not a {resource} delta link (from {source}): "
+                f"{shown!r}."
+            )
+            action = (
+                "A delta cursor only works with the tool that returned it. Discard this "
+                "cursor and start a fresh sync by calling again with no delta_token."
+            )
+        super().__init__("foreign_cursor", message, action)
         self.source = source
 
 

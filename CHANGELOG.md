@@ -103,6 +103,85 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   says to log in again, because the error's own text suggests a retry that cannot work
   (#82).
 
+### Security
+
+- **On Windows, a network path is refused before it is resolved.** The attachment tools confine
+  every path by resolving it and checking the result, which is right everywhere except for one
+  input: on Windows, resolving `\\host\share\file` opens it, and opening it connects to `host` and
+  signs in as the logged-in user. The refusal came one step after that. A path whose drive is a
+  network share or a device namespace (`\\host\share`, `//host/share`, `\\?\UNC\…`, `\\.\…`) is
+  now turned away by its text, before the filesystem is asked anything — unless it sits inside
+  an `attachments_dir` the operator put on a share themselves. Resolving remains the authority
+  for every path that gets past that. macOS and Linux were never affected.
+
+- **The draft tools only touch drafts.** A draft is addressed by its message id, and every message
+  has one. `outlook_delete_draft` made the same permanent DELETE that
+  `outlook_delete_message(permanent=True)` makes, on whatever id it was given, and
+  `outlook_update_draft`, `outlook_attach_to_draft` and `outlook_remove_draft_attachment` were
+  equally unparticular — all under `mail_drafts`, the category the README describes as "drafts
+  only". Each now reads the message's `isDraft` first and refuses anything Graph does not call a
+  draft, before changing it. One extra GET per call. `outlook_send_draft` is unchanged: it is
+  gated by `mail_send`, not `mail_drafts`.
+
+- **Calendar writes that send email need `mail_send`.** With attendees on it, an event is also
+  an email: Exchange delivers the subject and body to every address the call names, and an RSVP
+  comment goes to the organizer. All of that was gated by `calendar_write` alone, which the
+  README rated "creates calendar entries" and offered as a "calendar-only, nothing else" policy
+  — so withholding `mail_send` did not stop an agent sending text of its choosing to an address
+  of its choosing. With `allow_categories` set and `mail_send` absent, these are now refused:
+  `attendees` on `outlook_create_event` and `outlook_update_event`; a new subject, body or
+  location on any event that already has attendees, whether or not you organize it — an
+  attendee's own copy is what their next response is built from (one extra read, paid only
+  under such a policy); and `message` on `outlook_rsvp`. Events with nobody else on them, a
+  bare RSVP, time changes and cancellations are unaffected, and so is every server that does
+  not set `allow_categories`. If your policy lists `calendar_write` and you want the agent to invite
+  people, add `mail_send`.
+
+- **A delta cursor only works with the tool that issued it.** Since 1.21 a cursor's host is
+  pinned to `graph.microsoft.com`, which keeps the token on Graph. It did not keep a tool on its
+  own data: a cursor is a whole URL, so a delta tool handed any other Graph path as its cursor
+  fetched it and returned what came back through its own formatter, and `outlook_changes_since`
+  passed cursors through the same way. Nothing left Graph and nothing could be written — the
+  request is always a GET — but it reached data no loaded tool covers: To Do list names on a
+  server started without the `todo` group, say, or message subjects from any folder through
+  the digest, which by design reports only counts, senders and flagged Inbox subjects. Each
+  delta tool now accepts its own endpoint and nothing else (`/v1.0/me/mailFolders/<id>/messages/delta`,
+  `/v1.0/me/calendarView/delta`, `/v1.0/me/contacts/delta`), for the caller's cursor, every
+  `@odata.nextLink`, and the `deltaLink` it hands back; dot segments and encoded separators are
+  refused. A cursor pointing anywhere else is answered with a `foreign_cursor` error before any
+  request is made. Checked in the live tier against a consumer mailbox: the `deltaLink` of all
+  three tools, and a mid-sync `nextLink` for calendar and contacts, pass. A mail `nextLink` was
+  not observed — no folder there was large enough to return one — so that shape rests on the
+  mail `deltaLink` having the same path; the live test for it skips, by name, until it is seen.
+
+- **A read-only app registration can be signed in to again: `read_only_consent`.** The README
+  and SECURITY.md offer one route to a credential that cannot write — a second Azure app
+  holding only the read permissions — and the consent change above closed it: sign-in asked
+  *whatever* app was configured for the full read-write set, so that app was either refused or
+  handed write access, which is the thing it existed to not have. `read_only_consent: true`
+  makes `outlook-mcp auth` ask for `Mail.Read`, `Calendars.Read`, `Contacts.Read`,
+  `Tasks.Read`, `MailboxSettings.Read` and `User.Read`, and nothing else. It is its own key
+  rather than a reading of `read_only`, for the reason the consent change gives: a consent
+  narrowed by `read_only` strands every write the day that flag is flipped. The config refuses
+  `read_only_consent` without `read_only: true`, so that state cannot be configured. Never
+  shipped broken: 1.23.0 still signs in with `.default`.
+
+- **A saved sign-in is only used with the app it was made for.** azure-identity serves the saved
+  record's client id and ignores the configured one, so after `client_id` changed in
+  config.json the old app's session went on being used, and `outlook-mcp status` printed the
+  new id beside "authenticated". Moving to a read-only app without signing in again left the
+  write-capable session in place. A record whose client id differs from the config's is now
+  refused, with a `client_id_mismatch` error on `outlook-mcp status`, `outlook_auth_status`
+  and every tool call that says to run `outlook-mcp auth`.
+
+- **`uv.lock` no longer pins two packages with published advisories.** `pyjwt` 2.14.0 → 2.15.1
+  (CVE-2026-101918) and `urllib3` 2.7.0 → 2.8.0 (CVE-2026-97687, -97688, -97689), all
+  published 2026-10-01. None is reachable in a way that matters here — a crash in a JWKS
+  flow this server does not use, and proxy-TLS and hostile-server issues on a client that
+  only talks to Microsoft's sign-in endpoints. The lock file governs development, CI and
+  anything run with `uv run`; an install from PyPI resolves its own versions and already got
+  the fixed ones, so no published release was affected.
+
 ## [1.23.0] — 2026-09-30
 
 The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made

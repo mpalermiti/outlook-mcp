@@ -15,17 +15,21 @@ Programmatic management of Outlook inbox rules via `/me/mailFolders/inbox/messag
 
 ### Read-only that Microsoft enforces
 
-`read_only: true` gates this server's write tools. It does not narrow the token:
-`get_token_scopes()` returns `.default`, so the credential carries whatever the Azure app
-was consented for. A `read_only` server still holds a write-capable Graph token, and the
-setting is a line in `config.json` rather than anything Microsoft checks. Documented
-honestly in README and SECURITY.md as of 2026-09-12; this entry is about closing it for
-real.
+`read_only: true` gates this server's write tools. It does not narrow the token: sign-in
+consents the read-write scopes and every refresh asks for `.default`, so the credential
+carries whatever the Azure app was consented for. A `read_only` server still holds a
+write-capable Graph token, and the setting is a line in `config.json` rather than anything
+Microsoft checks. Documented honestly in README and SECURITY.md as of 2026-09-12; this
+entry is about closing it for real.
 
-**Shape:** let the read-only path use a *separately consented* Azure app. Either a second
-`client_id` in config (`read_only_client_id`), or documentation plus a preflight check that
-warns when `read_only: true` is paired with an app holding write consent. The token cache is
-keyed per client id, so the two coexist without interfering.
+**Shipped:** the consent half. `read_only_consent: true` makes `outlook-mcp auth`
+ask a *separately registered* read-only app for the read scopes only, the config refuses
+that key without `read_only: true`, and a sign-in saved for one `client_id` is no longer
+used after the config names another.
+
+**Still open:** a preflight check that warns when `read_only: true` is paired with an app
+holding write consent. Nothing yet tells an operator that the "read-only" app they pointed
+at was granted write access at some earlier sign-in.
 
 **Why it is not just done:** it pushes a second app registration onto the user, and the
 five-minute Azure setup is already the steepest part of onboarding. Most people will skip it

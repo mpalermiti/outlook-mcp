@@ -124,6 +124,7 @@ async def list_inbox_delta(
         initial_url=initial_url,
         delta_token=delta_token,
         page_size=page_size,
+        resource="mail",
     )
 
     messages = [format_delta_item(item, _format_message_delta) for item in raw_items]

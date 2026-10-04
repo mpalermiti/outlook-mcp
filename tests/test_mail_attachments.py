@@ -372,6 +372,7 @@ class TestAttachToDraft:
 
         mock_client = MagicMock()
         mock_builder = mock_client.me.messages.by_message_id.return_value
+        mock_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         mock_builder.attachments.post = AsyncMock(return_value=created_att)
 
         result = await attach_to_draft(
@@ -398,6 +399,7 @@ class TestAttachToDraft:
 
         mock_client = MagicMock()
         mock_builder = mock_client.me.messages.by_message_id.return_value
+        mock_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         mock_builder.attachments.create_upload_session.post = AsyncMock(
             return_value=mock_session
         )
@@ -432,6 +434,7 @@ class TestAttachToDraft:
 
         mock_client = MagicMock()
         mock_builder = mock_client.me.messages.by_message_id.return_value
+        mock_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         mock_builder.attachments.post = AsyncMock(return_value=created_att)
         mock_builder.attachments.create_upload_session.post = AsyncMock(
             return_value=mock_session
@@ -512,6 +515,9 @@ class TestRemoveDraftAttachment:
     async def test_remove_calls_delete(self):
         """remove_draft_attachment DELETEs the attachment by ID."""
         mock_client = MagicMock()
+        mock_client.me.messages.by_message_id.return_value.get = AsyncMock(
+            return_value=MagicMock(is_draft=True)
+        )
         att_builder = MagicMock()
         att_builder.delete = AsyncMock()
         mock_client.me.messages.by_message_id.return_value.attachments.by_attachment_id.return_value = (  # noqa: E501
@@ -558,3 +564,44 @@ class TestRemoveDraftAttachment:
                 attachment_id="ATT=",
                 config=_CFG_RO,
             )
+
+
+class TestDraftAttachmentToolsRefuseNonDrafts:
+    """The draft attachment tools must not add to or strip a message that is not a draft."""
+
+    async def test_attach_to_draft_refuses_a_received_message(self, tmp_path):
+        small_file = tmp_path / "note.txt"
+        small_file.write_bytes(b"hello world")
+
+        mock_client = MagicMock()
+        mock_builder = mock_client.me.messages.by_message_id.return_value
+        mock_builder.get = AsyncMock(return_value=MagicMock(is_draft=False))
+        mock_builder.attachments.post = AsyncMock()
+
+        with pytest.raises(ValueError, match="not a draft"):
+            await attach_to_draft(
+                mock_client,
+                draft_id="AAMkInboxMsg=",
+                attachment_paths=[str(small_file)],
+                config=Config(client_id="test", attachments_dir=str(tmp_path)),
+            )
+
+        mock_builder.attachments.post.assert_not_called()
+
+    async def test_remove_draft_attachment_refuses_a_received_message(self):
+        mock_client = MagicMock()
+        mock_builder = mock_client.me.messages.by_message_id.return_value
+        mock_builder.get = AsyncMock(return_value=MagicMock(is_draft=False))
+        att_builder = MagicMock()
+        att_builder.delete = AsyncMock()
+        mock_builder.attachments.by_attachment_id.return_value = att_builder
+
+        with pytest.raises(ValueError, match="not a draft"):
+            await remove_draft_attachment(
+                mock_client,
+                draft_id="AAMkInboxMsg=",
+                attachment_id="ATT456=",
+                config=_CFG,
+            )
+
+        att_builder.delete.assert_not_called()

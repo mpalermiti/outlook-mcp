@@ -6,6 +6,11 @@ import pytest
 
 from outlook_mcp.tools.mail_delta import _format_message_delta, list_inbox_delta
 
+# What Graph's cursors for this tool actually look like. A cursor is checked
+# against the tool's own endpoint, so a made-up path is refused like any other
+# foreign one; each fixture below is this endpoint plus a token naming the page.
+DELTA = "https://graph.microsoft.com/v1.0/me/mailFolders('INBOX')/messages/delta"
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -162,10 +167,10 @@ async def test_cap_reached_returns_nextlink_and_has_more():
     # Cap is page_size * 4 = 200; deliver 4 nextLink pages of 50 each, the
     # last one also a nextLink so the cap triggers.
     responses = [
-        _http_response(page(0, "https://graph.microsoft.com/v1.0/page2")),
-        _http_response(page(1, "https://graph.microsoft.com/v1.0/page3")),
-        _http_response(page(2, "https://graph.microsoft.com/v1.0/page4")),
-        _http_response(page(3, "https://graph.microsoft.com/v1.0/page5")),
+        _http_response(page(0, f"{DELTA}?$skiptoken=page2")),
+        _http_response(page(1, f"{DELTA}?$skiptoken=page3")),
+        _http_response(page(2, f"{DELTA}?$skiptoken=page4")),
+        _http_response(page(3, f"{DELTA}?$skiptoken=page5")),
     ]
     patch_client, fake_client = _async_client_with(responses)
     with _patch_resolve(), patch_client:
@@ -173,7 +178,7 @@ async def test_cap_reached_returns_nextlink_and_has_more():
 
     assert len(result["messages"]) == 200
     assert result["has_more"] is True
-    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/page5"
+    assert result["delta_token"] == f"{DELTA}?$skiptoken=page5"
     # 4 HTTP calls total — the 4th came back with a nextLink that we hand
     # to the caller instead of following.
     assert fake_client.get.await_count == 4
@@ -188,11 +193,11 @@ async def test_follows_nextlink_until_deltalink():
     responses = [
         _http_response({
             "value": [_raw_message(id="m1")],
-            "@odata.nextLink": "https://graph.microsoft.com/v1.0/p2",
+            "@odata.nextLink": f"{DELTA}?$skiptoken=p2",
         }),
         _http_response({
             "value": [_raw_message(id="m2")],
-            "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta-final",
+            "@odata.deltaLink": f"{DELTA}?$skiptoken=delta-final",
         }),
     ]
     patch_client, fake_client = _async_client_with(responses)
@@ -200,7 +205,7 @@ async def test_follows_nextlink_until_deltalink():
         result = await list_inbox_delta(_mock_graph_client(), folder="inbox", page_size=50)
 
     assert len(result["messages"]) == 2
-    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/delta-final"
+    assert result["delta_token"] == f"{DELTA}?$skiptoken=delta-final"
     assert result["has_more"] is False
     assert fake_client.get.await_count == 2
 
@@ -215,7 +220,7 @@ async def test_removed_item_collapses_to_id_only():
             _raw_message(id="m1"),
             {"id": "m2-deleted", "@removed": {"reason": "deleted"}},
         ],
-        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta",
+        "@odata.deltaLink": f"{DELTA}?$skiptoken=delta",
     }
     patch_client, _ = _async_client_with([_http_response(body)])
     with _patch_resolve(), patch_client:
@@ -235,16 +240,16 @@ async def test_removed_item_collapses_to_id_only():
 async def test_no_changes_returns_empty_list_and_delta_token():
     body = {
         "value": [],
-        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta-same",
+        "@odata.deltaLink": f"{DELTA}?$skiptoken=delta-same",
     }
     patch_client, _ = _async_client_with([_http_response(body)])
     with _patch_resolve(), patch_client:
         result = await list_inbox_delta(
-            _mock_graph_client(), delta_token="https://graph.microsoft.com/v1.0/prior-delta"
+            _mock_graph_client(), delta_token=f"{DELTA}?$skiptoken=prior-delta"
         )
 
     assert result["messages"] == []
-    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/delta-same"
+    assert result["delta_token"] == f"{DELTA}?$skiptoken=delta-same"
     assert result["has_more"] is False
 
 
@@ -266,7 +271,7 @@ class TestCompression:
     @pytest.mark.asyncio
     async def test_delta_get_requests_gzip(self):
         """Delta pages are large and highly compressible; polling agents refetch constantly."""
-        body = {"value": [], "@odata.deltaLink": "https://graph.microsoft.com/v1.0/delta?$deltatoken=abc"}
+        body = {"value": [], "@odata.deltaLink": f"{DELTA}?$deltatoken=abc"}
         patch_client, fake_client = _async_client_with([_http_response(body)])
         with _patch_resolve(), patch_client:
             await list_inbox_delta(_mock_graph_client(), folder="inbox", page_size=50)

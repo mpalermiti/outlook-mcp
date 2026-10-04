@@ -431,6 +431,42 @@ class TestFirstConsentScopes:
         assert scopes == tuple(auth_module.SCOPES_READWRITE)
         assert GRAPH_SCOPE not in scopes
 
+    def test_read_only_consent_asks_for_the_read_scopes_only(self):
+        """The explicit opt-in is the one thing that narrows the consent.
+
+        `read_only` alone must not (the test above): flipping it later would
+        strand every write. `read_only_consent` is a separate, deliberate
+        statement — "this app must never hold write access" — and it is what
+        makes a second, read-only app registration reachable at all.
+        """
+        scopes = self._consented_scopes(
+            Config(client_id="test-id", read_only=True, read_only_consent=True)
+        )
+        assert scopes == tuple(auth_module.SCOPES_READONLY)
+        assert GRAPH_SCOPE not in scopes
+
+    def test_no_read_only_scope_can_write_or_send(self):
+        for scope in auth_module.SCOPES_READONLY:
+            assert "Write" not in scope, scope
+            assert "Send" not in scope, scope
+
+    def test_the_read_only_scopes_cover_every_read_the_write_set_covers(self):
+        """Each read-write scope has its read counterpart, so no read tool loses its permission."""
+        counterparts = [
+            scope.replace(".ReadWrite", ".Read")
+            for scope in auth_module.SCOPES_READWRITE
+            if scope != "Mail.Send"
+        ]
+        assert auth_module.SCOPES_READONLY == counterparts
+        assert auth_module.SCOPES_READONLY == [
+            "Mail.Read",
+            "Calendars.Read",
+            "Contacts.Read",
+            "Tasks.Read",
+            "MailboxSettings.Read",
+            "User.Read",
+        ]
+
 
 class _DefaultConsentCredential:
     """A record-pinned credential whose session consented `.default` alone.
@@ -577,3 +613,59 @@ class TestStaleConsentRemedy:
         assert auth.startup_error is None  # AuthRequiredError on use, not this
         with pytest.raises(AuthRequiredError):
             auth.get_credential()
+
+
+class TestSavedSignInBelongsToTheConfiguredApp:
+    """A record saved for one app registration must not serve another.
+
+    azure-identity uses the *record's* client id and ignores the one passed in,
+    so after `client_id` is changed in config.json the old session kept being
+    used, silently — and `outlook-mcp status` printed the new id next to
+    "authenticated". Pointing the config at a read-only app without signing in
+    again left the write-capable session in place.
+    """
+
+    @staticmethod
+    def _record(client_id: str) -> AuthenticationRecord:
+        return AuthenticationRecord(
+            tenant_id="consumers",
+            client_id=client_id,
+            authority="https://login.microsoftonline.com/consumers",
+            home_account_id="home-1",
+            username="user@example.com",
+        )
+
+    def test_a_record_from_another_app_is_not_used(self):
+        from outlook_mcp.errors import ClientIdMismatchError
+
+        auth = AuthManager(Config(client_id="11111111-aaaa-4bbb-8ccc-000000000001"))
+        record = self._record("99999999-aaaa-4bbb-8ccc-000000000009")
+        with (
+            patch("outlook_mcp.auth._load_auth_record", return_value=record),
+            patch(
+                "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False
+            ),
+            patch("outlook_mcp.auth.DeviceCodeCredential") as cred_cls,
+        ):
+            assert auth.try_cached_token() is False
+
+        cred_cls.assert_not_called()
+        assert auth.is_authenticated() is False
+        assert isinstance(auth.startup_error, ClientIdMismatchError)
+        remedy = str(auth.startup_error)
+        assert "outlook-mcp auth" in remedy
+        assert "client_id" in remedy
+
+    def test_the_same_app_written_in_another_case_is_the_same_app(self):
+        auth = AuthManager(Config(client_id="ABCDEF00-AAAA-4BBB-8CCC-000000000001"))
+        record = self._record("abcdef00-aaaa-4bbb-8ccc-000000000001")
+        with (
+            patch("outlook_mcp.auth._load_auth_record", return_value=record),
+            patch(
+                "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False
+            ),
+            patch("outlook_mcp.auth.DeviceCodeCredential", _DefaultConsentCredential),
+        ):
+            assert auth.try_cached_token() is True
+
+        assert auth.startup_error is None

@@ -227,3 +227,111 @@ async def test_download_attachment_rejects_a_path_outside(attachments_dir, secre
         )
     assert "attachments_dir" in str(exc.value)
     assert secret.read_text() == "PRIVATE KEY"  # untouched
+
+
+# ── Network paths ────────────────────────────────────────────────────────────
+# On Windows, resolving a path opens it, and opening `\\host\share\x` means
+# connecting to `host` and signing in as the logged-in user. Confinement by
+# resolving therefore refused such a path one step too late: the connection had
+# already been made by the time the check said no. That one class is turned
+# away by its text, before the filesystem is asked anything.
+
+NETWORK_PATHS = [
+    r"\\attacker-host\share\a.pdf",
+    "//attacker-host/share/a.pdf",
+    r"\\?\UNC\attacker-host\share\a.pdf",
+    r"\\attacker-host@SSL\share\a.pdf",
+    r"\\.\pipe\attacker-host",
+    # Shapes `ntpath.splitdrive` reads differently from pathlib before Python
+    # 3.12 — it finds no drive at all in them — so a check that asked it would
+    # pass these on to `resolve()` on 3.10 and 3.11.
+    r"\\?\\UNC\attacker-host\share\a.pdf",
+    r"\\?\\attacker-host\share\a.pdf",
+    r"\/attacker-host/share/a.pdf",
+    r"\\\attacker-host\share\a.pdf",
+]
+
+
+@pytest.mark.parametrize("network_path", NETWORK_PATHS)
+def test_network_path_is_refused_before_the_filesystem_is_asked(
+    attachments_dir, monkeypatch, network_path
+):
+    """The refusal has to come before ``resolve()``, not after it.
+
+    Runs everywhere by switching on the Windows branch; on the windows-latest
+    leg it is the real thing. The spy records every path handed to
+    ``Path.resolve`` — the attachments directory may be resolved, the hostile
+    path may not.
+    """
+    from outlook_mcp.tools import mail_attachments
+
+    monkeypatch.setattr(mail_attachments, "_WINDOWS", True)
+    resolved_paths: list[str] = []
+    real_resolve = Path.resolve
+
+    def spy(self, *args, **kwargs):
+        resolved_paths.append(str(self))
+        return real_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", spy)
+
+    with pytest.raises(ValueError) as exc:
+        resolve_attachment_path(network_path, attachments_dir)
+
+    assert not [p for p in resolved_paths if "attacker-host" in p]
+    assert "network" in str(exc.value)
+
+
+def test_network_check_is_lexical_and_admits_only_the_configured_share():
+    """An ``attachments_dir`` on a share is the operator's choice; nothing else is."""
+    from outlook_mcp.tools.mail_attachments import _network_path_outside
+
+    share = (r"\\nas\share\attachments",)
+
+    assert not _network_path_outside(r"\\nas\share\attachments\x.pdf", share)
+    assert not _network_path_outside(r"\\NAS\Share\Attachments\sub\x.pdf", share)
+    assert not _network_path_outside("//nas/share/attachments/x.pdf", share)
+
+    assert _network_path_outside(r"\\nas\share\other\x.pdf", share)
+    assert _network_path_outside(r"\\nas\share\attachments\..\secret.txt", share)
+    assert _network_path_outside(r"\\nas\share\attachments-evil\x.pdf", share)
+    assert _network_path_outside(r"\\elsewhere\share\attachments\x.pdf", share)
+
+
+@pytest.mark.parametrize("local_base", ["\\", "/", "C:\\", r"C:\att", "", r"\\", "//"])
+def test_a_local_attachments_dir_admits_no_network_path(local_base):
+    """Only a base that is itself on a named share can vouch for a network path.
+
+    A root — one separator or two — normalises to an empty prefix, which every
+    path starts with.
+    """
+    from outlook_mcp.tools.mail_attachments import _network_path_outside
+
+    assert _network_path_outside(r"\\attacker-host\share\a.pdf", (local_base,))
+
+
+@pytest.mark.parametrize("local_path", [r"C:\Users\me\x.pdf", r"D:x.pdf", r"\x.pdf", "x.pdf"])
+def test_network_check_leaves_local_paths_to_the_resolver(local_path):
+    """Only network and device paths are judged by their text; resolving stays the authority."""
+    from outlook_mcp.tools.mail_attachments import _network_path_outside
+
+    assert not _network_path_outside(local_path, (r"C:\att",))
+
+
+@pytest.mark.asyncio
+async def test_download_attachment_refuses_a_network_path(attachments_dir, monkeypatch):
+    """End-to-end on the ungated download tool: refused before any Graph call."""
+    from outlook_mcp.config import Config
+    from outlook_mcp.tools import mail_attachments
+
+    monkeypatch.setattr(mail_attachments, "_WINDOWS", True)
+
+    with pytest.raises(ValueError) as exc:
+        await mail_attachments.download_attachment(
+            None,
+            "AAMkFakeMessageId",
+            "AAMkFakeAttachmentId",
+            save_path=r"\\attacker-host\share\a.pdf",
+            config=Config(attachments_dir=attachments_dir),
+        )
+    assert "network" in str(exc.value)

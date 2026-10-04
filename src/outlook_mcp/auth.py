@@ -17,6 +17,7 @@ from azure.identity import (
 from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config, _ensure_dir, atomic_write
 from outlook_mcp.errors import (
     AuthRequiredError,
+    ClientIdMismatchError,
     OutlookMCPError,
     StaleConsentError,
     UnencryptedTokenCacheError,
@@ -29,11 +30,12 @@ logger = logging.getLogger(__name__)
 # and try_cached_token, often multiple times during startup.
 _warned_unencrypted_fallback = False
 
-# The concrete delegated scopes the first consent asks for — always the full
-# read-write set, whatever read_only says: read_only gates the tools, not the
-# token (#58), and the scopes a first consent omits can never be redeemed from
-# the session it creates, so a read-only consent could never be widened after
-# the config flips. The FIRST consent names exactly these (login_interactive);
+# The concrete delegated scopes the first consent asks for — the full read-write
+# set whatever read_only says: read_only gates the tools, not the token (#58),
+# and the scopes a first consent omits can never be redeemed from the session
+# it creates, so a consent narrowed by that flag could never be widened after
+# the config flips. (SCOPES_READONLY below is the one, explicit, exception.)
+# The FIRST consent names exactly these (login_interactive);
 # every request afterwards — silent refresh and the Graph SDK's internal calls
 # alike — uses .default, which on an already-consented session means precisely
 # "the consented set". MSAL adds offline_access to its token requests itself,
@@ -44,6 +46,22 @@ SCOPES_READWRITE = [
     "Calendars.ReadWrite",
     "Contacts.ReadWrite",
     "Tasks.ReadWrite",
+    "MailboxSettings.Read",
+    "User.Read",
+]
+
+# What `read_only_consent: true` asks for instead: the read half of each scope
+# above, and no Mail.Send. This is what makes a second, read-only app
+# registration usable — the route the README offers for a credential Microsoft
+# itself limits. Asking that app for the write set either fails or grants it
+# write access, and both defeat the point. It is its own config key, never
+# inferred from read_only, for the reason given above; the config refuses the
+# key without read_only, so the stranded-writes state cannot be configured.
+SCOPES_READONLY = [
+    "Mail.Read",
+    "Calendars.Read",
+    "Contacts.Read",
+    "Tasks.Read",
     "MailboxSettings.Read",
     "User.Read",
 ]
@@ -180,15 +198,18 @@ class AuthManager:
     def get_scopes(self) -> list[str]:
         """Return the concrete delegated scopes the first consent asks for.
 
-        Always the full read-write set, whatever ``read_only`` says: that flag
-        gates the tools, not the token (#58). Which list this returns decides
-        what the account is ever able to grant — the scopes a first consent
-        omits cannot be redeemed from the session it creates, and because
-        every later request renews via ``.default`` ("the consented set"), a
-        read-only first consent could never be widened once the config flips
-        to ``read_only: false``. So the consent is always asked wide.
+        The full read-write set, whatever ``read_only`` says: that flag gates
+        the tools, not the token (#58). Which list this returns decides what
+        the account is ever able to grant — the scopes a first consent omits
+        cannot be redeemed from the session it creates, and because every
+        later request renews via ``.default`` ("the consented set"), a consent
+        narrowed by ``read_only`` could never be widened once that flag flips.
+
+        ``read_only_consent`` is the explicit exception: the operator has said
+        this app must never hold write access, and the config has already
+        refused that key without ``read_only``.
         """
-        return SCOPES_READWRITE
+        return SCOPES_READONLY if self.config.read_only_consent else SCOPES_READWRITE
 
     def is_authenticated(self) -> bool:
         """Check if we have an active credential."""
@@ -291,7 +312,7 @@ class AuthManager:
         # fixes that. Once these scopes are consented, everything later uses
         # .default, which then means exactly this consented set. The list is
         # the read-write one whatever read_only says (see get_scopes): that
-        # flag gates the tools, not the token.
+        # flag gates the tools, not the token. Only read_only_consent narrows it.
         try:
             cred.get_token(*self.get_scopes())
         except ClientAuthenticationError as exc:
@@ -318,6 +339,20 @@ class AuthManager:
 
         record = _load_auth_record()
         if record is None:
+            return False
+
+        # A record pins the app it was saved for: azure-identity uses the
+        # record's client id and ignores the configured one (see
+        # _make_credential). So a client_id changed in config.json has to be
+        # caught here, or the old app's session — and whatever it was
+        # consented for — goes on being used under the new id's name.
+        saved_client_id = getattr(record, "client_id", None)
+        if (
+            isinstance(saved_client_id, str)
+            and saved_client_id.lower() != self.config.client_id.lower()
+        ):
+            self.startup_error = ClientIdMismatchError(self.config.client_id, saved_client_id)
+            logger.warning("%s", self.startup_error)
             return False
 
         try:

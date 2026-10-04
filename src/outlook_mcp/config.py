@@ -74,6 +74,16 @@ class Config(BaseModel):
     client_id: str | None = Field(default=None, description="Azure AD app client ID (BYOID)")
     tenant_id: str = Field(default=DEFAULT_TENANT_ID)
     read_only: bool = Field(default=False)
+    read_only_consent: bool = Field(
+        default=False,
+        description=(
+            "Ask Microsoft for the read scopes only at sign-in, instead of the "
+            "read-write set. For a credential that cannot write: point client_id "
+            "at an app registration that has never been granted write access, set "
+            "this and read_only to true, then run `outlook-mcp auth`. Requires "
+            "read_only: true."
+        ),
+    )
     allow_categories: list[str] = Field(
         default_factory=list,
         description=(
@@ -135,6 +145,27 @@ class Config(BaseModel):
                     ", ".join(sorted(cls.model_fields)),
                 )
         return data
+
+    @model_validator(mode="after")
+    def _read_only_consent_needs_read_only(self) -> "Config":
+        """Refuse a read-only sign-in on a server that expects to write.
+
+        A session that consented only the read scopes cannot write, and no
+        refresh widens it — every later request asks for `.default`, which
+        means exactly what was consented. Left to load, each write tool would
+        fail with a 403 whose hint says nothing about the consent. This is the
+        trap a consent keyed on `read_only` alone used to set whenever that
+        flag was flipped; with its own key, the mismatch is a config error
+        with both names in it.
+        """
+        if self.read_only_consent and not self.read_only:
+            raise ValueError(
+                "read_only_consent: true needs read_only: true. A sign-in that asked "
+                "only for the read scopes cannot write, so every write tool would "
+                "fail. Set read_only to true, or remove read_only_consent and run "
+                "`outlook-mcp auth` again to consent the write scopes."
+            )
+        return self
 
     @field_validator("allow_categories")
     @classmethod
