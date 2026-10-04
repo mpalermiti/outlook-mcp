@@ -529,7 +529,7 @@ By default, `read_only: false` unlocks **all** write tools. For finer control, s
 | `mail_triage` | move, delete (soft), flag, categorize, mark read, copy, batch | Moderate — reversible except hard delete |
 | `mail_folders` | create/rename/delete folder | Moderate |
 | `mail_send` | send, reply, forward, send_draft, send_with_attachments | **Dangerous** — sends email on your behalf |
-| `calendar_write` | create/update/delete event, RSVP | Moderate — creates calendar entries |
+| `calendar_write` | create/update/delete event, RSVP | Moderate — your own calendar. The parts that email other people text the agent wrote need `mail_send` as well: inviting attendees, rewording (subject, body, location) a meeting you organize that already has them, and adding a message to an RSVP. A bare RSVP, a time change and a cancellation still notify the people involved, but carry nothing the agent wrote |
 | `contacts_write` | create/update/delete contact | Moderate |
 | `todo_write` | create/update/complete/delete task, checklist items; upload/delete task attachments | Moderate — your own task list, but `outlook_upload_task_attachment` reads local files from `attachments_dir` and pushes their bytes to Graph, and task/checklist/attachment deletes are irreversible. Listing and downloading attachments are plain reads, gated like every other read (not at all) and fenced to `attachments_dir` |
 
@@ -551,6 +551,9 @@ attachment reads — see the table above.)
 ```json
 { "read_only": false, "allow_categories": ["calendar_write"] }
 ```
+
+(It cannot invite anyone. An invitation is an email, so attendees need `mail_send` too — add it
+if the agent should set up meetings with other people, not just block out your own time.)
 
 **Full write access** (agent can do everything):
 

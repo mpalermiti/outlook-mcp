@@ -64,3 +64,29 @@ def check_permission(config: Config, category: str, tool_name: str) -> None:
         raise PermissionDeniedError(tool_name, category)
 
     return None
+
+
+def mail_send_withheld(config: Config) -> bool:
+    """True when a whitelist is in force and ``mail_send`` is not on it."""
+    return bool(config.allow_categories) and CATEGORY_MAIL_SEND not in config.allow_categories
+
+
+def check_sends_mail(config: Config, tool_name: str, doing: str) -> None:
+    """Enforce ``mail_send`` on a write that emails other people as a side effect.
+
+    A tool's own category covers what it is named for. A meeting invitation or
+    an RSVP comment is also an email — caller-written text, delivered by
+    Exchange to an address the call names — and that is the thing ``mail_send``
+    exists to gate. Called *after* the tool's own ``check_permission``, for the
+    part of the call that sends; ``doing`` names that part for the refusal.
+
+    Raises:
+        ReadOnlyError: if the server is in read-only mode.
+        PermissionDeniedError: if ``allow_categories`` is a non-empty whitelist
+            without ``mail_send``.
+    """
+    if config.read_only:
+        raise ReadOnlyError(tool_name)
+    if mail_send_withheld(config):
+        raise PermissionDeniedError(tool_name, CATEGORY_MAIL_SEND, doing=doing)
+    return None

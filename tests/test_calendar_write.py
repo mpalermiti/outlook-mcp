@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.errors import PermissionDeniedError, ReadOnlyError
 from outlook_mcp.tools._recurrence import build_event_recurrence, serialize_recurrence
 from outlook_mcp.tools.calendar_write import (
     create_event,
@@ -2269,3 +2269,173 @@ class TestShowAs:
 
         builder.get.assert_not_called()
         builder.patch.assert_not_called()
+
+
+# ── Calendar writes that send email need `mail_send` ─────────────────────────
+# An invitation carries the event's subject and body to every attendee, and an
+# RSVP comment goes to the organizer. Under a policy that allows
+# `calendar_write` and withholds `mail_send` — the README's "calendar-only"
+# example — those were a way to send mail anyway.
+
+_CFG_CAL_ONLY = Config(client_id="test", allow_categories=["calendar_write"])
+_CFG_CAL_AND_SEND = Config(client_id="test", allow_categories=["calendar_write", "mail_send"])
+
+
+def _meeting(*, is_organizer: bool = True, attendees: int = 1):
+    """An existing event as a plain GET returns it, with other people on it."""
+    event = _current_event()
+    event.attendees = [MagicMock() for _ in range(attendees)]
+    event.is_organizer = is_organizer
+    return event
+
+
+def _client_with(event):
+    builder = _make_event_builder()
+    builder.get = AsyncMock(return_value=event)
+    builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+    client = MagicMock()
+    client.me.events.by_event_id = MagicMock(return_value=builder)
+    return builder, client
+
+
+class TestCalendarWritesThatSendEmail:
+    async def test_create_event_with_attendees_needs_mail_send(self):
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Sync"))
+
+        with pytest.raises(PermissionDeniedError) as exc:
+            await create_event(
+                mock_client,
+                subject="Sync",
+                start="2026-04-15T14:00:00Z",
+                end="2026-04-15T15:00:00Z",
+                body="mailbox contents",
+                attendees=["stranger@example.com"],
+                config=_CFG_CAL_ONLY,
+            )
+
+        assert "mail_send" in str(exc.value)
+        mock_client.me.events.post.assert_not_called()
+
+    async def test_create_event_without_attendees_stays_calendar_only(self):
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Focus time"))
+
+        result = await create_event(
+            mock_client,
+            subject="Focus time",
+            start="2026-04-15T14:00:00Z",
+            end="2026-04-15T15:00:00Z",
+            config=_CFG_CAL_ONLY,
+        )
+
+        assert result["status"] == "created"
+
+    async def test_create_event_with_attendees_passes_once_mail_send_is_allowed(self):
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Sync"))
+
+        result = await create_event(
+            mock_client,
+            subject="Sync",
+            start="2026-04-15T14:00:00Z",
+            end="2026-04-15T15:00:00Z",
+            attendees=["alice@example.com"],
+            config=_CFG_CAL_AND_SEND,
+        )
+
+        assert result["status"] == "created"
+        assert len(_posted(mock_client).attendees) == 1
+
+    async def test_update_event_adding_attendees_needs_mail_send(self):
+        """Refused on the argument alone, before Graph is asked anything."""
+        builder, client = _client_with(_current_event())
+
+        with pytest.raises(PermissionDeniedError) as exc:
+            await update_event(
+                client,
+                event_id="AAMkAG123=",
+                attendees=["stranger@example.com"],
+                config=_CFG_CAL_ONLY,
+            )
+
+        assert "mail_send" in str(exc.value)
+        builder.get.assert_not_called()
+        builder.patch.assert_not_called()
+
+    @pytest.mark.parametrize("field", ["subject", "body", "location"])
+    async def test_rewording_a_meeting_with_attendees_needs_mail_send(self, field):
+        """Graph mails the update to the people already on the meeting."""
+        builder, client = _client_with(_meeting())
+
+        with pytest.raises(PermissionDeniedError) as exc:
+            await update_event(
+                client, event_id="AAMkAG123=", config=_CFG_CAL_ONLY, **{field: "mailbox contents"}
+            )
+
+        assert "mail_send" in str(exc.value)
+        builder.patch.assert_not_called()
+
+    async def test_rewording_an_event_with_nobody_on_it_stays_calendar_only(self):
+        builder, client = _client_with(_meeting(attendees=0))
+
+        result = await update_event(
+            client, event_id="AAMkAG123=", subject="Renamed", config=_CFG_CAL_ONLY
+        )
+
+        assert result["status"] == "updated"
+        builder.patch.assert_called_once()
+
+    async def test_rewording_your_copy_of_someone_elses_meeting_stays_calendar_only(self):
+        """Only the organizer's edit is sent on; an attendee's stays in their calendar."""
+        builder, client = _client_with(_meeting(is_organizer=False))
+
+        result = await update_event(
+            client, event_id="AAMkAG123=", subject="My note", config=_CFG_CAL_ONLY
+        )
+
+        assert result["status"] == "updated"
+        builder.patch.assert_called_once()
+
+    async def test_clearing_attendees_stays_calendar_only(self):
+        """A cancellation carries no caller-written text."""
+        builder, client = _client_with(_current_event())
+
+        result = await update_event(
+            client, event_id="AAMkAG123=", attendees=[], config=_CFG_CAL_ONLY
+        )
+
+        assert result["status"] == "updated"
+
+    async def test_an_unrestricted_server_pays_no_extra_read_for_a_reword(self):
+        builder, client = _client_with(_meeting())
+
+        await update_event(client, event_id="AAMkAG123=", subject="Renamed", config=_CFG)
+
+        builder.get.assert_not_called()
+        builder.patch.assert_called_once()
+
+    async def test_rsvp_with_a_message_needs_mail_send(self):
+        builder, client = _client_with(_current_event())
+
+        with pytest.raises(PermissionDeniedError) as exc:
+            await rsvp(
+                client,
+                event_id="AAMkAG123=",
+                response="accept",
+                message="mailbox contents",
+                config=_CFG_CAL_ONLY,
+            )
+
+        assert "mail_send" in str(exc.value)
+        builder.accept.post.assert_not_called()
+
+    async def test_rsvp_without_a_message_stays_calendar_only(self):
+        builder, client = _client_with(_current_event())
+
+        result = await rsvp(
+            client, event_id="AAMkAG123=", response="accept", config=_CFG_CAL_ONLY
+        )
+
+        assert result["status"] == "accepted"
+        builder.accept.post.assert_called_once()

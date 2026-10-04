@@ -123,6 +123,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   draft, before changing it. One extra GET per call. `outlook_send_draft` is unchanged: it is
   gated by `mail_send`, not `mail_drafts`.
 
+- **Calendar writes that send email need `mail_send`.** With attendees on it, an event is also
+  an email: Exchange delivers the subject and body to every address the call names, and an RSVP
+  comment goes to the organizer. All of that was gated by `calendar_write` alone, which the
+  README rated "creates calendar entries" and offered as a "calendar-only, nothing else" policy
+  — so withholding `mail_send` did not stop an agent sending text of its choosing to an address
+  of its choosing. With `allow_categories` set and `mail_send` absent, these are now refused:
+  `attendees` on `outlook_create_event` and `outlook_update_event`; a new subject, body or
+  location on a meeting you organize that already has attendees (one extra read, paid only under
+  such a policy); and `message` on `outlook_rsvp`. Events with nobody else on them, a bare RSVP,
+  time changes and cancellations are unaffected, and so is every server that does not set
+  `allow_categories`. If your policy lists `calendar_write` and you want the agent to invite
+  people, add `mail_send`.
+
 ## [1.23.0] — 2026-09-30
 
 The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made

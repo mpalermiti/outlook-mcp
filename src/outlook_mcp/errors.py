@@ -66,12 +66,25 @@ class ReadOnlyError(OutlookMCPError):
 
 
 class PermissionDeniedError(OutlookMCPError):
-    """Raised when a write tool is not in the user's allow_categories."""
+    """Raised when a write tool is not in the user's allow_categories.
 
-    def __init__(self, tool_name: str, category: str):
+    ``doing`` names the part of a call that needs ``category`` when the tool
+    as a whole does not — inviting attendees from a calendar tool needs
+    ``mail_send`` — so the refusal says which argument to drop, not just that
+    the tool was refused.
+    """
+
+    def __init__(self, tool_name: str, category: str, doing: str | None = None):
+        if doing:
+            message = (
+                f"Cannot use {tool_name} to {doing} — that sends email, and category "
+                f"'{category}' is not in allow_categories."
+            )
+        else:
+            message = f"Cannot use {tool_name} — category '{category}' is not in allow_categories."
         super().__init__(
             "permission_denied",
-            f"Cannot use {tool_name} — category '{category}' is not in allow_categories.",
+            message,
             (
                 f"Add '{category}' to allow_categories in {_config_dir()}/config.json, "
                 "or unset allow_categories for full write access."
