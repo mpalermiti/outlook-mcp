@@ -560,6 +560,7 @@ class TestMailDrafts:
 
     async def test_update_draft_every_argument_reaches_the_wire(self):
         builder = MagicMock()
+        builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         builder.patch = AsyncMock()
         client = MagicMock()
         client.me.messages.by_message_id.return_value = builder

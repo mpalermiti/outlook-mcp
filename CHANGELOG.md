@@ -114,6 +114,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   an `attachments_dir` the operator put on a share themselves. Resolving remains the authority
   for every path that gets past that. macOS and Linux were never affected.
 
+- **The draft tools only touch drafts.** A draft is addressed by its message id, and every message
+  has one. `outlook_delete_draft` made the same permanent DELETE that
+  `outlook_delete_message(permanent=True)` makes, on whatever id it was given, and
+  `outlook_update_draft`, `outlook_attach_to_draft` and `outlook_remove_draft_attachment` were
+  equally unparticular — all under `mail_drafts`, the category the README describes as "drafts
+  only". Each now reads the message's `isDraft` first and refuses anything Graph does not call a
+  draft, before changing it. One extra GET per call. `outlook_send_draft` is unchanged: it is
+  gated by `mail_send`, not `mail_drafts`.
+
 ## [1.23.0] — 2026-09-30
 
 The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made

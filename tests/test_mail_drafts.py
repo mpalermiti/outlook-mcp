@@ -262,6 +262,7 @@ class TestUpdateDraft:
     async def test_update_draft_patches_partial(self):
         """update_draft sends PATCH with only provided fields."""
         msg_builder = MagicMock()
+        msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         msg_builder.patch = AsyncMock()
 
         client = MagicMock()
@@ -281,6 +282,7 @@ class TestUpdateDraft:
     async def test_update_draft_body_defaults_to_text(self):
         """update_draft sends body as Text by default."""
         msg_builder = MagicMock()
+        msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         msg_builder.patch = AsyncMock()
 
         client = MagicMock()
@@ -304,6 +306,7 @@ class TestUpdateDraft:
         drafts originally composed as HTML in the Outlook UI — Text PATCH on
         an HTML draft triggers MapiSetProperties / ErrorAccessDenied)."""
         msg_builder = MagicMock()
+        msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         msg_builder.patch = AsyncMock()
 
         client = MagicMock()
@@ -348,6 +351,7 @@ class TestUpdateDraft:
     async def test_update_draft_patches_reply_to(self):
         """update_draft sets reply_to on the PATCH payload when provided."""
         msg_builder = MagicMock()
+        msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         msg_builder.patch = AsyncMock()
 
         client = MagicMock()
@@ -370,6 +374,7 @@ class TestUpdateDraft:
     async def test_update_draft_clears_reply_to_with_empty_list(self):
         """update_draft with reply_to=[] clears the field on the draft."""
         msg_builder = MagicMock()
+        msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         msg_builder.patch = AsyncMock()
 
         client = MagicMock()
@@ -399,6 +404,7 @@ class TestUpdateDraft:
     async def test_update_draft_sets_deferred_send_property(self):
         """update_draft attaches PR_DEFERRED_SEND_TIME on the PATCH payload."""
         msg_builder = MagicMock()
+        msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         msg_builder.patch = AsyncMock()
 
         client = MagicMock()
@@ -421,6 +427,7 @@ class TestUpdateDraft:
     async def test_update_draft_clears_deferred_send_with_empty_string(self):
         """update_draft with deferred_send_datetime='' clears the property."""
         msg_builder = MagicMock()
+        msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         msg_builder.patch = AsyncMock()
 
         client = MagicMock()
@@ -484,6 +491,7 @@ class TestDeleteDraft:
     async def test_delete_draft_calls_delete(self):
         """delete_draft DELETEs /me/messages/{id}."""
         msg_builder = MagicMock()
+        msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         msg_builder.delete = AsyncMock()
 
         client = MagicMock()
@@ -506,3 +514,70 @@ class TestDeleteDraft:
         client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await delete_draft(client, draft_id="AAMkAG123=", config=_CFG_RO)
+
+
+# ── The draft tools only touch drafts ────────────────────────────────────────
+# A draft is addressed by message id, and every message in the mailbox has one.
+# Without a check, `outlook_delete_draft` was a permanent delete for any message
+# under the `mail_drafts` category — the one the README calls "drafts only".
+
+
+def _message_builder(*, is_draft):
+    """A message builder whose GET answers `$select=isDraft` the way Graph would."""
+    builder = MagicMock()
+    builder.get = AsyncMock(return_value=MagicMock(is_draft=is_draft))
+    builder.patch = AsyncMock()
+    builder.delete = AsyncMock()
+    return builder
+
+
+def _client_for(builder):
+    client = MagicMock()
+    client.me.messages.by_message_id = MagicMock(return_value=builder)
+    return client
+
+
+class TestDraftToolsRefuseNonDrafts:
+    async def test_delete_draft_refuses_a_received_message(self):
+        builder = _message_builder(is_draft=False)
+
+        with pytest.raises(ValueError, match="not a draft"):
+            await delete_draft(_client_for(builder), draft_id="AAMkInboxMsg=", config=_CFG)
+
+        builder.delete.assert_not_called()
+
+    async def test_update_draft_refuses_a_received_message(self):
+        builder = _message_builder(is_draft=False)
+
+        with pytest.raises(ValueError, match="not a draft"):
+            await update_draft(
+                _client_for(builder), draft_id="AAMkInboxMsg=", subject="rewritten", config=_CFG
+            )
+
+        builder.patch.assert_not_called()
+
+    async def test_a_message_graph_does_not_call_a_draft_is_refused(self):
+        """Fail closed: only an explicit `isDraft: true` lets the delete through."""
+        builder = _message_builder(is_draft=None)
+
+        with pytest.raises(ValueError, match="not a draft"):
+            await delete_draft(_client_for(builder), draft_id="AAMkAG123=", config=_CFG)
+
+        builder.delete.assert_not_called()
+
+    async def test_the_check_asks_graph_for_isdraft_and_nothing_else(self):
+        builder = _message_builder(is_draft=True)
+
+        await delete_draft(_client_for(builder), draft_id="AAMkAG123=", config=_CFG)
+
+        request_config = builder.get.call_args.kwargs["request_configuration"]
+        assert request_config.query_parameters.select == ["isDraft"]
+        builder.delete.assert_called_once()
+
+    async def test_read_only_still_refuses_before_any_graph_call(self):
+        builder = _message_builder(is_draft=True)
+
+        with pytest.raises(ReadOnlyError):
+            await delete_draft(_client_for(builder), draft_id="AAMkAG123=", config=_CFG_RO)
+
+        builder.get.assert_not_called()

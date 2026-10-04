@@ -37,6 +37,36 @@ def _build_deferred_send_property(deferred_send_datetime: str, tz: str = "UTC"):
     return prop, normalized
 
 
+async def require_draft(graph_client: Any, message_id: str, tool_name: str) -> None:
+    """Refuse a message that is not a draft, before a draft tool changes it.
+
+    A draft is addressed by its message id, and every message in the mailbox
+    has one. Left unchecked, the draft tools were general message tools under
+    a category the README calls "drafts only": ``outlook_delete_draft`` made
+    the same DELETE that ``outlook_delete_message(permanent=True)`` makes, on
+    whatever id it was handed — a received message included.
+
+    One GET for ``isDraft`` and nothing else. Only an explicit ``True`` passes:
+    a message Graph does not call a draft is not ours to edit or delete here.
+    """
+    from msgraph.generated.users.item.messages.item.message_item_request_builder import (
+        MessageItemRequestBuilder,
+    )
+
+    req_config = build_request_config(
+        MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters,
+        {"$select": "isDraft"},
+    )
+    message = await graph_client.me.messages.by_message_id(message_id).get(
+        request_configuration=req_config
+    )
+    if getattr(message, "is_draft", None) is not True:
+        raise ValueError(
+            f"{tool_name} only works on drafts, and this message is not a draft. "
+            "Nothing was changed."
+        )
+
+
 async def list_drafts(
     graph_client: Any,
     count: int = 25,
@@ -268,6 +298,7 @@ async def update_draft(
         )
             msg.single_value_extended_properties = [prop]
 
+    await require_draft(graph_client, draft_id, "outlook_update_draft")
     await graph_client.me.messages.by_message_id(draft_id).patch(msg)
 
     result = {
@@ -314,6 +345,7 @@ async def delete_draft(
     check_permission(config, CATEGORY_MAIL_DRAFTS, "outlook_delete_draft")
     draft_id = validate_graph_id(draft_id)
 
+    await require_draft(graph_client, draft_id, "outlook_delete_draft")
     await graph_client.me.messages.by_message_id(draft_id).delete()
 
     return {

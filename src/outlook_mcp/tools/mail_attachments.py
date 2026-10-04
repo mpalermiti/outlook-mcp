@@ -14,6 +14,7 @@ from outlook_mcp.permissions import (
     CATEGORY_MAIL_SEND,
     check_permission,
 )
+from outlook_mcp.tools.mail_drafts import require_draft
 from outlook_mcp.validation import validate_email, validate_graph_id
 
 # 3MB threshold — files above this use upload sessions
@@ -390,6 +391,10 @@ async def attach_to_draft(
         else:
             small_files.append(path)
 
+    if attachment_paths:
+        # After the paths are confined and found, before anything is uploaded.
+        await require_draft(graph_client, draft_id, "outlook_attach_to_draft")
+
     attachment_ids: list[str] = []
     msg_builder = graph_client.me.messages.by_message_id(draft_id)
 
@@ -446,6 +451,7 @@ async def remove_draft_attachment(
     draft_id = validate_graph_id(draft_id)
     attachment_id = validate_graph_id(attachment_id)
 
+    await require_draft(graph_client, draft_id, "outlook_remove_draft_attachment")
     await (
         graph_client.me.messages.by_message_id(draft_id)
         .attachments.by_attachment_id(attachment_id)
