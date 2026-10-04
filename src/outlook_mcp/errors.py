@@ -236,6 +236,27 @@ class UntrustedURLError(OutlookMCPError):
         self.source = source
 
 
+class ForeignCursorError(OutlookMCPError):
+    """Raised when a delta cursor points somewhere other than its tool's endpoint.
+
+    The host check (``UntrustedURLError``) keeps the token on Graph. It does not
+    keep a tool on its own data: a cursor is a whole URL, so with only the host
+    pinned, any Graph path handed back as a cursor was fetched and returned —
+    mail through the calendar tool, tasks through the contacts tool. A cursor is
+    only good for the endpoint that issued it.
+    """
+
+    def __init__(self, source: str, url: str, resource: str):
+        shown = url[:120] if url else "(empty)"
+        super().__init__(
+            "foreign_cursor",
+            f"Refusing a cursor that is not a {resource} delta link (from {source}): {shown!r}.",
+            "A delta cursor only works with the tool that returned it. Discard this "
+            "cursor and start a fresh sync by calling again with no delta_token.",
+        )
+        self.source = source
+
+
 class ToolInputError(OutlookMCPError, ValueError):
     """A tool argument the caller can fix, raised as an anticipated failure.
 

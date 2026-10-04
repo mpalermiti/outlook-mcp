@@ -34,7 +34,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from outlook_mcp.errors import UntrustedURLError
+from outlook_mcp.errors import ForeignCursorError, UntrustedURLError
 from outlook_mcp.throttle import send_with_retry
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0/"
@@ -46,6 +46,25 @@ GRAPH_HOST = "graph.microsoft.com"
 # Control characters and spaces: the set that different URL parsers disagree
 # about. A real Graph cursor contains none of them.
 _FORBIDDEN_URL_CHARS = re.compile(r"[\x00-\x20\x7f-\xa0]")
+
+# The one endpoint each delta tool may request, as a whole path. A cursor is a
+# full URL that comes back from outside this process, so pinning the host alone
+# left every tool willing to GET any Graph path it was handed — `/me/messages`
+# through the calendar tool, say — and return the result. `/me` is how this
+# server asks; the `users/…` spellings are the same mailbox as Graph may echo
+# it. A key segment is written either `/id` or `('id')`, and Graph uses both.
+_MAILBOX = r"/v1\.0/(?:me|users/[^/]+|users\('[^'/]+'\))"
+_KEY = r"(?:/[^/]+|\('[^'/]+'\))"
+_DELTA_ENDPOINTS: dict[str, re.Pattern[str]] = {
+    "mail": re.compile(rf"{_MAILBOX}/mailFolders{_KEY}/messages/delta", re.IGNORECASE),
+    "calendar": re.compile(rf"{_MAILBOX}/calendarView/delta", re.IGNORECASE),
+    "contacts": re.compile(rf"{_MAILBOX}/contacts/delta", re.IGNORECASE),
+}
+
+# A dot segment, or a separator, hiding in a path — plain or percent-encoded.
+# An HTTP client collapses `..` before sending, so a path that matches the
+# pattern above as written could still arrive somewhere else.
+_PATH_TRICKS = re.compile(r"(?:^|/)(?:\.|%2e){1,2}(?:/|$)|%2f|%5c|\\", re.IGNORECASE)
 
 # Safety cap multiplier — bound a single tool call to at most this many
 # items even when Graph keeps handing us more ``@odata.nextLink`` pages
@@ -60,8 +79,13 @@ def _bearer_token(credential: Any) -> str:
     return tok.token
 
 
-def require_graph_url(url: str, *, source: str) -> str:
+def require_graph_url(url: str, *, source: str, resource: str | None = None) -> str:
     """Return ``url`` if it is an https Graph URL, else refuse.
+
+    With ``resource`` ("mail", "calendar" or "contacts") the path must also be
+    that tool's delta endpoint — see ``_DELTA_ENDPOINTS``. The host is checked
+    first either way: an off-Graph URL is the worse failure and gets its own
+    error.
 
     Every URL this module requests carries the mailbox bearer token, and two of
     them arrive from outside: the caller's ``delta_token`` and the
@@ -110,6 +134,11 @@ def require_graph_url(url: str, *, source: str) -> str:
     if parsed.scheme.lower() != "https" or parsed.netloc.lower() != GRAPH_HOST:
         raise UntrustedURLError(source, url)
 
+    if resource is not None:
+        endpoint = _DELTA_ENDPOINTS[resource]
+        if _PATH_TRICKS.search(parsed.path) or not endpoint.fullmatch(parsed.path):
+            raise ForeignCursorError(source, url, resource)
+
     # Return what was checked, not what was passed in — validating one string
     # and sending another is how a check gets bypassed.
     return candidate
@@ -140,6 +169,7 @@ async def fetch_delta_pages(
     initial_url: str,
     delta_token: str | None,
     page_size: int,
+    resource: str,
     headers: dict[str, str] | None = None,
     timeout: float = 30.0,
 ) -> tuple[list[dict], str | None, bool]:
@@ -180,9 +210,9 @@ async def fetch_delta_pages(
     # Check the host before minting the token, so a poisoned cursor costs a
     # refusal rather than a request.
     url: str = (
-        require_graph_url(delta_token, source="delta_token")
+        require_graph_url(delta_token, source="delta_token", resource=resource)
         if delta_token
-        else require_graph_url(initial_url, source="initial_url")
+        else require_graph_url(initial_url, source="initial_url", resource=resource)
     )
     base_headers = {
         "Authorization": f"Bearer {_bearer_token(credential)}",
@@ -216,12 +246,16 @@ async def fetch_delta_pages(
                 # Reached the end of this sync round. The deltaLink is the
                 # cursor for the *next* round — validated before we return it so
                 # a poisoned link is never stored by the caller and replayed.
-                next_token = require_graph_url(delta_link, source="@odata.deltaLink")
+                next_token = require_graph_url(
+                    delta_link, source="@odata.deltaLink", resource=resource
+                )
                 has_more = False
                 break
 
             if next_link:
-                next_link = require_graph_url(next_link, source="@odata.nextLink")
+                next_link = require_graph_url(
+                    next_link, source="@odata.nextLink", resource=resource
+                )
                 if len(collected) >= cap:
                     # Hit the per-call cap mid-sync. Hand the nextLink back
                     # so the caller resumes from where we stopped.

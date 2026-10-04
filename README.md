@@ -86,7 +86,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 - **Timezone-aware** -- calendar operations respect your configured IANA timezone.
 - **Relative dates** -- every datetime parameter takes ISO 8601 or an offset: `7d` is seven days ago, `+7d` is seven days from now, `now` is this moment. Units: `m`, `h`, `d`, `w`.
 - **Bounded attachments** -- attachment reads and writes are confined to `attachments_dir`, so a message that asks an agent to mail a file elsewhere on disk cannot be obeyed.
-- **Bounded delta cursors** -- a `delta_token` is caller-held state, so it is untrusted input. Every URL that would carry a Graph bearer token is parsed and required to be https on `graph.microsoft.com`, which is what stops a poisoned cursor from redirecting your mailbox token to someone else.
+- **Bounded delta cursors** -- a `delta_token` is caller-held state, so it is untrusted input. Every URL that would carry a Graph bearer token is parsed and required to be https on `graph.microsoft.com`, which is what stops a poisoned cursor from redirecting your mailbox token to someone else. Its path must also be the delta endpoint of the tool it was handed to, so a cursor cannot point a delta tool at some other part of the mailbox.
 - **Workflow prompts** -- `morning_brief`, `triage_folder` and `catch_up` ship as MCP prompts, so the common sequences do not have to be reconstructed call by call.
 
 ### Agent-friendly shape (1.8.0)

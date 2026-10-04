@@ -47,7 +47,9 @@ outlook-mcp is designed with security in mind:
 - **Delta cursors:** `delta_token` is caller-held state and is treated as
   untrusted input. Every URL that receives a Graph bearer token — the cursor and
   each `@odata.nextLink` — is parsed and required to be https on
-  `graph.microsoft.com`.
+  `graph.microsoft.com`, and its path must be the delta endpoint of the tool it
+  was handed to: a mail cursor is only followed by the mail delta tool, and no
+  delta tool will fetch any other Graph path.
 - **Read-only mode is a tool gate, not a token scope.** `read_only: true` blocks this
   server's write tools. It does not narrow the OAuth token, which is acquired with
   `.default` and carries whatever the Azure app was consented for. A `read_only` server

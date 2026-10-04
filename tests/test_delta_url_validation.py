@@ -124,6 +124,7 @@ async def test_poisoned_caller_cursor_sends_no_request_at_all(url):
                 initial_url=GRAPH_DELTA,
                 delta_token=url,
                 page_size=10,
+                resource="mail",
             )
     assert sent == [], f"bearer token was sent to {sent[0][0] if sent else ''}"
 
@@ -145,6 +146,7 @@ async def test_poisoned_nextlink_stops_the_walk_before_the_second_request():
                 initial_url=GRAPH_DELTA,
                 delta_token=None,
                 page_size=10,
+                resource="mail",
             )
 
     assert len(sent) == 1, "followed the poisoned nextLink"
@@ -166,6 +168,7 @@ async def test_poisoned_deltalink_is_not_handed_back_as_a_cursor():
                 initial_url=GRAPH_DELTA,
                 delta_token=None,
                 page_size=10,
+                resource="mail",
             )
 
 
@@ -188,6 +191,7 @@ async def test_no_request_in_the_suite_carries_the_bearer_off_graph():
             initial_url=GRAPH_DELTA,
             delta_token=None,
             page_size=10,
+            resource="mail",
         )
 
     assert len(sent) == 2
@@ -211,6 +215,7 @@ async def test_a_legitimate_graph_cursor_is_still_followed():
             initial_url="",
             delta_token=resume,
             page_size=10,
+            resource="mail",
         )
 
     assert [i["id"] for i in items] == ["m1"]
@@ -269,3 +274,173 @@ class TestParserDifferentials:
         """Validating one string and sending another is how checks get bypassed."""
         padded = f"  {GRAPH_DELTA}  "
         assert require_graph_url(padded, source="delta_token") == GRAPH_DELTA
+
+
+# ── A cursor is bound to the tool that issued it ─────────────────────
+# Pinning the host keeps the token on Graph. It does not keep a tool on its own
+# data: a cursor is a whole URL, so with only the host checked, the calendar
+# delta tool would GET `/v1.0/me/messages` when handed that as its cursor and
+# return what came back. Each tool now accepts its own delta endpoint and
+# nothing else — for the caller's cursor, every nextLink, and the deltaLink it
+# hands back.
+
+G = "https://graph.microsoft.com"
+
+OWN_CURSORS = [
+    pytest.param("mail", f"{G}/v1.0/me/mailFolders/inbox/messages/delta?$top=5", id="mail-first"),
+    pytest.param(
+        "mail",
+        f"{G}/v1.0/me/mailFolders('AQMkADAwATM0MDAAMS1iNTcAZC04MgBlLTAwAi0wMAoALgAAA')"
+        "/messages/delta?$deltatoken=abc",
+        id="mail-deltalink-key-form",
+    ),
+    pytest.param(
+        "mail",
+        f"{G}/v1.0/me/mailFolders/AQMkADAw-_%3D/messages/delta?$skiptoken=abc",
+        id="mail-encoded-id",
+    ),
+    pytest.param(
+        "calendar",
+        f"{G}/v1.0/me/calendarView/delta"
+        "?startDateTime=2026-05-21T00%3A00%3A00Z&endDateTime=2026-05-28T00%3A00%3A00Z",
+        id="calendar-first",
+    ),
+    pytest.param("calendar", f"{G}/v1.0/me/calendarView/delta?$deltatoken=abc", id="calendar"),
+    pytest.param("contacts", f"{G}/v1.0/me/contacts/delta", id="contacts-first"),
+    pytest.param("contacts", f"{G}/v1.0/me/contacts/delta?$skiptoken=abc", id="contacts"),
+]
+
+FOREIGN_CURSORS = [
+    pytest.param(
+        "calendar", f"{G}/v1.0/me/messages?$select=subject&$top=100", id="mail-via-calendar"
+    ),
+    pytest.param("contacts", f"{G}/v1.0/me/todo/lists", id="todo-via-contacts"),
+    pytest.param("mail", f"{G}/v1.0/me/events?$top=50", id="events-via-mail"),
+    pytest.param(
+        "mail", f"{G}/v1.0/me/calendarView/delta?$deltatoken=abc", id="calendar-cursor-in-mail"
+    ),
+    pytest.param(
+        "calendar", f"{G}/v1.0/me/mailFolders/inbox/messages/delta", id="mail-cursor-in-calendar"
+    ),
+    pytest.param("contacts", f"{G}/v1.0/me/calendarView/delta", id="calendar-cursor-in-contacts"),
+    pytest.param("mail", f"{G}/beta/me/mailFolders/inbox/messages/delta", id="beta"),
+    pytest.param("mail", f"{G}/v1.0/me/mailFolders/inbox/messages", id="not-delta"),
+    pytest.param(
+        "mail", f"{G}/v1.0/me/mailFolders/inbox/messages/delta/extra", id="trailing-segment"
+    ),
+    pytest.param("mail", f"{G}/v1.0/me/mailFolders/../messages/delta", id="dot-dot-as-the-id"),
+    pytest.param(
+        "mail",
+        f"{G}/v1.0/me/mailFolders/inbox/messages/delta/../../../../events",
+        id="dot-dot-after-a-good-prefix",
+    ),
+    pytest.param("mail", f"{G}/v1.0/me/mailFolders/%2e%2e/messages/delta", id="encoded-dot-dot"),
+    pytest.param("mail", f"{G}/v1.0/me/mailFolders/a%2Fb/messages/delta", id="encoded-slash"),
+    pytest.param("contacts", f"{G}/v1.0/me/contacts", id="contacts-list-not-delta"),
+    pytest.param("contacts", f"{G}/", id="no-path"),
+]
+
+
+class TestCursorIsBoundToItsTool:
+    @pytest.mark.parametrize(("resource", "url"), OWN_CURSORS)
+    def test_a_tools_own_endpoint_is_accepted(self, resource, url):
+        assert require_graph_url(url, source="delta_token", resource=resource) == url
+
+    @pytest.mark.parametrize(("resource", "url"), FOREIGN_CURSORS)
+    def test_any_other_graph_path_is_refused(self, resource, url):
+        with pytest.raises(OutlookMCPError) as exc:
+            require_graph_url(url, source="delta_token", resource=resource)
+        assert "delta_token" in str(exc.value)
+
+    def test_the_host_is_still_checked_first(self):
+        with pytest.raises(OutlookMCPError) as exc:
+            require_graph_url(
+                "https://evil.example/v1.0/me/contacts/delta",
+                source="delta_token",
+                resource="contacts",
+            )
+        assert "non-Graph" in str(exc.value)
+
+    def test_an_unknown_resource_is_a_programming_error_not_a_pass(self):
+        with pytest.raises(KeyError):
+            require_graph_url(f"{G}/v1.0/me/contacts/delta", source="x", resource="notes")
+
+
+@pytest.mark.asyncio
+async def test_another_tools_cursor_sends_no_request_at_all():
+    patcher, sent = _recording_client([])
+    with patcher:
+        with pytest.raises(OutlookMCPError):
+            await fetch_delta_pages(
+                _credential(),
+                initial_url="",
+                delta_token=f"{G}/v1.0/me/messages?$select=subject&$top=100",
+                page_size=10,
+                resource="calendar",
+            )
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_a_nextlink_to_another_resource_stops_the_walk():
+    page_one = _http_response(
+        {"value": [{"id": "m1"}], "@odata.nextLink": f"{G}/v1.0/me/events?$top=50"}
+    )
+    patcher, sent = _recording_client([page_one, _http_response({"value": []})])
+    with patcher:
+        with pytest.raises(OutlookMCPError):
+            await fetch_delta_pages(
+                _credential(),
+                initial_url=GRAPH_DELTA,
+                delta_token=None,
+                page_size=10,
+                resource="mail",
+            )
+    assert len(sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_deltalink_to_another_resource_is_not_handed_back():
+    body = {"value": [{"id": "m1"}], "@odata.deltaLink": f"{G}/v1.0/me/contacts/delta"}
+    patcher, _sent = _recording_client([_http_response(body)])
+    with patcher:
+        with pytest.raises(OutlookMCPError):
+            await fetch_delta_pages(
+                _credential(),
+                initial_url=GRAPH_DELTA,
+                delta_token=None,
+                page_size=10,
+                resource="mail",
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool", "kwargs"),
+    [
+        pytest.param("mail", {}, id="mail"),
+        pytest.param("calendar", {"start": None, "end": None}, id="calendar"),
+        pytest.param("contacts", {}, id="contacts"),
+    ],
+)
+async def test_each_delta_tool_refuses_a_cursor_that_is_not_its_own(tool, kwargs):
+    """Through the tools themselves: a path on Graph that no delta tool owns."""
+    from outlook_mcp.tools.calendar_delta import list_events_delta
+    from outlook_mcp.tools.contacts_delta import list_contacts_delta
+    from outlook_mcp.tools.mail_delta import list_inbox_delta
+
+    tools = {
+        "mail": list_inbox_delta,
+        "calendar": list_events_delta,
+        "contacts": list_contacts_delta,
+    }
+    graph_client = MagicMock()
+    graph_client.credential = _credential()
+
+    patcher, sent = _recording_client([])
+    with patcher:
+        with pytest.raises(OutlookMCPError):
+            await tools[tool](
+                graph_client, delta_token=f"{G}/v1.0/me/todo/lists/AAMk/tasks", **kwargs
+            )
+    assert sent == []

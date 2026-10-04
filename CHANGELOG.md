@@ -136,6 +136,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `allow_categories`. If your policy lists `calendar_write` and you want the agent to invite
   people, add `mail_send`.
 
+- **A delta cursor only works with the tool that issued it.** Since 1.21 a cursor's host is
+  pinned to `graph.microsoft.com`, which keeps the token on Graph. It did not keep a tool on its
+  own data: a cursor is a whole URL, so `outlook_list_events_delta` handed
+  `https://graph.microsoft.com/v1.0/me/messages?…` as its cursor fetched it and returned what
+  came back, and `outlook_changes_since` passed cursors through the same way. Nothing left Graph
+  and nothing could be written — the request is always a GET — but a server started with
+  `OUTLOOK_MCP_TOOLSETS` narrowed to, say, `calendar,digest` could be made to read mail it had
+  no mail tool for. Each delta tool now accepts its own endpoint and nothing else
+  (`…/mailFolders/<id>/messages/delta`, `…/calendarView/delta`, `…/contacts/delta`, on `/v1.0`),
+  for the caller's cursor, every `@odata.nextLink`, and the `deltaLink` it hands back; dot
+  segments and encoded separators are refused. A cursor pointing anywhere else is answered with
+  a `foreign_cursor` error before any request is made. Cursors you already hold keep working:
+  the patterns were checked against the links Graph really emits, in the live tier.
+
 ## [1.23.0] — 2026-09-30
 
 The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made

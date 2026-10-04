@@ -129,6 +129,7 @@ async def list_events_delta(
         initial_url=initial_url,
         delta_token=delta_token,
         page_size=page_size,
+        resource="calendar",
         headers={"Prefer": f"odata.maxpagesize={page_size}"},
     )
 

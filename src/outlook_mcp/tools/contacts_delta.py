@@ -110,6 +110,7 @@ async def list_contacts_delta(
         initial_url=initial_url,
         delta_token=delta_token,
         page_size=page_size,
+        resource="contacts",
         headers={"Prefer": f"odata.maxpagesize={page_size}"},
     )
 

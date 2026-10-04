@@ -6,6 +6,11 @@ import pytest
 
 from outlook_mcp.tools.contacts_delta import _format_contact_delta, list_contacts_delta
 
+# What Graph's cursors for this tool actually look like. A cursor is checked
+# against the tool's own endpoint, so a made-up path is refused like any other
+# foreign one; each fixture below is this endpoint plus a token naming the page.
+DELTA = "https://graph.microsoft.com/v1.0/me/contacts/delta"
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -97,14 +102,14 @@ class TestFormatContactDelta:
 async def test_first_call_uses_prefer_header_and_no_query_params():
     body = {
         "value": [_raw_contact(id="c1"), _raw_contact(id="c2")],
-        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/contacts-delta",
+        "@odata.deltaLink": f"{DELTA}?$skiptoken=contacts-delta",
     }
     patch_client, _, fake_get = _async_client_with([_http_response(body)])
     with patch_client:
         result = await list_contacts_delta(_mock_graph_client(), page_size=25)
 
     assert len(result["contacts"]) == 2
-    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/contacts-delta"
+    assert result["delta_token"] == f"{DELTA}?$skiptoken=contacts-delta"
     assert result["has_more"] is False
 
     # No query string on the contacts/delta URL
@@ -123,15 +128,15 @@ async def test_first_call_uses_prefer_header_and_no_query_params():
 async def test_subsequent_call_uses_delta_token_url_verbatim():
     body = {
         "value": [_raw_contact(id="changed")],
-        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/contacts-delta-new",
+        "@odata.deltaLink": f"{DELTA}?$skiptoken=contacts-delta-new",
     }
-    prior = "https://graph.microsoft.com/v1.0/contacts-delta-prior"
+    prior = f"{DELTA}?$skiptoken=contacts-delta-prior"
     patch_client, _, fake_get = _async_client_with([_http_response(body)])
     with patch_client:
         result = await list_contacts_delta(_mock_graph_client(), delta_token=prior)
 
     assert fake_get.last_call["url"] == prior
-    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/contacts-delta-new"
+    assert result["delta_token"] == f"{DELTA}?$skiptoken=contacts-delta-new"
 
 
 # ── Safety cap ───────────────────────────────────────────────────────
@@ -144,10 +149,10 @@ async def test_cap_reached_returns_nextlink_and_has_more():
         "@odata.nextLink": link,
     }
     responses = [
-        _http_response(page(0, "https://graph.microsoft.com/v1.0/p2")),
-        _http_response(page(1, "https://graph.microsoft.com/v1.0/p3")),
-        _http_response(page(2, "https://graph.microsoft.com/v1.0/p4")),
-        _http_response(page(3, "https://graph.microsoft.com/v1.0/p5")),
+        _http_response(page(0, f"{DELTA}?$skiptoken=p2")),
+        _http_response(page(1, f"{DELTA}?$skiptoken=p3")),
+        _http_response(page(2, f"{DELTA}?$skiptoken=p4")),
+        _http_response(page(3, f"{DELTA}?$skiptoken=p5")),
     ]
     patch_client, _, _ = _async_client_with(responses)
     with patch_client:
@@ -155,7 +160,7 @@ async def test_cap_reached_returns_nextlink_and_has_more():
 
     assert len(result["contacts"]) == 200
     assert result["has_more"] is True
-    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/p5"
+    assert result["delta_token"] == f"{DELTA}?$skiptoken=p5"
 
 
 # ── Final page ───────────────────────────────────────────────────────
@@ -167,13 +172,13 @@ async def test_follows_nextlink_until_deltalink():
         _http_response(
             {
                 "value": [_raw_contact(id="c1")],
-                "@odata.nextLink": "https://graph.microsoft.com/v1.0/p2",
+                "@odata.nextLink": f"{DELTA}?$skiptoken=p2",
             }
         ),
         _http_response(
             {
                 "value": [_raw_contact(id="c2")],
-                "@odata.deltaLink": "https://graph.microsoft.com/v1.0/contacts-delta-final",
+                "@odata.deltaLink": f"{DELTA}?$skiptoken=contacts-delta-final",
             }
         ),
     ]
@@ -182,7 +187,7 @@ async def test_follows_nextlink_until_deltalink():
         result = await list_contacts_delta(_mock_graph_client())
 
     assert len(result["contacts"]) == 2
-    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/contacts-delta-final"
+    assert result["delta_token"] == f"{DELTA}?$skiptoken=contacts-delta-final"
     assert result["has_more"] is False
 
 
@@ -196,7 +201,7 @@ async def test_removed_contact_collapses_to_id_only():
             _raw_contact(id="c1"),
             {"id": "c2-deleted", "@removed": {"reason": "deleted"}},
         ],
-        "@odata.deltaLink": "https://graph.microsoft.com/v1.0/contacts-delta",
+        "@odata.deltaLink": f"{DELTA}?$skiptoken=contacts-delta",
     }
     patch_client, _, _ = _async_client_with([_http_response(body)])
     with patch_client:
@@ -213,16 +218,16 @@ async def test_removed_contact_collapses_to_id_only():
 
 @pytest.mark.asyncio
 async def test_no_changes_returns_empty_list_and_delta_token():
-    body = {"value": [], "@odata.deltaLink": "https://graph.microsoft.com/v1.0/contacts-delta-same"}
+    body = {"value": [], "@odata.deltaLink": f"{DELTA}?$skiptoken=contacts-delta-same"}
     patch_client, _, _ = _async_client_with([_http_response(body)])
     with patch_client:
         result = await list_contacts_delta(
             _mock_graph_client(),
-            delta_token="https://graph.microsoft.com/v1.0/contacts-delta-prior",
+            delta_token=f"{DELTA}?$skiptoken=contacts-delta-prior",
         )
 
     assert result["contacts"] == []
-    assert result["delta_token"] == "https://graph.microsoft.com/v1.0/contacts-delta-same"
+    assert result["delta_token"] == f"{DELTA}?$skiptoken=contacts-delta-same"
     assert result["has_more"] is False
 
 
