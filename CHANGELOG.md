@@ -19,6 +19,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **`outlook_list_categories` gets the permission it actually needs.** The first consent asked
+  for exactly the scopes the README lists, and `MailboxSettings.Read` — the one permission
+  Graph documents for `/me/outlook/masterCategories` — was not among them. On a `.default`
+  consent that went unnoticed (the blanket grant covered it); under the concrete first consent
+  a new user following the registration steps would have hit a 403 on that one tool. It is now
+  in the registration step and in the consented set.
+
 - **Four tests no longer fail on every Windows run, and `load_config` stops re-`chmod`ing the
   config file on every load.** Two separate causes. `os.chmod` on Windows honours only the
   read-only attribute, so `0o700` and `0o600` are not representable there (measured: `0o777`
