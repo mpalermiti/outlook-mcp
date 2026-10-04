@@ -553,3 +553,57 @@ def test_settings_files_never_use_the_locale_encoding(tmp_path):
     )
 
     assert proc.returncode == 0, proc.stderr
+
+
+# ── read_only_consent: a sign-in that asks for the read scopes only ──────
+#
+# `read_only` is a tool gate. This is the other half — what Microsoft is asked
+# for at sign-in — and it has to be a separate, explicit key: narrowing the
+# consent on `read_only` alone strands every write the day that flag is flipped.
+
+
+def test_read_only_consent_is_off_unless_asked_for():
+    assert Config().read_only_consent is False
+
+
+def test_read_only_consent_without_read_only_is_refused():
+    """A read-only sign-in cannot write, so a config that expects writes is a mistake.
+
+    Left to load, every write tool would fail with a 403 whose hint points
+    somewhere else entirely. Refusing at load names the two keys instead.
+    """
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as exc:
+        Config(client_id="x", read_only_consent=True)
+
+    message = str(exc.value)
+    assert "read_only_consent" in message
+    assert "read_only" in message
+
+
+def test_read_only_consent_with_read_only_loads(tmp_path):
+    (tmp_path / "config.json").write_text(
+        '{"client_id": "x", "read_only": true, "read_only_consent": true}', encoding="utf-8"
+    )
+
+    loaded = load_config(config_dir=str(tmp_path))
+
+    assert loaded.read_only is True
+    assert loaded.read_only_consent is True
+
+
+def test_the_repair_for_a_lone_read_only_consent_names_both_keys(tmp_path):
+    from pydantic import ValidationError
+
+    from outlook_mcp.config import config_repair_lines
+
+    (tmp_path / "config.json").write_text(
+        '{"client_id": "x", "read_only_consent": true}', encoding="utf-8"
+    )
+    with pytest.raises(ValidationError) as exc:
+        load_config(config_dir=str(tmp_path))
+
+    repair = "\n".join(config_repair_lines(exc.value))
+    assert "read_only_consent" in repair
+    assert "read_only" in repair

@@ -63,10 +63,11 @@ def cmd_auth() -> None:
         sys.exit(1)
 
     auth = AuthManager(config)
-    # Always the read-write set, whatever read_only says: that flag gates the
-    # tools, not the token, and a read-only first consent could never be
-    # widened once the config flips.
-    print("Authenticating with the read-write scopes...")
+    # The read-write set whatever read_only says: that flag gates the tools,
+    # not the token, and a consent narrowed by it could never be widened once
+    # the config flips. Only the explicit read_only_consent key asks for less.
+    mode = "read-only" if config.read_only_consent else "read-write"
+    print(f"Authenticating with the {mode} scopes...")
     print()
 
     try:

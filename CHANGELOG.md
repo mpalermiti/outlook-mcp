@@ -150,6 +150,26 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   a `foreign_cursor` error before any request is made. Cursors you already hold keep working:
   the patterns were checked against the links Graph really emits, in the live tier.
 
+- **A read-only app registration can be signed in to again: `read_only_consent`.** The README
+  and SECURITY.md offer one route to a credential that cannot write — a second Azure app
+  holding only the read permissions — and the consent change above closed it: sign-in asked
+  *whatever* app was configured for the full read-write set, so that app was either refused or
+  handed write access, which is the thing it existed to not have. `read_only_consent: true`
+  makes `outlook-mcp auth` ask for `Mail.Read`, `Calendars.Read`, `Contacts.Read`,
+  `Tasks.Read`, `MailboxSettings.Read` and `User.Read`, and nothing else. It is its own key
+  rather than a reading of `read_only`, for the reason the consent change gives: a consent
+  narrowed by `read_only` strands every write the day that flag is flipped. The config refuses
+  `read_only_consent` without `read_only: true`, so that state cannot be configured. Never
+  shipped broken: 1.23.0 still signs in with `.default`.
+
+- **A saved sign-in is only used with the app it was made for.** azure-identity serves the saved
+  record's client id and ignores the configured one, so after `client_id` changed in
+  config.json the old app's session went on being used, and `outlook-mcp status` printed the
+  new id beside "authenticated". Moving to a read-only app without signing in again left the
+  write-capable session in place. A record whose client id differs from the config's is now
+  refused, with a `client_id_mismatch` error on `outlook-mcp status`, `outlook_auth_status`
+  and every tool call that says to run `outlook-mcp auth`.
+
 ## [1.23.0] — 2026-09-30
 
 The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made

@@ -193,6 +193,26 @@ class StaleConsentError(OutlookMCPError):
         )
 
 
+class ClientIdMismatchError(OutlookMCPError):
+    """Raised when the saved sign-in was made with a different app registration.
+
+    azure-identity serves the *record's* client id and ignores the one it is
+    constructed with, so a `client_id` changed in config.json went unnoticed:
+    the old app's session kept being used, and status printed the new id beside
+    "authenticated". That matters most for the one reason to change it — moving
+    to an app that holds fewer permissions — because the wider session stayed.
+    """
+
+    def __init__(self, configured: str, saved: str):
+        super().__init__(
+            "client_id_mismatch",
+            f"The saved sign-in was made with a different app registration "
+            f"(client_id {saved[:8]}…) than the one now in config.json "
+            f"({configured[:8]}…), so it was not used.",
+            "Run `outlook-mcp auth` on the host to sign in with the configured app.",
+        )
+
+
 class ConfigLoadError(OutlookMCPError):
     """The settings file could not be loaded; the server booted fail-safe.
 

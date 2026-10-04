@@ -51,11 +51,14 @@ outlook-mcp is designed with security in mind:
   was handed to: a mail cursor is only followed by the mail delta tool, and no
   delta tool will fetch any other Graph path.
 - **Read-only mode is a tool gate, not a token scope.** `read_only: true` blocks this
-  server's write tools. It does not narrow the OAuth token, which is acquired with
-  `.default` and carries whatever the Azure app was consented for. A `read_only` server
-  still holds a write-capable Graph token, and the setting is a config-file value rather
-  than anything Microsoft enforces. For a credential that genuinely cannot write, consent a
-  separate Azure app to the read scopes only.
+  server's write tools. It does not narrow the OAuth token: sign-in consents the read-write
+  scopes, and every refresh asks for `.default`, which carries whatever the Azure app was
+  consented for. A `read_only` server still holds a write-capable Graph token, and the
+  setting is a config-file value rather than anything Microsoft enforces. For a credential
+  that genuinely cannot write, register a separate Azure app with the read permissions only
+  and set `read_only_consent: true` beside `read_only: true`, which makes sign-in ask for
+  the read scopes and nothing else. A saved sign-in is only used with the app registration
+  it was made for.
 - **Input validation:** All Graph IDs, emails, dates, KQL queries, and folder names are validated before use
 - **Atomic writes:** Config files are written atomically to prevent corruption
 - **Symlink rejection:** Config loader refuses symlinked files

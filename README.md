@@ -222,7 +222,7 @@ uv run outlook-mcp auth
 
 You'll get a URL and a code. Open the URL in any browser, enter the code, and sign in with your Microsoft account. Tokens are cached in the OS keyring — the MCP server picks them up automatically.
 
-The consent screen always lists the full read-write set (`Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`, `Contacts.ReadWrite`, `Tasks.ReadWrite`, `User.Read`) — even when the config starts with `read_only: true`, because `read_only` gates the tools, not the token (see [What `read_only` does and does not do](#what-read_only-does-and-does-not-do)), and the scopes a first consent leaves out can never be granted later without logging in again. Every request afterwards — silent refresh and each Graph call — uses the `.default` scope, which on an already-consented account means exactly "the set you granted". That ordering is deliberate: on personal accounts a first consent asking only for `.default` can land a session with no delegated permissions, which then can't be redeemed (`AADSTS70000`) without logging in again ([#82](https://github.com/mpalermiti/outlook-mcp/issues/82)).
+The consent screen lists the full read-write set (`Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`, `Contacts.ReadWrite`, `Tasks.ReadWrite`, `MailboxSettings.Read`, `User.Read`) — even when the config starts with `read_only: true`, because `read_only` gates the tools, not the token (see [What `read_only` does and does not do](#what-read_only-does-and-does-not-do)), and the scopes a first consent leaves out can never be granted later without logging in again. (The one exception is `read_only_consent: true`, which asks for the read permissions only; it exists for a separate read-only app, described under the same heading.) Every request afterwards — silent refresh and each Graph call — uses the `.default` scope, which on an already-consented account means exactly "the set you granted". That ordering is deliberate: on personal accounts a first consent asking only for `.default` can land a session with no delegated permissions, which then can't be redeemed (`AADSTS70000`) without logging in again ([#82](https://github.com/mpalermiti/outlook-mcp/issues/82)).
 
 Other CLI commands:
 
@@ -452,6 +452,7 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions on
 | `tenant_id` | `string` | `"consumers"` | Azure AD tenant. Use `"consumers"` for personal Microsoft accounts. |
 | `timezone` | `string` | `"UTC"` | IANA timezone (e.g. `"America/New_York"`). Interprets zone-less dates, **and anchors every event you create** — a recurring event is expanded in this zone, so on the default `"UTC"` a 09:00 weekly meeting shifts an hour when the clocks change. Set it to where you are. |
 | `read_only` | `bool` | `false` | When `true`, all write tools (send, reply, move, delete, create, update, RSVP) return an error. Gates the tools, not the Microsoft token -- see below. |
+| `read_only_consent` | `bool` | `false` | When `true`, `outlook-mcp auth` asks Microsoft for the read permissions only, instead of the read-write set. For a second, read-only app registration -- see [What `read_only` does and does not do](#what-read_only-does-and-does-not-do). Requires `read_only: true`; the config is refused without it. |
 | `attachments_dir` | `string` | `"~/.outlook-mcp/attachments"` | The only directory the attachment tools may read from or write to. Every path an agent supplies is resolved and must land inside it — a symlink out or a `..` is refused. Widen it only if you understand that anything reachable can be emailed. |
 | `allow_categories` | `list[string]` | `[]` | Optional. Restrict write tools to specific categories (see below). Empty list = all writes allowed when `read_only: false`. |
 | `allow_unencrypted_token_cache` | `bool` | `false` | Permit the OAuth token cache to be written in cleartext when the platform has no encrypted store (Linux without libsecret). Off by default: authentication stops with an explanation rather than silently persisting a reusable Graph token in plaintext. macOS and Windows always encrypt and are unaffected. |
@@ -501,7 +502,7 @@ Then run `outlook-mcp auth` once per instance, with the same env set, to write e
 `read_only: true` stops outlook-mcp's write tools from running. Ask it to send mail and it
 refuses.
 
-**It does not make your Microsoft credential read-only.** The first sign-in always consents the full read-write set, even with `read_only: true` in the config — the scopes a first consent leaves out can never be added without logging in again (every refresh afterwards uses `.default` -- "everything this account has already consented" -- so a session granted only read scopes would fail every write with 403 no matter what the config says). The stored token can send mail whether `read_only` is on or off, and a session consented before you turned `read_only` on keeps its write scopes.
+**It does not make your Microsoft credential read-only.** The first sign-in consents the full read-write set, even with `read_only: true` in the config — the scopes a first consent leaves out can never be added without logging in again (every refresh afterwards uses `.default` -- "everything this account has already consented" -- so a session granted only read scopes would fail every write with 403 no matter what the config says). The stored token can send mail whether `read_only` is on or off, and a session consented before you turned `read_only` on keeps its write scopes.
 
 Two consequences worth understanding:
 
@@ -512,10 +513,27 @@ Two consequences worth understanding:
   token is unaffected by it.
 
 So treat `read_only` as a guardrail against an agent doing something rash, **not as a
-security boundary**. If you want a credential that genuinely cannot write, register a
-second Azure app consented only to the read scopes (`Mail.Read`, `Calendars.Read`,
-`Contacts.Read`, `Tasks.Read`, `User.Read`) and point `client_id` at that one. Then
-Microsoft enforces it rather than us.
+security boundary**. If you want a credential that genuinely cannot write, have Microsoft
+enforce it rather than us:
+
+1. Register a **second** Azure app and give it the read permissions only: `Mail.Read`,
+   `Calendars.Read`, `Contacts.Read`, `Tasks.Read`, `MailboxSettings.Read`, `User.Read`. It has
+   to be an app this account has never granted write access to. Microsoft remembers consent
+   per app, and a refresh returns everything that app was ever granted.
+2. Point `client_id` at it and set both keys:
+
+   ```json
+   { "client_id": "<the read-only app>", "read_only": true, "read_only_consent": true }
+   ```
+
+3. Run `outlook-mcp auth`. With `read_only_consent` the consent screen lists the read
+   permissions only. Without it, sign-in would ask this app for the read-write set too.
+
+`read_only_consent` is refused without `read_only: true`: a sign-in that asked only for read
+access cannot write, so a server expecting writes would fail on every one. And a sign-in
+belongs to the app it was made with. After `client_id` changes, the server will not use the
+old one — `outlook-mcp status` and `outlook_auth_status` say so until you run
+`outlook-mcp auth` again.
 
 ### Granular Write Permissions (optional)
 
