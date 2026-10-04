@@ -109,6 +109,8 @@ If it fails partway, re-run it. Uploads already on PyPI are skipped, so a dispat
 gh workflow run publish.yml
 ```
 
+The MCP registry step uses a pinned, checksum-verified `mcp-publisher` (`scripts/install-mcp-publisher.sh`), because that job holds the publishing credential. If the registry ever refuses the pinned version, move the pin — the script says how — in a PR before tagging; CI's `mcp-publisher-pin` job checks the new pin.
+
 > The workflow deliberately does **not** run the live tier — those need real credentials. Step 1 is still yours, and still the step that matters: a green offline suite is exactly what shipped 1.13.0 and 1.13.1 broken.
 
 ### Hotfix — when `main` isn't ready to ship
