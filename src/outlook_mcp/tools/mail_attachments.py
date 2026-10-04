@@ -122,8 +122,9 @@ def resolve_attachment_path(path: str, attachments_dir: str) -> str:
         raise ValueError(
             f"Attachment path is outside the permitted directory: {path}. "
             f"Attachments may only be read from or written to {attachments_dir}, "
-            "the server's attachments_dir setting. Ask the user to move the file "
-            f"there. {LEAVE_SETTINGS_TO_THE_USER}"
+            "the server's attachments_dir setting. To send a file, ask the user to "
+            "put it there; to save one, pass a path inside it (a bare filename lands "
+            f"there). {LEAVE_SETTINGS_TO_THE_USER}"
         )
     return str(resolved)
 

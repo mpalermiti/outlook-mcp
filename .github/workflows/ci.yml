@@ -80,6 +80,18 @@ jobs:
           assert len(tools) == 68, f"expected 68 tools, got {len(tools)}"
           print(f"OK: server imports, {len(tools)} tools registered")
           PY
+      - name: Request URLs must not be logged
+        # The server asks the MCP SDK for WARNING, and the SDK hands that to
+        # logging.basicConfig. The test job proves it against the locked SDK;
+        # this proves it against the one a new user resolves today, in a fresh
+        # process where nothing else has configured logging first.
+        run: |
+          "$RUNNER_TEMP/fresh/bin/python" - <<'PY'
+          import logging
+          import outlook_mcp.server
+          assert not logging.getLogger("httpx").isEnabledFor(logging.INFO), "httpx logs URLs at INFO"
+          print("OK: httpx request URLs are not logged")
+          PY
       - name: CLI entrypoint must be wired and runnable
         run: |
           "$RUNNER_TEMP/fresh/bin/outlook-mcp" --help

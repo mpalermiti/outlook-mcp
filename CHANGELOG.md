@@ -112,7 +112,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   network share or a device namespace (`\\host\share`, `//host/share`, `\\?\UNC\…`, `\\.\…`) is
   now turned away by its text, before the filesystem is asked anything — unless it sits inside
   an `attachments_dir` the operator put on a share themselves. Resolving remains the authority
-  for every path that gets past that. macOS and Linux were never affected.
+  for every path that gets past that. Affected: 1.20.0 through 1.23.0, on Windows only; macOS
+  and Linux were never affected.
 
 - **The draft tools only touch drafts.** A draft is addressed by its message id, and every message
   has one. `outlook_delete_draft` made the same permanent DELETE that
@@ -202,7 +203,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   access, the attachments fence said which key to change, and the plaintext token cache
   refusal said how to opt in. The clients this server runs under give the agent file tools,
   and the agent reads mail. Each now names the setting so the agent can tell the user, and
-  ends: "Do not change the server's settings yourself."
+  ends: "If you are an AI agent, do not change the server's settings — tell the user." — addressed
+  by name, because `outlook-mcp auth` prints some of these to the operator too. A refused
+  download target now says to pass a path inside `attachments_dir` (a bare filename lands
+  there) rather than to move a file that does not exist yet. SKILL.md, which OpenClaw loads
+  into the agent's context, says the same: the settings are the user's.
+
+- **`outlook-mcp auth` warns before a read-only config consents write access.** `read_only: true`
+  alone still consents the read-write set (see the consent entry above), which is right when
+  the flag will be flipped later and a trap for anyone whose `client_id` is a read-only app
+  registration: 1.23.0 signed that app in with `.default`, so it was never asked for write
+  access, and the first 1.24.0 sign-in would ask. With `read_only` set and `read_only_consent`
+  not, `auth` now says so before the browser opens and names the setting to add.
+
+- **`outlook-mcp status` prints the plaintext-cache refusal instead of a traceback.** The refresh
+  re-raises it so the operator gets the remedy, and `status` was the one caller that did not
+  catch it.
 
 ## [1.23.0] — 2026-09-30
 
