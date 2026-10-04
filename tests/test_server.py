@@ -465,3 +465,32 @@ class TestCalendarWriteArgumentOrder:
         assert event.show_as.value == "oof"
         # The slot next to show_as in the call, and the one a swap would hit.
         assert event.is_all_day is None
+
+
+def test_request_urls_are_not_logged():
+    """httpx logs every request URL at INFO, and those URLs carry search terms,
+    filter addresses and message ids. The MCP SDK sets the root logger to INFO
+    by default, which some clients write to a log file. README promises that
+    recipient addresses are never logged.
+
+    In a fresh process, because pytest's own log capture leaves the root logger
+    with handlers before the server is imported, and `logging.basicConfig`
+    does nothing when handlers exist — this has to see what a real start does.
+    """
+    import os
+    import subprocess
+    import sys
+
+    probe = (
+        "import logging\n"
+        "import outlook_mcp.server\n"
+        "print(logging.getLogger('httpx').isEnabledFor(logging.INFO))\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", probe],
+        env=dict(os.environ),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.strip().splitlines()[-1] == "False"

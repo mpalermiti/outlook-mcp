@@ -259,3 +259,67 @@ def test_status_names_a_sign_in_saved_for_another_app(capsys, monkeypatch, tmp_p
     assert "not authenticated" in out
     assert "different app" in out
     assert "Status: authenticated" not in out
+
+
+def test_auth_warns_a_read_only_config_before_asking_for_write_access(capsys, monkeypatch):
+    """`read_only: true` alone still consents the read-write set (#101).
+
+    That is right when the flag will be flipped later, and a trap for the one
+    setup the README offers for a credential that cannot write: a second,
+    read-only app registration. Its owner upgrading from 1.23.0 — which signed
+    in with `.default` — would see a consent screen asking that app for write
+    access. Say so before the browser opens.
+    """
+    signed_in = []
+    monkeypatch.setattr(cli, "load_config", lambda: Config(client_id="test-id", read_only=True))
+    monkeypatch.setattr(
+        cli.AuthManager, "login_interactive", lambda self: signed_in.append(True)
+    )
+
+    cli.cmd_auth()
+
+    out = capsys.readouterr().out
+    assert "read_only_consent" in out
+    assert "read-only app registration" in out
+    assert out.index("read_only_consent") < out.index("Done.")
+    assert signed_in == [True]
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        pytest.param(Config(client_id="test-id"), id="read-write"),
+        pytest.param(
+            Config(client_id="test-id", read_only=True, read_only_consent=True),
+            id="read_only_consent",
+        ),
+    ],
+)
+def test_auth_says_nothing_extra_when_the_consent_matches_the_config(
+    capsys, monkeypatch, config
+):
+    monkeypatch.setattr(cli, "load_config", lambda: config)
+    monkeypatch.setattr(cli.AuthManager, "login_interactive", lambda self: None)
+
+    cli.cmd_auth()
+
+    assert "read-only app registration" not in capsys.readouterr().out
+
+
+def test_status_prints_a_refusal_with_its_remedy_not_a_traceback(capsys, monkeypatch):
+    """`try_cached_token` re-raises the plaintext-cache refusal; status must not crash on it."""
+    from unittest.mock import patch
+
+    from outlook_mcp.errors import UnencryptedTokenCacheError
+
+    monkeypatch.setattr(cli, "load_config", lambda: Config(client_id="test-id"))
+
+    def _refuses(self):
+        raise UnencryptedTokenCacheError()
+
+    with patch.object(cli.AuthManager, "try_cached_token", _refuses):
+        cli.cmd_status()
+
+    out = capsys.readouterr().out
+    assert "not authenticated" in out
+    assert "allow_unencrypted_token_cache" in out

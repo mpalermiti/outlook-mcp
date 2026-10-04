@@ -144,12 +144,19 @@ Working rules, each of which saves a round trip:
 # shared intermediary's to hand to someone else.
 TOOL_LIST_CACHE = CacheHint(ttl_ms=5 * 60 * 1000, scope="private")
 
+# WARNING, not the SDK's INFO default. The SDK hands this level to
+# `logging.basicConfig`, so it is the root level for every library in the
+# process — and httpx logs each request URL at INFO. Graph URLs carry search
+# terms, the address a `$filter` matches on and message ids, and some clients
+# keep a server's stderr in a log file. Nothing in this package logs below
+# WARNING.
 mcp = MCPServer(
     "outlook-mcp",
     instructions=INSTRUCTIONS,
     lifespan=lifespan,
     version=__version__,
     cache_hints={"tools/list": TOOL_LIST_CACHE},
+    log_level="WARNING",
 )
 
 

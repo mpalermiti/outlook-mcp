@@ -35,13 +35,12 @@ from urllib.parse import urlsplit
 import httpx
 
 from outlook_mcp.errors import ForeignCursorError, UntrustedURLError
+from outlook_mcp.graph import GRAPH_HOST  # the only host that may receive a Graph token
 from outlook_mcp.throttle import send_with_retry
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0/"
 GRAPH_TOKEN_SCOPE = "https://graph.microsoft.com/.default"
 
-# The only host that may ever receive a Graph bearer token.
-GRAPH_HOST = "graph.microsoft.com"
 
 # Control characters and spaces: the set that different URL parsers disagree
 # about. A real Graph cursor contains none of them.
