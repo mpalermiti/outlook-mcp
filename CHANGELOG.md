@@ -170,6 +170,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   refused, with a `client_id_mismatch` error on `outlook-mcp status`, `outlook_auth_status`
   and every tool call that says to run `outlook-mcp auth`.
 
+- **`uv.lock` no longer pins two packages with published advisories.** `pyjwt` 2.14.0 → 2.15.1
+  (CVE-2026-101918) and `urllib3` 2.7.0 → 2.8.0 (CVE-2026-97687, -97688, -97689), all
+  published 2026-10-01. None is reachable in a way that matters here — a crash in a JWKS
+  flow this server does not use, and proxy-TLS and hostile-server issues on a client that
+  only talks to Microsoft's sign-in endpoints. The lock file governs development, CI and
+  anything run with `uv run`; an install from PyPI resolves its own versions and already got
+  the fixed ones, so no published release was affected.
+
 ## [1.23.0] — 2026-09-30
 
 The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made
