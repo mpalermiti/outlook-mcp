@@ -182,6 +182,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   anything run with `uv run`; an install from PyPI resolves its own versions and already got
   the fixed ones, so no published release was affected.
 
+- **The Graph client only authenticates requests to Graph.** The SDK's auth provider was built
+  with no host allow-list, and kiota's default is that every host is valid: it asks the
+  credential for a token scoped to whatever host a request names, and attaches it. Nothing
+  here sent an SDK request anywhere else — the pages followed with `with_url` are
+  `@odata.nextLink`s from Graph's own responses — so this is the guarantee moved into the
+  client rather than a hole closed. A request to any other host now goes out with no token,
+  and none is minted for it. The raw delta path already pinned the same host.
+
+- **Request URLs are no longer logged.** The MCP SDK sets the root logger to INFO unless told
+  otherwise, and httpx logs every request URL at INFO — Graph URLs that carry search terms,
+  the address a `from_address` filter matches on, and message ids — to stderr, which some
+  clients keep in a log file. README has always said recipient addresses are never logged.
+  The server now starts at WARNING; nothing in this package logs below it.
+
+- **Refusals no longer tell the agent how to switch themselves off.** "Set read_only to false
+  in …/config.json to enable write operations" reached the model as the remedy for a
+  read-only refusal; the `allow_categories` refusal said to unset the list for full write
+  access, the attachments fence said which key to change, and the plaintext token cache
+  refusal said how to opt in. The clients this server runs under give the agent file tools,
+  and the agent reads mail. Each now names the setting so the agent can tell the user, and
+  ends: "Do not change the server's settings yourself."
+
 ## [1.23.0] — 2026-09-30
 
 The headline is a data-safety fix. Changing a recurring series' start, end or repeat pattern made

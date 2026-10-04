@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from mcp.server.mcpserver.exceptions import ToolError
 
+# Closes every refusal that names a setting. These strings reach the model, and
+# the clients this server runs under give the agent file tools: a refusal that
+# spells out how to turn itself off is an instruction the agent can carry out,
+# and the agent reads mail. The setting is named so the agent can tell the
+# user; changing it is the user's call.
+LEAVE_SETTINGS_TO_THE_USER = "Do not change the server's settings yourself."
+
 
 def _config_dir() -> str:
     """The settings directory remedies point at, imported lazily.
@@ -61,7 +68,8 @@ class ReadOnlyError(OutlookMCPError):
         super().__init__(
             "read_only",
             f"Cannot use {tool_name} — server is in read-only mode.",
-            f"Set read_only to false in {_config_dir()}/config.json to enable write operations.",
+            "The user set read_only in the server's config.json. Tell them what you "
+            f"were trying to do. {LEAVE_SETTINGS_TO_THE_USER}",
         )
 
 
@@ -86,8 +94,8 @@ class PermissionDeniedError(OutlookMCPError):
             "permission_denied",
             message,
             (
-                f"Add '{category}' to allow_categories in {_config_dir()}/config.json, "
-                "or unset allow_categories for full write access."
+                "The user limits this server's writes with allow_categories in its "
+                f"config.json. Tell them this needs '{category}'. {LEAVE_SETTINGS_TO_THE_USER}"
             ),
         )
 
@@ -154,12 +162,12 @@ class UnencryptedTokenCacheError(OutlookMCPError):
             "Refusing to persist the token cache: this environment has no "
             "encrypted store (Linux without libsecret/gnome-keyring), so the "
             "cache would be written to disk in cleartext.",
-            "Either install the system packages (apt: `gnome-keyring "
-            "libsecret-1-0 python3-gi`) and re-create the venv with "
-            "`--system-site-packages`, or accept plaintext storage by setting "
-            '`"allow_unencrypted_token_cache": true` in '
-            f"{_config_dir()}/config.json. See "
-            "https://github.com/mpalermiti/outlook-mcp/issues/7.",
+            "This is for the user to decide, on the host: install the system "
+            "packages (apt: `gnome-keyring libsecret-1-0 python3-gi`) and re-create "
+            "the venv with `--system-site-packages`, or opt in to plaintext storage "
+            f"with allow_unencrypted_token_cache in {_config_dir()}/config.json. See "
+            "https://github.com/mpalermiti/outlook-mcp/issues/7. "
+            f"{LEAVE_SETTINGS_TO_THE_USER}",
         )
 
 

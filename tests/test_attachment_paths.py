@@ -133,7 +133,9 @@ def test_user_home_is_expanded(tmp_path, monkeypatch):
 
 
 def test_error_names_the_config_key_and_the_directory(attachments_dir, secret):
-    """The message is what the agent reads, so it has to say how to fix it."""
+    """The message is what the agent reads: it names the directory and the setting,
+    so the agent can tell the user — not how to change it (see
+    test_refusals_leave_settings_to_the_user.py)."""
     with pytest.raises(ValueError) as exc:
         resolve_attachment_path(str(secret), attachments_dir)
 
