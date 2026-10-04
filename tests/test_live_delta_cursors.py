@@ -17,7 +17,8 @@ The same goes, more sharply, for the per-tool endpoint check: it matches the
 cursor's *path* against a pattern written from what Graph was seen to emit —
 `/me/mailFolders('<id>')/messages/delta` and so on. If Graph spells a link
 another way, every delta call fails on its own cursor. So each tool's
-deltaLink, and a mid-sync nextLink, is put through `resource=` here.
+deltaLink is put through `resource=` here, and so is each tool's mid-sync
+nextLink where the mailbox is large enough to produce one.
 """
 
 import pytest
@@ -66,49 +67,59 @@ async def test_contacts_delta_cursor_round_trips(real_graph_client):
     assert require_graph_url(token, source="live-check", resource="contacts") == token
 
 
-async def test_a_mid_sync_nextlink_passes_each_tools_own_check(real_graph_client):
-    """The other cursor shape: a nextLink handed back when the per-call cap stops a walk.
+# The other cursor shape: a nextLink handed back when the per-call cap stops a
+# walk. `page_size=1` caps a call at four items, so a resource with more than
+# that returns a nextLink (`$skiptoken`) rather than a deltaLink. One test per
+# tool, and a skip that names the shape when the mailbox is too small to show
+# it — a run that never saw a mail nextLink must not read as having checked one.
 
-    `page_size=1` caps a call at four items, so any mailbox with more than that
-    in a folder returns a nextLink (`$skiptoken`) rather than a deltaLink. The
-    tool has already put every link it followed through its own check on the way
-    here — a refusal would have raised inside the call — so reaching the
-    assertions is most of the test; replaying the cursor is the rest.
-    """
-    mail = await list_inbox_delta(real_graph_client, folder="inbox", page_size=1)
-    if mail["has_more"]:
-        token = mail["delta_token"]
-        assert require_graph_url(token, source="live-check", resource="mail") == token
-        resumed = await list_inbox_delta(
-            real_graph_client, folder="inbox", page_size=1, delta_token=token
+
+async def test_a_mid_sync_mail_nextlink_passes_the_mail_check(real_graph_client):
+    result = await list_inbox_delta(real_graph_client, folder="inbox", page_size=1)
+    if not result["has_more"]:
+        pytest.skip(
+            "The inbox has four messages or fewer, so Graph returned no mail nextLink — "
+            "that cursor shape is unverified by this run"
         )
-        assert "messages" in resumed
+    token = result["delta_token"]
+    assert require_graph_url(token, source="live-check", resource="mail") == token
+    resumed = await list_inbox_delta(
+        real_graph_client, folder="inbox", page_size=1, delta_token=token
+    )
+    assert "messages" in resumed
 
-    events = await list_events_delta(
+
+async def test_a_mid_sync_calendar_nextlink_passes_the_calendar_check(real_graph_client):
+    result = await list_events_delta(
         real_graph_client,
         start="2026-01-01T00:00:00Z",
         end="2026-12-31T00:00:00Z",
         page_size=1,
     )
-    if events["has_more"]:
-        token = events["delta_token"]
-        assert require_graph_url(token, source="live-check", resource="calendar") == token
-        resumed = await list_events_delta(
-            real_graph_client, start=None, end=None, page_size=1, delta_token=token
+    if not result["has_more"]:
+        pytest.skip(
+            "Four events or fewer in 2026, so Graph returned no calendar nextLink — "
+            "that cursor shape is unverified by this run"
         )
-        assert "events" in resumed
-
-    contacts = await list_contacts_delta(real_graph_client, page_size=1)
-    if contacts["has_more"]:
-        token = contacts["delta_token"]
-        assert require_graph_url(token, source="live-check", resource="contacts") == token
-        resumed = await list_contacts_delta(real_graph_client, page_size=1, delta_token=token)
-        assert "contacts" in resumed
-
-    assert mail["has_more"] or events["has_more"] or contacts["has_more"], (
-        "No folder had more than four items, so no nextLink was seen — this run "
-        "says nothing about that cursor shape"
+    token = result["delta_token"]
+    assert require_graph_url(token, source="live-check", resource="calendar") == token
+    resumed = await list_events_delta(
+        real_graph_client, start=None, end=None, page_size=1, delta_token=token
     )
+    assert "events" in resumed
+
+
+async def test_a_mid_sync_contacts_nextlink_passes_the_contacts_check(real_graph_client):
+    result = await list_contacts_delta(real_graph_client, page_size=1)
+    if not result["has_more"]:
+        pytest.skip(
+            "Four contacts or fewer, so Graph returned no contacts nextLink — "
+            "that cursor shape is unverified by this run"
+        )
+    token = result["delta_token"]
+    assert require_graph_url(token, source="live-check", resource="contacts") == token
+    resumed = await list_contacts_delta(real_graph_client, page_size=1, delta_token=token)
+    assert "contacts" in resumed
 
 
 async def test_a_real_cursor_has_no_port_or_userinfo(real_graph_client):

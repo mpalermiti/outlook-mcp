@@ -50,15 +50,21 @@ _FORBIDDEN_URL_CHARS = re.compile(r"[\x00-\x20\x7f-\xa0]")
 # The one endpoint each delta tool may request, as a whole path. A cursor is a
 # full URL that comes back from outside this process, so pinning the host alone
 # left every tool willing to GET any Graph path it was handed — `/me/messages`
-# through the calendar tool, say — and return the result. `/me` is how this
-# server asks; the `users/…` spellings are the same mailbox as Graph may echo
-# it. A key segment is written either `/id` or `('id')`, and Graph uses both.
-_MAILBOX = r"/v1\.0/(?:me|users/[^/]+|users\('[^'/]+'\))"
+# through the calendar tool, say — and return the result.
+#
+# `/me` and nothing else: it is how this server asks, and Graph answers in the
+# spelling it was asked in, so no other mailbox path is a cursor issued here. A
+# key segment is written either `/id` or `('id')` — Graph returns
+# `mailFolders('inbox')` for a first URL that said `mailFolders/inbox`. Case is
+# ignored because Graph ignores it in these segment names, and ASCII-only
+# because without `re.ASCII`, `IGNORECASE` also folds a few non-ASCII letters
+# onto these.
 _KEY = r"(?:/[^/]+|\('[^'/]+'\))"
+_FLAGS = re.IGNORECASE | re.ASCII
 _DELTA_ENDPOINTS: dict[str, re.Pattern[str]] = {
-    "mail": re.compile(rf"{_MAILBOX}/mailFolders{_KEY}/messages/delta", re.IGNORECASE),
-    "calendar": re.compile(rf"{_MAILBOX}/calendarView/delta", re.IGNORECASE),
-    "contacts": re.compile(rf"{_MAILBOX}/contacts/delta", re.IGNORECASE),
+    "mail": re.compile(rf"/v1\.0/me/mailFolders{_KEY}/messages/delta", _FLAGS),
+    "calendar": re.compile(r"/v1\.0/me/calendarView/delta", _FLAGS),
+    "contacts": re.compile(r"/v1\.0/me/contacts/delta", _FLAGS),
 }
 
 # A dot segment, or a separator, hiding in a path — plain or percent-encoded.

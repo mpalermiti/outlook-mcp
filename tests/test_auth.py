@@ -452,6 +452,12 @@ class TestFirstConsentScopes:
 
     def test_the_read_only_scopes_cover_every_read_the_write_set_covers(self):
         """Each read-write scope has its read counterpart, so no read tool loses its permission."""
+        counterparts = [
+            scope.replace(".ReadWrite", ".Read")
+            for scope in auth_module.SCOPES_READWRITE
+            if scope != "Mail.Send"
+        ]
+        assert auth_module.SCOPES_READONLY == counterparts
         assert auth_module.SCOPES_READONLY == [
             "Mail.Read",
             "Calendars.Read",

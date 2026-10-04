@@ -22,7 +22,7 @@ write-capable Graph token, and the setting is a line in `config.json` rather tha
 Microsoft checks. Documented honestly in README and SECURITY.md as of 2026-09-12; this
 entry is about closing it for real.
 
-**Shipped in 1.23.1:** the consent half. `read_only_consent: true` makes `outlook-mcp auth`
+**Shipped:** the consent half. `read_only_consent: true` makes `outlook-mcp auth`
 ask a *separately registered* read-only app for the read scopes only, the config refuses
 that key without `read_only: true`, and a sign-in saved for one `client_id` is no longer
 used after the config names another.

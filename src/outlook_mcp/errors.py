@@ -268,12 +268,27 @@ class ForeignCursorError(OutlookMCPError):
 
     def __init__(self, source: str, url: str, resource: str):
         shown = url[:120] if url else "(empty)"
-        super().__init__(
-            "foreign_cursor",
-            f"Refusing a cursor that is not a {resource} delta link (from {source}): {shown!r}.",
-            "A delta cursor only works with the tool that returned it. Discard this "
-            "cursor and start a fresh sync by calling again with no delta_token.",
-        )
+        if source == "initial_url":
+            # The first URL is built here, from the tool's own arguments — there
+            # is no cursor to blame, and telling the caller to discard one would
+            # send it looking for something it never passed.
+            message = (
+                f"Could not build a {resource} delta link from this call's arguments: {shown!r}."
+            )
+            action = (
+                "Check the folder or id passed to this tool; for mail, pass the folder's "
+                "display name or a well-known name such as inbox."
+            )
+        else:
+            message = (
+                f"Refusing a cursor that is not a {resource} delta link (from {source}): "
+                f"{shown!r}."
+            )
+            action = (
+                "A delta cursor only works with the tool that returned it. Discard this "
+                "cursor and start a fresh sync by calling again with no delta_token."
+            )
+        super().__init__("foreign_cursor", message, action)
         self.source = source
 
 

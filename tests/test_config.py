@@ -578,8 +578,7 @@ def test_read_only_consent_without_read_only_is_refused():
         Config(client_id="x", read_only_consent=True)
 
     message = str(exc.value)
-    assert "read_only_consent" in message
-    assert "read_only" in message
+    assert "read_only_consent: true needs read_only: true" in message
 
 
 def test_read_only_consent_with_read_only_loads(tmp_path):
@@ -605,5 +604,4 @@ def test_the_repair_for_a_lone_read_only_consent_names_both_keys(tmp_path):
         load_config(config_dir=str(tmp_path))
 
     repair = "\n".join(config_repair_lines(exc.value))
-    assert "read_only_consent" in repair
-    assert "read_only" in repair
+    assert "read_only_consent: true needs read_only: true" in repair

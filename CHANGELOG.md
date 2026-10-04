@@ -139,17 +139,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - **A delta cursor only works with the tool that issued it.** Since 1.21 a cursor's host is
   pinned to `graph.microsoft.com`, which keeps the token on Graph. It did not keep a tool on its
-  own data: a cursor is a whole URL, so `outlook_list_events_delta` handed
-  `https://graph.microsoft.com/v1.0/me/messages?…` as its cursor fetched it and returned what
-  came back, and `outlook_changes_since` passed cursors through the same way. Nothing left Graph
-  and nothing could be written — the request is always a GET — but a server started with
-  `OUTLOOK_MCP_TOOLSETS` narrowed to, say, `calendar,digest` could be made to read mail it had
-  no mail tool for. Each delta tool now accepts its own endpoint and nothing else
-  (`…/mailFolders/<id>/messages/delta`, `…/calendarView/delta`, `…/contacts/delta`, on `/v1.0`),
-  for the caller's cursor, every `@odata.nextLink`, and the `deltaLink` it hands back; dot
-  segments and encoded separators are refused. A cursor pointing anywhere else is answered with
-  a `foreign_cursor` error before any request is made. Cursors you already hold keep working:
-  the patterns were checked against the links Graph really emits, in the live tier.
+  own data: a cursor is a whole URL, so a delta tool handed any other Graph path as its cursor
+  fetched it and returned what came back through its own formatter, and `outlook_changes_since`
+  passed cursors through the same way. Nothing left Graph and nothing could be written — the
+  request is always a GET — but it reached data no loaded tool covers: To Do list names on a
+  server started without the `todo` group, say, or message subjects from any folder through
+  the digest, which by design reports only counts, senders and flagged Inbox subjects. Each
+  delta tool now accepts its own endpoint and nothing else (`/v1.0/me/mailFolders/<id>/messages/delta`,
+  `/v1.0/me/calendarView/delta`, `/v1.0/me/contacts/delta`), for the caller's cursor, every
+  `@odata.nextLink`, and the `deltaLink` it hands back; dot segments and encoded separators are
+  refused. A cursor pointing anywhere else is answered with a `foreign_cursor` error before any
+  request is made. Checked in the live tier against a consumer mailbox: the `deltaLink` of all
+  three tools, and a mid-sync `nextLink` for calendar and contacts, pass. A mail `nextLink` was
+  not observed — no folder there was large enough to return one — so that shape rests on the
+  mail `deltaLink` having the same path; the live test for it skips, by name, until it is seen.
 
 - **A read-only app registration can be signed in to again: `read_only_consent`.** The README
   and SECURITY.md offer one route to a credential that cannot write — a second Azure app

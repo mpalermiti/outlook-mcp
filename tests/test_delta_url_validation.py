@@ -338,6 +338,15 @@ FOREIGN_CURSORS = [
     pytest.param("mail", f"{G}/v1.0/me/mailFolders/a%2Fb/messages/delta", id="encoded-slash"),
     pytest.param("contacts", f"{G}/v1.0/me/contacts", id="contacts-list-not-delta"),
     pytest.param("contacts", f"{G}/", id="no-path"),
+    # This server only ever asks as `/me`, and Graph answers in kind, so no
+    # other spelling of a mailbox is a cursor it issued.
+    pytest.param("contacts", f"{G}/v1.0/users/someone/contacts/delta", id="another-user"),
+    pytest.param("contacts", f"{G}/v1.0/users('someone')/contacts/delta", id="another-user-key"),
+    pytest.param("mail", f"{G}/v1.0/me/mailFolders/a%5Cb/messages/delta", id="encoded-backslash"),
+    pytest.param("mail", f"{G}/v1.0/me/mailFolders/a\\b/messages/delta", id="raw-backslash"),
+    # `re.IGNORECASE` on a str pattern folds a few non-ASCII letters onto ASCII
+    # ones (long s, dotless i, the Kelvin sign); the paths are ASCII.
+    pytest.param("contacts", f"{G}/v1.0/me/contact\u017f/delta", id="unicode-case-fold"),
 ]
 
 
@@ -360,6 +369,23 @@ class TestCursorIsBoundToItsTool:
                 resource="contacts",
             )
         assert "non-Graph" in str(exc.value)
+
+    def test_segment_names_match_in_any_ascii_case(self):
+        """Graph ignores case in these segment names, so a link in another case is the same one."""
+        url = f"{G}/v1.0/me/mailfolders('AQMkADNkNAAAgEMAAAA')/messages/delta?$skiptoken=abc"
+        assert require_graph_url(url, source="@odata.nextLink", resource="mail") == url
+
+    def test_a_first_url_that_cannot_be_built_does_not_blame_a_cursor(self):
+        """`initial_url` is ours, not the caller's: the refusal must not say to discard a cursor."""
+        with pytest.raises(OutlookMCPError) as exc:
+            require_graph_url(
+                f"{G}/v1.0/me/mailFolders/a%2Fb/messages/delta",
+                source="initial_url",
+                resource="mail",
+            )
+        message = str(exc.value)
+        assert "Discard this cursor" not in message
+        assert "folder" in message
 
     def test_an_unknown_resource_is_a_programming_error_not_a_pass(self):
         with pytest.raises(KeyError):
