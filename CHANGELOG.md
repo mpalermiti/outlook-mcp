@@ -8,14 +8,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [1.24.0] — 2026-10-04
 
-A security release. A review of the code since 1.23.0 found nothing exploitable in the default
-setup and no problem in any contributor's change, but it found the optional safety settings
-weaker than the README said, and one sign-in route that #101 had closed. In this release:
+A security release. A review of the code since 1.23.0 found no problem in any contributor's change
+and nothing exploitable in the default setup on macOS or Linux. On Windows, an attachment path
+from the agent could make the machine sign in to another host (1.20.0 through 1.23.0). The
+optional safety settings were weaker than the README said, and one sign-in route had been closed
+by #101. In this release:
 
-- A second, read-only Azure app can be signed in to again, with the new `read_only_consent`
-  setting. A saved sign-in is only used with the app it was made for.
-- `allow_categories` means what it says: calendar invitations need `mail_send`, and the draft
-  tools only touch drafts.
+- Signing in to a second, read-only Azure app now needs the new `read_only_consent` setting,
+  which asks for the read permissions only. A saved sign-in is only used with the app it was
+  made for.
+- `allow_categories` means what it says: calendar invitations, rewording an event that has
+  attendees, and RSVP messages need `mail_send`.
+- The draft tools only touch drafts, on every server.
 - A delta cursor only works with the tool that issued it.
 - On Windows, a network path in an attachment argument is refused before it is resolved.
 - The Graph client authenticates requests to Graph only, request URLs stay out of the logs, and
@@ -24,8 +28,12 @@ weaker than the README said, and one sign-in route that #101 had closed. In this
 
 **Before you upgrade:**
 
-- **If you change `client_id`, sign in again.** The server no longer quietly uses a sign-in
-  made with a different app registration. `outlook-mcp status` says so.
+- **If `client_id` points at a read-only app registration,** set `read_only: true` and
+  `read_only_consent: true` before you next run `outlook-mcp auth`. Without them, sign-in asks
+  that app for write access too, and accepting it cannot be undone by changing the config.
+  `outlook-mcp auth` warns about this before the browser opens.
+- **If `client_id` changed since you last signed in, sign in again.** The server no longer
+  quietly uses a sign-in made with a different app registration. `outlook-mcp status` says so.
 - **If `allow_categories` lists `calendar_write` but not `mail_send`,** the agent can no longer
   invite people, reword an event that has attendees, or add a message to an RSVP. Add
   `mail_send` if it should.
