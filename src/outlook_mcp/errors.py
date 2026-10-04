@@ -8,8 +8,12 @@ from mcp.server.mcpserver.exceptions import ToolError
 # the clients this server runs under give the agent file tools: a refusal that
 # spells out how to turn itself off is an instruction the agent can carry out,
 # and the agent reads mail. The setting is named so the agent can tell the
-# user; changing it is the user's call.
-LEAVE_SETTINGS_TO_THE_USER = "Do not change the server's settings yourself."
+# user; changing it is the user's call. Addressed to the agent by name, because
+# `outlook-mcp auth` prints some of these to the operator too, and the operator
+# is exactly who should change the setting.
+LEAVE_SETTINGS_TO_THE_USER = (
+    "If you are an AI agent, do not change the server's settings — tell the user."
+)
 
 
 def _config_dir() -> str:
@@ -165,7 +169,7 @@ class UnencryptedTokenCacheError(OutlookMCPError):
             "This is for the user to decide, on the host: install the system "
             "packages (apt: `gnome-keyring libsecret-1-0 python3-gi`) and re-create "
             "the venv with `--system-site-packages`, or opt in to plaintext storage "
-            f"with allow_unencrypted_token_cache in {_config_dir()}/config.json. See "
+            "with allow_unencrypted_token_cache in the server's config.json. See "
             "https://github.com/mpalermiti/outlook-mcp/issues/7. "
             f"{LEAVE_SETTINGS_TO_THE_USER}",
         )
@@ -236,7 +240,8 @@ class ConfigLoadError(OutlookMCPError):
             "config_load_failed",
             f"The settings file could not be loaded ({reason}); the server "
             "booted read-only.",
-            f"Fix {config_dir}/config.json and restart the server.",
+            f"Fix {config_dir}/config.json and restart the server. "
+            f"{LEAVE_SETTINGS_TO_THE_USER}",
         )
 
 

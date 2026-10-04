@@ -31,6 +31,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - **Personal Microsoft accounts only** (`@outlook.com`, `@hotmail.com`, `@live.com`). Work/school accounts (Entra ID) are not supported in v1.
 - **Requires Azure AD app registration** — free, takes ~5 minutes, but you need a free Azure account first. See README.
 - **Auth is CLI-based** — run `outlook-mcp auth` on the host before the agent can use it. No interactive auth through MCP tools.
+- **Settings belong to the user.** `read_only`, `allow_categories`, `attachments_dir` and the rest of `config.json` are the user's choices. An agent that hits a refusal tells the user what it was trying to do; it never edits the config itself.
 
 ## Setup
 
