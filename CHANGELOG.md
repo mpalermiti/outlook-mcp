@@ -6,6 +6,37 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.24.0] — 2026-10-04
+
+A security release. A review of the code since 1.23.0 found nothing exploitable in the default
+setup and no problem in any contributor's change, but it found the optional safety settings
+weaker than the README said, and one sign-in route that #101 had closed. In this release:
+
+- A second, read-only Azure app can be signed in to again, with the new `read_only_consent`
+  setting. A saved sign-in is only used with the app it was made for.
+- `allow_categories` means what it says: calendar invitations need `mail_send`, and the draft
+  tools only touch drafts.
+- A delta cursor only works with the tool that issued it.
+- On Windows, a network path in an attachment argument is refused before it is resolved.
+- The Graph client authenticates requests to Graph only, request URLs stay out of the logs, and
+  refusals no longer tell the agent how to switch themselves off.
+- `uv.lock` moves past four advisories in `pyjwt` and `urllib3`.
+
+**Before you upgrade:**
+
+- **If you change `client_id`, sign in again.** The server no longer quietly uses a sign-in
+  made with a different app registration. `outlook-mcp status` says so.
+- **If `allow_categories` lists `calendar_write` but not `mail_send`,** the agent can no longer
+  invite people, reword an event that has attendees, or add a message to an RSVP. Add
+  `mail_send` if it should.
+- **Add `MailboxSettings.Read` to your app registration** before you next run
+  `outlook-mcp auth`. The first sign-in now asks for it by name (#106), and a registration
+  that does not list it may be refused. Existing sign-ins keep refreshing.
+
+Not verified live: the `mail_send` gate itself, which would mean sending real invitations (its
+input is checked live), and a mail delta `nextLink`, which the test mailbox is too small to
+produce. Both are covered offline.
+
 ### Changed
 
 - **CI runs the test suite on Windows (#88).** Every job ran on `ubuntu-latest`, so failures
