@@ -333,6 +333,7 @@ def _as_instant(date_time: str, projected_zone: str | None) -> str:
         return text
     return text + "Z"
 
+
 # Spellings an agent plausibly emits for the two Graph values whose names don't
 # match Outlook's own menu labels ("Out of office", "Working elsewhere"), mapped
 # to the normalised form of the real value. Widening what we accept cannot break
@@ -671,8 +672,7 @@ async def update_event(
         )
     if remove_recurrence and recurrence is not None:
         raise ValueError(
-            "Pass either recurrence or remove_recurrence, not both — they ask for "
-            "opposite things"
+            "Pass either recurrence or remove_recurrence, not both — they ask for opposite things"
         )
     if timezone is not None and (start is None or end is None):
         raise ValueError(

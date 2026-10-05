@@ -60,8 +60,14 @@ def _mail_item(
     }
 
 
-def _event_item(*, id="e1", subject="Meeting", start="2026-05-22T14:00:00.0000000 (UTC)",
-                end="2026-05-22T15:00:00.0000000 (UTC)", is_deleted=False):
+def _event_item(
+    *,
+    id="e1",
+    subject="Meeting",
+    start="2026-05-22T14:00:00.0000000 (UTC)",
+    end="2026-05-22T15:00:00.0000000 (UTC)",
+    is_deleted=False,
+):
     if is_deleted:
         return {"id": id, "is_deleted": True}
     return {
@@ -166,15 +172,18 @@ async def test_first_call_mail_high_flagged_normal_urgent_grouping():
     ]
     with (
         patch.object(
-            digest, "list_inbox_delta",
+            digest,
+            "list_inbox_delta",
             new=AsyncMock(return_value=_mail_response(items)),
         ),
         patch.object(
-            digest, "list_events_delta",
+            digest,
+            "list_events_delta",
             new=AsyncMock(return_value=_events_response([])),
         ),
         patch.object(
-            digest, "list_contacts_delta",
+            digest,
+            "list_contacts_delta",
             new=AsyncMock(return_value=_contacts_response([])),
         ),
     ):
@@ -202,15 +211,18 @@ async def test_first_call_window_filter_excludes_old_items():
     ]
     with (
         patch.object(
-            digest, "list_inbox_delta",
+            digest,
+            "list_inbox_delta",
             new=AsyncMock(return_value=_mail_response(items)),
         ),
         patch.object(
-            digest, "list_events_delta",
+            digest,
+            "list_events_delta",
             new=AsyncMock(return_value=_events_response([])),
         ),
         patch.object(
-            digest, "list_contacts_delta",
+            digest,
+            "list_contacts_delta",
             new=AsyncMock(return_value=_contacts_response([])),
         ),
     ):
@@ -232,15 +244,18 @@ async def test_subsequent_mail_call_counts_new_and_removed():
     ]
     with (
         patch.object(
-            digest, "list_inbox_delta",
+            digest,
+            "list_inbox_delta",
             new=AsyncMock(return_value=_mail_response(items, token="new-mail-tok")),
         ),
         patch.object(
-            digest, "list_events_delta",
+            digest,
+            "list_events_delta",
             new=AsyncMock(return_value=_events_response([])),
         ),
         patch.object(
-            digest, "list_contacts_delta",
+            digest,
+            "list_contacts_delta",
             new=AsyncMock(return_value=_contacts_response([])),
         ),
     ):
@@ -262,15 +277,18 @@ async def test_subsequent_events_call_cancelled_only():
     items = [_event_item(id="ev-gone", is_deleted=True)]
     with (
         patch.object(
-            digest, "list_inbox_delta",
+            digest,
+            "list_inbox_delta",
             new=AsyncMock(return_value=_mail_response([])),
         ),
         patch.object(
-            digest, "list_events_delta",
+            digest,
+            "list_events_delta",
             new=AsyncMock(return_value=_events_response(items, token="ev-tok-2")),
         ),
         patch.object(
-            digest, "list_contacts_delta",
+            digest,
+            "list_contacts_delta",
             new=AsyncMock(return_value=_contacts_response([])),
         ),
     ):
@@ -293,12 +311,14 @@ async def test_first_call_calendar_passes_window_args():
     mock_events = AsyncMock(return_value=_events_response([]))
     with (
         patch.object(
-            digest, "list_inbox_delta",
+            digest,
+            "list_inbox_delta",
             new=AsyncMock(return_value=_mail_response([])),
         ),
         patch.object(digest, "list_events_delta", new=mock_events),
         patch.object(
-            digest, "list_contacts_delta",
+            digest,
+            "list_contacts_delta",
             new=AsyncMock(return_value=_contacts_response([])),
         ),
     ):
@@ -356,9 +376,7 @@ async def test_mail_sync_state_not_found_triggers_resync():
     # an empty snapshot.
     fake_response = MagicMock()
     fake_response.status_code = 410
-    err = httpx.HTTPStatusError(
-        "sync state lost", request=MagicMock(), response=fake_response
-    )
+    err = httpx.HTTPStatusError("sync state lost", request=MagicMock(), response=fake_response)
 
     call_args_seen: list[dict] = []
 
@@ -371,12 +389,15 @@ async def test_mail_sync_state_not_found_triggers_resync():
     with (
         patch.object(digest, "list_inbox_delta", new=AsyncMock(side_effect=flaky_mail)),
         patch.object(
-            digest, "list_events_delta",
+            digest,
+            "list_events_delta",
             new=AsyncMock(return_value=_events_response([], token="et")),
         ),
         patch.object(
-            digest, "list_contacts_delta",
-            new=AsyncMock(return_value=_contacts_response([], token="ct"))),
+            digest,
+            "list_contacts_delta",
+            new=AsyncMock(return_value=_contacts_response([], token="ct")),
+        ),
     ):
         result = await changes_since(
             _mock_graph_client(),
@@ -399,21 +420,25 @@ async def test_mail_sync_state_not_found_triggers_resync():
 async def test_internal_pagination_drains_multiple_pages():
     page1 = _mail_response(
         [_mail_item(id="p1-1"), _mail_item(id="p1-2")],
-        token="page2-tok", has_more=True,
+        token="page2-tok",
+        has_more=True,
     )
     page2 = _mail_response(
         [_mail_item(id="p2-1")],
-        token="final-mail-tok", has_more=False,
+        token="final-mail-tok",
+        has_more=False,
     )
     mock_mail = AsyncMock(side_effect=[page1, page2])
     with (
         patch.object(digest, "list_inbox_delta", new=mock_mail),
         patch.object(
-            digest, "list_events_delta",
+            digest,
+            "list_events_delta",
             new=AsyncMock(return_value=_events_response([])),
         ),
         patch.object(
-            digest, "list_contacts_delta",
+            digest,
+            "list_contacts_delta",
             new=AsyncMock(return_value=_contacts_response([])),
         ),
     ):
@@ -438,8 +463,16 @@ async def test_by_sender_capped_at_top_five():
     # 8 distinct senders with varying counts.
     items: list[dict] = []
     # Sender weights: a=8, b=7, c=6, d=5, e=4, f=3, g=2, h=1 (top 5: a-e)
-    for letter, count in [("a", 8), ("b", 7), ("c", 6), ("d", 5),
-                          ("e", 4), ("f", 3), ("g", 2), ("h", 1)]:
+    for letter, count in [
+        ("a", 8),
+        ("b", 7),
+        ("c", 6),
+        ("d", 5),
+        ("e", 4),
+        ("f", 3),
+        ("g", 2),
+        ("h", 1),
+    ]:
         for n in range(count):
             items.append(
                 _mail_item(id=f"{letter}{n}", from_email=f"{letter}@x.com", received=now_iso)
@@ -447,15 +480,18 @@ async def test_by_sender_capped_at_top_five():
 
     with (
         patch.object(
-            digest, "list_inbox_delta",
+            digest,
+            "list_inbox_delta",
             new=AsyncMock(return_value=_mail_response(items)),
         ),
         patch.object(
-            digest, "list_events_delta",
+            digest,
+            "list_events_delta",
             new=AsyncMock(return_value=_events_response([])),
         ),
         patch.object(
-            digest, "list_contacts_delta",
+            digest,
+            "list_contacts_delta",
             new=AsyncMock(return_value=_contacts_response([])),
         ),
     ):
@@ -474,6 +510,7 @@ async def test_by_sender_capped_at_top_five():
 def test_digest_does_not_call_check_permission():
     """Sanity: digest.py composes read-only deltas; no permissions module import."""
     import outlook_mcp.tools.digest as digest_mod
+
     src = open(digest_mod.__file__).read()
     assert "check_permission" not in src
     assert "from outlook_mcp.permissions" not in src

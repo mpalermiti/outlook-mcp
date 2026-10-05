@@ -28,7 +28,10 @@ class TestMoveMessage:
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
         result = await move_message(
-            mock_client, message_id="AAMkAG123=", folder="inbox", config=_CFG,
+            mock_client,
+            message_id="AAMkAG123=",
+            folder="inbox",
+            config=_CFG,
         )
         assert result["status"] == "moved"
         assert result["folder"] == "inbox"
@@ -50,7 +53,10 @@ class TestMoveMessage:
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await move_message(
-                mock_client, message_id="AAMkAG123=", folder="inbox", config=_CFG_RO,
+                mock_client,
+                message_id="AAMkAG123=",
+                folder="inbox",
+                config=_CFG_RO,
             )
 
 
@@ -63,7 +69,10 @@ class TestDeleteMessage:
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
         result = await delete_message(
-            mock_client, message_id="AAMkAG123=", permanent=False, config=_CFG,
+            mock_client,
+            message_id="AAMkAG123=",
+            permanent=False,
+            config=_CFG,
         )
         assert result["status"] == "moved"
         assert result["folder"] == "deleteditems"
@@ -77,7 +86,10 @@ class TestDeleteMessage:
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
         result = await delete_message(
-            mock_client, message_id="AAMkAG123=", permanent=True, config=_CFG,
+            mock_client,
+            message_id="AAMkAG123=",
+            permanent=True,
+            config=_CFG,
         )
         assert result["status"] == "permanently_deleted"
         msg_builder.delete.assert_called_once()
@@ -98,7 +110,10 @@ class TestFlagMessage:
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
         result = await flag_message(
-            mock_client, message_id="AAMkAG123=", status="flagged", config=_CFG,
+            mock_client,
+            message_id="AAMkAG123=",
+            status="flagged",
+            config=_CFG,
         )
         assert result["status"] == "flagged"
         assert result["flag_status"] == "flagged"
@@ -109,7 +124,10 @@ class TestFlagMessage:
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="flag status must be one of"):
             await flag_message(
-                mock_client, message_id="AAMkAG123=", status="invalid", config=_CFG,
+                mock_client,
+                message_id="AAMkAG123=",
+                status="invalid",
+                config=_CFG,
             )
 
     async def test_flag_raises_read_only(self):
@@ -117,7 +135,10 @@ class TestFlagMessage:
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await flag_message(
-                mock_client, message_id="AAMkAG123=", status="flagged", config=_CFG_RO,
+                mock_client,
+                message_id="AAMkAG123=",
+                status="flagged",
+                config=_CFG_RO,
             )
 
 
@@ -131,7 +152,10 @@ class TestCategorizeMessage:
 
         categories = ["Red Category", "Blue Category"]
         result = await categorize_message(
-            mock_client, message_id="AAMkAG123=", categories=categories, config=_CFG,
+            mock_client,
+            message_id="AAMkAG123=",
+            categories=categories,
+            config=_CFG,
         )
         assert result["status"] == "categorized"
         assert result["categories"] == categories
@@ -158,7 +182,10 @@ class TestMarkRead:
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
         result = await mark_read(
-            mock_client, message_id="AAMkAG123=", is_read=True, config=_CFG,
+            mock_client,
+            message_id="AAMkAG123=",
+            is_read=True,
+            config=_CFG,
         )
         assert result["status"] == "updated"
         assert result["is_read"] is True
@@ -172,7 +199,10 @@ class TestMarkRead:
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
         result = await mark_read(
-            mock_client, message_id="AAMkAG123=", is_read=False, config=_CFG,
+            mock_client,
+            message_id="AAMkAG123=",
+            is_read=False,
+            config=_CFG,
         )
         assert result["status"] == "updated"
         assert result["is_read"] is False
@@ -182,7 +212,10 @@ class TestMarkRead:
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await mark_read(
-                mock_client, message_id="AAMkAG123=", is_read=True, config=_CFG_RO,
+                mock_client,
+                message_id="AAMkAG123=",
+                is_read=True,
+                config=_CFG_RO,
             )
 
 
@@ -195,7 +228,10 @@ class TestReclassifyMessage:
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
         result = await reclassify_message(
-            mock_client, message_id="AAMkAG123=", classification="focused", config=_CFG,
+            mock_client,
+            message_id="AAMkAG123=",
+            classification="focused",
+            config=_CFG,
         )
         assert result["status"] == "reclassified"
         assert result["classification"] == "focused"
@@ -209,7 +245,10 @@ class TestReclassifyMessage:
         mock_client.me.messages.by_message_id.return_value = msg_builder
 
         result = await reclassify_message(
-            mock_client, message_id="AAMkAG123=", classification="other", config=_CFG,
+            mock_client,
+            message_id="AAMkAG123=",
+            classification="other",
+            config=_CFG,
         )
         assert result["classification"] == "other"
 
@@ -218,7 +257,10 @@ class TestReclassifyMessage:
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="classification"):
             await reclassify_message(
-                mock_client, message_id="AAMkAG123=", classification="bogus", config=_CFG,
+                mock_client,
+                message_id="AAMkAG123=",
+                classification="bogus",
+                config=_CFG,
             )
 
     async def test_reclassify_rejects_invalid_message_id(self):
@@ -226,7 +268,10 @@ class TestReclassifyMessage:
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="invalid characters"):
             await reclassify_message(
-                mock_client, message_id="<bad>", classification="focused", config=_CFG,
+                mock_client,
+                message_id="<bad>",
+                classification="focused",
+                config=_CFG,
             )
 
     async def test_reclassify_raises_read_only(self):

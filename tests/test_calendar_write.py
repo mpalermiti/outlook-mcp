@@ -418,9 +418,7 @@ class TestUpdateEvent:
         mock_client = MagicMock()
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
-        await update_event(
-            mock_client, event_id="AAMkAG123=", recurrence="weekly", config=_CFG
-        )
+        await update_event(mock_client, event_id="AAMkAG123=", recurrence="weekly", config=_CFG)
 
         builder.get.assert_awaited_once()
         patched = builder.patch.call_args[0][0]
@@ -462,9 +460,7 @@ class TestUpdateEvent:
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
         with pytest.raises(ValueError, match="start"):
-            await update_event(
-                mock_client, event_id="AAMkAG123=", recurrence="weekly", config=_CFG
-            )
+            await update_event(mock_client, event_id="AAMkAG123=", recurrence="weekly", config=_CFG)
 
         builder.patch.assert_not_called()
 
@@ -572,9 +568,7 @@ class TestUpdateEvent:
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
         with pytest.raises(ValueError, match="start and end"):
-            await update_event(
-                mock_client, event_id="AAMkAG123=", is_all_day=True, config=_CFG
-            )
+            await update_event(mock_client, event_id="AAMkAG123=", is_all_day=True, config=_CFG)
 
         builder.patch.assert_not_called()
 
@@ -595,6 +589,7 @@ class TestUpdateEvent:
         )
 
         assert builder.patch.call_args[0][0].is_all_day is False
+
     async def test_remove_recurrence_sends_an_explicit_null(self):
         """The SDK DROPS `event.recurrence = None` — it must go via additional_data.
 
@@ -611,9 +606,7 @@ class TestUpdateEvent:
         mock_client = MagicMock()
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
-        await update_event(
-            mock_client, event_id="AAMkAG123=", remove_recurrence=True, config=_CFG
-        )
+        await update_event(mock_client, event_id="AAMkAG123=", remove_recurrence=True, config=_CFG)
 
         writer = JsonSerializationWriter()
         builder.patch.call_args[0][0].serialize(writer)
@@ -686,9 +679,7 @@ class TestUpdateEvent:
         mock_client = MagicMock()
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
-        await update_event(
-            mock_client, event_id="AAMkAG123=", remove_recurrence=True, config=_CFG
-        )
+        await update_event(mock_client, event_id="AAMkAG123=", remove_recurrence=True, config=_CFG)
 
         builder.get.assert_not_called()
 
@@ -719,7 +710,10 @@ class TestRsvp:
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
         result = await rsvp(
-            mock_client, event_id="AAMkAG123=", response="accept", config=_CFG,
+            mock_client,
+            event_id="AAMkAG123=",
+            response="accept",
+            config=_CFG,
         )
         assert result["status"] == "accepted"
         builder.accept.post.assert_called_once()
@@ -731,7 +725,10 @@ class TestRsvp:
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
         result = await rsvp(
-            mock_client, event_id="AAMkAG123=", response="decline", config=_CFG,
+            mock_client,
+            event_id="AAMkAG123=",
+            response="decline",
+            config=_CFG,
         )
         assert result["status"] == "declined"
         builder.decline.post.assert_called_once()
@@ -743,7 +740,10 @@ class TestRsvp:
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
         result = await rsvp(
-            mock_client, event_id="AAMkAG123=", response="tentative", config=_CFG,
+            mock_client,
+            event_id="AAMkAG123=",
+            response="tentative",
+            config=_CFG,
         )
         assert result["status"] == "tentativelyAccepted"
         builder.tentatively_accept.post.assert_called_once()
@@ -966,7 +966,7 @@ class TestEventTimezone:
             )
 
     async def test_an_explicit_zone_re_anchors_both_ends(self):
-        """"Move this to Eastern" means the whole event, not one end of it.
+        """ "Move this to Eastern" means the whole event, not one end of it.
 
         Preserving a split only makes sense while the caller has named no zone;
         once they have, applying it to one end and not the other leaves the
@@ -1028,9 +1028,7 @@ class TestEventTimezone:
         # Known only from the stored event — refused after the one read.
         builder = _make_event_builder()
         builder.get = AsyncMock(
-            return_value=_current_event(
-                date_time="2026-10-22T00:00:00.0000000", is_all_day=True
-            )
+            return_value=_current_event(date_time="2026-10-22T00:00:00.0000000", is_all_day=True)
         )
         mock_client = MagicMock()
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
@@ -1476,12 +1474,19 @@ class TestEventTimezone:
     @pytest.mark.parametrize(
         "times",
         [
-            {"start": "2026-11-04T18:00:00", "end": "2026-11-04T18:30:00",
-             "timezone": "America/Los_Angeles"},
+            {
+                "start": "2026-11-04T18:00:00",
+                "end": "2026-11-04T18:30:00",
+                "timezone": "America/Los_Angeles",
+            },
             {"start": "2026-11-05T03:00:00Z", "end": "2026-11-05T03:30:00Z"},
             {"end": "2026-11-05T02:45:00Z"},
-            {"recurrence": {"pattern": {"type": "weekly", "daysOfWeek": ["thursday", "friday"]},
-                            "range": {"type": "numbered", "numberOfOccurrences": 3}}},
+            {
+                "recurrence": {
+                    "pattern": {"type": "weekly", "daysOfWeek": ["thursday", "friday"]},
+                    "range": {"type": "numbered", "numberOfOccurrences": 3},
+                }
+            },
         ],
         ids=["re-anchor", "same-zone-move", "end-only", "pattern-change"],
     )
@@ -1563,8 +1568,12 @@ class TestEventTimezone:
             # is named as one rather than surfacing as the occurrence refusal.
             ({"recurrence": "fortnightly"}, "Invalid recurrence"),
             (
-                {"recurrence": {"pattern": {"type": "weekly", "daysOfWeek": ["funday"]},
-                                "range": {"type": "noEnd"}}},
+                {
+                    "recurrence": {
+                        "pattern": {"type": "weekly", "daysOfWeek": ["funday"]},
+                        "range": {"type": "noEnd"},
+                    }
+                },
                 "pattern.daysOfWeek",
             ),
             (
@@ -1579,9 +1588,7 @@ class TestEventTimezone:
             mock_client.me.events.by_event_id = MagicMock(return_value=builder)
 
             with pytest.raises(ValueError) as excinfo:
-                await update_event(
-                    mock_client, event_id="AAMkAG123=", config=_CFG_LA, **kwargs
-                )
+                await update_event(mock_client, event_id="AAMkAG123=", config=_CFG_LA, **kwargs)
 
             assert expected in str(excinfo.value), kwargs
             assert builder.get.await_count == 0, f"{kwargs} asked Graph before refusing"
@@ -2444,9 +2451,7 @@ class TestCalendarWritesThatSendEmail:
     async def test_rsvp_without_a_message_stays_calendar_only(self):
         builder, client = _client_with(_current_event())
 
-        result = await rsvp(
-            client, event_id="AAMkAG123=", response="accept", config=_CFG_CAL_ONLY
-        )
+        result = await rsvp(client, event_id="AAMkAG123=", response="accept", config=_CFG_CAL_ONLY)
 
         assert result["status"] == "accepted"
         builder.accept.post.assert_called_once()

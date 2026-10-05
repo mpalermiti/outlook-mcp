@@ -110,7 +110,7 @@ class TestZonelessDatetimeInterpretation:
         )
 
     def test_bare_date_honors_an_explicit_zone(self):
-        """"after=2026-10-22" means the caller's midnight, not UTC's."""
+        """ "after=2026-10-22" means the caller's midnight, not UTC's."""
         assert validate_datetime("2026-10-22", tz="America/Los_Angeles") == "2026-10-22T07:00:00Z"
 
     def test_bare_date_defaults_to_utc(self):
@@ -181,6 +181,7 @@ class TestZonelessDatetimeInterpretation:
     def test_unknown_zone_is_rejected(self):
         with pytest.raises(ValueError, match="timezone"):
             validate_datetime("2026-10-22T12:30:00", tz="Mars/Olympus_Mons")
+
 
 class TestKqlSanitization:
     def test_simple_query(self):

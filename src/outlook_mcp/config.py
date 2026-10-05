@@ -135,9 +135,7 @@ class Config(BaseModel):
             return data
         for key in data:
             if key in _LEGACY_KEYS:
-                logger.warning(
-                    "Config key %r ignored: %s.", key, _LEGACY_KEYS[key]
-                )
+                logger.warning("Config key %r ignored: %s.", key, _LEGACY_KEYS[key])
             elif key not in cls.model_fields:
                 logger.warning(
                     "Unknown config key %r ignored — supported keys: %s.",

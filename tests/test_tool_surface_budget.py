@@ -99,6 +99,7 @@ async def test_gating_actually_reduces_the_surface():
 
     mail_only = [t for t in full if toolsets.TOOL_GROUPS.get(t.name) in {"mail", "account"}]
 
-    assert _proxy_tokens(
-        [t.model_dump(exclude_none=True, by_alias=True) for t in mail_only]
-    ) < _proxy_tokens([t.model_dump(exclude_none=True, by_alias=True) for t in full]) // 2
+    assert (
+        _proxy_tokens([t.model_dump(exclude_none=True, by_alias=True) for t in mail_only])
+        < _proxy_tokens([t.model_dump(exclude_none=True, by_alias=True) for t in full]) // 2
+    )

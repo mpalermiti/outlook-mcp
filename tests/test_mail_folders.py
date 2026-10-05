@@ -39,7 +39,10 @@ class TestCreateFolder:
         mock_client.me.mail_folders.by_mail_folder_id.return_value = child_mock
 
         result = await create_folder(
-            mock_client, name="Sub Folder", parent_folder="AAMkAGparent123=", config=_CFG,
+            mock_client,
+            name="Sub Folder",
+            parent_folder="AAMkAGparent123=",
+            config=_CFG,
         )
 
         assert result == {"id": "folder123", "name": "My Folder"}
@@ -62,7 +65,10 @@ class TestRenameFolder:
         mock_client.me.mail_folders.by_mail_folder_id.return_value = folder_builder
 
         result = await rename_folder(
-            mock_client, folder_id="AAMkAGfolder123=", name="Renamed Folder", config=_CFG,
+            mock_client,
+            folder_id="AAMkAGfolder123=",
+            name="Renamed Folder",
+            config=_CFG,
         )
 
         assert result == {"id": "folder123", "name": "Renamed Folder"}
@@ -80,7 +86,10 @@ class TestRenameFolder:
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await rename_folder(
-                mock_client, folder_id="AAMkAG123=", name="New", config=_CFG_RO,
+                mock_client,
+                folder_id="AAMkAG123=",
+                name="New",
+                config=_CFG_RO,
             )
 
 

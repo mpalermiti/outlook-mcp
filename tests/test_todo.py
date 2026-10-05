@@ -193,10 +193,7 @@ class TestResolveListId:
         token and page one is fetched forever)."""
         default_list = _mock_task_list("default9", "Tasks", True, "defaultList")
         other = _mock_task_list("listA", "A", True, "none")
-        next_link = (
-            "https://graph.microsoft.com/v1.0/me/todo/lists?"
-            "$skiptoken=MSxnMjsjOyM7Jw"
-        )
+        next_link = "https://graph.microsoft.com/v1.0/me/todo/lists?$skiptoken=MSxnMjsjOyM7Jw"
         page1 = MagicMock(value=[other], odata_next_link=next_link)
         page2 = MagicMock(value=[default_list], odata_next_link=None)
         client = _build_mock_client()
@@ -278,9 +275,7 @@ class TestListTaskLists:
         """/me/todo/lists pages with $skiptoken and the SDK's typed query
         class cannot carry it — the walk follows the raw link with with_url,
         so no list can hide on page two."""
-        next_link = (
-            "https://graph.microsoft.com/v1.0/me/todo/lists?$skiptoken=MSxn"
-        )
+        next_link = "https://graph.microsoft.com/v1.0/me/todo/lists?$skiptoken=MSxn"
         page1 = MagicMock(
             value=[_mock_task_list("list1", "First", True, "defaultList")],
             odata_next_link=next_link,
@@ -930,9 +925,7 @@ class TestAddChecklistItem:
 
 class TestUpdateChecklistItem:
     def _item(self, client):
-        task_item = (
-            client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
-        )
+        task_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
         return task_item.return_value.checklist_items.by_checklist_item_id
 
     async def test_check_item(self):
@@ -992,9 +985,7 @@ class TestUpdateChecklistItem:
 
 class TestDeleteChecklistItem:
     def _item(self, client):
-        task_item = (
-            client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
-        )
+        task_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
         return task_item.return_value.checklist_items.by_checklist_item_id
 
     async def test_delete_checklist_item(self):

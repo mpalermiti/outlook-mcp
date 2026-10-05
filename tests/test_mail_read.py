@@ -32,9 +32,7 @@ def _make_mock_message(**overrides):
     msg.flag = MagicMock()
     msg.flag.flag_status = MagicMock(value=overrides.get("flag", "notFlagged"))
     msg.conversation_id = overrides.get("conversation_id", "conv123")
-    msg.inference_classification = MagicMock(
-        value=overrides.get("classification", "focused")
-    )
+    msg.inference_classification = MagicMock(value=overrides.get("classification", "focused"))
     # Body for read_message
     msg.body = MagicMock()
     msg.body.content = overrides.get("body_content", "<p>Hello</p>")
@@ -153,8 +151,7 @@ class TestListInbox:
         await list_inbox(mock_client, classification="focused")
 
         call_kwargs = (
-            mock_client.me.mail_folders.by_mail_folder_id.return_value
-            .messages.get.call_args
+            mock_client.me.mail_folders.by_mail_folder_id.return_value.messages.get.call_args
         )
         qp = call_kwargs.kwargs["request_configuration"].query_parameters
         assert qp.filter is not None
@@ -167,8 +164,7 @@ class TestListInbox:
         await list_inbox(mock_client, classification="other")
 
         call_kwargs = (
-            mock_client.me.mail_folders.by_mail_folder_id.return_value
-            .messages.get.call_args
+            mock_client.me.mail_folders.by_mail_folder_id.return_value.messages.get.call_args
         )
         qp = call_kwargs.kwargs["request_configuration"].query_parameters
         assert "inferenceClassification eq 'other'" in qp.filter
@@ -187,8 +183,7 @@ class TestListInbox:
         await list_inbox(mock_client, unread_only=True, classification="focused")
 
         call_kwargs = (
-            mock_client.me.mail_folders.by_mail_folder_id.return_value
-            .messages.get.call_args
+            mock_client.me.mail_folders.by_mail_folder_id.return_value.messages.get.call_args
         )
         qp = call_kwargs.kwargs["request_configuration"].query_parameters
         assert "isRead eq false" in qp.filter
@@ -202,8 +197,7 @@ class TestListInbox:
         await list_inbox(mock_client, uncategorized_only=True)
 
         call_kwargs = (
-            mock_client.me.mail_folders.by_mail_folder_id.return_value
-            .messages.get.call_args
+            mock_client.me.mail_folders.by_mail_folder_id.return_value.messages.get.call_args
         )
         qp = call_kwargs.kwargs["request_configuration"].query_parameters
         assert qp.filter is not None
@@ -216,8 +210,7 @@ class TestListInbox:
         await list_inbox(mock_client)
 
         call_kwargs = (
-            mock_client.me.mail_folders.by_mail_folder_id.return_value
-            .messages.get.call_args
+            mock_client.me.mail_folders.by_mail_folder_id.return_value.messages.get.call_args
         )
         qp = call_kwargs.kwargs["request_configuration"].query_parameters
         assert qp.filter is None
@@ -234,8 +227,7 @@ class TestListInbox:
         )
 
         call_kwargs = (
-            mock_client.me.mail_folders.by_mail_folder_id.return_value
-            .messages.get.call_args
+            mock_client.me.mail_folders.by_mail_folder_id.return_value.messages.get.call_args
         )
         qp = call_kwargs.kwargs["request_configuration"].query_parameters
         assert "isRead eq false" in qp.filter
@@ -252,8 +244,7 @@ class TestListInboxFilterOrdering:
     @staticmethod
     def _filter_for(mock_client):
         call_kwargs = (
-            mock_client.me.mail_folders.by_mail_folder_id.return_value
-            .messages.get.call_args
+            mock_client.me.mail_folders.by_mail_folder_id.return_value.messages.get.call_args
         )
         return call_kwargs.kwargs["request_configuration"].query_parameters.filter
 
@@ -279,9 +270,7 @@ class TestListInboxFilterOrdering:
         """classification alone also returned 400 in 1.12.0."""
         mock_client = _make_folder_mock([])
         await list_inbox(mock_client, classification="focused")
-        assert self._filter_for(mock_client).startswith(
-            f"receivedDateTime ge {RECEIVED_FLOOR} and"
-        )
+        assert self._filter_for(mock_client).startswith(f"receivedDateTime ge {RECEIVED_FLOOR} and")
 
     @pytest.mark.asyncio
     async def test_caller_date_filter_is_not_double_floored(self):

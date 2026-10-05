@@ -84,17 +84,14 @@ async def batch_triage(
         validate_graph_id(mid)
 
     if action == "flag" and value not in _VALID_FLAG_STATUSES:
-        raise ValueError(
-            f"flag value must be one of {_VALID_FLAG_STATUSES}; got {value!r}"
-        )
+        raise ValueError(f"flag value must be one of {_VALID_FLAG_STATUSES}; got {value!r}")
 
     resolved_value: Any = value
     if action == "move":
         resolved_value = await resolve_folder_id(graph_client, value)
 
     subrequests = [
-        _build_subrequest(i, mid, action, resolved_value)
-        for i, mid in enumerate(message_ids)
+        _build_subrequest(i, mid, action, resolved_value) for i, mid in enumerate(message_ids)
     ]
     batch_body = {"requests": subrequests}
 

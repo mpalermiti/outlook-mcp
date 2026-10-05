@@ -236,9 +236,7 @@ def test_an_emailing_write_needs_mail_send_when_categories_are_restricted():
 
 
 def test_an_emailing_write_passes_when_mail_send_is_listed():
-    config = Config(
-        read_only=False, allow_categories=[CATEGORY_CALENDAR_WRITE, CATEGORY_MAIL_SEND]
-    )
+    config = Config(read_only=False, allow_categories=[CATEGORY_CALENDAR_WRITE, CATEGORY_MAIL_SEND])
     assert check_sends_mail(config, "outlook_create_event", "invite attendees") is None
 
 

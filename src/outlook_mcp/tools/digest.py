@@ -215,15 +215,17 @@ def _classify_mail(
         is_high = (item.get("importance") or "").lower() == "high"
         is_flagged = (item.get("flag") or "") == "flagged"
         if is_high or is_flagged:
-            urgent.append({
-                "id": item.get("id"),
-                "subject": item.get("subject") or "",
-                "from_email": item.get("from_email") or "",
-                "from_name": item.get("from_name") or "",
-                "received_at": item.get("received") or "",
-                "is_high_importance": is_high,
-                "is_flagged": is_flagged,
-            })
+            urgent.append(
+                {
+                    "id": item.get("id"),
+                    "subject": item.get("subject") or "",
+                    "from_email": item.get("from_email") or "",
+                    "from_name": item.get("from_name") or "",
+                    "received_at": item.get("received") or "",
+                    "is_high_importance": is_high,
+                    "is_flagged": is_flagged,
+                }
+            )
 
         from_email = (item.get("from_email") or "").lower()
         if from_email:
@@ -258,24 +260,28 @@ def _classify_events(items: list[dict]) -> dict:
         if item.get("is_deleted"):
             # Hard-delete tombstones — same bucket as cancellations from
             # the caller's perspective (the event is gone).
-            cancelled_list.append({
-                "id": item.get("id"),
-                "subject": "",
-                "start": "",
-            })
+            cancelled_list.append(
+                {
+                    "id": item.get("id"),
+                    "subject": "",
+                    "start": "",
+                }
+            )
             continue
 
         # ``is_cancelled`` isn't in the formatter's output (the calendar
         # delta formatter doesn't surface it). Live items therefore all
         # land in "new"; cancellations only surface via @removed
         # tombstones above. Documented in the tool docstring.
-        new_list.append({
-            "id": item.get("id"),
-            "subject": item.get("subject") or "",
-            "start": item.get("start") or "",
-            "end": item.get("end") or "",
-            "organizer_email": "",  # formatter exposes organizer name, not email
-        })
+        new_list.append(
+            {
+                "id": item.get("id"),
+                "subject": item.get("subject") or "",
+                "start": item.get("start") or "",
+                "end": item.get("end") or "",
+                "organizer_email": "",  # formatter exposes organizer name, not email
+            }
+        )
 
     return {
         "new": new_list,

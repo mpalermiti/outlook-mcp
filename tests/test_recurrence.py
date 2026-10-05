@@ -238,17 +238,13 @@ class TestEventStartDate:
         from outlook_mcp.tools._recurrence import event_start_date
 
         assert event_start_date("2026-10-29T01:00:00Z") == date(2026, 10, 29)
-        assert event_start_date("2026-10-29T01:00:00Z", "America/Los_Angeles") == date(
-            2026, 10, 28
-        )
+        assert event_start_date("2026-10-29T01:00:00Z", "America/Los_Angeles") == date(2026, 10, 28)
 
     def test_a_naive_start_is_never_shifted(self):
         """It is already wall-clock time in the zone; converting would move it."""
         from outlook_mcp.tools._recurrence import event_start_date
 
-        assert event_start_date("2026-10-29T01:00:00", "America/Los_Angeles") == date(
-            2026, 10, 29
-        )
+        assert event_start_date("2026-10-29T01:00:00", "America/Los_Angeles") == date(2026, 10, 29)
         assert event_start_date("2026-10-29", "Asia/Tokyo") == date(2026, 10, 29)
 
     def test_an_unresolvable_zone_falls_back_to_the_written_date(self):
@@ -455,23 +451,39 @@ _WRONG_TYPES = [
     ({"pattern": {"type": "daily"}, "range": "invalid"}, "range must be an object"),
     ({"pattern": {"type": "daily"}, "range": ["noEnd"]}, "range must be an object"),
     ({"pattern": "daily", "range": {"type": "noEnd"}}, "pattern must be an object"),
-    ({"pattern": {"type": "daily", "interval": None}, "range": {"type": "noEnd"}},
-     "pattern.interval must be a whole number"),
-    ({"pattern": {"type": "daily", "interval": 2.5}, "range": {"type": "noEnd"}},
-     "pattern.interval must be a whole number"),
-    ({"pattern": {"type": "daily", "interval": True}, "range": {"type": "noEnd"}},
-     "pattern.interval must be a whole number"),
-    ({"pattern": {"type": "weekly", "daysOfWeek": "monday"}, "range": {"type": "noEnd"}},
-     "daysOfWeek must be a list"),
-    ({"pattern": {"type": "weekly", "daysOfWeek": [1]}, "range": {"type": "noEnd"}},
-     "Invalid pattern.daysOfWeek 1"),
+    (
+        {"pattern": {"type": "daily", "interval": None}, "range": {"type": "noEnd"}},
+        "pattern.interval must be a whole number",
+    ),
+    (
+        {"pattern": {"type": "daily", "interval": 2.5}, "range": {"type": "noEnd"}},
+        "pattern.interval must be a whole number",
+    ),
+    (
+        {"pattern": {"type": "daily", "interval": True}, "range": {"type": "noEnd"}},
+        "pattern.interval must be a whole number",
+    ),
+    (
+        {"pattern": {"type": "weekly", "daysOfWeek": "monday"}, "range": {"type": "noEnd"}},
+        "daysOfWeek must be a list",
+    ),
+    (
+        {"pattern": {"type": "weekly", "daysOfWeek": [1]}, "range": {"type": "noEnd"}},
+        "Invalid pattern.daysOfWeek 1",
+    ),
     ({"pattern": {"type": 7}, "range": {"type": "noEnd"}}, "Invalid pattern.type 7"),
-    ({"pattern": {"type": "daily"}, "range": {"type": "numbered", "numberOfOccurrences": None}},
-     "numberOfOccurrences must be a whole number"),
-    ({"pattern": {"type": "daily"}, "range": {"type": "endDate", "endDate": 20270101}},
-     "endDate must be a YYYY-MM-DD string"),
-    ({"pattern": {"type": "daily"}, "range": {"type": "noEnd", "recurrenceTimeZone": 5}},
-     "recurrenceTimeZone must be a zone name string"),
+    (
+        {"pattern": {"type": "daily"}, "range": {"type": "numbered", "numberOfOccurrences": None}},
+        "numberOfOccurrences must be a whole number",
+    ),
+    (
+        {"pattern": {"type": "daily"}, "range": {"type": "endDate", "endDate": 20270101}},
+        "endDate must be a YYYY-MM-DD string",
+    ),
+    (
+        {"pattern": {"type": "daily"}, "range": {"type": "noEnd", "recurrenceTimeZone": 5}},
+        "recurrenceTimeZone must be a zone name string",
+    ),
 ]
 
 
@@ -535,8 +547,10 @@ class TestPatternTypeSpelling:
 def test_a_whole_number_in_another_spelling_is_still_accepted():
     """The control: a digit string and an integral float were accepted before, and still are."""
     built = build_event_recurrence(
-        {"pattern": {"type": "daily", "interval": "2"},
-         "range": {"type": "numbered", "numberOfOccurrences": 3.0}},
+        {
+            "pattern": {"type": "daily", "interval": "2"},
+            "range": {"type": "numbered", "numberOfOccurrences": 3.0},
+        },
         start=_START,
     )
     assert built.pattern.interval == 2

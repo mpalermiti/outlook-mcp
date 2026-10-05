@@ -47,8 +47,7 @@ class TestListInboxPagination:
         assert result["cursor"] is None
         # Verify skip was set from cursor
         call_kwargs = (
-            mock_client.me.mail_folders.by_mail_folder_id
-            .return_value.messages.get.call_args
+            mock_client.me.mail_folders.by_mail_folder_id.return_value.messages.get.call_args
         )
         qp = call_kwargs.kwargs["request_configuration"].query_parameters
         assert qp.skip == 50
@@ -78,8 +77,7 @@ class TestListInboxPagination:
         mock_client = _make_folder_mock([])
         await list_inbox(mock_client, skip=10, cursor=cursor)
         call_kwargs = (
-            mock_client.me.mail_folders.by_mail_folder_id
-            .return_value.messages.get.call_args
+            mock_client.me.mail_folders.by_mail_folder_id.return_value.messages.get.call_args
         )
         qp = call_kwargs.kwargs["request_configuration"].query_parameters
         # Cursor's skip (75) should be used, not the manual skip (10)

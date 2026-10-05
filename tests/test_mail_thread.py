@@ -181,7 +181,10 @@ class TestCopyMessage:
         mock_client.me.mail_folders.get = AsyncMock(return_value=empty_response)
         with pytest.raises(ValueError, match="not found"):
             await copy_message(
-                mock_client, message_id="AAMkAG123=", folder="bad folder!", config=_CFG,
+                mock_client,
+                message_id="AAMkAG123=",
+                folder="bad folder!",
+                config=_CFG,
             )
 
     async def test_copy_raises_read_only(self):
@@ -189,7 +192,10 @@ class TestCopyMessage:
         mock_client = MagicMock()
         with pytest.raises(ReadOnlyError):
             await copy_message(
-                mock_client, message_id="AAMkAG123=", folder="inbox", config=_CFG_RO,
+                mock_client,
+                message_id="AAMkAG123=",
+                folder="inbox",
+                config=_CFG_RO,
             )
 
     async def test_copy_calls_post_and_returns_status(self):
@@ -198,7 +204,10 @@ class TestCopyMessage:
         mock_client.me.messages.by_message_id.return_value.copy.post = AsyncMock()
 
         result = await copy_message(
-            mock_client, message_id="AAMkAG123=", folder="archive", config=_CFG,
+            mock_client,
+            message_id="AAMkAG123=",
+            folder="archive",
+            config=_CFG,
         )
         assert result["status"] == "copied"
         assert result["folder"] == "archive"

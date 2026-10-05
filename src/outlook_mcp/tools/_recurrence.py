@@ -141,8 +141,7 @@ def build_patterned_recurrence(recurrence: dict) -> Any:
     if "daysOfWeek" in pattern_in:
         if not isinstance(pattern_in["daysOfWeek"], list):
             raise ValueError(
-                "recurrence pattern.daysOfWeek must be a list of day names, "
-                'e.g. ["monday"]'
+                'recurrence pattern.daysOfWeek must be a list of day names, e.g. ["monday"]'
             )
         pattern.days_of_week = [
             _enum_lookup(DayOfWeek, d, "pattern.daysOfWeek") for d in pattern_in["daysOfWeek"]
@@ -485,8 +484,7 @@ def move_pattern(payload: dict, *, old: date, new: date) -> dict:
                 kind,
                 old,
                 new,
-                "That crosses into a different month, which no single dayOfMonth "
-                "expresses.",
+                "That crosses into a different month, which no single dayOfMonth expresses.",
             )
         pattern["dayOfMonth"] = new.day
         if kind == "absoluteYearly":

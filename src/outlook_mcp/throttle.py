@@ -83,9 +83,7 @@ async def send_with_retry(
     while True:
         resp = await send(url, **call_kwargs)
         if resp.status_code in _RETRYABLE and attempt < max_retries:
-            wait = parse_retry_after(
-                dict(resp.headers), default_backoff * (2**attempt)
-            )
+            wait = parse_retry_after(dict(resp.headers), default_backoff * (2**attempt))
             await sleep(wait)
             attempt += 1
             continue
@@ -129,9 +127,7 @@ async def retry_throttled_subrequests(
                 continue  # no response for this id; caller handles the gap
             status = sub.get("status", 0)
             if status in _RETRYABLE and attempt < max_retries:
-                wait = parse_retry_after(
-                    sub.get("headers") or {}, default_backoff * (2**attempt)
-                )
+                wait = parse_retry_after(sub.get("headers") or {}, default_backoff * (2**attempt))
                 max_wait = max(max_wait, wait)
                 retry_next.append(req)
             else:

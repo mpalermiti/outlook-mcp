@@ -468,9 +468,10 @@ class TestTimeZoneAnchoring:
         )
 
         zone = ZoneInfo(_DST_ZONE)
-        shift = datetime.combine(second, dt_time(9, 0), tzinfo=zone).utcoffset() - datetime.combine(
-            first, dt_time(9, 0), tzinfo=zone
-        ).utcoffset()
+        shift = (
+            datetime.combine(second, dt_time(9, 0), tzinfo=zone).utcoffset()
+            - datetime.combine(first, dt_time(9, 0), tzinfo=zone).utcoffset()
+        )
 
         starts = [_utc_instant(e["start"]) for e in ours]
         assert starts[0] != starts[1], (
@@ -638,9 +639,7 @@ class TestTimeZoneAnchoring:
         import httpx
 
         monday = _anchor_monday()
-        token = real_graph_client.credential.get_token(
-            "https://graph.microsoft.com/.default"
-        ).token
+        token = real_graph_client.credential.get_token("https://graph.microsoft.com/.default").token
         auth = {"Authorization": f"Bearer {token}"}
         subject = LIVE_WRITE_SUBJECT + " tz-split"
 
@@ -822,9 +821,7 @@ class TestReAnchoringAnExistingEvent:
     the SDK in every case.
     """
 
-    async def test_a_single_event_moves_to_another_zone(
-        self, real_graph_client, live_write_config
-    ):
+    async def test_a_single_event_moves_to_another_zone(self, real_graph_client, live_write_config):
         """The simple half, and the control for the series case below."""
         monday = _anchor_monday()
 
@@ -917,9 +914,7 @@ class TestReAnchoringAnExistingEvent:
         import httpx
 
         monday = _anchor_monday()
-        token = real_graph_client.credential.get_token(
-            "https://graph.microsoft.com/.default"
-        ).token
+        token = real_graph_client.credential.get_token("https://graph.microsoft.com/.default").token
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
         async with _temporary_event(
@@ -972,9 +967,7 @@ class TestReAnchoringAnExistingEvent:
         import httpx
 
         monday = _anchor_monday()
-        token = real_graph_client.credential.get_token(
-            "https://graph.microsoft.com/.default"
-        ).token
+        token = real_graph_client.credential.get_token("https://graph.microsoft.com/.default").token
         headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
         async with _temporary_event(
@@ -1052,9 +1045,7 @@ class TestReAnchoringAnExistingEvent:
         # A Wednesday, 18:00 Pacific — next-day in UTC either side of the
         # transition, so the test does not depend on which offset applies.
         wednesday = _anchor_monday() + timedelta(days=2)
-        token = real_graph_client.credential.get_token(
-            "https://graph.microsoft.com/.default"
-        ).token
+        token = real_graph_client.credential.get_token("https://graph.microsoft.com/.default").token
         auth = {"Authorization": f"Bearer {token}"}
         subject = LIVE_WRITE_SUBJECT + " tz-windows-anchor"
 
@@ -1173,9 +1164,7 @@ async def _instances(sdk, event_id: str, first: date, zone: str) -> list:
     )
     config = RequestConfiguration(query_parameters=query)
     config.headers.add("Prefer", f'outlook.timezone="{zone}"')
-    response = await sdk.me.events.by_event_id(event_id).instances.get(
-        request_configuration=config
-    )
+    response = await sdk.me.events.by_event_id(event_id).instances.get(request_configuration=config)
     return sorted(response.value or [], key=lambda i: i.start.date_time)
 
 

@@ -167,11 +167,15 @@ class TestBatchReadHappyPath:
     async def test_multiple_all_succeed(self, patched_httpx):
         _, set_response = patched_httpx
         ids = ["AAA=", "BBB=", "CCC="]
-        set_response(_batch_response([
-            _ok_sub("0", _raw_message("AAA=", subject="A")),
-            _ok_sub("1", _raw_message("BBB=", subject="B")),
-            _ok_sub("2", _raw_message("CCC=", subject="C")),
-        ]))
+        set_response(
+            _batch_response(
+                [
+                    _ok_sub("0", _raw_message("AAA=", subject="A")),
+                    _ok_sub("1", _raw_message("BBB=", subject="B")),
+                    _ok_sub("2", _raw_message("CCC=", subject="C")),
+                ]
+            )
+        )
 
         result = await read_messages(_fake_graph_client(), ids)
         assert result["requested"] == 3
@@ -187,11 +191,15 @@ class TestBatchReadHappyPath:
         _, set_response = patched_httpx
         ids = ["ID_C=", "ID_A=", "ID_B="]
         # Graph returns them shuffled relative to input.
-        set_response(_batch_response([
-            _ok_sub("1", _raw_message("ID_A=", subject="msgA")),
-            _ok_sub("2", _raw_message("ID_B=", subject="msgB")),
-            _ok_sub("0", _raw_message("ID_C=", subject="msgC")),
-        ]))
+        set_response(
+            _batch_response(
+                [
+                    _ok_sub("1", _raw_message("ID_A=", subject="msgA")),
+                    _ok_sub("2", _raw_message("ID_B=", subject="msgB")),
+                    _ok_sub("0", _raw_message("ID_C=", subject="msgC")),
+                ]
+            )
+        )
 
         result = await read_messages(_fake_graph_client(), ids)
         # Input order: [C, A, B]
@@ -207,11 +215,15 @@ class TestBatchReadFailures:
     async def test_partial_failure_404_mixed(self, patched_httpx):
         _, set_response = patched_httpx
         ids = ["AAA=", "BBB=", "CCC="]
-        set_response(_batch_response([
-            _ok_sub("0", _raw_message("AAA=", subject="A")),
-            _err_sub("1", 404, "ErrorItemNotFound", "The specified object was not found."),
-            _ok_sub("2", _raw_message("CCC=", subject="C")),
-        ]))
+        set_response(
+            _batch_response(
+                [
+                    _ok_sub("0", _raw_message("AAA=", subject="A")),
+                    _err_sub("1", 404, "ErrorItemNotFound", "The specified object was not found."),
+                    _ok_sub("2", _raw_message("CCC=", subject="C")),
+                ]
+            )
+        )
 
         result = await read_messages(_fake_graph_client(), ids)
         assert result["requested"] == 3
@@ -235,11 +247,15 @@ class TestBatchReadFailures:
     async def test_all_fail(self, patched_httpx):
         _, set_response = patched_httpx
         ids = ["AAA=", "BBB=", "CCC="]
-        set_response(_batch_response([
-            _err_sub("0", 404, "ErrorItemNotFound", "gone"),
-            _err_sub("1", 404, "ErrorItemNotFound", "gone"),
-            _err_sub("2", 403, "ErrorAccessDenied", "no"),
-        ]))
+        set_response(
+            _batch_response(
+                [
+                    _err_sub("0", 404, "ErrorItemNotFound", "gone"),
+                    _err_sub("1", 404, "ErrorItemNotFound", "gone"),
+                    _err_sub("2", 403, "ErrorAccessDenied", "no"),
+                ]
+            )
+        )
 
         result = await read_messages(_fake_graph_client(), ids)
         assert result["messages"] == []
@@ -255,9 +271,13 @@ class TestBatchReadFailures:
         post_mock, _ = patched_httpx
         resp = MagicMock()
         resp.status_code = 500
-        resp.raise_for_status = MagicMock(side_effect=httpx.HTTPStatusError(
-            "boom", request=MagicMock(), response=MagicMock(status_code=500),
-        ))
+        resp.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError(
+                "boom",
+                request=MagicMock(),
+                response=MagicMock(status_code=500),
+            )
+        )
         post_mock.return_value = resp
 
         with pytest.raises(httpx.HTTPStatusError):
@@ -287,9 +307,13 @@ class TestFormatVariants:
     @pytest.mark.asyncio
     async def test_format_html(self, patched_httpx):
         post_mock, set_response = patched_httpx
-        set_response(_batch_response([
-            _ok_sub("0", _raw_message("AAA=", body_html="<p>Hello</p>")),
-        ]))
+        set_response(
+            _batch_response(
+                [
+                    _ok_sub("0", _raw_message("AAA=", body_html="<p>Hello</p>")),
+                ]
+            )
+        )
         result = await read_messages(_fake_graph_client(), ["AAA="], format="html")
         msg = result["messages"][0]
         assert msg["body"] == ""
@@ -302,9 +326,13 @@ class TestFormatVariants:
     @pytest.mark.asyncio
     async def test_format_full(self, patched_httpx):
         _, set_response = patched_httpx
-        set_response(_batch_response([
-            _ok_sub("0", _raw_message("AAA=", body_html="<p>Hello</p>")),
-        ]))
+        set_response(
+            _batch_response(
+                [
+                    _ok_sub("0", _raw_message("AAA=", body_html="<p>Hello</p>")),
+                ]
+            )
+        )
         result = await read_messages(_fake_graph_client(), ["AAA="], format="full")
         msg = result["messages"][0]
         # full: both populated
@@ -336,18 +364,23 @@ class TestIncludeDeferredSend:
     async def test_extended_property_filter_in_url(self, patched_httpx):
         """The sub-request URL adds $expand=singleValueExtendedProperties($filter=...)."""
         post_mock, set_response = patched_httpx
-        set_response(_batch_response([
-            _ok_sub("0", _raw_message(
-                "AAA=",
-                extended_props=[
-                    {"id": "SystemTime 0x3fef", "value": "2026-06-01T15:00:00Z"},
-                ],
-            )),
-        ]))
-
-        result = await read_messages(
-            _fake_graph_client(), ["AAA="], include_deferred_send=True
+        set_response(
+            _batch_response(
+                [
+                    _ok_sub(
+                        "0",
+                        _raw_message(
+                            "AAA=",
+                            extended_props=[
+                                {"id": "SystemTime 0x3fef", "value": "2026-06-01T15:00:00Z"},
+                            ],
+                        ),
+                    ),
+                ]
+            )
         )
+
+        result = await read_messages(_fake_graph_client(), ["AAA="], include_deferred_send=True)
         msg = result["messages"][0]
         # The deferred value is surfaced.
         assert msg["deferred_send_datetime"] == "2026-06-01T15:00:00Z"
@@ -362,13 +395,15 @@ class TestIncludeDeferredSend:
     @pytest.mark.asyncio
     async def test_deferred_send_none_when_property_absent(self, patched_httpx):
         _, set_response = patched_httpx
-        set_response(_batch_response([
-            _ok_sub("0", _raw_message("AAA=", extended_props=[])),
-        ]))
-
-        result = await read_messages(
-            _fake_graph_client(), ["AAA="], include_deferred_send=True
+        set_response(
+            _batch_response(
+                [
+                    _ok_sub("0", _raw_message("AAA=", extended_props=[])),
+                ]
+            )
         )
+
+        result = await read_messages(_fake_graph_client(), ["AAA="], include_deferred_send=True)
         assert result["messages"][0]["deferred_send_datetime"] is None
 
 
@@ -386,9 +421,11 @@ class TestBatchReadThrottling:
         """
         post_mock, _ = patched_httpx
         post_mock.side_effect = [
-            _batch_response([
-                {"id": "0", "status": 429, "headers": {"Retry-After": "0"}, "body": {}},
-            ]),
+            _batch_response(
+                [
+                    {"id": "0", "status": 429, "headers": {"Retry-After": "0"}, "body": {}},
+                ]
+            ),
             _batch_response([_ok_sub("0", _raw_message("AAA=", subject="Recovered"))]),
         ]
 
@@ -405,14 +442,14 @@ class TestBatchReadThrottling:
         assert [r["id"] for r in retry_body["requests"]] == ["0"]
 
     @pytest.mark.asyncio
-    async def test_persistent_throttle_recorded_as_failure_not_infinite(
-        self, patched_httpx
-    ):
+    async def test_persistent_throttle_recorded_as_failure_not_infinite(self, patched_httpx):
         """A sub-request throttled past max_retries is bounded and recorded."""
         post_mock, _ = patched_httpx
-        post_mock.return_value = _batch_response([
-            {"id": "0", "status": 429, "headers": {"Retry-After": "0"}, "body": {}},
-        ])
+        post_mock.return_value = _batch_response(
+            [
+                {"id": "0", "status": 429, "headers": {"Retry-After": "0"}, "body": {}},
+            ]
+        )
 
         result = await read_messages(_fake_graph_client(), ["AAA="])
 

@@ -400,9 +400,7 @@ class TestAttachToDraft:
         mock_client = MagicMock()
         mock_builder = mock_client.me.messages.by_message_id.return_value
         mock_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
-        mock_builder.attachments.create_upload_session.post = AsyncMock(
-            return_value=mock_session
-        )
+        mock_builder.attachments.create_upload_session.post = AsyncMock(return_value=mock_session)
 
         with patch(
             "outlook_mcp.tools.mail_attachments._upload_large_file", new_callable=AsyncMock
@@ -436,13 +434,9 @@ class TestAttachToDraft:
         mock_builder = mock_client.me.messages.by_message_id.return_value
         mock_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
         mock_builder.attachments.post = AsyncMock(return_value=created_att)
-        mock_builder.attachments.create_upload_session.post = AsyncMock(
-            return_value=mock_session
-        )
+        mock_builder.attachments.create_upload_session.post = AsyncMock(return_value=mock_session)
 
-        with patch(
-            "outlook_mcp.tools.mail_attachments._upload_large_file", new_callable=AsyncMock
-        ):
+        with patch("outlook_mcp.tools.mail_attachments._upload_large_file", new_callable=AsyncMock):
             result = await attach_to_draft(
                 mock_client,
                 draft_id="AAMkAG123=",

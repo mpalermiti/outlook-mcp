@@ -18,7 +18,10 @@ class TestSendMessage:
         mock_client = AsyncMock()
         mock_client.me.send_mail.post = AsyncMock()
         result = await send_message(
-            mock_client, to=["valid@test.com"], subject="Test", body="Hello",
+            mock_client,
+            to=["valid@test.com"],
+            subject="Test",
+            body="Hello",
             config=_CFG,
         )
         assert result["status"] == "sent"
@@ -29,7 +32,10 @@ class TestSendMessage:
         mock_client = AsyncMock()
         with pytest.raises(ValueError):
             await send_message(
-                mock_client, to=["not-an-email"], subject="Test", body="Hello",
+                mock_client,
+                to=["not-an-email"],
+                subject="Test",
+                body="Hello",
                 config=_CFG,
             )
 
@@ -38,7 +44,10 @@ class TestSendMessage:
         mock_client = AsyncMock()
         with pytest.raises(ReadOnlyError):
             await send_message(
-                mock_client, to=["a@b.com"], subject="Test", body="Hello",
+                mock_client,
+                to=["a@b.com"],
+                subject="Test",
+                body="Hello",
                 config=_CFG_RO,
             )
 
@@ -84,7 +93,11 @@ class TestSendMessage:
         mock_client = AsyncMock()
         mock_client.me.send_mail.post = AsyncMock()
         await send_message(
-            mock_client, to=["to@test.com"], subject="Test", body="Hello", config=_CFG,
+            mock_client,
+            to=["to@test.com"],
+            subject="Test",
+            body="Hello",
+            config=_CFG,
         )
         request_body = mock_client.me.send_mail.post.call_args.args[0]
         assert request_body.message.reply_to is None
@@ -122,7 +135,10 @@ class TestReply:
         msg_builder.reply_all.post = AsyncMock()
         mock_client.me.messages.by_message_id.return_value = msg_builder
         result = await reply(
-            mock_client, message_id="AAMkAG123=", body="Thanks!", reply_all=True,
+            mock_client,
+            message_id="AAMkAG123=",
+            body="Thanks!",
+            reply_all=True,
             config=_CFG,
         )
         assert result["reply_all"] is True
@@ -143,7 +159,10 @@ class TestForward:
         msg_builder.forward.post = AsyncMock()
         mock_client.me.messages.by_message_id.return_value = msg_builder
         result = await forward(
-            mock_client, message_id="AAMkAG123=", to=["a@b.com"], config=_CFG,
+            mock_client,
+            message_id="AAMkAG123=",
+            to=["a@b.com"],
+            config=_CFG,
         )
         assert result["status"] == "forwarded"
         msg_builder.forward.post.assert_called_once()
@@ -153,7 +172,10 @@ class TestForward:
         mock_client = AsyncMock()
         with pytest.raises(ReadOnlyError):
             await forward(
-                mock_client, message_id="AAMkAG123=", to=["a@b.com"], config=_CFG_RO,
+                mock_client,
+                message_id="AAMkAG123=",
+                to=["a@b.com"],
+                config=_CFG_RO,
             )
 
 

@@ -104,9 +104,7 @@ def _build_mock_client(attachments=None, post_result=None, attachment_entity=Non
 
 
 def _attachments_of(client):
-    task_item = (
-        client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
-    )
+    task_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
     return task_item.return_value.attachments
 
 
@@ -155,9 +153,7 @@ class TestListTaskAttachments:
 
         result = await list_task_attachments(client, task_id="task1", count=25)
 
-        qp = _attachments_of(client).get.call_args.kwargs[
-            "request_configuration"
-        ].query_parameters
+        qp = _attachments_of(client).get.call_args.kwargs["request_configuration"].query_parameters
         assert qp.top == 25
         assert result["has_more"] is True
         assert result["next_cursor"] is not None
@@ -204,7 +200,9 @@ class TestDownloadTaskAttachment:
         TypeError or a truncated leftover."""
         client = _build_mock_client(
             attachment_entity=_entity(
-                id="att1", name="empty.bin", content_type="application/octet-stream",
+                id="att1",
+                name="empty.bin",
+                content_type="application/octet-stream",
                 content_bytes=None,
             )
         )
@@ -298,9 +296,7 @@ class TestDownloadTaskAttachment:
                 config=config,
             )
 
-    async def test_download_missing_bytes_with_declared_size_is_an_error(
-        self, tmp_path
-    ):
+    async def test_download_missing_bytes_with_declared_size_is_an_error(self, tmp_path):
         """The old bug: contentBytes absent -> `or b""` wrote a 0-byte file
         under the trusted name and reported success. The entity's own size is
         the witness — bytes and declared size must not contradict each other,
@@ -331,9 +327,7 @@ class TestDownloadTaskAttachment:
 
         assert staged.read_bytes() == b"precious staged bytes"
 
-    async def test_download_entity_without_content_bytes_property_is_a_clear_error(
-        self, tmp_path
-    ):
+    async def test_download_entity_without_content_bytes_property_is_a_clear_error(self, tmp_path):
         """A response without @odata.type deserializes as AttachmentBase,
         which has no content_bytes attribute — that must be a ValueError, not
         a bare AttributeError whose text never reaches the model."""
@@ -380,9 +374,7 @@ class TestDownloadTaskAttachment:
                 config=config,
             )
 
-    async def test_download_declared_size_zero_with_no_bytes_writes_empty(
-        self, tmp_path
-    ):
+    async def test_download_declared_size_zero_with_no_bytes_writes_empty(self, tmp_path):
         """A 0-byte attachment carries size=0 and no contentBytes — honest
         data, and the witness check must not block it."""
         client = _build_mock_client(
@@ -407,9 +399,7 @@ class TestDownloadTaskAttachment:
         assert (tmp_path / "att" / "empty.bin").read_bytes() == b""
         assert result["size"] == 0
 
-    async def test_download_rejects_the_directory_itself_before_any_fetch(
-        self, tmp_path
-    ):
+    async def test_download_rejects_the_directory_itself_before_any_fetch(self, tmp_path):
         """save_path resolving to attachments_dir (or '.') passed the
         confinement check and sent dirname() one level above the fence —
         mkstemp would land next to config.json. Refused before the Graph
@@ -428,9 +418,7 @@ class TestDownloadTaskAttachment:
 
         _attachments_of(client).by_attachment_base_id.return_value.get.assert_not_called()
 
-    async def test_download_rejects_missing_parent_directory_before_any_fetch(
-        self, tmp_path
-    ):
+    async def test_download_rejects_missing_parent_directory_before_any_fetch(self, tmp_path):
         """sub/x.pdf with sub/ absent used to fail at mkstemp *after* the
         fetch, with a FileNotFoundError the model never sees. ValueError,
         before the fetch."""
@@ -616,13 +604,10 @@ class TestUploadTaskAttachment:
                 # A regular file that claims to be 1 KiB (S_IFREG so
                 # os.path.isfile still says yes) while the bytes on disk are
                 # over the cap — the race, frozen in place.
-                st = os.stat_result(
-                    (stat_module.S_IFREG | 0o644, 0, 0, 0, 0, 0, 1024, 0, 0, 0)
-                )
+                st = os.stat_result((stat_module.S_IFREG | 0o644, 0, 0, 0, 0, 0, 1024, 0, 0, 0))
             return st
 
         with patch("os.stat", side_effect=lying_stat):
-
             with pytest.raises(ValueError, match="20 MiB"):
                 await upload_task_attachment(
                     client, task_id="task1", file_path=str(oversize), config=config

@@ -70,8 +70,7 @@ ENDPOINTS: list[tuple[str, str]] = [
     ("me/outlook/masterCategories", "Categories"),
     ("me/mailFolders/inbox/messages/delta", "Mail delta"),
     (
-        "me/calendarView/delta?startDateTime=2026-05-21T00:00:00Z"
-        "&endDateTime=2026-05-28T00:00:00Z",
+        "me/calendarView/delta?startDateTime=2026-05-21T00:00:00Z&endDateTime=2026-05-28T00:00:00Z",
         "Calendar delta",
     ),
     ("me/contacts/delta", "Contacts delta"),
@@ -165,11 +164,15 @@ def _todo_task_rows(headers: dict[str, str]) -> tuple[list[tuple[str, str]], lis
         task_id, attachment_id = _task_with_attachment(headers, list_id)
     except Exception as exc:
         reason = f"could not provision a live task: {exc}"
-        return [], [
-            f"To Do checklist items ({reason})",
-            f"To Do task attachments ({reason})",
-            f"To Do attachment entity GET ({reason})",
-        ], []
+        return (
+            [],
+            [
+                f"To Do checklist items ({reason})",
+                f"To Do task attachments ({reason})",
+                f"To Do attachment entity GET ({reason})",
+            ],
+            [],
+        )
     task_path = f"me/todo/lists/{list_id}/tasks/{task_id}"
 
     rows.append((f"{task_path}/checklistItems?$top=1", "To Do checklist items"))
@@ -186,9 +189,7 @@ def _todo_task_rows(headers: dict[str, str]) -> tuple[list[tuple[str, str]], lis
     # (contentBytes off the attachment entity), so it is probed directly and
     # the body is checked — a 200 without contentBytes is the shape the
     # download tool now refuses, and worth a loud line here.
-    status, body = _get_json(
-        f"{task_path}/attachments/{attachment_id}", headers, timeout=60
-    )
+    status, body = _get_json(f"{task_path}/attachments/{attachment_id}", headers, timeout=60)
     verdict = classify(status) if status is not None else "FAIL"
     has_bytes = isinstance(body, dict) and "contentBytes" in body
     print(
@@ -205,9 +206,7 @@ def _todo_task_rows(headers: dict[str, str]) -> tuple[list[tuple[str, str]], lis
             "genuinely non-empty, that is a finding, not a pass"
         )
     # Legacy raw route, no longer used by any tool — kept as an extra signal.
-    rows.append(
-        (f"{task_path}/attachments/{attachment_id}/$value", "To Do attachment $value")
-    )
+    rows.append((f"{task_path}/attachments/{attachment_id}/$value", "To Do attachment $value"))
     return rows, not_probed, failures
 
 

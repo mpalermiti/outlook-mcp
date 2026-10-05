@@ -8,7 +8,6 @@ reads the real record is order-dependent, host-dependent, and one refactor
 away from deleting it.
 """
 
-
 import pytest
 
 from outlook_mcp import cli
@@ -20,9 +19,7 @@ def _record_in_tmp(tmp_path, monkeypatch):
     """Point the record path at an empty tmp dir for every test here."""
     from outlook_mcp import auth as auth_module
 
-    monkeypatch.setattr(
-        auth_module, "_auth_record_path", lambda: tmp_path / "auth_record.json"
-    )
+    monkeypatch.setattr(auth_module, "_auth_record_path", lambda: tmp_path / "auth_record.json")
 
 
 def test_status_without_config_exits_with_the_fix(capsys, monkeypatch):
@@ -43,9 +40,7 @@ def test_status_authenticated_flow_reads_only_the_patched_record(capsys, monkeyp
     assert "outlook-mcp auth" in out
 
 
-def test_status_surfaces_a_named_remedy_instead_of_the_generic_line(
-    capsys, monkeypatch
-):
+def test_status_surfaces_a_named_remedy_instead_of_the_generic_line(capsys, monkeypatch):
     """The AADSTS70000 dead end must not print "Run: outlook-mcp auth" alone.
 
     That line reads as "any re-auth will do" when only a fresh login exits,
@@ -81,9 +76,7 @@ def test_auth_without_config_exits_with_the_fix(capsys, monkeypatch):
 
 
 @pytest.mark.parametrize("command", [cli.cmd_auth, cli.cmd_status, cli.cmd_logout])
-def test_an_unloadable_config_exits_with_the_repair_not_a_traceback(
-    command, capsys, monkeypatch
-):
+def test_an_unloadable_config_exits_with_the_repair_not_a_traceback(command, capsys, monkeypatch):
     """Whatever the server's pre-run check catches, the CLI catches too."""
     monkeypatch.setattr(
         cli, "load_config", lambda: (_ for _ in ()).throw(OSError(13, "Permission denied"))
@@ -171,17 +164,14 @@ def test_auth_refusal_prints_the_remedy_not_a_traceback(capsys, monkeypatch):
         # no AADSTS code at all.
         "Timed out waiting for user to authenticate",
         # A declined sign-in surfaces as access_denied, not a consent-code.
-        "Authentication failed: access_denied: The user has denied access "
-        "to the app",
+        "Authentication failed: access_denied: The user has denied access to the app",
         # A generic invalid grant (the AADSTS70000 family) — the code a
         # stale consent or a revoked refresh token reports.
         "Authentication failed: AADSTS70000: The requested user must first "
         "sign-in and grant the client application access",
     ],
 )
-def test_auth_non_consent_refusals_get_no_registration_remedy(
-    refusal, capsys, monkeypatch
-):
+def test_auth_non_consent_refusals_get_no_registration_remedy(refusal, capsys, monkeypatch):
     """Only the AADSTS65xxx refusals say anything about the app registration.
 
     A timed-out device code, a declined sign-in and a generic invalid grant
@@ -272,9 +262,7 @@ def test_auth_warns_a_read_only_config_before_asking_for_write_access(capsys, mo
     """
     signed_in = []
     monkeypatch.setattr(cli, "load_config", lambda: Config(client_id="test-id", read_only=True))
-    monkeypatch.setattr(
-        cli.AuthManager, "login_interactive", lambda self: signed_in.append(True)
-    )
+    monkeypatch.setattr(cli.AuthManager, "login_interactive", lambda self: signed_in.append(True))
 
     cli.cmd_auth()
 
@@ -295,9 +283,7 @@ def test_auth_warns_a_read_only_config_before_asking_for_write_access(capsys, mo
         ),
     ],
 )
-def test_auth_says_nothing_extra_when_the_consent_matches_the_config(
-    capsys, monkeypatch, config
-):
+def test_auth_says_nothing_extra_when_the_consent_matches_the_config(capsys, monkeypatch, config):
     monkeypatch.setattr(cli, "load_config", lambda: config)
     monkeypatch.setattr(cli.AuthManager, "login_interactive", lambda self: None)
 

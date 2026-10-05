@@ -86,9 +86,7 @@ class TestFormatEventDelta:
         assert out["location"] == "Online"
 
     def test_missing_subject_and_organizer(self):
-        out = _format_event_delta(
-            _raw_event(subject=None, organizer={"emailAddress": None})
-        )
+        out = _format_event_delta(_raw_event(subject=None, organizer={"emailAddress": None}))
         assert out["subject"] == "(no subject)"
         assert out["organizer"] == ""
 

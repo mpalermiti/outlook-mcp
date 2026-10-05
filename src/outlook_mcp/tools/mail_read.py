@@ -235,18 +235,22 @@ def _format_read_message_from_sdk(
     to_list = []
     for r in msg.to_recipients or []:
         if r.email_address:
-            to_list.append({
-                "name": sanitize_output(r.email_address.name or ""),
-                "email": r.email_address.address or "",
-            })
+            to_list.append(
+                {
+                    "name": sanitize_output(r.email_address.name or ""),
+                    "email": r.email_address.address or "",
+                }
+            )
 
     cc_list = []
     for r in msg.cc_recipients or []:
         if r.email_address:
-            cc_list.append({
-                "name": sanitize_output(r.email_address.name or ""),
-                "email": r.email_address.address or "",
-            })
+            cc_list.append(
+                {
+                    "name": sanitize_output(r.email_address.name or ""),
+                    "email": r.email_address.address or "",
+                }
+            )
 
     body_text = ""
     body_html = None
@@ -259,11 +263,13 @@ def _format_read_message_from_sdk(
 
     attachments = []
     for att in msg.attachments or []:
-        attachments.append({
-            "id": att.id,
-            "name": sanitize_output(att.name or ""),
-            "size": att.size or 0,
-        })
+        attachments.append(
+            {
+                "id": att.id,
+                "name": sanitize_output(att.name or ""),
+                "size": att.size or 0,
+            }
+        )
 
     importance = "normal"
     if msg.importance and hasattr(msg.importance, "value"):
@@ -326,18 +332,22 @@ def _format_read_message_from_raw(
     to_list = []
     for r in raw.get("toRecipients") or []:
         ea = (r or {}).get("emailAddress") or {}
-        to_list.append({
-            "name": sanitize_output(ea.get("name") or ""),
-            "email": ea.get("address") or "",
-        })
+        to_list.append(
+            {
+                "name": sanitize_output(ea.get("name") or ""),
+                "email": ea.get("address") or "",
+            }
+        )
 
     cc_list = []
     for r in raw.get("ccRecipients") or []:
         ea = (r or {}).get("emailAddress") or {}
-        cc_list.append({
-            "name": sanitize_output(ea.get("name") or ""),
-            "email": ea.get("address") or "",
-        })
+        cc_list.append(
+            {
+                "name": sanitize_output(ea.get("name") or ""),
+                "email": ea.get("address") or "",
+            }
+        )
 
     body = raw.get("body") or {}
     content = body.get("content") or ""
@@ -350,11 +360,13 @@ def _format_read_message_from_raw(
 
     attachments = []
     for att in raw.get("attachments") or []:
-        attachments.append({
-            "id": att.get("id"),
-            "name": sanitize_output(att.get("name") or ""),
-            "size": att.get("size") or 0,
-        })
+        attachments.append(
+            {
+                "id": att.get("id"),
+                "name": sanitize_output(att.get("name") or ""),
+                "size": att.get("size") or 0,
+            }
+        )
 
     flag_status = "notFlagged"
     flag_node = raw.get("flag")
@@ -452,9 +464,7 @@ async def read_message(
 
         from outlook_mcp.tools.mail_drafts import _PR_DEFERRED_SEND_TIME_ID
 
-        adapter = graph_client.me.messages.by_message_id(
-            message_id
-        ).request_adapter
+        adapter = graph_client.me.messages.by_message_id(message_id).request_adapter
         filter_expr = f"id eq '{_PR_DEFERRED_SEND_TIME_ID}'"
         # Keep `=`, space, and single quotes literal — Graph requires
         # them in the $filter clause and they're safe inside a query
@@ -516,10 +526,7 @@ def _build_read_subrequest_url(message_id: str, include_deferred_send: bool) -> 
     filter_expr = f"id eq '{_PR_DEFERRED_SEND_TIME_ID}'"
     # Match ``read_message``: keep ``= '`` literal, percent-encode the rest.
     encoded_filter = quote(filter_expr, safe="= '")
-    return (
-        f"/me/messages/{safe_id}"
-        f"?$expand=singleValueExtendedProperties($filter={encoded_filter})"
-    )
+    return f"/me/messages/{safe_id}?$expand=singleValueExtendedProperties($filter={encoded_filter})"
 
 
 async def read_messages(
@@ -563,9 +570,7 @@ async def read_messages(
     if not message_ids:
         raise ValueError("message_ids must not be empty")
     if len(message_ids) > MAX_BATCH_SIZE:
-        raise ValueError(
-            f"Maximum {MAX_BATCH_SIZE} messages per batch (Graph API limit)"
-        )
+        raise ValueError(f"Maximum {MAX_BATCH_SIZE} messages per batch (Graph API limit)")
 
     # Fail fast on malformed IDs *before* any HTTP work.
     for mid in message_ids:
@@ -575,11 +580,13 @@ async def read_messages(
 
     subrequests = []
     for i, mid in enumerate(message_ids):
-        subrequests.append({
-            "id": str(i),
-            "method": "GET",
-            "url": _build_read_subrequest_url(mid, include_deferred_send),
-        })
+        subrequests.append(
+            {
+                "id": str(i),
+                "method": "GET",
+                "url": _build_read_subrequest_url(mid, include_deferred_send),
+            }
+        )
 
     tok = credential.get_token(GRAPH_TOKEN_SCOPE)
     headers = {
@@ -618,12 +625,14 @@ async def read_messages(
     for i, mid in enumerate(message_ids):
         sub = responses_by_id.get(str(i))
         if sub is None:
-            failures.append({
-                "id": mid,
-                "status": 0,
-                "code": "NoResponse",
-                "message": "no sub-response returned by Graph for this id",
-            })
+            failures.append(
+                {
+                    "id": mid,
+                    "status": 0,
+                    "code": "NoResponse",
+                    "message": "no sub-response returned by Graph for this id",
+                }
+            )
             continue
 
         status = sub.get("status", 0)
@@ -631,18 +640,18 @@ async def read_messages(
 
         if 200 <= status < 300:
             messages.append(
-                _format_read_message_from_raw(
-                    body, format, concise, include_deferred_send
-                )
+                _format_read_message_from_raw(body, format, concise, include_deferred_send)
             )
         else:
             err = body.get("error") or {}
-            failures.append({
-                "id": mid,
-                "status": status,
-                "code": err.get("code") or "",
-                "message": err.get("message") or "",
-            })
+            failures.append(
+                {
+                    "id": mid,
+                    "status": status,
+                    "code": err.get("code") or "",
+                    "message": err.get("message") or "",
+                }
+            )
 
     return {
         "messages": messages,

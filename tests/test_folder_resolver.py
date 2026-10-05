@@ -22,11 +22,13 @@ def _mock_folder(
 
 def _setup_child_folders(mock_client: MagicMock, children_by_parent: dict) -> None:
     """Wire mock_client.me.mail_folders.by_mail_folder_id(pid).child_folders.get()."""
+
     def _by_id(parent_id: str):
         builder = MagicMock()
         kids = children_by_parent.get(parent_id, [])
         builder.child_folders.get = AsyncMock(return_value=_mock_list_response(kids))
         return builder
+
     mock_client.me.mail_folders.by_mail_folder_id = MagicMock(side_effect=_by_id)
 
 
@@ -172,9 +174,7 @@ class TestSubfolderLookup:
         receipts = _mock_folder("receipts_id", "Receipts", child_count=1)
         domains = _mock_folder("domains_id", "Domains")
         mock_client = MagicMock()
-        mock_client.me.mail_folders.get = AsyncMock(
-            return_value=_mock_list_response([receipts])
-        )
+        mock_client.me.mail_folders.get = AsyncMock(return_value=_mock_list_response([receipts]))
         _setup_child_folders(mock_client, {"receipts_id": [domains]})
 
         result = await resolve_folder_id(mock_client, "Domains")
@@ -187,9 +187,7 @@ class TestSubfolderLookup:
         services = _mock_folder("services_id", "Services", child_count=1)
         domains = _mock_folder("domains_id", "Domains")
         mock_client = MagicMock()
-        mock_client.me.mail_folders.get = AsyncMock(
-            return_value=_mock_list_response([receipts])
-        )
+        mock_client.me.mail_folders.get = AsyncMock(return_value=_mock_list_response([receipts]))
         _setup_child_folders(
             mock_client,
             {"receipts_id": [services], "services_id": [domains]},
@@ -218,9 +216,7 @@ class TestSubfolderLookup:
         a = _mock_folder("a_id", "A", child_count=1)
         b = _mock_folder("b_id", "B", child_count=1)
         mock_client = MagicMock()
-        mock_client.me.mail_folders.get = AsyncMock(
-            return_value=_mock_list_response([a, b])
-        )
+        mock_client.me.mail_folders.get = AsyncMock(return_value=_mock_list_response([a, b]))
         _setup_child_folders(
             mock_client,
             {
@@ -235,9 +231,7 @@ class TestSubfolderLookup:
     async def test_not_found_after_full_walk(self):
         receipts = _mock_folder("receipts_id", "Receipts", child_count=1)
         mock_client = MagicMock()
-        mock_client.me.mail_folders.get = AsyncMock(
-            return_value=_mock_list_response([receipts])
-        )
+        mock_client.me.mail_folders.get = AsyncMock(return_value=_mock_list_response([receipts]))
         _setup_child_folders(
             mock_client,
             {"receipts_id": [_mock_folder("bills_id", "Bills")]},

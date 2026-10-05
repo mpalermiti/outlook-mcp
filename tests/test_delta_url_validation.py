@@ -236,15 +236,9 @@ class TestParserDifferentials:
     @pytest.mark.parametrize(
         "url",
         [
-            pytest.param(
-                "https://evil.example\t@graph.microsoft.com/x", id="tab-smuggled"
-            ),
-            pytest.param(
-                "https://evil.example\n@graph.microsoft.com/x", id="lf-smuggled"
-            ),
-            pytest.param(
-                "https://evil.example\r@graph.microsoft.com/x", id="cr-smuggled"
-            ),
+            pytest.param("https://evil.example\t@graph.microsoft.com/x", id="tab-smuggled"),
+            pytest.param("https://evil.example\n@graph.microsoft.com/x", id="lf-smuggled"),
+            pytest.param("https://evil.example\r@graph.microsoft.com/x", id="cr-smuggled"),
             pytest.param("\x01https://graph.microsoft.com/x", id="leading-control"),
             pytest.param("https://graph.microsoft.com\x00.evil/x", id="null-byte"),
             pytest.param("https://graph.microsoft.com/x\ty", id="tab-in-path"),
@@ -260,9 +254,7 @@ class TestParserDifferentials:
             pytest.param("https://graph.microsoft.com:evil/x", id="junk-port"),
             pytest.param("https://graph.microsoft.com:443/x", id="explicit-port"),
             pytest.param("https://user:pw@graph.microsoft.com/x", id="userinfo"),
-            pytest.param(
-                "https://evil.example[graph.microsoft.com]/x", id="bracketed-host"
-            ),
+            pytest.param("https://evil.example[graph.microsoft.com]/x", id="bracketed-host"),
         ],
     )
     def test_netloc_must_match_exactly(self, url):
