@@ -14,6 +14,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   now formatted, and `ci.yml`'s `test` job and `publish.yml` run
   `ruff format --check src/ tests/ scripts/` beside `ruff check`, which also covers `scripts/`
   now. Contributors: run `uv run ruff format src/ tests/ scripts/` before pushing.
+  The dev extra and the dependency group both require `ruff>=0.15.10,<0.17`, so a `pip install
+  outlook-graph-mcp[dev]` gets a ruff that formats the tree the way CI checks it.
 
 ### Security
 
