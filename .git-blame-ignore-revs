@@ -1,0 +1,10 @@
+# Commits that `git blame` should look through: mechanical rewrites that change
+# how code looks, not what it does. GitHub's blame view reads this file on its
+# own; for local `git blame`, run once per clone:
+#
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Add a commit here only if it is formatter output and nothing else.
+
+# style: ruff format src/ tests/ scripts/ (#111, closes #78)
+fd449e4ba32bd91f38d396d29b1e127b1176e3dc
