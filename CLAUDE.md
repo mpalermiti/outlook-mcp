@@ -13,8 +13,8 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
 - `uv run pytest` — run tests (offline unit suite; `integration`/`live` markers are deselected by default)
 - `uv run pytest -m live -v` — live query-shape guards; run before tagging if you changed any `$filter`/`$orderby`/`$search` construction (see `RELEASING.md` 1b)
 - `uv run pytest -m integration -v` — live response-shape smoke tests
-- `uv run ruff check src/ tests/` — lint
-- `uv run ruff format src/ tests/` — format
+- `uv run ruff check src/ tests/ scripts/` — lint
+- `uv run ruff format src/ tests/ scripts/` — format (CI runs `ruff format --check` on the same paths and fails on any file it would change)
 - `uv run outlook-mcp` — start server (stdio)
 - `uv run python scripts/preflight.py` — pre-release Graph smoke test (must pass before tagging; see `RELEASING.md`)
 
