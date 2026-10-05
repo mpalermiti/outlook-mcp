@@ -287,6 +287,7 @@ async def update_draft(
             from msgraph.generated.models.single_value_legacy_extended_property import (
                 SingleValueLegacyExtendedProperty,
             )
+
             prop = SingleValueLegacyExtendedProperty()
             prop.id = _PR_DEFERRED_SEND_TIME_ID
             prop.value = ""
@@ -294,8 +295,8 @@ async def update_draft(
             deferred_normalized = ""
         else:
             prop, deferred_normalized = _build_deferred_send_property(
-            deferred_send_datetime, config.timezone
-        )
+                deferred_send_datetime, config.timezone
+            )
             msg.single_value_extended_properties = [prop]
 
     await require_draft(graph_client, draft_id, "outlook_update_draft")

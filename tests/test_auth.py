@@ -94,9 +94,7 @@ def test_auth_record_round_trips_atomically(tmp_path, monkeypatch):
         home_account_id="home-1",
         username="user@example.com",
     )
-    monkeypatch.setattr(
-        auth_module, "_auth_record_path", lambda: tmp_path / "auth_record.json"
-    )
+    monkeypatch.setattr(auth_module, "_auth_record_path", lambda: tmp_path / "auth_record.json")
 
     auth_module._save_auth_record(record)
 
@@ -202,17 +200,13 @@ class TestUnencryptedCacheIsOptIn:
 
     def test_encrypted_storage_is_the_default(self):
         auth = AuthManager(Config(client_id="test-id"))
-        with patch(
-            "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False
-        ):
+        with patch("outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False):
             assert self._options_used(auth).allow_unencrypted_storage is False
 
     def test_refuses_to_build_a_credential_that_would_write_plaintext(self):
         auth = AuthManager(Config(client_id="test-id"))
         with (
-            patch(
-                "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True
-            ),
+            patch("outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True),
             pytest.raises(UnencryptedTokenCacheError) as exc,
         ):
             auth._make_credential()
@@ -221,23 +215,15 @@ class TestUnencryptedCacheIsOptIn:
         assert "allow_unencrypted_token_cache" in str(exc.value)
 
     def test_opting_in_permits_the_plaintext_fallback(self):
-        auth = AuthManager(
-            Config(client_id="test-id", allow_unencrypted_token_cache=True)
-        )
-        with patch(
-            "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True
-        ):
+        auth = AuthManager(Config(client_id="test-id", allow_unencrypted_token_cache=True))
+        with patch("outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True):
             assert self._options_used(auth).allow_unencrypted_storage is True
 
     def test_opting_in_still_warns(self, caplog):
-        auth = AuthManager(
-            Config(client_id="test-id", allow_unencrypted_token_cache=True)
-        )
+        auth = AuthManager(Config(client_id="test-id", allow_unencrypted_token_cache=True))
         with (
             caplog.at_level(logging.WARNING, logger="outlook_mcp.auth"),
-            patch(
-                "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True
-            ),
+            patch("outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True),
         ):
             auth._make_credential()
         assert [r for r in caplog.records if "unencrypted" in r.getMessage().lower()]
@@ -259,9 +245,7 @@ class TestUnencryptedCacheIsOptIn:
         auth = AuthManager(Config(client_id="test-id"))
         with (
             patch("outlook_mcp.auth._load_auth_record", return_value=object()),
-            patch(
-                "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True
-            ),
+            patch("outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True),
             pytest.raises(UnencryptedTokenCacheError),
         ):
             auth.try_cached_token()
@@ -272,7 +256,7 @@ class TestUnencryptedCacheIsOptIn:
     AZURE_REFUSAL = ValueError(
         "Cache encryption is impossible because libsecret dependencies are not "
         "installed or are unusable, for example because no display is available "
-        '(as in an SSH session). The chained exception has more information. '
+        "(as in an SSH session). The chained exception has more information. "
         'Specify "allow_unencrypted_storage=True" to store the cache unencrypted '
         "instead of raising this exception."
     )
@@ -306,9 +290,7 @@ class TestUnencryptedCacheIsOptIn:
                 "outlook_mcp.auth._unencrypted_fallback_will_be_used",
                 return_value=False,
             ),
-            patch.object(
-                DeviceCodeCredential, "_get_app", side_effect=self.AZURE_REFUSAL
-            ),
+            patch.object(DeviceCodeCredential, "_get_app", side_effect=self.AZURE_REFUSAL),
             pytest.raises(UnencryptedTokenCacheError) as exc,
         ):
             auth.try_cached_token()
@@ -325,9 +307,7 @@ class TestUnencryptedCacheIsOptIn:
                 "outlook_mcp.auth._unencrypted_fallback_will_be_used",
                 return_value=False,
             ),
-            patch.object(
-                DeviceCodeCredential, "_get_app", side_effect=self.AZURE_REFUSAL
-            ),
+            patch.object(DeviceCodeCredential, "_get_app", side_effect=self.AZURE_REFUSAL),
             pytest.raises(UnencryptedTokenCacheError),
         ):
             auth.login_interactive()
@@ -571,9 +551,7 @@ class TestStaleConsentRemedy:
                 "outlook_mcp.auth._unencrypted_fallback_will_be_used",
                 return_value=False,
             ),
-            patch.object(
-                DeviceCodeCredential, "_get_app", side_effect=self.AADSTS70000_REFUSAL
-            ),
+            patch.object(DeviceCodeCredential, "_get_app", side_effect=self.AADSTS70000_REFUSAL),
         ):
             assert auth.try_cached_token() is False
 
@@ -597,8 +575,7 @@ class TestStaleConsentRemedy:
         """
         auth = AuthManager(Config(client_id="test-id"))
         expired = ClientAuthenticationError(
-            "Authentication failed: AADSTS7000215: Invalid grant. The token "
-            "is expired or revoked."
+            "Authentication failed: AADSTS7000215: Invalid grant. The token is expired or revoked."
         )
         with (
             patch("outlook_mcp.auth._load_auth_record", return_value=self.RECORD),
@@ -642,9 +619,7 @@ class TestSavedSignInBelongsToTheConfiguredApp:
         record = self._record("99999999-aaaa-4bbb-8ccc-000000000009")
         with (
             patch("outlook_mcp.auth._load_auth_record", return_value=record),
-            patch(
-                "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False
-            ),
+            patch("outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False),
             patch("outlook_mcp.auth.DeviceCodeCredential") as cred_cls,
         ):
             assert auth.try_cached_token() is False
@@ -661,9 +636,7 @@ class TestSavedSignInBelongsToTheConfiguredApp:
         record = self._record("abcdef00-aaaa-4bbb-8ccc-000000000001")
         with (
             patch("outlook_mcp.auth._load_auth_record", return_value=record),
-            patch(
-                "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False
-            ),
+            patch("outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False),
             patch("outlook_mcp.auth.DeviceCodeCredential", _DefaultConsentCredential),
         ):
             assert auth.try_cached_token() is True

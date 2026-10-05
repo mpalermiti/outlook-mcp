@@ -39,9 +39,7 @@ def _ctx(auth):
 async def test_server_still_boots_when_the_token_cache_is_unwritable():
     with (
         patch("outlook_mcp.server.load_config", return_value=Config(client_id="x")),
-        patch.object(
-            AuthManager, "try_cached_token", side_effect=UnencryptedTokenCacheError()
-        ),
+        patch.object(AuthManager, "try_cached_token", side_effect=UnencryptedTokenCacheError()),
     ):
         async with lifespan(MagicMock()) as state:
             assert state["auth"] is not None
@@ -79,9 +77,7 @@ async def test_an_ordinary_unauthenticated_host_is_unchanged():
         auth.get_credential()
 
     result = await outlook_auth_status(_ctx(auth))
-    assert result["action_required"] == (
-        "Run `outlook-mcp auth` on the host to authenticate."
-    )
+    assert result["action_required"] == ("Run `outlook-mcp auth` on the host to authenticate.")
 
 
 @pytest.mark.asyncio
@@ -193,9 +189,7 @@ async def test_unreadable_or_non_utf8_config_boots_the_same_way(caplog):
 async def test_auth_status_reports_the_config_failure_as_the_action():
     """The degraded boot has to say what to fix, not "run outlook-mcp auth"."""
     auth = AuthManager(Config(read_only=True))
-    auth.startup_error = ConfigLoadError(
-        OSError(13, "Permission denied"), "/settings"
-    )
+    auth.startup_error = ConfigLoadError(OSError(13, "Permission denied"), "/settings")
 
     result = await outlook_auth_status(_ctx(auth))
 
@@ -232,9 +226,7 @@ def _assert_clean_exit(proc: subprocess.CompletedProcess[str], *expected: str):
 def test_main_exits_cleanly_on_an_invalid_config(tmp_path):
     config_dir = tmp_path / "broken"
     config_dir.mkdir()
-    (config_dir / "config.json").write_text(
-        json.dumps({"allow_categories": ["not-a-category"]})
-    )
+    (config_dir / "config.json").write_text(json.dumps({"allow_categories": ["not-a-category"]}))
 
     _assert_clean_exit(
         _run_server_entry(config_dir),

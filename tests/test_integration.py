@@ -34,9 +34,7 @@ async def test_list_events_smoke(real_graph_client, real_config):
     """List events returns valid response shape."""
     from outlook_mcp.tools.calendar_read import list_events
 
-    result = await list_events(
-        real_graph_client.sdk_client, days=1, timezone=real_config.timezone
-    )
+    result = await list_events(real_graph_client.sdk_client, days=1, timezone=real_config.timezone)
     assert "events" in result
     assert "count" in result
     assert isinstance(result["events"], list)

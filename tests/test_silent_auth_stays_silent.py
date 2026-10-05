@@ -37,9 +37,7 @@ def _assume_an_encrypted_store():
     including the GitHub runner -- for a reason that has nothing to do with what
     they assert.
     """
-    with patch(
-        "outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False
-    ):
+    with patch("outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False):
         yield
 
 

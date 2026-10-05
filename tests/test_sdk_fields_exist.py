@@ -34,8 +34,10 @@ def _sdk_class_bindings(fn: ast.AST) -> dict[str, tuple[str, str]]:
     imported from msgraph.generated.models inside this function or module."""
     imported: dict[str, tuple[str, str]] = {}
     for node in ast.walk(fn):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith(
-            "msgraph.generated.models"
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and node.module.startswith("msgraph.generated.models")
         ):
             for alias in node.names:
                 imported[alias.asname or alias.name] = (node.module, alias.name)

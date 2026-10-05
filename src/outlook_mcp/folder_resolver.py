@@ -27,16 +27,12 @@ async def fetch_all_top_level_folders(graph_client: Any, top: int = 100) -> list
     response = await graph_client.me.mail_folders.get(request_configuration=config)
     collected = list(response.value) if response and response.value else []
     while getattr(response, "odata_next_link", None):
-        response = await graph_client.me.mail_folders.with_url(
-            response.odata_next_link
-        ).get()
+        response = await graph_client.me.mail_folders.with_url(response.odata_next_link).get()
         collected.extend(list(response.value) if response and response.value else [])
     return collected
 
 
-async def fetch_all_child_folders(
-    graph_client: Any, parent_id: str, top: int = 100
-) -> list[Any]:
+async def fetch_all_child_folders(graph_client: Any, parent_id: str, top: int = 100) -> list[Any]:
     """Fetch every child folder of `parent_id`, following pagination."""
     from msgraph.generated.users.item.mail_folders.item.child_folders import (
         child_folders_request_builder as cf,

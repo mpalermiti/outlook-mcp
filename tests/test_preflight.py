@@ -15,9 +15,7 @@ import io
 import pathlib
 from urllib.parse import urljoin
 
-_PREFLIGHT_PATH = (
-    pathlib.Path(__file__).resolve().parent.parent / "scripts" / "preflight.py"
-)
+_PREFLIGHT_PATH = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "preflight.py"
 _spec = importlib.util.spec_from_file_location("preflight", _PREFLIGHT_PATH)
 preflight = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
@@ -133,9 +131,7 @@ class TestTodoTaskFamilies:
             },
         )
 
-        rows, not_probed, failures = preflight._todo_task_rows(
-            {"Authorization": "Bearer x"}
-        )
+        rows, not_probed, failures = preflight._todo_task_rows({"Authorization": "Bearer x"})
 
         assert failures == []
         paths = [p for p, _ in rows]
@@ -183,9 +179,7 @@ class TestTodoTaskFamilies:
             },
         )
 
-        rows, not_probed, failures = preflight._todo_task_rows(
-            {"Authorization": "Bearer x"}
-        )
+        rows, not_probed, failures = preflight._todo_task_rows({"Authorization": "Bearer x"})
 
         assert not_probed == []
         assert failures == []
@@ -205,9 +199,7 @@ class TestTodoTaskFamilies:
                 ),
                 f"{base}/L1/tasks?$top=10": self._lists([{"id": "T1"}]),
                 f"{base}/L1/tasks/T1/attachments?$top=1": self._lists([{"id": "A1"}]),
-                f"{base}/L1/tasks/T1/attachments/A1": _Resp(
-                    200, {"id": "A1", "size": 1234}
-                ),
+                f"{base}/L1/tasks/T1/attachments/A1": _Resp(200, {"id": "A1", "size": 1234}),
             },
         )
 
@@ -228,9 +220,7 @@ class TestTodoTaskFamilies:
                 f"{base}?$top=100": self._lists(
                     [{"id": "L1", "isOwner": True, "wellknownListName": "defaultList"}]
                 ),
-                f"{base}/L1/tasks?$top=10": self._lists(
-                    [{"id": "T1"}, {"id": "T2"}, {"id": "T3"}]
-                ),
+                f"{base}/L1/tasks?$top=10": self._lists([{"id": "T1"}, {"id": "T2"}, {"id": "T3"}]),
                 f"{base}/L1/tasks/T1/attachments?$top=1": self._lists([]),
                 f"{base}/L1/tasks/T2/attachments?$top=1": self._lists([{"id": "A2"}]),
                 f"{base}/L1/tasks/T3/attachments?$top=1": self._lists([]),
@@ -249,9 +239,7 @@ class TestTodoTaskFamilies:
         base = "https://graph.microsoft.com/v1.0/me/todo/lists"
         self._wire(monkeypatch, {f"{base}?$top=100": self._lists([])})
 
-        rows, not_probed, failures = preflight._todo_task_rows(
-            {"Authorization": "Bearer x"}
-        )
+        rows, not_probed, failures = preflight._todo_task_rows({"Authorization": "Bearer x"})
 
         assert rows == []
         assert failures == []
@@ -281,8 +269,10 @@ class TestRunSummary:
         rows = [("me/todo/lists/L1/tasks/T1/checklistItems?$top=1", "To Do checklist items")]
         code, out = self._run_with(
             monkeypatch,
-            {urljoin(preflight.GRAPH_BASE, p): _Resp(200, {}) for p, _ in
-             preflight.ENDPOINTS + rows},
+            {
+                urljoin(preflight.GRAPH_BASE, p): _Resp(200, {})
+                for p, _ in preflight.ENDPOINTS + rows
+            },
             (rows, [], []),
         )
 
@@ -296,8 +286,10 @@ class TestRunSummary:
 
         code, out = self._run_with(
             monkeypatch,
-            {urljoin(preflight.GRAPH_BASE, p): _Resp(200, {}) for p, _ in
-             preflight.ENDPOINTS + rows},
+            {
+                urljoin(preflight.GRAPH_BASE, p): _Resp(200, {})
+                for p, _ in preflight.ENDPOINTS + rows
+            },
             (rows, not_probed, []),
         )
 

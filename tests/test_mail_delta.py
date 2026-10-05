@@ -131,8 +131,12 @@ async def test_first_call_returns_messages_and_delta_token():
 
 @pytest.mark.asyncio
 async def test_subsequent_call_uses_delta_token_as_url():
-    prior_token = "https://graph.microsoft.com/v1.0/me/mailFolders('INBOX')/messages/delta?$deltatoken=abc"
-    new_delta = "https://graph.microsoft.com/v1.0/me/mailFolders('INBOX')/messages/delta?$deltatoken=def"
+    prior_token = (
+        "https://graph.microsoft.com/v1.0/me/mailFolders('INBOX')/messages/delta?$deltatoken=abc"
+    )
+    new_delta = (
+        "https://graph.microsoft.com/v1.0/me/mailFolders('INBOX')/messages/delta?$deltatoken=def"
+    )
     body = {
         "value": [_raw_message(id="changed1", subject="Updated")],
         "@odata.deltaLink": new_delta,
@@ -161,7 +165,7 @@ async def test_subsequent_call_uses_delta_token_as_url():
 async def test_cap_reached_returns_nextlink_and_has_more():
     """200 messages with page_size=50 → cap=200 hit exactly; nextLink returned."""
     page = lambda i, link: {  # noqa: E731
-        "value": [_raw_message(id=f"m{i*50 + n}") for n in range(50)],
+        "value": [_raw_message(id=f"m{i * 50 + n}") for n in range(50)],
         "@odata.nextLink": link,
     }
     # Cap is page_size * 4 = 200; deliver 4 nextLink pages of 50 each, the
@@ -191,14 +195,18 @@ async def test_cap_reached_returns_nextlink_and_has_more():
 async def test_follows_nextlink_until_deltalink():
     """Two nextLink pages then a deltaLink — should follow both, return deltaLink."""
     responses = [
-        _http_response({
-            "value": [_raw_message(id="m1")],
-            "@odata.nextLink": f"{DELTA}?$skiptoken=p2",
-        }),
-        _http_response({
-            "value": [_raw_message(id="m2")],
-            "@odata.deltaLink": f"{DELTA}?$skiptoken=delta-final",
-        }),
+        _http_response(
+            {
+                "value": [_raw_message(id="m1")],
+                "@odata.nextLink": f"{DELTA}?$skiptoken=p2",
+            }
+        ),
+        _http_response(
+            {
+                "value": [_raw_message(id="m2")],
+                "@odata.deltaLink": f"{DELTA}?$skiptoken=delta-final",
+            }
+        ),
     ]
     patch_client, fake_client = _async_client_with(responses)
     with _patch_resolve(), patch_client:
@@ -264,7 +272,6 @@ async def test_no_links_at_all_returns_none_token():
     assert result["messages"] == []
     assert result["delta_token"] is None
     assert result["has_more"] is False
-
 
 
 class TestCompression:

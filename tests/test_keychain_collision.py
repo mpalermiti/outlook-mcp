@@ -193,9 +193,7 @@ class _TwoInstances:
         monkeypatch.setattr(auth_module, "_load_auth_record", load_record)
         # The unencrypted-cache check is a Linux concern; this suite models
         # macOS, where storage is always encrypted.
-        monkeypatch.setattr(
-            auth_module, "_unencrypted_fallback_will_be_used", lambda: False
-        )
+        monkeypatch.setattr(auth_module, "_unencrypted_fallback_will_be_used", lambda: False)
 
     def record_for(self, name: str) -> AuthenticationRecord:
         """The record an instance's settings directory holds."""

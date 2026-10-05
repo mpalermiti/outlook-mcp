@@ -354,10 +354,9 @@ async def send_with_attachments(
             upload_body = CreateUploadSessionPostRequestBody()
             upload_body.attachment_item = att_item
 
-            session = (
-                await graph_client.me.messages.by_message_id(draft.id)
-                .attachments.create_upload_session.post(upload_body)
-            )
+            session = await graph_client.me.messages.by_message_id(
+                draft.id
+            ).attachments.create_upload_session.post(upload_body)
 
             await _upload_large_file(session.upload_url, file_path, file_size)
 

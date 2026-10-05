@@ -272,8 +272,7 @@ async def upload_task_attachment(
     file_size = len(content)
     if file_size < 1:
         raise ValueError(
-            f"Attachment file is empty ({file_size} bytes) — accepted size is "
-            "1 byte – 20 MiB"
+            f"Attachment file is empty ({file_size} bytes) — accepted size is 1 byte – 20 MiB"
         )
     if file_size > _MAX_ATTACHMENT_SIZE:
         raise ValueError(

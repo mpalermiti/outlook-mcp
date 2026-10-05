@@ -25,9 +25,7 @@ async def _newest_message_id(sdk, folder: str) -> str | None:
         MessagesRequestBuilder,
     )
 
-    query = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
-        top=1, select=["id"]
-    )
+    query = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(top=1, select=["id"])
     page = await sdk.me.mail_folders.by_mail_folder_id(folder).messages.get(
         request_configuration=RequestConfiguration(query_parameters=query)
     )
@@ -65,7 +63,7 @@ async def _events_with_and_without_attendees(sdk) -> tuple[str | None, str | Non
         request_configuration=RequestConfiguration(query_parameters=query)
     )
     with_guests = without_guests = None
-    for event in (page.value if page and page.value else []):
+    for event in page.value if page and page.value else []:
         if event.attendees and with_guests is None:
             with_guests = event.id
         if not event.attendees and without_guests is None:

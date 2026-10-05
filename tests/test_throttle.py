@@ -6,7 +6,6 @@ envelope-level retry for a throttled request, and per-sub-request retry for a
 $batch whose envelope is 200 but individual sub-responses are 429/503.
 """
 
-
 from outlook_mcp.throttle import (
     parse_retry_after,
     retry_throttled_subrequests,
@@ -100,9 +99,7 @@ async def test_send_retries_503():
 async def test_send_gives_up_after_max_retries():
     client = _FakeClient([_Resp(429, {"Retry-After": "1"})] * 5)
     sleep, slept = _recording_sleep()
-    resp = await send_with_retry(
-        client, "GET", "u", headers={}, max_retries=2, sleep=sleep
-    )
+    resp = await send_with_retry(client, "GET", "u", headers={}, max_retries=2, sleep=sleep)
     assert resp.status_code == 429  # returns the final throttled response
     assert len(client.calls) == 3  # initial + 2 retries
     assert len(slept) == 2
@@ -157,9 +154,6 @@ async def test_subrequest_429_bounded_records_final():
         return {"responses": [{"id": "0", "status": 429, "headers": {"Retry-After": "1"}}]}
 
     sleep, slept = _recording_sleep()
-    merged = await retry_throttled_subrequests(
-        post_batch, requests, max_retries=2, sleep=sleep
-    )
+    merged = await retry_throttled_subrequests(post_batch, requests, max_retries=2, sleep=sleep)
     assert merged["0"]["status"] == 429  # bounded — recorded after retries exhausted
     assert len(slept) == 2
-

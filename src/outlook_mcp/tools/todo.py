@@ -411,9 +411,7 @@ async def get_task(
     # unverified (forcing it live would take a checklist past the page size,
     # and this is a read path) — so this follows the link if it ever appears
     # rather than assuming it cannot, the same with_url walk the lists use.
-    next_link = (getattr(task, "additional_data", None) or {}).get(
-        "checklistItems@odata.nextLink"
-    )
+    next_link = (getattr(task, "additional_data", None) or {}).get("checklistItems@odata.nextLink")
     pages = 1
     while isinstance(next_link, str) and next_link:
         pages += 1

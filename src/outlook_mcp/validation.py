@@ -75,10 +75,10 @@ _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
 
 # ISO 8601 datetime: strict pattern to reject injection attempts
 _ISO_DATETIME_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}"           # date
-    r"(?:T\d{2}:\d{2}:\d{2}"        # optional time
-    r"(?:\.\d+)?"                    # optional fractional seconds
-    r"(?:Z|[+-]\d{2}:\d{2})?"       # optional timezone
+    r"^\d{4}-\d{2}-\d{2}"  # date
+    r"(?:T\d{2}:\d{2}:\d{2}"  # optional time
+    r"(?:\.\d+)?"  # optional fractional seconds
+    r"(?:Z|[+-]\d{2}:\d{2})?"  # optional timezone
     r")?$"
 )
 
@@ -94,10 +94,38 @@ _ISO_DATETIME_RE = re.compile(
 # to Graph unchecked. They live in the table below now.
 _TIME_ZONE_ABBREVIATIONS = frozenset(
     {
-        "PT", "PST", "PDT", "MT", "MDT", "CT", "CST", "CDT", "ET", "EDT",
-        "AKST", "AKDT", "ADT", "NST", "NDT", "BST", "CEST",
-        "EEST", "WEST", "AEST", "AEDT", "ACST", "ACDT", "AWST",
-        "NZST", "NZDT", "SGT", "PHT", "KST", "JST", "IST", "ICT",
+        "PT",
+        "PST",
+        "PDT",
+        "MT",
+        "MDT",
+        "CT",
+        "CST",
+        "CDT",
+        "ET",
+        "EDT",
+        "AKST",
+        "AKDT",
+        "ADT",
+        "NST",
+        "NDT",
+        "BST",
+        "CEST",
+        "EEST",
+        "WEST",
+        "AEST",
+        "AEDT",
+        "ACST",
+        "ACDT",
+        "AWST",
+        "NZST",
+        "NZDT",
+        "SGT",
+        "PHT",
+        "KST",
+        "JST",
+        "IST",
+        "ICT",
     }
 )
 
@@ -123,8 +151,13 @@ _ZONES_GRAPH_REFUSES = {
 _FIXED_OFFSET_ZONES = frozenset({"EST", "MST", "HST"})
 
 WELL_KNOWN_FOLDERS = {
-    "inbox", "drafts", "sentitems", "deleteditems",
-    "junkemail", "archive", "outbox",
+    "inbox",
+    "drafts",
+    "sentitems",
+    "deleteditems",
+    "junkemail",
+    "archive",
+    "outbox",
 }
 
 
@@ -254,8 +287,7 @@ def validate_event_timezone(name: str) -> str:
         # which do observe daylight saving — so it is stated per entry rather
         # than of the table, and the table's own comment says why.
         also_fixed = (
-            " and it is a fixed-offset zone that would not follow daylight saving "
-            "even if it did"
+            " and it is a fixed-offset zone that would not follow daylight saving even if it did"
             if key.upper() in _FIXED_OFFSET_ZONES
             else ""
         )
@@ -307,8 +339,7 @@ def resolve_config_event_timezone(name: str) -> str:
             # makes. Telling an operator that CET "never observes daylight saving"
             # would be false diagnostic information in the one message they get.
             why = (
-                f" (not {key!r}, which is a fixed offset that never observes "
-                f"daylight saving)"
+                f" (not {key!r}, which is a fixed offset that never observes daylight saving)"
                 if str(key).upper() in _FIXED_OFFSET_ZONES
                 else ""
             )
@@ -412,7 +443,7 @@ def sanitize_kql(query: str) -> str:
         # Would send $search="" — Graph answers with an opaque BadRequest.
         raise ValueError(
             f"Search query is empty after sanitization: {query[:50]!r}. "
-            'Quotes, backslashes and the characters & | ! * are removed; '
+            "Quotes, backslashes and the characters & | ! * are removed; "
             "use KQL syntax like subject:budget or from:sarah@acme.com."
         )
     return f'"{sanitized}"'

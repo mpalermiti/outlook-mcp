@@ -238,10 +238,8 @@ class ConfigLoadError(OutlookMCPError):
     def __init__(self, reason: Exception, config_dir: str):
         super().__init__(
             "config_load_failed",
-            f"The settings file could not be loaded ({reason}); the server "
-            "booted read-only.",
-            f"Fix {config_dir}/config.json and restart the server. "
-            f"{LEAVE_SETTINGS_TO_THE_USER}",
+            f"The settings file could not be loaded ({reason}); the server booted read-only.",
+            f"Fix {config_dir}/config.json and restart the server. {LEAVE_SETTINGS_TO_THE_USER}",
         )
 
 
@@ -294,8 +292,7 @@ class ForeignCursorError(OutlookMCPError):
             )
         else:
             message = (
-                f"Refusing a cursor that is not a {resource} delta link (from {source}): "
-                f"{shown!r}."
+                f"Refusing a cursor that is not a {resource} delta link (from {source}): {shown!r}."
             )
             action = (
                 "A delta cursor only works with the tool that returned it. Discard this "
@@ -346,12 +343,9 @@ _HINT_TABLE: dict[tuple[int, str | None], str] = {
         "re-read the item and send the update again."
     ),
     (429, None): (
-        "Rate limited by Microsoft Graph. "
-        "Back off and retry; respect any Retry-After header."
+        "Rate limited by Microsoft Graph. Back off and retry; respect any Retry-After header."
     ),
-    (503, None): (
-        "Microsoft Graph is temporarily unavailable. Retry after a short delay."
-    ),
+    (503, None): ("Microsoft Graph is temporarily unavailable. Retry after a short delay."),
 }
 
 
@@ -388,14 +382,13 @@ def wrap_graph_error(exc: Exception) -> GraphAPIError:
         from msgraph.generated.models.o_data_errors.o_data_error import (
             ODataError as _ODataError,
         )
+
         graph_types: tuple[type, ...] = (APIError, _ODataError)
     except ImportError:  # pragma: no cover — defensive
         graph_types = (APIError,)
 
     if not isinstance(exc, graph_types):
-        raise TypeError(
-            f"wrap_graph_error: not a Graph SDK error: {type(exc).__name__}"
-        )
+        raise TypeError(f"wrap_graph_error: not a Graph SDK error: {type(exc).__name__}")
 
     status_code: int | None = getattr(exc, "response_status_code", None)
 

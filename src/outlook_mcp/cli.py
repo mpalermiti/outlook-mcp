@@ -147,16 +147,16 @@ def cmd_logout() -> None:
     """Remove this instance's auth record; report what stays behind."""
     auth = AuthManager(_load_config_or_exit())
     if auth.logout()["record_removed"]:
-        print("Removed this instance's auth record "
-              f"({DEFAULT_CONFIG_DIR}/auth_record.json).")
+        print(f"Removed this instance's auth record ({DEFAULT_CONFIG_DIR}/auth_record.json).")
     else:
         print("No auth record was present for this instance.")
     print("This server will ask for `outlook-mcp auth` again on next start.")
     print()
-    print("The encrypted token cache the OS keeps for azure-identity "
-          "(Keychain item Microsoft.Developer.IdentityService on macOS, its")
-    print("equivalent on other systems) is shared across apps and left in "
-          "place; its tokens")
+    print(
+        "The encrypted token cache the OS keeps for azure-identity "
+        "(Keychain item Microsoft.Developer.IdentityService on macOS, its"
+    )
+    print("equivalent on other systems) is shared across apps and left in place; its tokens")
     print("age out on their own.")
 
 

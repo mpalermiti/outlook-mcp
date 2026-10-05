@@ -31,9 +31,7 @@ def _make_batch_response(statuses: list[int], errors: list[str | None] | None = 
 
 def _mock_client_with_batch_response(http_resp: MagicMock) -> MagicMock:
     mock_client = MagicMock()
-    mock_client.request_adapter.get_http_response_message = AsyncMock(
-        return_value=http_resp
-    )
+    mock_client.request_adapter.get_http_response_message = AsyncMock(return_value=http_resp)
     return mock_client
 
 
@@ -53,7 +51,11 @@ class TestBatchTriageValidation:
         mock_client = MagicMock()
         with pytest.raises(ValueError, match="must not be empty"):
             await batch_triage(
-                mock_client, message_ids=[], action="move", value="inbox", config=_CFG,
+                mock_client,
+                message_ids=[],
+                action="move",
+                value="inbox",
+                config=_CFG,
             )
 
     async def test_max_20_messages(self):
@@ -61,14 +63,22 @@ class TestBatchTriageValidation:
         ids = [f"AAMkAG{i}=" for i in range(21)]
         with pytest.raises(ValueError, match="Maximum 20"):
             await batch_triage(
-                mock_client, message_ids=ids, action="move", value="inbox", config=_CFG,
+                mock_client,
+                message_ids=ids,
+                action="move",
+                value="inbox",
+                config=_CFG,
             )
 
     async def test_exactly_20_messages_allowed(self):
         mock_client = _mock_client_with_batch_response(_make_batch_response([200] * 20))
         ids = [f"AAMkAG{i}=" for i in range(20)]
         result = await batch_triage(
-            mock_client, message_ids=ids, action="move", value="inbox", config=_CFG,
+            mock_client,
+            message_ids=ids,
+            action="move",
+            value="inbox",
+            config=_CFG,
         )
         assert result["success_count"] == 20
         assert result["failure_count"] == 0
