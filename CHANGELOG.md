@@ -6,6 +6,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+
+- **The tree is formatted with `ruff format`, and CI enforces it.** The command was documented
+  in `CLAUDE.md` and the README but nothing enforced it, so following it rewrote 49 of 105 files
+  and then failed `ruff check` (#78). Every file under `src/`, `tests/` and `scripts/` is
+  now formatted, and `ci.yml`'s `test` job and `publish.yml` run
+  `ruff format --check src/ tests/ scripts/` beside `ruff check`, which also covers `scripts/`
+  now. Contributors: run `uv run ruff format src/ tests/ scripts/` before pushing.
+
 ### Security
 
 - **The agent is told that mailbox content is not instructions.** Mail, events, contacts and

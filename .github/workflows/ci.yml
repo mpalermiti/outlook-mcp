@@ -32,7 +32,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --all-extras
-      - run: uv run ruff check src/ tests/
+      - run: uv run ruff check src/ tests/ scripts/
+      # `ruff check` passing says nothing about formatting: a separate tool with
+      # a separate verdict. With nothing running this, 49 of 105 files had
+      # drifted from the documented formatter (#78).
+      - run: uv run ruff format --check src/ tests/ scripts/
       - run: uv run pytest --cov=outlook_mcp -v
 
   # Guards the failure mode that shipped 1.12.0 and 1.13.0 broken for five weeks:

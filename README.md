@@ -611,10 +611,10 @@ uv sync --extra dev
 uv run pytest
 
 # Lint
-uv run ruff check src/ tests/
+uv run ruff check src/ tests/ scripts/
 
-# Format
-uv run ruff format src/ tests/
+# Format (CI fails if `ruff format --check` would change a file)
+uv run ruff format src/ tests/ scripts/
 
 # Run server locally (stdio)
 uv run outlook-mcp

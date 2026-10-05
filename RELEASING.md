@@ -62,7 +62,8 @@ Double-gated on purpose: the marker is deselected by default **and** the tier sk
 
 ```bash
 uv run pytest --tb=no -q
-uv run ruff check src/ tests/
+uv run ruff check src/ tests/ scripts/
+uv run ruff format --check src/ tests/ scripts/
 ```
 
 The default run is the offline unit suite only — `addopts` deselects the `integration`, `live` and `live_write` markers, so this needs no network or token. Expect zero failures; the deselected count is those three tiers, and grows as they do.
