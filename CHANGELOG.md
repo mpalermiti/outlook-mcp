@@ -12,8 +12,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `outlook_download_attachment` opened its target and wrote to it directly. An attachment with
   no content (an attached email, a link to a cloud file) emptied any file already under that
   name before failing; a symlink placed at the target after the path check was written through,
-  so the bytes landed wherever it pointed; and the file was created readable by everyone on the
-  machine. It now writes the way the To Do download always has — to a temp file created
+  so the bytes landed wherever it pointed; and the file got default permissions (0644) rather
+  than owner-only ones — mitigated when the server created the attachments folder, which it
+  makes owner-only. It now writes the way the To Do download always has — to a temp file created
   owner-only, moved into place — and refuses an attachment with no content, or a target that
   cannot land, before anything is touched. The attachment name and content type it reports are
   stripped of control characters, as the To Do download's are, and a carriage return no longer
