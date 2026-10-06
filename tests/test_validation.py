@@ -32,6 +32,23 @@ class TestGraphIdValidation:
     def test_valid_id_with_slashes(self):
         assert validate_graph_id("AAMkAG/test+id=") == "AAMkAG/test+id="
 
+    def test_rejects_a_trailing_newline(self):
+        """`$` with `.match` also matches before one final newline."""
+        with pytest.raises(ValueError):
+            validate_graph_id("AAMkAG123=\n")
+
+
+class TestTrailingNewlines:
+    """Every pattern validator must match the whole string, newline included."""
+
+    def test_email(self):
+        with pytest.raises(ValueError):
+            validate_email("someone@example.com\n")
+
+    def test_phone(self):
+        with pytest.raises(ValueError):
+            validate_phone("555 0100\n")
+
     def test_rejects_empty(self):
         with pytest.raises(ValueError, match="empty"):
             validate_graph_id("")
@@ -308,6 +325,17 @@ class TestOutputSanitization:
 
     def test_strips_null_bytes(self):
         assert sanitize_output("null\x00byte") == "nullbyte"
+
+    def test_a_carriage_return_does_not_survive_a_single_line_field(self):
+        """CR is a control character too: it moves a terminal's cursor to the line start.
+
+        Single-line fields (names, subjects, content types) come from senders,
+        and a newline there already becomes a space; a CR kept slipping through.
+        """
+        assert (
+            sanitize_output("application/pdf\r\nX-Injected: 1") == "application/pdf  X-Injected: 1"
+        )
+        assert "\r" not in sanitize_output("name\roverwritten")
 
 
 class TestTimezoneResolution:

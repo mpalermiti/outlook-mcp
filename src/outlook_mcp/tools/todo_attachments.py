@@ -31,8 +31,6 @@ from __future__ import annotations
 
 import mimetypes
 import os
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -40,7 +38,11 @@ import httpx
 from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.permissions import CATEGORY_TODO_WRITE, check_permission
-from outlook_mcp.tools.mail_attachments import resolve_attachment_path
+from outlook_mcp.tools.mail_attachments import (
+    _validated_download_target,
+    resolve_attachment_path,
+    write_download,
+)
 from outlook_mcp.tools.todo import _iso_datetime, _resolve_list_id
 from outlook_mcp.validation import sanitize_output, validate_graph_id
 
@@ -152,32 +154,6 @@ async def list_task_attachments(
     }
 
 
-def _validated_download_target(save_path: str, attachments_dir: str) -> str:
-    """Refuse a download target that cannot land, before any Graph call.
-
-    Two shapes used to slip past the confinement check and blow up late:
-    ``save_path`` resolving to the attachments directory itself (``"."`` is
-    relative to it, and ``is_relative_to`` is satisfied) sent ``dirname()`` one
-    level *above* the fence, so the temp file landed next to ``config.json``;
-    and a path whose parent does not exist made it all the way through the
-    fetch before ``mkstemp`` raised FileNotFoundError — an OS error whose text
-    never reaches the model. Both are caller-input problems, so both are
-    ValueError, checked before a single byte is requested.
-    """
-    resolved = Path(save_path)
-    if resolved.is_dir():
-        raise ValueError(
-            f"Attachment download target is a directory, not a file: "
-            f"{resolved}. Pass a file path inside {attachments_dir}."
-        )
-    if not resolved.parent.is_dir():
-        raise ValueError(
-            f"Attachment download directory does not exist: {resolved.parent}. "
-            "Create it first — downloads do not create directories on demand."
-        )
-    return save_path
-
-
 async def download_task_attachment(
     graph_client: Any,
     task_id: str,
@@ -217,19 +193,7 @@ async def download_task_attachment(
         )
     content = _verified_content_bytes(attachment, attachment_id)
 
-    fd, tmp_path = tempfile.mkstemp(
-        dir=os.path.dirname(save_path), prefix=".download-", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(content)
-        os.replace(tmp_path, save_path)
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
+    write_download(save_path, content)
 
     return {
         "saved_to": save_path,
