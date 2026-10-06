@@ -6,6 +6,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security
+
+- **A mail attachment download can no longer empty, redirect or expose a file.**
+  `outlook_download_attachment` opened its target and wrote to it directly. An attachment with
+  no content (an attached email, a link to a cloud file) emptied any file already under that
+  name before failing; a symlink placed at the target after the path check was written through,
+  so the bytes landed wherever it pointed; and the file was created readable by everyone on the
+  machine. It now writes the way the To Do download always has — to a temp file created
+  owner-only, moved into place — and refuses an attachment with no content, or a target that
+  cannot land, before anything is touched. The attachment name and content type it reports are
+  stripped of control characters, as the To Do download's are, and a carriage return no longer
+  survives any single-line field.
+
+- **IDs, addresses and phone numbers are validated whole.** The ID, email and phone patterns
+  accepted one trailing newline, so `"inbox\n"` got past `outlook_delete_folder`'s guard on
+  well-known folders. And `outlook_batch_triage` now percent-encodes message IDs in its request
+  URLs, the way every other call already does, so an ID containing `/` stays one path segment.
+
 ## [1.25.0] — 2026-10-05
 
 The rest of the security review that produced 1.24.0. No new tools and no change to what a tool
