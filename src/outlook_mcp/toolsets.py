@@ -5,7 +5,8 @@ registered (see ``server.py``):
 
 1. **Annotations** — every tool gets ``readOnlyHint`` / ``destructiveHint``
    (`ToolAnnotations`) so a client can auto-approve reads and gate destructive
-   ops (delete mail, decline event) without a hardcoded allowlist.
+   ops (delete mail, send mail, an invitation or RSVP) without a hardcoded
+   allowlist.
 
 2. **Config-gated toolsets** — the full tool schemas cost chars/4 proxy tokens
    of client context every turn (the budget test's yardstick and its header
@@ -143,9 +144,21 @@ READ_ONLY: set[str] = {
     "outlook_list_inbox_overrides",
 }
 
-# Tools that delete or irreversibly remove. Everything not read-only and not
-# here is treated as an additive write (destructiveHint=False).
+# Tools whose effect cannot be taken back: they delete, or they send email to
+# someone — an invitation and an RSVP are email too. Everything not read-only
+# and not here is an additive write (destructiveHint=False), which a client may
+# approve without asking, so a tool that can send must never fall through to
+# it. `test_send_tools_are_marked_destructive.py` finds every tool gated on
+# `mail_send` and fails if one is missing here.
 DESTRUCTIVE: set[str] = {
+    "outlook_send_message",
+    "outlook_reply",
+    "outlook_forward",
+    "outlook_send_draft",
+    "outlook_send_with_attachments",
+    "outlook_create_event",
+    "outlook_update_event",
+    "outlook_rsvp",
     "outlook_delete_message",
     "outlook_delete_draft",
     "outlook_delete_event",

@@ -605,3 +605,79 @@ def test_the_repair_for_a_lone_read_only_consent_names_both_keys(tmp_path):
 
     repair = "\n".join(config_repair_lines(exc.value))
     assert "read_only_consent: true needs read_only: true" in repair
+
+
+# ── A misspelt safety key refuses to load ─────────────────────────────────
+#
+# Unknown keys are accepted with a warning, so a config written for a newer
+# release still boots an older one. For three keys that is the wrong way round:
+# `read_only`, `allow_categories` and `read_only_consent` all default to the
+# open side, so `"readOnly": true` — ignored with a line on stderr nobody reads —
+# ran a fully writable server while its operator believed it read-only. A key
+# that is plainly one of those three, misspelt, is refused instead: the server
+# does not start, and the repair names the key it meant.
+
+
+@pytest.mark.parametrize(
+    ("written", "meant"),
+    [
+        ("readOnly", "read_only"),
+        ("read-only", "read_only"),
+        ("readonly", "read_only"),
+        ("READ_ONLY", "read_only"),
+        ("read_onyl", "read_only"),
+        ("allowCategories", "allow_categories"),
+        ("allow_category", "allow_categories"),
+        ("allow-categories", "allow_categories"),
+        ("readOnlyConsent", "read_only_consent"),
+        ("read_only_consnet", "read_only_consent"),
+    ],
+)
+def test_a_misspelt_safety_key_refuses_to_load(tmp_path, written, meant):
+    from pydantic import ValidationError
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"client_id": "x", written: True if "categor" not in written.lower() else []}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError) as exc:
+        load_config(config_dir=str(tmp_path))
+
+    repair = "\n".join(config_repair_lines(exc.value))
+    assert repair.count(repr(written)) >= 1
+    assert f"'{meant}'" in repair
+
+
+@pytest.mark.parametrize("written", ["theme", "time_zone", "client-id", "accounts"])
+def test_other_unknown_keys_still_load_with_a_warning(tmp_path, caplog, written):
+    """Forward compatibility stays for everything that is not a safety key."""
+    (tmp_path / "config.json").write_text(
+        json.dumps({"client_id": "x", written: "anything"}), encoding="utf-8"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        loaded = load_config(config_dir=str(tmp_path))
+
+    assert loaded.client_id == "x"
+    assert written in caplog.text
+
+
+def test_the_correctly_spelt_safety_keys_load(tmp_path):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "client_id": "x",
+                "read_only": True,
+                "read_only_consent": True,
+                "allow_categories": ["calendar_write"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config_dir=str(tmp_path))
+
+    assert loaded.read_only is True
+    assert loaded.read_only_consent is True
+    assert loaded.allow_categories == ["calendar_write"]

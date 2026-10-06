@@ -34,6 +34,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   before it is unpacked. `scripts/install-mcp-publisher.sh` is the one place the pin lives; a
   new CI job runs it on every push.
 
+- **Tools that can send email are marked destructive.** MCP clients read the tool annotations to
+  decide what to ask about, and `destructiveHint: false` means "only adds to your own data" — a
+  write a client may approve without asking. The five send tools, `outlook_rsvp`, and
+  `outlook_create_event` / `outlook_update_event` (an invitation is an email) were all marked
+  that way, though nothing they send can be taken back. All eight now say `destructiveHint:
+  true`. A test finds every tool gated on `mail_send` and fails if one is not marked, so a new
+  send tool cannot fall through.
+
+- **A misspelt safety key stops the server instead of being ignored.** An unknown key in
+  `config.json` is accepted with a warning, so a config written for a newer release still boots
+  an older one. For `read_only`, `allow_categories` and `read_only_consent` that fails open:
+  their defaults are the permissive ones, so `"readOnly": true` — warned about on stderr and
+  ignored — ran a fully writable server its operator believed was read-only. A key that is
+  plainly one of these three in another spelling (`readOnly`, `read-only`, `allowCategories`) or
+  with a one-or-two-letter slip (`read_onyl`, `allow_category`) is now refused, and the repair
+  names the key it meant. Every other unknown key still loads with a warning.
+
 ## [1.24.0] — 2026-10-04
 
 A security release. A review of the code since 1.23.0 found no problem in any contributor's change

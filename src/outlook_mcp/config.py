@@ -1,5 +1,6 @@
 """Config file management for outlook-mcp."""
 
+import difflib
 import locale
 import logging
 import os
@@ -68,6 +69,33 @@ _LEGACY_KEYS = {
 }
 
 
+# Keys whose default is the open side: absent, the server is writable, every
+# write category is allowed, and sign-in asks for write access. An unknown key
+# is normally accepted with a warning (a newer release's config must still boot
+# an older one), but a misspelling of one of these is refused instead — ignoring
+# `"readOnly": true` ran a writable server its operator believed was read-only.
+_SAFETY_KEYS = ("read_only", "allow_categories", "read_only_consent")
+
+
+def _squash(key: str) -> str:
+    """`readOnly`, `read-only`, `READ_ONLY` and `readonly` all squash to `readonly`."""
+    return "".join(ch for ch in key.lower() if ch.isalnum())
+
+
+def _misspelt_safety_key(key: str) -> str | None:
+    """The safety key an unknown `key` plainly means, or None.
+
+    A different spelling of the same words, or a one-or-two-letter slip
+    (`difflib` ratio 0.8 or better). Deliberately narrow: only these three keys,
+    so every other unknown key keeps loading with a warning.
+    """
+    for safety_key in _SAFETY_KEYS:
+        if _squash(key) == _squash(safety_key):
+            return safety_key
+    close = difflib.get_close_matches(key.lower(), _SAFETY_KEYS, n=1, cutoff=0.8)
+    return close[0] if close else None
+
+
 class Config(BaseModel):
     """Outlook MCP server configuration."""
 
@@ -130,12 +158,22 @@ class Config(BaseModel):
         release should still boot an older one), but each one is named on
         the way out. Known-legacy keys get the same treatment with a pointer
         to what replaced them.
+
+        The exception is a misspelt safety key (see ``_SAFETY_KEYS``), whose
+        default is the open side: that one refuses the load, so the server does
+        not start with a safety setting silently missing.
         """
         if not isinstance(data, dict):
             return data
         for key in data:
             if key in _LEGACY_KEYS:
                 logger.warning("Config key %r ignored: %s.", key, _LEGACY_KEYS[key])
+            elif key not in cls.model_fields and (meant := _misspelt_safety_key(key)):
+                raise ValueError(
+                    f"config key {key!r} looks like {meant!r} misspelt. {meant!r} is a "
+                    "safety setting whose default is the permissive one, so the server "
+                    f"will not start with it ignored. Rename the key to {meant!r}."
+                )
             elif key not in cls.model_fields:
                 logger.warning(
                     "Unknown config key %r ignored — supported keys: %s.",
