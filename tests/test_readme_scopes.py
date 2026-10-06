@@ -24,9 +24,7 @@ def _readme_registration_scopes() -> set[str]:
     elsewhere in the README never leaks into the set.
     """
     text = README.read_text(encoding="utf-8")
-    m = re.search(
-        r"^5\. Go to \*\*API permissions\*\*.*?\n\n", text, re.MULTILINE | re.DOTALL
-    )
+    m = re.search(r"^5\. Go to \*\*API permissions\*\*.*?\n\n", text, re.MULTILINE | re.DOTALL)
     assert m, "README step 5 (API permissions) not found — was it renumbered or moved?"
     scopes: set[str] = set()
     for backticked in re.findall(r"`([^`]+)`", m.group(0)):
