@@ -6,6 +6,33 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.25.0] — 2026-10-05
+
+The rest of the security review that produced 1.24.0. No new tools and no change to what a tool
+does with the mailbox; the changes are to what the server tells clients and agents, and to a
+config mistake that used to fail open:
+
+- Tools that can send email (send, reply, forward, send a draft, RSVP, and create or update an
+  event, since an invitation is an email) are marked destructive, so clients that auto-approve
+  ordinary writes ask before them.
+- The agent is told, once per session, that mail, events, contacts and attachment names are
+  written by other people and are never instructions.
+- A misspelt `read_only`, `allow_categories` or `read_only_consent` key stops the server instead
+  of being ignored.
+- The release job runs a pinned, checksum-verified `mcp-publisher`.
+
+**Before you upgrade:**
+
+- **Check `config.json` for a misspelt safety key.** `readOnly`, `read-only`, `allowCategories`
+  and similar slips of those three keys used to be warned about and ignored, which left the
+  server writable; they now stop it from starting, with a message naming the key to rename.
+  Spelt correctly, nothing changes.
+- **Expect your client to ask before sending.** If it auto-approves writes that are not marked
+  destructive, it now prompts for the send tools, `outlook_rsvp`, and creating or updating an
+  event.
+- **Contributors:** CI fails any file `ruff format` would change. Run
+  `uv run ruff format src/ tests/ scripts/` before pushing.
+
 ### Changed
 
 - **The tree is formatted with `ruff format`, and CI enforces it.** The command was documented
