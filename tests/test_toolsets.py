@@ -73,8 +73,19 @@ def test_delete_tool_is_destructive():
     assert ann.destructive_hint is True
 
 
-def test_send_tool_is_additive_write():
+def test_send_tool_is_destructive():
+    """Sending is irreversible and leaves the mailbox: not an "additive" write.
+
+    Clients read `destructiveHint=False` as safe to auto-approve among writes,
+    and an email cannot be unsent (see test_send_tools_are_marked_destructive).
+    """
     ann = toolsets.annotation_for("outlook_send_message")
+    assert ann.read_only_hint is False
+    assert ann.destructive_hint is True
+
+
+def test_an_additive_write_is_not_destructive():
+    ann = toolsets.annotation_for("outlook_create_contact")
     assert ann.read_only_hint is False
     assert ann.destructive_hint is False
 
