@@ -1,6 +1,7 @@
 """Tests for mail attachment tools."""
 
 import os
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -599,3 +600,153 @@ class TestDraftAttachmentToolsRefuseNonDrafts:
             )
 
         att_builder.delete.assert_not_called()
+
+
+# ── The mail download writes the way the To Do one does ───────────────────
+# It used to `open(save_path, "wb")` and write: an existing file was emptied
+# before the bytes were known good, a symlink placed at the target after the
+# path check was written through, the file got the umask's mode (0644), and a
+# target that could never land surfaced as an OS error the model never sees.
+
+
+def _client_returning(attachment, on_get=None):
+    """A client whose attachment GET returns `attachment`, optionally running `on_get` first."""
+
+    async def _get():
+        if on_get is not None:
+            on_get()
+        return attachment
+
+    client = MagicMock()
+    builder = client.me.messages.by_message_id.return_value.attachments.by_attachment_id
+    builder.return_value.get = AsyncMock(side_effect=_get)
+    return client, builder.return_value.get
+
+
+def _file_attachment(content: bytes | None, name: str = "report.pdf"):
+    att = MagicMock()
+    att.name = name
+    att.size = len(content or b"")
+    att.content_type = "application/pdf"
+    att.content_bytes = content
+    return att
+
+
+class TestDownloadWritesSafely:
+    async def test_an_attachment_with_no_content_leaves_the_existing_file_alone(self, tmp_path):
+        existing = tmp_path / "report.pdf"
+        existing.write_bytes(b"the copy already here")
+        client, _ = _client_returning(_file_attachment(None))
+
+        with pytest.raises(ValueError, match="Nothing was written"):
+            await download_attachment(
+                client,
+                message_id="AAMkAG123=",
+                attachment_id="att1",
+                save_path=str(existing),
+                config=Config(attachments_dir=str(tmp_path)),
+            )
+
+        assert existing.read_bytes() == b"the copy already here"
+
+    async def test_an_attached_email_or_link_is_refused_with_a_reason(self, tmp_path):
+        """An item or reference attachment has no `content_bytes` at all."""
+        item = MagicMock(spec=["name", "size", "content_type", "odata_type"])
+        item.name = "Fwd: invoice"
+        item.odata_type = "#microsoft.graph.itemAttachment"
+        client, _ = _client_returning(item)
+
+        with pytest.raises(ValueError, match="no file content"):
+            await download_attachment(
+                client,
+                message_id="AAMkAG123=",
+                attachment_id="att1",
+                save_path="invoice.eml",
+                config=Config(attachments_dir=str(tmp_path)),
+            )
+
+        assert not (tmp_path / "invoice.eml").exists()
+
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="os.chmod on Windows honours only the read-only attribute (#85).",
+    )
+    async def test_the_saved_file_is_readable_by_its_owner_only(self, tmp_path):
+        client, _ = _client_returning(_file_attachment(b"%PDF"))
+
+        result = await download_attachment(
+            client,
+            message_id="AAMkAG123=",
+            attachment_id="att1",
+            save_path="report.pdf",
+            config=Config(attachments_dir=str(tmp_path)),
+        )
+
+        assert oct(os.stat(result["saved_to"]).st_mode)[-3:] == "600"
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+    async def test_a_symlink_planted_after_the_check_is_replaced_not_written_through(
+        self, tmp_path
+    ):
+        """The path is checked, then Graph is asked, then the file is written.
+
+        A symlink put at the target in between must not redirect the write:
+        the bytes land in a new file at that name, and what the link pointed
+        at is untouched.
+        """
+        attachments = tmp_path / "attachments"
+        attachments.mkdir()
+        outside = tmp_path / "shell-profile"
+        outside.write_text("export PATH=/usr/bin\n")
+        target = attachments / "report.pdf"
+
+        def plant_symlink():
+            target.symlink_to(outside)
+
+        client, _ = _client_returning(_file_attachment(b"attacker bytes"), on_get=plant_symlink)
+
+        await download_attachment(
+            client,
+            message_id="AAMkAG123=",
+            attachment_id="att1",
+            save_path="report.pdf",
+            config=Config(attachments_dir=str(attachments)),
+        )
+
+        assert outside.read_text() == "export PATH=/usr/bin\n"
+        assert not target.is_symlink()
+        assert target.read_bytes() == b"attacker bytes"
+
+    @pytest.mark.parametrize("save_path", [".", "missing-subfolder/report.pdf"])
+    async def test_a_target_that_cannot_land_is_refused_before_graph_is_asked(
+        self, tmp_path, save_path
+    ):
+        client, get = _client_returning(_file_attachment(b"%PDF"))
+
+        with pytest.raises(ValueError):
+            await download_attachment(
+                client,
+                message_id="AAMkAG123=",
+                attachment_id="att1",
+                save_path=save_path,
+                config=Config(attachments_dir=str(tmp_path)),
+            )
+
+        get.assert_not_called()
+
+    async def test_the_name_and_type_it_reports_are_sanitised(self, tmp_path):
+        """Both come from the sender; the To Do twin already strips control characters."""
+        att = _file_attachment(b"%PDF", name="report\x1b[31m\x07.pdf")
+        att.content_type = "application/pdf\r\nX-Injected: 1"
+        client, _ = _client_returning(att)
+
+        result = await download_attachment(
+            client,
+            message_id="AAMkAG123=",
+            attachment_id="att1",
+            save_path="report.pdf",
+            config=Config(attachments_dir=str(tmp_path)),
+        )
+
+        assert result["name"] == "report.pdf"
+        assert "\r" not in result["content_type"] and "\n" not in result["content_type"]

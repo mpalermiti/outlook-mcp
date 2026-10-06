@@ -309,6 +309,17 @@ class TestOutputSanitization:
     def test_strips_null_bytes(self):
         assert sanitize_output("null\x00byte") == "nullbyte"
 
+    def test_a_carriage_return_does_not_survive_a_single_line_field(self):
+        """CR is a control character too: it moves a terminal's cursor to the line start.
+
+        Single-line fields (names, subjects, content types) come from senders,
+        and a newline there already becomes a space; a CR kept slipping through.
+        """
+        assert (
+            sanitize_output("application/pdf\r\nX-Injected: 1") == "application/pdf  X-Injected: 1"
+        )
+        assert "\r" not in sanitize_output("name\roverwritten")
+
 
 class TestTimezoneResolution:
     """A zone name needs a time zone database; say so when there isn't one.

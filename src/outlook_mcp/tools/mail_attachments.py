@@ -5,6 +5,7 @@ from __future__ import annotations
 import mimetypes
 import ntpath
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from outlook_mcp.permissions import (
     check_permission,
 )
 from outlook_mcp.tools.mail_drafts import require_draft
-from outlook_mcp.validation import validate_email, validate_graph_id
+from outlook_mcp.validation import sanitize_output, validate_email, validate_graph_id
 
 # 3MB threshold — files above this use upload sessions
 _LARGE_FILE_THRESHOLD = 3 * 1024 * 1024
@@ -171,6 +172,57 @@ async def list_attachments(
     }
 
 
+def _validated_download_target(save_path: str, attachments_dir: str) -> str:
+    """Refuse a download target that cannot land, before any Graph call.
+
+    Two shapes used to slip past the confinement check and blow up late:
+    ``save_path`` resolving to the attachments directory itself (``"."`` is
+    relative to it, and ``is_relative_to`` is satisfied) sent ``dirname()`` one
+    level *above* the fence, so the temp file landed next to ``config.json``;
+    and a path whose parent does not exist made it all the way through the
+    fetch before ``mkstemp`` raised FileNotFoundError — an OS error whose text
+    never reaches the model. Both are caller-input problems, so both are
+    ValueError, checked before a single byte is requested.
+    """
+    resolved = Path(save_path)
+    if resolved.is_dir():
+        raise ValueError(
+            f"Attachment download target is a directory, not a file: "
+            f"{resolved}. Pass a file path inside {attachments_dir}."
+        )
+    if not resolved.parent.is_dir():
+        raise ValueError(
+            f"Attachment download directory does not exist: {resolved.parent}. "
+            "Create it first — downloads do not create directories on demand."
+        )
+    return save_path
+
+
+def write_download(save_path: str, content: bytes) -> None:
+    """Land downloaded bytes at ``save_path`` atomically, readable by the owner only.
+
+    All bytes are in hand before this is called, and they go to a temp file in
+    the target's own directory (``mkstemp``: created 0600, exclusively) that
+    ``os.replace`` then moves into place. So a failed write never truncates a
+    file already under that name, and a symlink planted at the target after the
+    path check is replaced rather than written through — the bytes cannot be
+    redirected to whatever it pointed at. Shared by the mail and To Do downloads.
+    """
+    fd, tmp_path = tempfile.mkstemp(
+        dir=os.path.dirname(save_path), prefix=".download-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+        os.replace(tmp_path, save_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
 async def download_attachment(
     graph_client: Any,
     message_id: str,
@@ -187,6 +239,7 @@ async def download_attachment(
     message_id = validate_graph_id(message_id)
     attachment_id = validate_graph_id(attachment_id)
     save_path = resolve_attachment_path(save_path, config.attachments_dir)
+    save_path = _validated_download_target(save_path, config.attachments_dir)
 
     attachment = (
         await graph_client.me.messages.by_message_id(message_id)
@@ -196,15 +249,24 @@ async def download_attachment(
     # The msgraph SDK (Kiota) already base64-decodes contentBytes into raw bytes
     # during deserialization, so content_bytes is the raw file content. Decoding
     # again corrupts binary files / raises UnicodeDecodeError (issue #25).
-    content = attachment.content_bytes
+    # An attached email or a link to a cloud file is a different model with no
+    # content_bytes at all; a file attachment can come back with None. Either
+    # way there is nothing to save, and nothing is touched.
+    content = getattr(attachment, "content_bytes", None)
+    if content is None:
+        kind = getattr(attachment, "odata_type", None)
+        kind = f" ({kind})" if isinstance(kind, str) else ""
+        raise ValueError(
+            f"Attachment {attachment_id} has no file content to save{kind} — it may "
+            "be an attached email or a link to a cloud file. Nothing was written."
+        )
 
-    with open(save_path, "wb") as f:
-        f.write(content)
+    write_download(save_path, content)
     return {
         "saved_to": save_path,
-        "name": attachment.name,
+        "name": sanitize_output(attachment.name or ""),
         "size": attachment.size,
-        "content_type": attachment.content_type,
+        "content_type": sanitize_output(attachment.content_type or ""),
     }
 
 

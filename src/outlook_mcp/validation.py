@@ -469,7 +469,9 @@ def sanitize_output(text: str, multiline: bool = False) -> str:
     text = _ANSI_ESCAPE.sub("", text)
     text = _CONTROL_CHARS.sub("", text)
     if not multiline:
-        text = text.replace("\n", " ").replace("\t", " ")
+        # CR as well as LF: a lone CR returns a terminal's cursor to the line
+        # start, so a sender-chosen name could overwrite what is printed before it.
+        text = text.replace("\r", " ").replace("\n", " ").replace("\t", " ")
     else:
         text = text.replace("\t", " ")
     return text
