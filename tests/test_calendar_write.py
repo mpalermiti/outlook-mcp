@@ -2121,6 +2121,123 @@ class TestEventTimezone:
         assert patched.start.time_zone == "Europe/London"
 
 
+def _one_day_series_ending_thursday():
+    """A UTC series at Thursday 23:00Z whose ``endDate`` range ends that same Thursday.
+
+    In Tokyo that start is Friday 08:00, so re-anchoring it there moves the
+    first occurrence's local date past the end with nobody typing a date.
+    """
+    return build_event_recurrence(
+        {
+            "pattern": {"type": "daily", "interval": 1},
+            "range": {"type": "endDate", "endDate": "2026-11-05"},
+        },
+        start="2026-11-05T23:00:00Z",
+        zone="UTC",
+    )
+
+
+def _thursday_evening_master():
+    stored = _one_day_series_ending_thursday()
+    current = _current_event(
+        date_time="2026-11-05T23:00:00.0000000",
+        start_zone="UTC",
+        event_type="seriesMaster",
+        recurrence=stored,
+    )
+    return stored, *_series_master_builder(stored, current=current)
+
+
+class TestARangeThatEndsBeforeItBegins:
+    """#86 on every route into ``_reconcile_range``: refused, and nothing sent.
+
+    ``endDate`` is never moved to make room — extending a series is not what
+    the caller asked for — and the refusal is ours rather than Graph's
+    ``400 StartDateV2 should be earlier or equal to EndDateV2``.
+    """
+
+    async def test_a_zone_re_anchor_that_crosses_midnight_is_refused(self):
+        """The re-send: the caller typed neither a new date nor a range.
+
+        Same instant, new zone — Thursday 23:00Z is Friday 08:00 in Tokyo, a
+        day past the series' end. A zone test that never crosses midnight
+        cannot see this.
+        """
+        _, builder, mock_client = _thursday_evening_master()
+
+        with pytest.raises(ValueError) as excinfo:
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-11-06T08:00:00",
+                end="2026-11-06T08:30:00",
+                timezone="Asia/Tokyo",
+                config=_CFG,
+            )
+
+        assert "range.endDate (2026-11-05)" in str(excinfo.value)
+        assert "first occurrence (2026-11-06)" in str(excinfo.value)
+        builder.patch.assert_not_called()
+
+    async def test_a_zone_re_anchor_that_keeps_the_date_is_sent(self):
+        """The control: London in November is UTC+0, so the date holds and the range is valid.
+
+        Without it, the refusal above could be the fixture's rather than the check's.
+        """
+        from msgraph.generated.models.recurrence_range_type import RecurrenceRangeType
+
+        _, builder, mock_client = _thursday_evening_master()
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-05T23:00:00",
+            end="2026-11-05T23:30:00",
+            timezone="Europe/London",
+            config=_CFG,
+        )
+
+        sent = builder.patch.call_args[0][0].recurrence.range
+        assert sent.type is RecurrenceRangeType.EndDate
+        assert sent.start_date == date(2026, 11, 5)
+        assert sent.end_date == date(2026, 11, 5)
+
+    async def test_an_echoed_recurrence_with_a_start_past_its_end_is_refused(self):
+        """Update with the caller's own recurrence: ``outlook_get_event``'s, handed back."""
+        stored, builder, mock_client = _thursday_evening_master()
+
+        with pytest.raises(ValueError, match=r"range\.endDate \(2026-11-05\)"):
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-11-12T23:00:00",
+                end="2026-11-12T23:30:00",
+                recurrence=serialize_recurrence(stored),
+                config=_CFG,
+            )
+
+        builder.patch.assert_not_called()
+
+    async def test_create_with_a_range_ending_before_the_start_is_refused(self):
+        """Create: no network at all."""
+        mock_client = AsyncMock()
+
+        with pytest.raises(ValueError, match=r"range\.endDate \(2027-03-26\)"):
+            await create_event(
+                mock_client,
+                subject="Ends before it begins",
+                start="2027-04-05T09:00:00Z",
+                end="2027-04-05T09:30:00Z",
+                recurrence={
+                    "pattern": {"type": "daily", "interval": 1},
+                    "range": {"type": "endDate", "endDate": "2027-03-26"},
+                },
+                config=_CFG,
+            )
+
+        mock_client.me.events.post.assert_not_called()
+
+
 class TestShowAs:
     """``show_as`` is Graph's ``freeBusyStatus`` — Outlook's "Show as" field.
 

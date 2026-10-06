@@ -6,6 +6,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **A recurring event whose range would end before it begins is refused, naming both dates.**
+  `range.startDate` is re-derived from the event's start, while `range.endDate` is the caller's,
+  so moving a start past the series end built a range Graph refuses with
+  `400 ErrorInvalidParameter: StartDateV2 should be earlier or equal to EndDateV2` (#86). That
+  now fails before anything is sent, on create, on update, and on a time zone change that
+  re-sends the series and moves its first day past the end. `endDate` is never moved to make
+  room, because extending a series is not what was asked for. `numbered` and `noEnd` ranges are
+  unaffected.
+
 ### Security
 
 - **A mail attachment download can no longer empty, redirect or expose a file.**
