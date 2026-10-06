@@ -32,6 +32,23 @@ class TestGraphIdValidation:
     def test_valid_id_with_slashes(self):
         assert validate_graph_id("AAMkAG/test+id=") == "AAMkAG/test+id="
 
+    def test_rejects_a_trailing_newline(self):
+        """`$` with `.match` also matches before one final newline."""
+        with pytest.raises(ValueError):
+            validate_graph_id("AAMkAG123=\n")
+
+
+class TestTrailingNewlines:
+    """Every pattern validator must match the whole string, newline included."""
+
+    def test_email(self):
+        with pytest.raises(ValueError):
+            validate_email("someone@example.com\n")
+
+    def test_phone(self):
+        with pytest.raises(ValueError):
+            validate_phone("555 0100\n")
+
     def test_rejects_empty(self):
         with pytest.raises(ValueError, match="empty"):
             validate_graph_id("")

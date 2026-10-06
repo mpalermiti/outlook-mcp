@@ -163,9 +163,24 @@ class TestBatchTriageSingleRequest:
         body = json.loads(req.content.decode("utf-8"))
         assert len(body["requests"]) == 2
         assert body["requests"][0]["method"] == "POST"
-        assert body["requests"][0]["url"] == "/me/messages/AAMkAG1=/move"
+        assert body["requests"][0]["url"] == "/me/messages/AAMkAG1%3D/move"
         assert body["requests"][0]["body"] == {"destinationId": "inbox"}
-        assert body["requests"][1]["url"] == "/me/messages/AAMkAG2=/move"
+        assert body["requests"][1]["url"] == "/me/messages/AAMkAG2%3D/move"
+
+    @pytest.mark.parametrize(
+        "action,value",
+        [("move", "inbox"), ("flag", "flagged"), ("categorize", "Red"), ("mark_read", True)],
+    )
+    async def test_an_id_stays_one_path_segment(self, action, value):
+        """IDs may contain `/` and `+`. Encoded the way the typed SDK encodes them
+        on every other call, so `AA/BB` cannot become two segments of the URL."""
+        mock_client = _mock_client_with_batch_response(_make_batch_response([200]))
+        await batch_triage(
+            mock_client, message_ids=["AA/BB+CC="], action=action, value=value, config=_CFG
+        )
+        req = mock_client.request_adapter.get_http_response_message.call_args.args[0]
+        url = json.loads(req.content.decode("utf-8"))["requests"][0]["url"]
+        assert url.startswith("/me/messages/AA%2FBB%2BCC%3D")
 
 
 class TestBatchTriageActions:

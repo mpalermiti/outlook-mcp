@@ -38,6 +38,9 @@ def _known_zone_keys() -> frozenset[str]:
 _warned_legacy_config_zone: set[str] = set()
 
 # Graph API entity ID pattern: alphanumeric, =, +, /, -
+# The three patterns below are applied with `fullmatch`, never `match`: with
+# `match`, the closing `$` also matches before one final newline, so
+# "AAMk…=\n" and "a@b.com\n" validated.
 _GRAPH_ID_RE = re.compile(r"^[a-zA-Z0-9_=+/\-]{1,1024}$")
 
 # Email pattern (simplified but sufficient for validation)
@@ -167,14 +170,14 @@ def validate_graph_id(value: str) -> str:
         raise ValueError("Graph ID must not be empty")
     if len(value) > 1024:
         raise ValueError("Graph ID too long (max 1024 chars)")
-    if not _GRAPH_ID_RE.match(value):
+    if not _GRAPH_ID_RE.fullmatch(value):
         raise ValueError(f"Graph ID contains invalid characters: {value[:50]}")
     return value
 
 
 def validate_email(value: str) -> str:
     """Validate an email address."""
-    if not _EMAIL_RE.match(value):
+    if not _EMAIL_RE.fullmatch(value):
         raise ValueError(f"Invalid email address: {value[:50]}")
     return value
 
@@ -459,7 +462,7 @@ def validate_folder_name(name: str) -> str:
 
 def validate_phone(value: str) -> str:
     """Validate a phone number."""
-    if not _PHONE_RE.match(value):
+    if not _PHONE_RE.fullmatch(value):
         raise ValueError(f"Invalid phone number: {value[:30]}")
     return value
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import quote
 
 from kiota_abstractions.method import Method
 from kiota_abstractions.request_information import RequestInformation
@@ -19,13 +20,18 @@ _VALID_FLAG_STATUSES = ("flagged", "complete", "notFlagged")
 
 
 def _build_subrequest(index: int, message_id: str, action: str, value: Any) -> dict:
-    """Map a (message_id, action, value) tuple to a Graph batch sub-request."""
+    """Map a (message_id, action, value) tuple to a Graph batch sub-request.
+
+    The id is percent-encoded into the URL, exactly as the typed SDK encodes it
+    on every other call and as `mail_read`'s own `$batch` does: an id may carry
+    `/` or `+`, and unencoded a `/` would split it into two path segments.
+    """
     request_id = str(index)
     if action == "move":
         return {
             "id": request_id,
             "method": "POST",
-            "url": f"/me/messages/{message_id}/move",
+            "url": f"/me/messages/{quote(message_id, safe='')}/move",
             "body": {"destinationId": value},
             "headers": {"Content-Type": "application/json"},
         }
@@ -33,7 +39,7 @@ def _build_subrequest(index: int, message_id: str, action: str, value: Any) -> d
         return {
             "id": request_id,
             "method": "PATCH",
-            "url": f"/me/messages/{message_id}",
+            "url": f"/me/messages/{quote(message_id, safe='')}",
             "body": {"flag": {"flagStatus": value}},
             "headers": {"Content-Type": "application/json"},
         }
@@ -42,7 +48,7 @@ def _build_subrequest(index: int, message_id: str, action: str, value: Any) -> d
         return {
             "id": request_id,
             "method": "PATCH",
-            "url": f"/me/messages/{message_id}",
+            "url": f"/me/messages/{quote(message_id, safe='')}",
             "body": {"categories": categories},
             "headers": {"Content-Type": "application/json"},
         }
@@ -51,7 +57,7 @@ def _build_subrequest(index: int, message_id: str, action: str, value: Any) -> d
         return {
             "id": request_id,
             "method": "PATCH",
-            "url": f"/me/messages/{message_id}",
+            "url": f"/me/messages/{quote(message_id, safe='')}",
             "body": {"isRead": is_read},
             "headers": {"Content-Type": "application/json"},
         }
