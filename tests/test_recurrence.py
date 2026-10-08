@@ -85,6 +85,75 @@ class TestBuildEventRecurrenceDict:
         assert pr.range.start_date == date(2026, 9, 7)
 
 
+class TestARangeThatEndsBeforeItBegins:
+    """#86: ``startDate`` is re-derived from the start and ``endDate`` is the caller's.
+
+    So a start past the series end used to build a range ending before it
+    began, which Graph refuses with ``400 ErrorInvalidParameter: StartDateV2
+    should be earlier or equal to EndDateV2``. The refusal is ours now, and it
+    never moves ``endDate``: extending a series is not what the caller asked for.
+    """
+
+    _START = "2027-04-05T09:00:00"
+
+    @staticmethod
+    def _ending(end: str, range_type: str = "endDate", **extra) -> dict:
+        return {
+            "pattern": {"type": "daily", "interval": 1},
+            "range": {"type": range_type, "endDate": end, **extra},
+        }
+
+    def test_an_end_before_the_start_is_refused_naming_both_dates(self):
+        """The issue's exact repro."""
+        with pytest.raises(ValueError) as excinfo:
+            build_event_recurrence(self._ending("2027-03-26"), start=self._START)
+
+        message = str(excinfo.value)
+        assert "range.endDate (2027-03-26)" in message
+        assert "first occurrence (2027-04-05)" in message
+        assert "on or after 2027-04-05" in message
+
+    def test_it_is_refused_when_the_caller_supplied_a_matching_start_date_too(self):
+        """The verified-``startDate`` branch reaches the check, not only the defaulted one."""
+        with pytest.raises(ValueError, match="range.endDate"):
+            build_event_recurrence(
+                self._ending("2027-03-26", startDate="2027-04-05"), start=self._START
+            )
+
+    def test_an_end_on_the_start_day_is_accepted(self):
+        """Graph allows equal dates — a one-day range — so the boundary must pass."""
+        pr = build_event_recurrence(self._ending("2027-04-05"), start=self._START)
+
+        assert pr.range.start_date == date(2027, 4, 5)
+        assert pr.range.end_date == date(2027, 4, 5)
+
+    def test_a_numbered_series_as_graph_reads_it_back_is_accepted(self):
+        """The reason the check reads ``endDate`` only on an ``endDate`` range.
+
+        Graph reads a ``numbered`` series back with ``endDate: "0001-01-01"``,
+        and accepts any ``endDate`` on one and ignores it (verified live
+        2026-10-05). ``serialize_recurrence`` passes the field through, so this
+        is the shape every echo of a numbered series carries — the
+        ``outlook_get_event`` round trip and the zone re-anchor's re-send alike.
+        """
+        pr = build_event_recurrence(
+            self._ending("0001-01-01", "numbered", numberOfOccurrences=2), start=self._START
+        )
+
+        assert pr.range.type is RecurrenceRangeType.Numbered
+        assert pr.range.number_of_occurrences == 2
+
+    def test_a_pascal_case_range_type_is_checked_too(self):
+        """The converter accepts the SDK's member name, so the check has to see it as well."""
+        with pytest.raises(ValueError, match="range.endDate"):
+            build_event_recurrence(self._ending("2027-03-26", "EndDate"), start=self._START)
+
+    def test_a_malformed_end_gets_the_converters_refusal(self):
+        """One wording for a bad date, whichever check reaches it first."""
+        with pytest.raises(ValueError, match="range.endDate must be YYYY-MM-DD"):
+            build_event_recurrence(self._ending("2027-13-01"), start=self._START)
+
+
 class TestShorthands:
     def test_weekly_uses_the_start_weekday(self):
         """'weekly' on a Monday start means every Monday."""

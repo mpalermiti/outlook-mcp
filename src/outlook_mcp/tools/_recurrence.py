@@ -273,36 +273,53 @@ def _expand_shorthand(name: str, start: date) -> dict:
 
 
 def _reconcile_range(payload: dict, start: date) -> dict:
-    """Fill in or verify ``range.startDate`` against the event's first occurrence.
+    """Fill in or verify ``range.startDate``, then check the range does not end first.
 
     Graph requires the range to begin on the same day as the series master and
     returns ErrorInvalidRecurrenceRange otherwise. Callers usually omit it, so
     default it; when they do send one, a mismatch is a mistake worth naming
     here rather than surfacing as an opaque 400.
+
+    ``endDate`` is the caller's, so it is never moved: a start re-derived past
+    it is refused rather than the series silently extended (#86). Every route
+    that builds an event recurrence passes through here — create, update, and
+    the zone re-anchor's re-send — so one check covers all three.
+
+    The check reads ``endDate`` only on an ``endDate`` range, because that is
+    the only type Graph holds it to. A ``numbered`` series reads back carrying
+    ``endDate: "0001-01-01"``, and Graph accepts any ``endDate`` on one and
+    ignores it — so comparing regardless of type would refuse every echo of a
+    numbered series. Verified live 2026-10-05.
     """
     rng = dict(_object(payload.get("range"), "range"))
     rng.setdefault("type", "noEnd")
 
     given = rng.get("startDate")
-    if given is None:
-        rng["startDate"] = start.isoformat()
-        return {**payload, "range": rng}
+    if given is not None:
+        try:
+            parsed = date.fromisoformat(str(given))
+        except ValueError as e:
+            raise ValueError(
+                f"recurrence range.startDate must be YYYY-MM-DD; got {str(given)[:50]!r}"
+            ) from e
 
-    try:
-        parsed = date.fromisoformat(str(given))
-    except ValueError as e:
-        raise ValueError(
-            f"recurrence range.startDate must be YYYY-MM-DD; got {str(given)[:50]!r}"
-        ) from e
+        if parsed != start:
+            raise ValueError(
+                f"recurrence range.startDate ({parsed.isoformat()}) must match the event's start "
+                f"date ({start.isoformat()}); Graph rejects a series whose range begins on a "
+                f"different day than its first occurrence"
+            )
+    rng["startDate"] = start.isoformat()
 
-    if parsed != start:
-        raise ValueError(
-            f"recurrence range.startDate ({parsed.isoformat()}) must match the event's start "
-            f"date ({start.isoformat()}); Graph rejects a series whose range begins on a "
-            f"different day than its first occurrence"
-        )
-
-    rng["startDate"] = parsed.isoformat()
+    if _range_type(rng) == "endDate" and "endDate" in rng:
+        end = _iso_date(rng["endDate"], "range.endDate")
+        if end < start:
+            raise ValueError(
+                f"recurrence range.endDate ({end.isoformat()}) is before the series' first "
+                f"occurrence ({start.isoformat()}), and Graph refuses a range that ends before "
+                f"it begins. Nothing was changed. Pass `recurrence` with a range.endDate on or "
+                f"after {start.isoformat()}, or a numbered or noEnd range."
+            )
     return {**payload, "range": rng}
 
 
@@ -347,20 +364,32 @@ def check_recurrence_shape(recurrence: dict | str) -> None:
     build_patterned_recurrence({**payload, "range": rng})
 
 
-def _pattern_type(pattern: dict) -> str:
-    """The pattern's type in Graph's own spelling, however the caller cased it.
+def _graph_spelling(enum_cls: Any, value: Any) -> str:
+    """``value`` as ``enum_cls``'s member value — Graph's own spelling — however it was cased.
 
     The converter accepts both `weekly` and `Weekly` (the SDK's member name), so
-    anything that branches on the type has to see one spelling, or a PascalCase
-    pattern skips every type-specific comparison and move.
+    anything that branches on a type has to see one spelling, or a PascalCase
+    value skips every type-specific comparison, move and check.
     """
-    from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
-
-    raw = str(pattern.get("type") or "")
-    for member in RecurrencePatternType:
+    raw = str(value or "")
+    for member in enum_cls:
         if member.value.lower() == raw.lower():
             return member.value
     return raw
+
+
+def _pattern_type(pattern: dict) -> str:
+    """The pattern's type in Graph's own spelling, however the caller cased it."""
+    from msgraph.generated.models.recurrence_pattern_type import RecurrencePatternType
+
+    return _graph_spelling(RecurrencePatternType, pattern.get("type"))
+
+
+def _range_type(rng: dict) -> str:
+    """The range's type in Graph's own spelling, however the caller cased it."""
+    from msgraph.generated.models.recurrence_range_type import RecurrenceRangeType
+
+    return _graph_spelling(RecurrenceRangeType, rng.get("type"))
 
 
 def _whole(pattern: dict, field: str) -> int | None:
