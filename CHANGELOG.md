@@ -36,6 +36,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   well-known folders. And `outlook_batch_triage` now percent-encodes message IDs in its request
   URLs, the way every other call already does, so an ID containing `/` stays one path segment.
 
+- **`uv.lock` moves `multidict` to 6.9.1**, past a reference leak in its items-view union and
+  subtraction (GHSA-54p9-h82j-f925, medium), flagged by Dependabot on 2026-10-06. It arrives
+  indirectly, through `aiohttp` and `yarl` under the Graph SDK, and the worst case is memory that
+  is not freed. The lock file governs development, CI and `uv run`; a PyPI install already
+  resolved the fixed version.
+
 ## [1.25.0] — 2026-10-05
 
 The rest of the security review that produced 1.24.0. No new tools and no change to what a tool
