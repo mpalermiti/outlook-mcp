@@ -6,6 +6,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.25.1] — 2026-10-07
+
+A patch release. The last two code items from the 1.24.0 security review, a calendar fix from a
+contributor, and one dependency bump:
+
+- A mail attachment download can no longer empty an existing file, be redirected through a
+  symlink, or leave the saved file readable by other users. It writes the way the To Do
+  download always has.
+- IDs, email addresses and phone numbers are validated as whole strings, and the batch tool
+  percent-encodes message IDs the way every other call does.
+- A recurring event whose range would end before it begins is refused before anything is sent,
+  naming both dates (#86, @neilbrencode).
+- `uv.lock` moves `multidict` past a medium-severity memory leak.
+
+Nothing to do before upgrading.
+
 ### Fixed
 
 - **A recurring event whose range would end before it begins is refused, naming both dates.**
