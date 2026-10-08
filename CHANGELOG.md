@@ -6,6 +6,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.25.1] — 2026-10-07
+
+A patch release. The last two code items from the 1.24.0 security review, a calendar fix from a
+contributor, and one dependency bump:
+
+- A mail attachment download can no longer empty an existing file or be redirected through a
+  symlink, and the saved file is owner-only rather than default permissions. It writes the way
+  the To Do download always has.
+- IDs, email addresses and phone numbers are validated as whole strings, and the batch tool
+  percent-encodes message IDs the way every other call does.
+- A recurring event whose range would end before it begins is refused before anything is sent,
+  naming both dates (#86, @neilbrencode).
+- `uv.lock` moves `multidict` past a medium-severity memory leak.
+
+Nothing to do before upgrading.
+
 ### Fixed
 
 - **A recurring event whose range would end before it begins is refused, naming both dates.**
@@ -35,6 +51,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   accepted one trailing newline, so `"inbox\n"` got past `outlook_delete_folder`'s guard on
   well-known folders. And `outlook_batch_triage` now percent-encodes message IDs in its request
   URLs, the way every other call already does, so an ID containing `/` stays one path segment.
+
+- **`uv.lock` moves `multidict` to 6.9.1**, past a reference leak in its items-view union and
+  subtraction (GHSA-54p9-h82j-f925, medium), flagged by Dependabot on 2026-10-06. It arrives
+  indirectly, through `aiohttp` and `yarl` under the Graph SDK, and the worst case is memory that
+  is not freed. The lock file governs development, CI and `uv run`; a PyPI install already
+  resolved the fixed version.
 
 ## [1.25.0] — 2026-10-05
 
