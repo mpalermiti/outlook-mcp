@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import functools
+import inspect
 import logging
 import os
 import sys
@@ -216,6 +217,9 @@ def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
       ``{code, message, action}`` instead of raw SDK exception text.
     - Re-raise anything else unchanged: a crash is not something we saw coming,
       and its text stays on the server.
+
+    Every tool passes through here, so it also dedents the docstring the SDK
+    publishes as the tool's description.
     """
 
     @functools.wraps(func)
@@ -232,6 +236,13 @@ def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
             except TypeError:
                 # Not a Graph SDK error — bubble the original.
                 raise exc from None
+
+    # Python 3.13 strips a docstring's indentation when it compiles it; 3.10-3.12
+    # keep it, and the SDK sends `__doc__` as it finds it. Without this, clients
+    # on the older versions pay for the indentation on every turn, and the
+    # surface budget measures a different number on each Python.
+    if func.__doc__:
+        wrapper.__doc__ = inspect.cleandoc(func.__doc__)
 
     return wrapper
 
