@@ -337,10 +337,13 @@ _HINT_TABLE: dict[tuple[int, str | None], str] = {
     (404, "ErrorItemNotFound"): (
         "Resource not found. The ID may be stale — re-list to get current IDs."
     ),
+    # Not "nothing was modified" (#96): kiota retries a PATCH after a 503/504, and a
+    # retry of an attempt that had committed carries the old change key and lands here.
     (412, "ErrorIrresolvableConflict"): (
-        "Something else changed the item while this update was in flight, so Graph "
-        "refused it rather than overwrite that change. Nothing was modified — "
-        "re-read the item and send the update again."
+        "The item changed after it was read, so Graph refused this update rather than "
+        "overwrite that change. Usually someone else edited it, but after a retried "
+        "request this change may already have been applied. Re-read the item and check "
+        "before sending the update again."
     ),
     (429, None): (
         "Rate limited by Microsoft Graph. Back off and retry; respect any Retry-After header."

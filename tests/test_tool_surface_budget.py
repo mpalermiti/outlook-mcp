@@ -54,6 +54,15 @@ CHARS_PER_TOKEN = 4
 # above was taken on an interpreter that keeps docstring indentation (3.10-3.12);
 # the same 1.25.1 surface measured 13,243 there and 13,024 on 3.13, which strips
 # it. Compare numbers from here on only with each other. Ceiling unchanged.
+#
+# 13,203 with the contact fixes, on the dedented measure: `job_title` on create
+# and update (#119), then `phone_type` on both and `title` on update (#120,
+# +101), then update's docstring saying `title` is the name prefix, as create's
+# does (+23) — undescribed, models fill it with the job (#119). No raise.
+#
+# 13,261 with `clear_phones` on `outlook_update_contact` and its one-line example
+# (+58): without it, moving a number from mobile to business left a copy in
+# mobile (#120 follow-up). No raise; ~39 tokens of headroom left.
 TOOL_SURFACE_CEILING = 13_300
 
 # `prompts/list` is the cheap half of the bargain struck in 1.20.0: workflow

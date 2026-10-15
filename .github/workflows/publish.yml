@@ -15,6 +15,12 @@ name: Publish
 #   clawhub publish "$(pwd)" --version X.Y.Z --tags latest --changelog "..."
 #
 # One-time PyPI setup is required before this can work. See RELEASING.md.
+#
+# Three jobs, so a token exists only where it is used. `build` runs the suite
+# and every dev dependency and gets no token. `pypi` only uploads what `build`
+# built: no checkout, no repo code. `registry` needs the repo for server.json.
+# Every action is pinned to a commit SHA; tests/test_workflows_are_pinned.py
+# holds both lines.
 
 on:
   release:
@@ -24,16 +30,17 @@ on:
   workflow_dispatch:
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write # lets GitHub vouch for this job to PyPI and the registry
       contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           python-version: "3.13"
 
@@ -72,6 +79,30 @@ jobs:
       - name: Build
         run: uv build
 
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # lets GitHub vouch for this job to PyPI
+
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist
+          path: dist/
+
+      # Only for `uv publish`. No cache: a cache restored into a job that holds
+      # a publish token is a way in for whoever last wrote that cache.
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: false
+
       # No token. PyPI trusted publishing verifies this repo and workflow via
       # OIDC. --check-url makes a re-run skip files already uploaded instead of
       # failing on a duplicate.
@@ -81,11 +112,21 @@ jobs:
             --trusted-publishing always \
             --check-url https://pypi.org/simple/outlook-graph-mcp/
 
+  registry:
+    needs: [build, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # lets GitHub vouch for this job to the MCP registry
+      contents: read
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
       # The registry refuses a version it cannot find on PyPI, and PyPI's index
       # lags its own upload by up to a couple of minutes. Wait rather than race.
       - name: Wait for PyPI to serve the new version
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ needs.build.outputs.version }}"
           for i in $(seq 1 30); do
             CODE=$(curl -s -o /dev/null -w '%{http_code}' \
               "https://pypi.org/pypi/outlook-graph-mcp/$VERSION/json")
@@ -128,7 +169,7 @@ jobs:
 
       - name: Summary
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ needs.build.outputs.version }}"
           {
             echo "### Published $VERSION"
             echo ""

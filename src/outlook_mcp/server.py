@@ -936,8 +936,14 @@ async def outlook_create_contact(
     phone: str | None = None,
     company: str | None = None,
     title: str | None = None,
+    job_title: str | None = None,
+    phone_type: str = "mobile",
 ) -> dict:
-    """Create a new contact with name and optional email, phone, company, title."""
+    """Create a new contact with name and optional email, phone, company, job_title.
+
+    title is the name prefix ("Dr.", "Ms."), shown in the display name — not the job.
+    phone_type: "mobile", "business" or "home".
+    """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await contacts.create_contact(
@@ -948,6 +954,8 @@ async def outlook_create_contact(
         phone,
         company,
         title,
+        job_title,
+        phone_type,
         config=config,
     )
 
@@ -961,15 +969,22 @@ async def outlook_update_contact(
     last_name: str | None = None,
     email: str | None = None,
     phone: str | None = None,
+    phone_type: str = "mobile",
+    title: str | None = None,
+    job_title: str | None = None,
     home_address: dict | None = None,
     business_address: dict | None = None,
     other_address: dict | None = None,
+    clear_phones: list[str] | None = None,
 ) -> dict:
     """Update an existing contact (partial patch — only provided fields change).
 
     An address takes the shape outlook_get_contact returns — any subset of
     {"street", "city", "state", "postal_code", "country_or_region"} — and REPLACES that
     whole address, so pass back every part you want to keep. Omit it to leave it untouched.
+    phone_type ("mobile", "business", "home") picks the field; business/home REPLACE that list.
+    clear_phones empties those types: phone_type="business", clear_phones=["mobile"] moves it.
+    title is the name prefix ("Dr.", "Ms."), shown in the display name — not the job.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -980,9 +995,13 @@ async def outlook_update_contact(
         last_name,
         email,
         phone,
+        phone_type,
+        title,
+        job_title,
         home_address,
         business_address,
         other_address,
+        clear_phones,
         config=config,
     )
 

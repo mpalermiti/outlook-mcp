@@ -98,6 +98,8 @@ gh release create vX.Y.Z --target main --title "vX.Y.Z" --notes "<changelog body
 
 Publishing the release triggers `.github/workflows/publish.yml`, which re-checks the version lockstep, runs tests and lint, builds, publishes to **PyPI**, waits for PyPI's index to catch up, then publishes to the **MCP registry**. Both authenticate through GitHub OIDC — no stored tokens, and no five-minute registry login to race by hand.
 
+It runs as three jobs — `build` (checks, tests, build; no token), `pypi` (uploads the built files and nothing else) and `registry` — so the publishing token exists only in the two jobs that publish. Every action in both workflows is pinned to a commit SHA; Dependabot (`.github/dependabot.yml`, GitHub Actions only) opens PRs to move the pins.
+
 Watch it:
 
 ```bash

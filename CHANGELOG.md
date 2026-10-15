@@ -15,6 +15,51 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   each Python, so a change measured on 3.13 could fit the ceiling locally and fail CI. The
   descriptions are now dedented once, when each tool is registered, and the surface measures
   13,004 on every supported version.
+- **A contact's job title no longer becomes part of its name.** `outlook_create_contact`'s
+  `title` writes Graph's `title`, the name prefix ("Dr.", "Ms."), which Graph folds into the
+  display name — so an agent filling in a business card that passed the person's job there got
+  back "Engineer Jane Doe" (#119). `outlook_create_contact` and `outlook_update_contact` now take
+  `job_title` (Graph's `jobTitle`), `outlook_get_contact` returns it, and `title` is described as
+  the prefix it is. `title` keeps its name and meaning, so existing callers are unaffected.
+  `outlook_update_contact` also takes `title` now, so a job already stuck in the prefix can be
+  corrected in place instead of by deleting and recreating the contact.
+- **A business or home phone number can be saved as one.** `outlook_create_contact` and
+  `outlook_update_contact` wrote every `phone` to `mobilePhone`, so an office number from a
+  business card was saved as a mobile and had to be moved by hand (#120). A new `phone_type`
+  argument (`mobile`, the default, `business` or `home`) files it under the matching Graph field.
+  Graph keeps business and home numbers as lists, and a write replaces that list with the one
+  number given — the same replace-not-merge rule the addresses follow.
+  `outlook_update_contact` also takes `clear_phones`, which empties the types it names, so a
+  number already saved as mobile moves to business in one update instead of leaving a copy
+  behind in mobile.
+- **A refused calendar update no longer claims nothing changed when it may have.** A series
+  update is pinned to the version it read, and Graph answers a stale pin with `412`. The hint
+  said "nothing was modified", but the SDK retries an update after a gateway timeout, and when
+  the first attempt had gone through, the retry is the one refused — so an agent reported a
+  change that landed as a failure (#96). The hint now says the change may already have been
+  applied and to re-read the item before trying again. Retry behaviour is unchanged.
+
+### Security
+
+- **The release pipeline runs only actions it can name exactly.** Every `uses:` in the CI and
+  publish workflows is pinned to a full commit SHA, with the version it was resolved from as a
+  comment; a version tag can be moved by the action's owner, a SHA cannot. Dependabot
+  (GitHub Actions only) opens PRs to move the pins. Publishing is split into three jobs: `build`
+  runs the checks, tests and build with no publishing token; `pypi` only uploads the built files,
+  with no checkout and no cache; `registry` publishes to the MCP registry.
+  `tests/test_workflows_are_pinned.py` holds both lines.
+
+### Documentation
+
+- **The README and SKILL.md match the registered surface again, and a test keeps them there.**
+  `concise` is taken by six read tools, not five (`outlook_read_messages` was missing from
+  both lists); the toolset example loads 28 tools, not "~30"; errors reach the client as a
+  tool error whose text carries the message and hint, not a `{code, message, action}`
+  response; the `allow_categories` table names every tool each category gates (draft
+  attachments, reclassify, Focused Inbox overrides were missing); and the README's roadmap
+  no longer offers inbox rules, which ROADMAP.md records as not viable on personal accounts.
+  `tests/test_docs_match_the_surface.py` pins tool lists, per-section and total counts,
+  toolset groups, the concise list, the category set and the prompts to the code.
 
 ## [1.25.1] — 2026-10-07
 

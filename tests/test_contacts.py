@@ -4,10 +4,12 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from mcp.client import Client
 
 from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.pagination import encode_cursor
+from outlook_mcp.server import mcp
 from outlook_mcp.tools.contacts import (
     _ADDRESS_FIELDS,
     _LIST_SELECT,
@@ -43,6 +45,7 @@ def _make_mock_contact(**overrides):
             "surname",
             "company_name",
             "title",
+            "job_title",
             "department",
             "birthday",
             "email_addresses",
@@ -61,7 +64,8 @@ def _make_mock_contact(**overrides):
     contact.given_name = overrides.get("given_name", "John")
     contact.surname = overrides.get("surname", "Doe")
     contact.company_name = overrides.get("company_name", "Acme")
-    contact.title = overrides.get("title", "Engineer")
+    contact.title = overrides.get("title", "Dr.")
+    contact.job_title = overrides.get("job_title", "Engineer")
     contact.department = overrides.get("department", "")
     contact.birthday = overrides.get("birthday", None)
 
@@ -241,7 +245,8 @@ class TestGetContact:
         assert result["last_name"] == "Doe"
         assert result["display_name"] == "John Doe"
         assert result["company"] == "Acme"
-        assert result["title"] == "Engineer"
+        assert result["title"] == "Dr."
+        assert result["job_title"] == "Engineer"
         assert len(result["email_addresses"]) == 1
         assert result["email_addresses"][0]["address"] == "john@test.com"
         assert result["mobile_phone"] == "+1234567890"
@@ -369,6 +374,61 @@ class TestUpdateContact:
         payload = contact_obj.patch.call_args.args[0]
         assert payload.mobile_phone == "+19998887777"
         assert getattr(payload, "phones", None) is None
+
+    async def test_unknown_phone_type_is_refused(self):
+        """A misspelt type must not fall back to mobile and report success."""
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        with pytest.raises(ValueError, match="phone_type.*mobile, business, home"):
+            await update_contact(
+                mock_client,
+                contact_id="contact123",
+                phone="+19998887777",
+                phone_type="work",
+                config=_CFG,
+            )
+        mock_client.me.contacts.by_contact_id.return_value.patch.assert_not_called()
+
+    async def test_phone_type_without_phone_is_refused(self):
+        """Without a number there is nothing to file under the type — a patch
+        that carried nothing would report "updated" and change nothing (#41's shape)."""
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        with pytest.raises(ValueError, match="phone_type needs phone"):
+            await update_contact(
+                mock_client, contact_id="contact123", phone_type="business", config=_CFG
+            )
+        mock_client.me.contacts.by_contact_id.return_value.patch.assert_not_called()
+
+    async def test_clearing_an_unknown_phone_type_is_refused(self):
+        """A misspelt type would clear nothing and report "updated"."""
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        with pytest.raises(ValueError, match="clear_phones.*mobile, business, home"):
+            await update_contact(
+                mock_client, contact_id="contact123", clear_phones=["work"], config=_CFG
+            )
+        mock_client.me.contacts.by_contact_id.return_value.patch.assert_not_called()
+
+    async def test_clearing_the_type_being_written_is_refused(self):
+        """Write and clear the same field: one of them would be silently lost."""
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        with pytest.raises(ValueError, match="clear_phones.*business"):
+            await update_contact(
+                mock_client,
+                contact_id="contact123",
+                phone="+19998887777",
+                phone_type="business",
+                clear_phones=["business"],
+                config=_CFG,
+            )
+        mock_client.me.contacts.by_contact_id.return_value.patch.assert_not_called()
+
+    async def test_create_refuses_unknown_phone_type(self):
+        mock_client = MagicMock()
+        mock_client.me.contacts.post = AsyncMock()
+        with pytest.raises(ValueError, match="phone_type"):
+            await create_contact(
+                mock_client, first_name="John", phone="+1234567890", phone_type="fax", config=_CFG
+            )
+        mock_client.me.contacts.post.assert_not_called()
 
     async def test_update_validates_id(self):
         """update_contact rejects invalid contact IDs."""
@@ -860,6 +920,7 @@ class TestGetContactAsksGraphForEverything:
             "business_phones",
             "company",
             "title",
+            "job_title",
             "department",
             "birthday",
             "home_address",
@@ -868,3 +929,16 @@ class TestGetContactAsksGraphForEverything:
             "categories",
             "personal_notes",
         }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["outlook_create_contact", "outlook_update_contact"])
+async def test_title_is_described_as_the_name_prefix_where_the_model_reads_it(tool):
+    """#119: an undescribed `title` gets filled with the job. The tool description is the
+    only text a client sees, so both write tools must say what `title` is there."""
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+
+    description = tools[tool].description
+    assert "name prefix" in description
+    assert "not the job" in description

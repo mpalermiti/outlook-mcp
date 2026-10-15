@@ -1,0 +1,10 @@
+# Keeps the SHA pins in .github/workflows current: each PR moves a pin and its
+# `# vX.Y.Z` comment together. GitHub Actions only — Python dependencies are
+# bounded by hand in pyproject.toml, each cap with a comment naming the
+# upstream fix that lifts it, and a bot bump would bypass that.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

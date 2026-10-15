@@ -107,13 +107,18 @@ def test_wrap_404_item_not_found_hint():
     assert "stale" in wrapped.action.lower() or "re-list" in wrapped.action.lower()
 
 
-def test_wrap_412_conflict_says_nothing_changed_and_to_re_read():
+def test_wrap_412_conflict_says_the_change_may_have_landed_and_to_re_read():
     """412 is the one status a caller reaches by losing a race, not by being wrong.
 
     `outlook_update_event` pins its recurrence re-send to the version it read, so
     a concurrent edit conflicts instead of being silently reverted. Graph's own
     message talks about "change keys", which tells an agent nothing about what to
-    do — the hint has to say that nothing was written and the retry is a re-read.
+    do — the hint has to say what may have happened and that the retry is a re-read.
+
+    It must not say "nothing was modified" (#96): kiota retries a PATCH after a
+    503/504, and when the first attempt had committed, the retry carries the old
+    change key and gets this 412 for a change that landed. An agent told nothing
+    happened reports failure for a write that succeeded.
     """
     exc = _make_odata_error(
         412,
@@ -124,10 +129,10 @@ def test_wrap_412_conflict_says_nothing_changed_and_to_re_read():
     wrapped = wrap_graph_error(exc)
     assert wrapped.status_code == 412
     assert wrapped.action is not None
-    # Both halves matter: a retry hint that does not say the write was refused
-    # invites the agent to assume a partial update it then has to reconcile.
-    assert "nothing was modified" in wrapped.action.lower()
-    assert "re-read" in wrapped.action.lower()
+    action = wrapped.action.lower()
+    assert "nothing was modified" not in action
+    assert "may already have been applied" in action
+    assert "re-read" in action
 
 
 def test_wrap_429_rate_limit_hint():

@@ -117,6 +117,36 @@ async def test_graph_sdk_error_hint_reaches_the_client():
 
 
 @pytest.mark.asyncio
+async def test_pinned_write_conflict_hint_reaches_the_client():
+    """A 412 on a pinned write may follow a retry of a write that landed (#96).
+
+    The hint the model reads must say so — "nothing was modified" there makes an
+    agent report a successful update as a failure — and must send it to re-read
+    before trying again.
+    """
+    from msgraph.generated.models.o_data_errors.main_error import MainError
+    from msgraph.generated.models.o_data_errors.o_data_error import ODataError
+
+    def _odata_412():
+        inner = MainError()
+        inner.code = "ErrorIrresolvableConflict"
+        inner.message = "The change key passed in the request does not match."
+
+        err = ODataError()
+        err.response_status_code = 412
+        err.error = inner
+        return err
+
+    is_error, text = await _text_the_model_sees(_odata_412)
+
+    assert is_error is True
+    assert "change key" in text
+    assert "may already have been applied" in text
+    assert "Re-read the item" in text
+    assert "Nothing was modified" not in text
+
+
+@pytest.mark.asyncio
 async def test_unexpected_exception_stays_generic():
     """A crash is not an anticipated failure: its text stays on the server."""
 

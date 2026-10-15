@@ -33,6 +33,9 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 - `src/outlook_mcp/validation.py` — Input validation (OData, KQL, IDs, datetimes, time zones)
 - `src/outlook_mcp/errors.py` — Exception hierarchy. `OutlookMCPError` inherits the SDK's `ToolError`; this is load-bearing, not cosmetic (see Conventions)
 - `src/outlook_mcp/pagination.py` — Cursor-based pagination
+- `src/outlook_mcp/cli.py` — `outlook-mcp` entry point: `serve` (default), `auth`, `status`, `logout`
+- `src/outlook_mcp/permissions.py` — `read_only` and `allow_categories` write gating (the seven write categories)
+- `src/outlook_mcp/folder_resolver.py`, `calendar_resolver.py` — Display name / well-known name → Graph id resolution for mail folders and calendars
 - `src/outlook_mcp/throttle.py` — Retry-After honoring for the raw-httpx delta/`$batch` paths (SDK path already retries via kiota)
 - `src/outlook_mcp/toolsets.py` — Tool annotations + config-gated toolset selection (`OUTLOOK_MCP_TOOLSETS`); `configure()` runs once after registration
 - `src/outlook_mcp/tools/` — One file per tool group:

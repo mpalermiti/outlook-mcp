@@ -24,7 +24,7 @@ Provides AI agents with full access to mail, calendar, contacts, and tasks via M
 
 ## Agent-friendly
 
-Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`, `outlook_search_mail`, `outlook_list_events`, `outlook_list_thread`) to drop large body fields — ~10× fewer tokens for triage scans. Graph errors are wrapped into structured `{code, message, action}` responses with recovery hints (re-auth on 401, ROADMAP link on 403/ErrorAccessDenied, re-list on 404, back-off on 429, retry on 503). v1.9.1 docstring audit: every `@mcp.tool()` docstring rewritten to a consistent shape with contrastive pointers for ambiguous pairs and concrete syntax examples, designed to reduce wrong-tool selection by LLMs.
+Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`, `outlook_read_messages`, `outlook_search_mail`, `outlook_list_events`, `outlook_list_thread`) to drop large body fields — ~10× fewer tokens for triage scans. Graph errors come back as tool errors whose text carries Graph's message and a recovery hint (re-auth on 401, ROADMAP link on 403/ErrorAccessDenied, re-list on 404, back-off on 429, retry on 503). v1.9.1 docstring audit: every `@mcp.tool()` docstring rewritten to a consistent shape with contrastive pointers for ambiguous pairs and concrete syntax examples, designed to reduce wrong-tool selection by LLMs.
 
 ## Important
 
@@ -81,7 +81,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_auth_status` — Check authentication status and read-only mode
 
 ### Mail — Read
-- `outlook_list_inbox` — List messages with filters (folder, unread, sender, date, category, Focused class)
+- `outlook_list_inbox` — List messages with filters (folder, unread, sender, date, uncategorized only, Focused class)
 - `outlook_read_message` — Get full message by ID
 - `outlook_read_messages` — Bulk read up to 20 messages by ID in one `$batch` round-trip (use NOT N read_message calls)
 - `outlook_search_mail` — Search mail using KQL query
@@ -117,8 +117,8 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_list_contacts` — List with cursor pagination; summaries carry `categories`
 - `outlook_search_contacts` — Search by name or email; results omit `categories` (Graph's contact `$search` does not return them — read the contact back if you need them)
 - `outlook_get_contact` — Get full details incl. home/business/other addresses, categories, personal notes
-- `outlook_create_contact` — Create (no address: add one with `outlook_update_contact` afterwards)
-- `outlook_update_contact` — Update fields; `home_address`/`business_address`/`other_address` take `{street, city, state, postal_code, country_or_region}` (the shape `outlook_get_contact` returns) and **replace** that whole address, so pass back every part you want to keep
+- `outlook_create_contact` — Create (no address: add one with `outlook_update_contact` afterwards). `title` is the name prefix ("Dr."), shown in the display name; a job goes in `job_title`. `phone_type` is `mobile` (default), `business` or `home`
+- `outlook_update_contact` — Update fields, including `title` and `job_title`; `phone_type` as on create, and a `business`/`home` number **replaces** that list; `clear_phones` empties the types it names (`["mobile"]` beside `phone_type="business"` moves a number out of mobile); `home_address`/`business_address`/`other_address` take `{street, city, state, postal_code, country_or_region}` (the shape `outlook_get_contact` returns) and **replace** that whole address, so pass back every part you want to keep
 - `outlook_delete_contact` — Delete
 - `outlook_list_contacts_delta` — List only contact changes since last call (massive token savings for recurring agent jobs)
 

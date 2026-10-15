@@ -44,7 +44,8 @@ class TestCreateContactRoundTrip:
             email="live.write.guard@example.com",
             phone="+15555550199",
             company="LiveWriteGuard Co",
-            title="Probe",
+            title="Dr.",
+            job_title="Probe",
         ) as contact_id:
             got = await get_contact(real_graph_client.sdk_client, contact_id)
 
@@ -55,7 +56,13 @@ class TestCreateContactRoundTrip:
             ]
             assert got["mobile_phone"] == "+15555550199"
             assert got["company"] == "LiveWriteGuard Co"
-            assert got["title"] == "Probe"
+            # #119: a faithful round trip is not enough — the old test wrote a
+            # job into `title`, read it back from `title`, and passed while the
+            # contact displayed as "Probe <first> <last>". Each value must land
+            # in the field that means it.
+            assert got["title"] == "Dr."
+            assert got["job_title"] == "Probe"
+            assert not got["display_name"].startswith("Probe")
 
 
 class TestUpdateContactRoundTrip:
@@ -75,10 +82,13 @@ class TestUpdateContactRoundTrip:
                 last_name="After",
                 email="after@example.com",
                 phone="+15555550197",
+                job_title="Probe-After",
                 config=live_write_config,
             )
 
             got = await get_contact(real_graph_client.sdk_client, contact_id)
+            assert got["job_title"] == "Probe-After"
+            assert got["title"] == ""
             assert got["first_name"] == f"{LIVE_WRITE_NAME}-After"
             assert got["last_name"] == "After"
             assert got["mobile_phone"] == "+15555550197"
@@ -109,6 +119,105 @@ class TestUpdateContactRoundTrip:
             assert got["first_name"] == LIVE_WRITE_NAME
             assert got["mobile_phone"] == "+15555550196"
             assert got["company"] == "Keep Me"
+
+
+class TestPhoneTypeRoundTrip:
+    """#120: each phone type lands in its own field, and only there.
+
+    The issue's live evidence showed Graph accepting ``businessPhones`` on a
+    consumer contact; these pin that our own write path gets it there, and that
+    the update path can fix a prefix in place (#119's follow-up).
+    """
+
+    async def test_create_files_a_business_number_as_business(
+        self, real_graph_client, live_write_config
+    ):
+        async with _temporary_contact(
+            real_graph_client,
+            live_write_config,
+            first_name=LIVE_WRITE_NAME,
+            last_name="BusinessPhone",
+            phone="+15555550195",
+            phone_type="business",
+        ) as contact_id:
+            got = await get_contact(real_graph_client.sdk_client, contact_id)
+            assert got["business_phones"] == ["+15555550195"]
+            assert got["mobile_phone"] == ""
+            assert got["home_phones"] == []
+
+    async def test_update_files_a_home_number_and_corrects_the_prefix(
+        self, real_graph_client, live_write_config
+    ):
+        async with _temporary_contact(
+            real_graph_client,
+            live_write_config,
+            first_name=LIVE_WRITE_NAME,
+            last_name="HomePhone",
+            phone="+15555550194",
+            title="Probe",
+        ) as contact_id:
+            await update_contact(
+                real_graph_client.sdk_client,
+                contact_id=contact_id,
+                phone="+15555550193",
+                phone_type="home",
+                title="Dr.",
+                config=live_write_config,
+            )
+
+            got = await get_contact(real_graph_client.sdk_client, contact_id)
+            assert got["home_phones"] == ["+15555550193"]
+            # Untouched: phone_type picks one field, it does not move the others.
+            assert got["mobile_phone"] == "+15555550194"
+            assert got["title"] == "Dr."
+            assert not got["display_name"].startswith("Probe")
+
+    async def test_update_moves_a_mobile_number_to_business(
+        self, real_graph_client, live_write_config
+    ):
+        """#120's own case on an existing contact: the office number saved as
+        mobile moves to business, and no copy stays behind in mobile."""
+        async with _temporary_contact(
+            real_graph_client,
+            live_write_config,
+            first_name=LIVE_WRITE_NAME,
+            last_name="MovePhone",
+            phone="+15555550192",
+        ) as contact_id:
+            await update_contact(
+                real_graph_client.sdk_client,
+                contact_id=contact_id,
+                phone="+15555550192",
+                phone_type="business",
+                clear_phones=["mobile"],
+                config=live_write_config,
+            )
+
+            got = await get_contact(real_graph_client.sdk_client, contact_id)
+            assert got["business_phones"] == ["+15555550192"]
+            assert got["mobile_phone"] == ""
+            assert got["home_phones"] == []
+
+    async def test_update_empties_a_number_list(self, real_graph_client, live_write_config):
+        """The lists clear by sending ``[]``, not null — the half #120's
+        transcript did not show, so it is pinned here."""
+        async with _temporary_contact(
+            real_graph_client,
+            live_write_config,
+            first_name=LIVE_WRITE_NAME,
+            last_name="ClearPhone",
+            phone="+15555550191",
+            phone_type="business",
+        ) as contact_id:
+            await update_contact(
+                real_graph_client.sdk_client,
+                contact_id=contact_id,
+                clear_phones=["business"],
+                config=live_write_config,
+            )
+
+            got = await get_contact(real_graph_client.sdk_client, contact_id)
+            assert got["business_phones"] == []
 
 
 class TestAddressRoundTrip:

@@ -1238,7 +1238,7 @@ class TestEventTimezone:
         concurrent re-patterning between the GET and the PATCH would therefore be
         silently reverted to whatever this call read. `If-Match` turns that into
         `412 ErrorIrresolvableConflict` instead, which `errors._HINT_TABLE`
-        answers with "re-read the item and send the update again".
+        answers with "re-read the item and check before sending the update again".
 
         Verified live on a consumer mailbox: a stale change key is refused and
         the current one succeeds, on the SDK's own request builder.
