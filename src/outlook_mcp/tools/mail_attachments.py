@@ -21,7 +21,11 @@ from mcp.types import (
 )
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import LEAVE_SETTINGS_TO_THE_USER, MESSAGE_MAY_HAVE_BEEN_SENT
+from outlook_mcp.errors import (
+    LEAVE_SETTINGS_TO_THE_USER,
+    MESSAGE_MAY_HAVE_BEEN_SENT,
+    GraphAPIError,
+)
 from outlook_mcp.permissions import (
     CATEGORY_MAIL_DRAFTS,
     CATEGORY_MAIL_SEND,
@@ -485,10 +489,16 @@ async def _upload_large_file(
 ) -> None:
     """Upload a large file in chunks via an upload session.
 
-    Uses httpx to PUT chunks to the upload URL provided by Graph.
+    Uses httpx to PUT chunks to the upload URL provided by Graph. Every chunk's reply is
+    checked (#125): a refused chunk raises ``httpx.HTTPStatusError``, which
+    ``_wrap_tool_errors`` reports as Graph's own error (the upload URL, which carries its own
+    authorization, stays out of it), and an upload whose last reply is not a completed one
+    (200 or 201) raises ``GraphAPIError``. Either way the caller stops before it sends the
+    draft or reports the attachment as added.
     """
     import httpx
 
+    status = None
     async with httpx.AsyncClient() as client:
         offset = 0
         with open(file_path, "rb") as f:
@@ -500,8 +510,18 @@ async def _upload_large_file(
                     "Content-Range": f"bytes {offset}-{end}/{file_size}",
                     "Content-Length": str(chunk_size),
                 }
-                await client.put(upload_url, content=chunk, headers=headers)
+                response = await client.put(upload_url, content=chunk, headers=headers)
+                response.raise_for_status()
+                status = response.status_code
                 offset += chunk_size
+    if status not in (200, 201):
+        raise GraphAPIError(
+            status or 0,
+            "IncompleteUpload",
+            f"Graph did not report the attachment upload as complete (last reply: {status}).",
+            action="This file was not attached and nothing was sent. Try again; if it keeps "
+            "failing, send the file another way.",
+        )
 
 
 async def send_with_attachments(

@@ -6,6 +6,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **A large attachment that fails to upload no longer goes out missing (#125).** Files over
+  3 MB go up in chunks through an upload session, and no chunk's reply was read: a refused
+  chunk was skipped over, so `outlook_send_with_attachments` sent the draft and
+  `outlook_attach_to_draft` reported the file as attached without it. Each reply is now
+  checked. A refusal stops the upload with Graph's own error (the upload URL, which carries
+  its own authorization, stays out of it), and an upload Graph does not report as complete
+  (200 or 201) fails as `IncompleteUpload`. Nothing is sent after a failed upload; the draft
+  stays in Drafts.
+
 ## [1.27.0] — 2026-10-24
 
 ### Fixed
