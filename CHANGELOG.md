@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.26.0] — 2026-10-23
+
 ### Fixed
 
 - **Tool descriptions no longer carry the source file's indentation.** The SDK publishes each
