@@ -126,7 +126,7 @@ def test_the_readme_category_table_is_the_accepted_set():
     table = _section(README, "Granular Write Permissions (optional)")
     rows = set(re.findall(r"^\| `(\w+)` \|", table, re.MULTILINE))
     assert rows == VALID_CATEGORIES
-    words = {7: "seven"}
+    words = {7: "seven", 8: "eight"}
     assert f"only the {words[len(VALID_CATEGORIES)]} names above" in table
     assert f"the {len(VALID_CATEGORIES)} categories" in SKILL
 

@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 68 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 72 typed Graph tools across mail, inbox rules, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -75,7 +75,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `triage_folder(folder="inbox", count=50)` — one scan, sorted, applied in a single batch call
 - `catch_up(since="24h")` — what changed, via the delta path
 
-## Tools (68)
+## Tools (72)
 
 ### Auth
 - `outlook_auth_status` — Check authentication status and read-only mode
@@ -103,6 +103,12 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_list_inbox_overrides` — List Focused Inbox per-sender override rules
 - `outlook_set_inbox_override` — Upsert a per-sender override (focused/other)
 - `outlook_delete_inbox_override` — Delete an override by ID
+
+### Mail Rules
+- `outlook_list_rules` — List inbox rules in execution order with each rule's conditions and actions, and `has_error` when Exchange is failing to apply it (server-side; runs with no client open)
+- `outlook_create_rule` — Create a rule: sender/subject/body/attachment conditions, then move/copy/mark-read/delete/forward/categorize/stop actions. Rules are durable — they keep running after the session ends. `forward_to` also needs the `mail_send` category
+- `outlook_update_rule` — Rename, enable/disable, resequence or re-point a rule; its other actions are preserved. Re-enabling or reordering a rule that forwards or redirects needs `mail_send`, as does changing a `stop_processing_rules` rule that hides one
+- `outlook_delete_rule` — Delete a rule by ID (irreversible). Deleting a `stop_processing_rules` rule that hides a forwarding rule needs `mail_send`
 
 ### Calendar
 - `outlook_list_events` — List events in date range (expands recurring); each carries `type` (`occurrence`/`exception` for a series instance vs `singleInstance`; a `seriesMaster` never appears on a listing — use `outlook_get_event`) and `show_as` (the free/busy status); `calendar` reads a secondary calendar by name or ID (default calendar when omitted); a cursor continues the same calendar. `concise=True` drops `type` and `show_as`
@@ -185,6 +191,6 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - Three workflow prompts ship with the server: `morning_brief`, `triage_folder`, `catch_up`
 - Mail search uses KQL syntax
 - Start with `read_only: true`, flip when comfortable
-- **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 7 categories and example policies.
-- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context; unset loads all 68. Tools carry read-only / destructive annotations so clients can auto-approve reads.
+- **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 8 categories and example policies.
+- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context; unset loads all 72. Tools carry read-only / destructive annotations so clients can auto-approve reads.
 - **Two accounts:** One server serves one mailbox. Register a second server entry with its own `OUTLOOK_MCP_CONFIG_DIR` (e.g. `~/.outlook-mcp-work`) and run `outlook-mcp auth` once with that variable set. Move only the config directory, never `HOME` — see README "Two accounts, two instances".

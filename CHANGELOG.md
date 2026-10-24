@@ -6,6 +6,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Inbox rules: `outlook_list_rules`, `outlook_create_rule`, `outlook_update_rule`,
+  `outlook_delete_rule`.** Graph's `/me/mailFolders/inbox/messageRules` was previously
+  documented here as a dead end on personal accounts; it is not (see ROADMAP). Rules are
+  server-side, so they keep running with every client closed. `outlook_update_rule` reads the
+  rule before patching it, because Graph replaces a rule's `actions` object wholesale — a
+  re-point that did not send the other actions back would silently clear them. The three write
+  tools sit behind a new `mail_rules` permission category and need `MailboxSettings.ReadWrite`
+  on the token, which the new `mailbox_settings_write` config key adds to the sign-in: the
+  default consent set asks only for `MailboxSettings.Read`, and consent is per requested scope,
+  so the portal permission alone would not put it in the token. `outlook_list_rules` returns each
+  rule's conditions and actions, not only its name and status — a forwarding rule you cannot see
+  is the one that matters. Overlapping updates of one rule are serialized in-process; Graph
+  returns no `@odata.etag` on this endpoint, so there is no `If-Match` and the last write wins
+  across processes. The `mail_send` gate follows the indirect routes as well: a forwarding rule
+  behind a `stop_processing_rules` rule starts delivering mail when the forwarding rule is
+  moved up, or when that stop rule is reordered, disabled or deleted, so those changes require
+  `mail_send` too — none of them names a forwarding address. Two follow-ups from the same class of defect: reordering a
+  *disabled* forwarding rule no longer demands `mail_send` (a disabled rule delivers nothing), and
+  `mailbox_settings_write` is refused alongside `read_only_consent` rather than being silently
+  ignored. `outlook_list_rules` also reports `has_error`, and both read and write paths walk the
+  model's own attributes instead of a hand-kept field list, so a field Graph adds later is neither
+  hidden from the read nor dropped from an update. Tool count 68 → 72; tool-surface ceiling raised 13,700 → 15,000
+  (measured 14,805).
+
 ### Fixed
 
 - **Failures outside the Graph SDK reach the model with their text and a remedy.** Only SDK

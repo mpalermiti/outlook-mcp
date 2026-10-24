@@ -1,6 +1,6 @@
 """The tool surface is a per-turn cost, so it gets a ceiling.
 
-Every client pays for all 68 tool schemas on every turn that includes them.
+Every client pays for all 72 tool schemas on every turn that includes them.
 ROADMAP records a measured baseline of ~8,644 tokens (o200k proxy, 2026-07), and
 that number is what makes the `OUTLOOK_MCP_TOOLSETS` gating worth having — but
 nothing stopped it drifting upward one well-meant docstring at a time.
@@ -30,7 +30,6 @@ from outlook_mcp.server import mcp
 CHARS_PER_TOKEN = 4
 
 # Ceiling for the full tool surface. Measured at 11,206 on 1.20.0 with a
-#
 # 12,000 ceiling; raised to 13,500 for the eight To Do detail tools
 # (get_task, checklist-item CRUD, task attachments), then to 13,650 after
 # the attachment rewrite (measured 12,855 at the time) — each a deliberate
@@ -92,7 +91,21 @@ CHARS_PER_TOKEN = 4
 # `outlook_get_contact` returned categories and notes that nothing could write
 # (#175). Six arguments do not fit the ~100 tokens left, so this is a deliberate
 # raise to 13,700: ~0.8% headroom.
-TOOL_SURFACE_CEILING = 13_700
+#
+# 14,805 on the 72-tool surface, measured after the rebase onto that 13,586 main
+# and two review rounds: `outlook_list_rules` returns conditions and actions (+25 in
+# the tool docstring, which is what the model reads), and update/delete document the
+# ordering gate that starts a hidden forwarding rule (+71) — a gate the model cannot
+# respect without being told it exists:
+# the four inbox-rule schemas (+1,123, ~281 each), of which `outlook_create_rule`
+# is most of it — 14 optional arguments, the price of exposing Graph's whole
+# predicate/action set in one call. Review asked for a sentence in both rule
+# docstrings saying a rule outlives the session, which is worth paying: a rule is
+# the write most likely to be induced by the mail it acts on. Deliberate raise to
+# 15,000: ~1.3% headroom, room for a wording fix, not for another batch. The rule
+# tools are their own `rules` toolset group, so a client that gates down to `mail`
+# does not pay this.
+TOOL_SURFACE_CEILING = 15_000
 
 # `prompts/list` is the cheap half of the bargain struck in 1.20.0: workflow
 # guidance costs a name and one line here until someone invokes it. If that ever
@@ -113,7 +126,7 @@ async def test_the_tool_surface_stays_within_budget():
     cost = _proxy_tokens([t.model_dump(exclude_none=True, by_alias=True) for t in tools])
 
     assert cost <= TOOL_SURFACE_CEILING, (
-        f"The 68-tool surface now costs ~{cost} proxy tokens per turn, over the "
+        f"The 72-tool surface now costs ~{cost} proxy tokens per turn, over the "
         f"{TOOL_SURFACE_CEILING} ceiling. Every client pays this on every turn. "
         f"Either trim it, or raise the ceiling deliberately and say why."
     )
@@ -166,3 +179,13 @@ async def test_gating_actually_reduces_the_surface():
         _proxy_tokens([t.model_dump(exclude_none=True, by_alias=True) for t in mail_only])
         < _proxy_tokens([t.model_dump(exclude_none=True, by_alias=True) for t in full]) // 2
     )
+
+    # The rule tools are their own group: the most expensive feature here must be
+    # opt-in, so a `mail`-only client does not silently pay for it.
+    assert not [t for t in mail_only if t.name.endswith("_rule") or t.name == "outlook_list_rules"]
+    assert {n for n, g in toolsets.TOOL_GROUPS.items() if g == "rules"} == {
+        "outlook_list_rules",
+        "outlook_create_rule",
+        "outlook_update_rule",
+        "outlook_delete_rule",
+    }

@@ -11,6 +11,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from outlook_mcp.config import Config, config_repair_lines, load_config, save_config
 
@@ -681,3 +682,24 @@ def test_the_correctly_spelt_safety_keys_load(tmp_path):
     assert loaded.read_only is True
     assert loaded.read_only_consent is True
     assert loaded.allow_categories == ["calendar_write"]
+
+
+class TestMailboxSettingsWriteConfig:
+    def test_refused_when_paired_with_read_only_consent(self):
+        """A key the sign-in would silently ignore is a config error, not a no-op."""
+        with pytest.raises(ValidationError):
+            Config(
+                client_id="test",
+                read_only=True,
+                read_only_consent=True,
+                mailbox_settings_write=True,
+            )
+
+    def test_allowed_with_plain_read_only(self):
+        """read_only gates the tools; the token still asks for the write scopes."""
+        cfg = Config(client_id="test", read_only=True, mailbox_settings_write=True)
+        assert cfg.mailbox_settings_write is True
+
+    def test_allowed_on_its_own(self):
+        cfg = Config(client_id="test", mailbox_settings_write=True)
+        assert cfg.mailbox_settings_write is True

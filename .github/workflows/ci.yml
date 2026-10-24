@@ -83,7 +83,7 @@ jobs:
           "$RUNNER_TEMP/fresh/bin/python" - <<'PY'
           import outlook_mcp.server as s
           tools = [a for a in dir(s) if a.startswith("outlook_")]
-          assert len(tools) == 68, f"expected 68 tools, got {len(tools)}"
+          assert len(tools) == 72, f"expected 72 tools, got {len(tools)}"
           print(f"OK: server imports, {len(tools)} tools registered")
           PY
       - name: Request URLs must not be logged

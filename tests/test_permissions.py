@@ -9,6 +9,7 @@ from outlook_mcp.permissions import (
     CATEGORY_CONTACTS_WRITE,
     CATEGORY_MAIL_DRAFTS,
     CATEGORY_MAIL_FOLDERS,
+    CATEGORY_MAIL_RULES,
     CATEGORY_MAIL_SEND,
     CATEGORY_MAIL_TRIAGE,
     CATEGORY_TODO_WRITE,
@@ -40,18 +41,19 @@ def test_category_constants_are_snake_case_strings():
         assert cat
 
 
-def test_valid_categories_contains_all_7():
+def test_valid_categories_contains_all_8():
     """VALID_CATEGORIES includes every declared category constant."""
     assert VALID_CATEGORIES == {
         CATEGORY_MAIL_SEND,
         CATEGORY_MAIL_DRAFTS,
         CATEGORY_MAIL_TRIAGE,
         CATEGORY_MAIL_FOLDERS,
+        CATEGORY_MAIL_RULES,
         CATEGORY_CALENDAR_WRITE,
         CATEGORY_CONTACTS_WRITE,
         CATEGORY_TODO_WRITE,
     }
-    assert len(VALID_CATEGORIES) == 7
+    assert len(VALID_CATEGORIES) == 8
 
 
 def test_category_values_are_expected_names():

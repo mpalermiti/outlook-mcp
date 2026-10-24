@@ -225,7 +225,17 @@ class AuthManager:
         this app must never hold write access, and the config has already
         refused that key without ``read_only``.
         """
-        return SCOPES_READONLY if self.config.read_only_consent else SCOPES_READWRITE
+        if self.config.read_only_consent:
+            return list(SCOPES_READONLY)
+        if self.config.mailbox_settings_write:
+            # Consent is per requested scope: the portal permission alone does not
+            # put MailboxSettings.ReadWrite in the token, so the first consent has
+            # to name it or the rule write tools answer ErrorAccessDenied forever.
+            return [
+                "MailboxSettings.ReadWrite" if scope == "MailboxSettings.Read" else scope
+                for scope in SCOPES_READWRITE
+            ]
+        return list(SCOPES_READWRITE)
 
     def is_authenticated(self) -> bool:
         """Check if we have an active credential."""

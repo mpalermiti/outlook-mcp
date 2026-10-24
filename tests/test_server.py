@@ -93,13 +93,18 @@ EXPECTED_TOOLS = [
     # Admin (2)
     "outlook_list_categories",
     "outlook_get_mail_tips",
+    # Mail rules (4)
+    "outlook_list_rules",
+    "outlook_create_rule",
+    "outlook_update_rule",
+    "outlook_delete_rule",
 ]
 
 
 def test_tool_count():
-    """All 68 tools are registered (auth is CLI-only now)."""
+    """All 72 tools are registered (auth is CLI-only now)."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 68
+    assert len(registered) == 72
 
 
 def test_all_tools_registered():

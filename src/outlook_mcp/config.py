@@ -112,6 +112,18 @@ class Config(BaseModel):
             "read_only: true."
         ),
     )
+    mailbox_settings_write: bool = Field(
+        default=False,
+        description=(
+            "Ask Microsoft for `MailboxSettings.ReadWrite` at sign-in instead of "
+            "`MailboxSettings.Read`, which is what the inbox-rule write tools need. "
+            "Off by default because it widens the token to every mailbox setting "
+            "(automatic replies, working hours, time zone), not only rules. Adding "
+            "the permission in the Azure portal is not enough on its own: consent is "
+            "granted per *requested* scope, so the sign-in has to name it and the "
+            "account has to consent again."
+        ),
+    )
     allow_categories: list[str] = Field(
         default_factory=list,
         description=(
@@ -200,6 +212,26 @@ class Config(BaseModel):
                 "only for the read scopes cannot write, so every write tool would "
                 "fail. Set read_only to true, or remove read_only_consent and run "
                 "`outlook-mcp auth` again to consent the write scopes."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _mailbox_settings_write_needs_a_write_consent(self) -> "Config":
+        """Refuse a scope request that the sign-in would never make.
+
+        `read_only_consent` asks for the read scopes only, so `get_scopes` returns
+        the read list whatever `mailbox_settings_write` says. Loaded together, the
+        key would be silently ignored and every rule write would fail with a 403
+        that names none of it — the same dead end as documenting a permission the
+        code never requests.
+        """
+        if self.mailbox_settings_write and self.read_only_consent:
+            raise ValueError(
+                "mailbox_settings_write: true cannot be combined with read_only_consent: "
+                "true. That consent asks for the read scopes only, so MailboxSettings."
+                "ReadWrite would never be requested and every inbox-rule write would "
+                "fail. Drop one: read_only_consent for a registration that must never "
+                "write, mailbox_settings_write for one that should manage rules."
             )
         return self
 
