@@ -70,12 +70,12 @@ Latency + token/API cost for the persistent single-agent recurring mail+calendar
 
 For the population installing this from the MCP registry, not for Neo. stdio stays the default and unchanged.
 
-- **Stateless Streamable-HTTP deployment** — the 2026-07-28 spec RC removed `Mcp-Session-Id`, so a remote server can scale behind a plain round-robin LB with no session store. Optional remote transport alongside stdio.
+- ~~**Stateless Streamable-HTTP deployment**~~ — ✅ landed in [Unreleased] (#126). `OUTLOOK_MCP_TRANSPORT=streamable-http` serves `/mcp` through the SDK's own `streamable_http_app(stateless_http=True, json_response=True)`; stdio stays the default and unchanged. It does not build on the RC: since streamable HTTP arrived (2025-03-26), a server *may* issue `Mcp-Session-Id`, so one that never does is within every released revision, and that is all stateless mode is. No tool needs the session (no sampling, elicitation, progress or log notifications), so nothing is lost. A token is required on every bind, loopback included, and the server binds loopback by default. It speaks plain HTTP, so TLS belongs to a proxy in front. Authentication is a static bearer for a reverse proxy to sit in front of, not OAuth — that stays the next item.
 - **OAuth discovery hardening** — OIDC Discovery, RFC 9728 Protected-Resource-Metadata, incremental scope consent (SEP-835), Client ID Metadata Documents (SEP-991). Load-bearing only when exposed as a remote OAuth resource.
 - ~~**`tools/list` caching** — SEP-2549 `ttlMs` / `cacheScope`~~ — ✅ shipped in v1.20.0. The precondition landed: `mcp` 2.1.1 emits both fields and `MCPServer(cache_hints=...)` sets them. Five minutes, private.
 - **Cross-provider / multi-account** — a competing server already unifies M365 + Outlook.com + Google in one MCP. Several mailboxes are already served by one process per account (`OUTLOOK_MCP_CONFIG_DIR`); anything beyond that is new design. Real but new; secondary to Tier 0.
 
-**Caveat:** several Tier-1 surfaces are release-candidate / draft spec (statelessness RC, SEP-2549) — don't build against them until Claude / Cursor / OpenClaw actually honor them.
+**Caveat:** several Tier-1 surfaces are release-candidate / draft spec (SEP-2549) — don't build against them until Claude / Cursor / OpenClaw actually honor them. The stateless HTTP transport above is not one of them: it uses nothing beyond the released spec.
 
 ### Tier 2 — deferred (hosting- or client-gated; revisit when the precondition lands)
 - **Change-notification webhooks** as the delta trigger (near-real-time, avoids polling/throttling) — needs a public HTTPS endpoint; N/A for stdio/local. Rich-mode notifications carry the changed object inline (a token lever) but need an encryption cert. Recommended end-state is delta-tokens **+** webhooks.

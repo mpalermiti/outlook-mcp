@@ -27,6 +27,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 
 ## Architecture
 - `src/outlook_mcp/server.py` — `MCPServer` entry point, lifespan context
+- `src/outlook_mcp/http_transport.py` — Opt-in streamable-HTTP transport (`OUTLOOK_MCP_TRANSPORT`): settings checked before anything binds, bearer-token gate, uvicorn config. stdio stays the default
 - `src/outlook_mcp/auth.py` — Device code OAuth2 via azure-identity
 - `src/outlook_mcp/graph.py` — Graph client factory
 - `src/outlook_mcp/config.py` — Config file management (`~/.outlook-mcp/`, or `OUTLOOK_MCP_CONFIG_DIR` — one directory per server instance, one instance per account)

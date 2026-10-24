@@ -59,6 +59,13 @@ outlook-mcp is designed with security in mind:
   and set `read_only_consent: true` beside `read_only: true`, which makes sign-in ask for
   the read scopes and nothing else. A saved sign-in is only used with the app registration
   it was made for.
+- **HTTP transport is opt-in, and never runs without a token.** With
+  `OUTLOOK_MCP_TRANSPORT=streamable-http`, one request to the port reaches the mailbox, so the
+  server refuses to start without `OUTLOOK_MCP_HTTP_TOKEN` on any bind, loopback included, and
+  answers `401` to any request without it. It speaks plain HTTP, so TLS belongs to a reverse
+  proxy in front; the README's
+  [Remote / HTTP transport](README.md#remote--http-transport-optional--outlook_mcp_transport)
+  section has the rest.
 - **Input validation:** All Graph IDs, emails, dates, KQL queries, and folder names are validated before use
 - **Atomic writes:** Config files are written atomically to prevent corruption
 - **Symlink rejection:** Config loader refuses symlinked files

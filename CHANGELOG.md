@@ -83,6 +83,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `outlook_categorize_message` does a message's: `[]` removes every category, and omitting it
   leaves them alone. The update description says so, since adding one category with a one-item
   list would drop the rest.
+- **An optional streamable-HTTP transport** (#126), for a server on another machine or in a
+  container, or a client that cannot spawn a local process.
+  `OUTLOOK_MCP_TRANSPORT=streamable-http` serves `/mcp` through the SDK's own streamable-HTTP
+  app, stateless and answering JSON, on `OUTLOOK_MCP_HTTP_HOST`/`OUTLOOK_MCP_HTTP_PORT` (default
+  `127.0.0.1:8000`). It never starts without `OUTLOOK_MCP_HTTP_TOKEN`, loopback included, and
+  every request must carry it as a bearer or gets `401`. It speaks plain HTTP, so TLS belongs to
+  a proxy in front. stdio stays the default, unchanged; no new dependency. See the README's
+  "Remote / HTTP transport".
 
 ## [1.26.0] — 2026-10-23
 

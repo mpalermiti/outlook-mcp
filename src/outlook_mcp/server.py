@@ -17,7 +17,7 @@ from mcp.server.caching import CacheHint
 from mcp.server.mcpserver import Context, MCPServer
 from pydantic import ValidationError
 
-from outlook_mcp import __version__, toolsets
+from outlook_mcp import __version__, http_transport, toolsets
 from outlook_mcp.auth import AuthManager, error_for_failed_refresh
 from outlook_mcp.config import (
     DEFAULT_CONFIG_DIR,
@@ -1819,7 +1819,17 @@ def main():
         for line in config_repair_lines(exc):
             print(line, file=sys.stderr)
         sys.exit(1)
-    mcp.run(transport="stdio")
+    # stdio unless OUTLOOK_MCP_TRANSPORT asks for HTTP. The HTTP settings are
+    # checked here too, so a refusal exits the same way, before anything binds.
+    try:
+        http = http_transport.settings_from_env(os.environ)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
+    if http is None:
+        mcp.run(transport="stdio")
+    else:
+        http_transport.serve(mcp, http)
 
 
 if __name__ == "__main__":
