@@ -274,6 +274,51 @@ async def test_no_links_at_all_returns_none_token():
     assert result["has_more"] is False
 
 
+# ── Bootstrap window (outlook_changes_since) ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_received_since_asks_graph_for_that_window_only():
+    """The digest's first sync: Graph filters, rather than sending the whole folder.
+
+    `receivedDateTime ge` is the one `$filter` message delta accepts. Graph
+    encodes it into the nextLink and deltaLink, so the rest of the round, and
+    every later round, stay inside it without being asked again. It is
+    percent-encoded: `require_graph_url` refuses a URL with a space in it.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    body = {"value": [], "@odata.deltaLink": f"{DELTA}?$deltatoken=abc"}
+    patch_client, fake_client = _async_client_with([_http_response(body)])
+    since = datetime(2026, 5, 21, 8, 0, tzinfo=timezone(timedelta(hours=2)))
+    with _patch_resolve(), patch_client:
+        await list_inbox_delta(_mock_graph_client(), page_size=50, received_since=since)
+
+    url = fake_client.get.call_args.args[0]
+    assert url == (
+        "https://graph.microsoft.com/v1.0/me/mailFolders/INBOX_ID/messages/delta"
+        "?$top=50&$filter=receivedDateTime%20ge%202026-05-21T06:00:00Z"
+    )
+
+
+@pytest.mark.asyncio
+async def test_received_since_is_not_added_to_a_cursor():
+    """A cursor already carries the filter of the round it belongs to."""
+    from datetime import datetime, timezone
+
+    prior = f"{DELTA}?$deltatoken=abc"
+    body = {"value": [], "@odata.deltaLink": f"{DELTA}?$deltatoken=def"}
+    patch_client, fake_client = _async_client_with([_http_response(body)])
+    with _patch_resolve(), patch_client:
+        await list_inbox_delta(
+            _mock_graph_client(),
+            delta_token=prior,
+            received_since=datetime(2026, 5, 21, tzinfo=timezone.utc),
+        )
+
+    assert fake_client.get.call_args.args[0] == prior
+
+
 class TestCompression:
     @pytest.mark.asyncio
     async def test_delta_get_requests_gzip(self):

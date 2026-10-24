@@ -124,7 +124,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_list_contacts_delta` — List only contact changes since last call (massive token savings for recurring agent jobs)
 
 ### Digest
-- `outlook_changes_since` — One structured "since last call" digest across mail, events, and contacts. Composes the three delta tools into counts + urgent-flagged mail + top-5 senders + new/cancelled events; auto-recovers from stale tokens. Designed for recurring agent loops (morning brief, hourly inbox sweep).
+- `outlook_changes_since` — One structured "since last call" digest across mail, events, and contacts. Composes the three delta tools into counts + urgent-flagged mail + top-5 senders + new/cancelled events; auto-recovers from stale tokens; `has_more` per resource when a sync stopped early (replace the stored `delta_tokens` dict with the returned one, never merge it). Mail falls back to the client-side window if Graph ignores the filter and says so in `_meta.mail_window_fallback`. The first call covers only the last `fallback_window_hours`. Designed for recurring agent loops (morning brief, hourly inbox sweep).
 
 ### To Do
 - `outlook_list_task_lists` — List To Do lists

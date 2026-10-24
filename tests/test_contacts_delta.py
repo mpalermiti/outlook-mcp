@@ -231,6 +231,45 @@ async def test_no_changes_returns_empty_list_and_delta_token():
     assert result["has_more"] is False
 
 
+# ── Bootstrap window (outlook_changes_since) ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_modified_since_keeps_only_contacts_changed_since():
+    """The digest's first sync: a whole address book is not a day's changes.
+
+    `/me/contacts/delta` takes no `$filter`, so the bound is applied to
+    `lastModifiedDateTime`, which Graph sends on every contact (the endpoint
+    takes no `$select` either). Tombstones carry no timestamp and are kept;
+    so is the summary shape — the bound filters, it adds no key.
+    """
+    from datetime import datetime, timezone
+
+    body = {
+        "value": [
+            _raw_contact(id="changed", lastModifiedDateTime="2026-05-21T09:30:00Z"),
+            _raw_contact(id="boundary", lastModifiedDateTime="2026-05-21T08:00:00Z"),
+            _raw_contact(id="old", lastModifiedDateTime="2025-01-15T09:00:00Z"),
+            _raw_contact(id="unreadable", lastModifiedDateTime="not a date"),
+            _raw_contact(id="missing"),
+            {"id": "gone", "@removed": {"reason": "deleted"}},
+        ],
+        "@odata.deltaLink": f"{DELTA}?$deltatoken=abc",
+    }
+    patch_client, _, fake_get = _async_client_with([_http_response(body)])
+    with patch_client:
+        result = await list_contacts_delta(
+            _mock_graph_client(),
+            modified_since=datetime(2026, 5, 21, 8, 0, tzinfo=timezone.utc),
+        )
+
+    assert [c["id"] for c in result["contacts"]] == ["changed", "boundary", "gone"]
+    assert set(result["contacts"][0]) == set(_format_contact_delta(_raw_contact())) | {"is_deleted"}
+    assert result["delta_token"] == f"{DELTA}?$deltatoken=abc"
+    # Still no query string: the endpoint refuses one.
+    assert "?" not in fake_get.last_call["url"]
+
+
 class TestTheDeltaSummaryMirrorsTheListingSummary:
     """The parity claim in `_format_contact_delta`'s docstring, as a test.
 

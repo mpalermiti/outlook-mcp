@@ -45,9 +45,12 @@ import pytest
 from msgraph.generated.models.event_type import EventType
 from msgraph.generated.models.free_busy_status import FreeBusyStatus
 
+from outlook_mcp.tools._delta import parse_graph_datetime, require_graph_url
 from outlook_mcp.tools.calendar_delta import list_events_delta
 from outlook_mcp.tools.calendar_read import list_events
 from outlook_mcp.tools.contacts import list_contacts, search_contacts
+from outlook_mcp.tools.contacts_delta import list_contacts_delta
+from outlook_mcp.tools.mail_delta import list_inbox_delta
 from outlook_mcp.tools.mail_read import list_inbox, search_mail
 from outlook_mcp.tools.mail_thread import list_thread
 from outlook_mcp.tools.todo import get_task, list_tasks
@@ -734,6 +737,122 @@ async def test_the_event_delta_carries_type_without_a_select(real_graph_client):
 # Nothing is left for the live tier to see here, because an omitted field has
 # no wire behaviour for Graph to get wrong — unlike the positive cases above,
 # where a `$select` Graph silently ignores is invisible to a mock.
+
+
+# ── outlook_changes_since: the first sync's window ──
+# The digest's bootstrap asks message delta for `receivedDateTime ge <bound>`
+# and keeps contacts by `lastModifiedDateTime`. Mocks see the URL we build and
+# the field we read; only Graph can say the filter is honoured and the field is
+# sent.
+
+
+async def test_the_mail_bootstrap_honours_its_window_or_reports_a_fallback(real_graph_client):
+    """Prove the digest's bound on accounts that honour or ignore Graph's filter.
+
+    Read-only. Every observed live message outside the bound must be absent
+    from the digest, and ignored filters must be reported explicitly.
+    """
+    from unittest.mock import patch
+
+    from outlook_mcp.tools import digest
+
+    bound = datetime.now(dt_timezone.utc).replace(microsecond=0) - timedelta(days=7)
+    older = await list_inbox(
+        real_graph_client.sdk_client, before=bound.strftime("%Y-%m-%dT%H:%M:%SZ"), count=1
+    )
+    if not older["messages"]:
+        pytest.skip("No inbox message older than the bound — nothing to exclude")
+
+    observed = []
+
+    async def read_page(*args, **kwargs):
+        page = await list_inbox_delta(*args, **kwargs)
+        observed.extend(page["messages"])
+        return page
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return bound + timedelta(days=7)
+
+    from unittest.mock import AsyncMock
+
+    with (
+        patch.object(digest, "datetime", FrozenDatetime),
+        patch.object(digest, "list_inbox_delta", new=read_page),
+        patch.object(
+            digest,
+            "list_events_delta",
+            new=AsyncMock(return_value={"events": [], "delta_token": None, "has_more": False}),
+        ),
+        patch.object(
+            digest,
+            "list_contacts_delta",
+            new=AsyncMock(return_value={"contacts": [], "delta_token": None, "has_more": False}),
+        ),
+    ):
+        result = await digest.changes_since(real_graph_client, fallback_window_hours=7 * 24)
+    token = result["delta_tokens"]["mail"]
+    assert token, "Graph returned no cursor for a filtered first sync"
+    assert require_graph_url(token, source="live-check", resource="mail") == token
+    live = [item for item in observed if not item.get("is_deleted")]
+    recent = [
+        item
+        for item in live
+        if (
+            parse_graph_datetime(item.get("received") or "")
+            or datetime.min.replace(tzinfo=dt_timezone.utc)
+        )
+        >= bound
+    ]
+    assert result["mail"]["new_count"] == len(recent)
+    assert all(
+        parse_graph_datetime(item["received_at"]) >= bound
+        for item in result["mail"]["urgent_flagged"]
+    )
+    ignored = any(
+        (stamp := parse_graph_datetime(item.get("received") or "")) is not None and stamp < bound
+        for item in live
+    )
+    print(
+        f"mail delta received-time filter: {'ignored; client fallback' if ignored else 'honoured'}"
+    )
+    assert ("mail_window_fallback" in result.get("_meta", {})) is ignored
+    assert result["delta_tokens"].get("mail_bootstrap_from") == (
+        bound.strftime("%Y-%m-%dT%H:%M:%SZ") if result["has_more"]["mail"] else None
+    )
+
+
+async def test_the_contacts_delta_carries_last_modified_without_a_select(real_graph_client):
+    """The premise behind `list_contacts_delta(modified_since=...)`.
+
+    `/me/contacts/delta` takes neither `$filter` nor `$select`, so the digest's
+    first sync keeps contacts by the `lastModifiedDateTime` Graph is assumed to
+    send on every one. If Graph stops sending it, every contact is dropped and
+    the first digest reports none changed, with no error. With a bound in the
+    distant past, the filter must keep exactly the contacts an unfiltered call
+    returns.
+    """
+    everything = await list_contacts_delta(real_graph_client, page_size=100)
+    if everything["has_more"]:
+        pytest.skip("More contacts than one call returns; two snapshots would not line up")
+    live = {c["id"] for c in everything["contacts"] if not c["is_deleted"]}
+    if not live:
+        pytest.skip("No contacts to read lastModifiedDateTime from")
+
+    kept = await list_contacts_delta(
+        real_graph_client,
+        page_size=100,
+        modified_since=datetime(2000, 1, 1, tzinfo=dt_timezone.utc),
+    )
+
+    dropped = live - {c["id"] for c in kept["contacts"] if not c["is_deleted"]}
+    assert not dropped, (
+        f"{len(dropped)} of {len(live)} contacts carry no readable lastModifiedDateTime on the "
+        f"delta path, so the digest's first sync cannot place them in its window."
+    )
+
+
 # ── todo: $expand=checklistItems on a single-task GET ──
 
 

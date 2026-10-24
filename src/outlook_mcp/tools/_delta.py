@@ -29,6 +29,7 @@ receive the token is checked against ``graph.microsoft.com`` first.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -76,6 +77,29 @@ _PATH_TRICKS = re.compile(r"(?:^|/)(?:\.|%2e){1,2}(?:/|$)|%2f|%5c|\\", re.IGNORE
 # inside one delta-sync round. Callers continue by passing the returned
 # delta_token (a nextLink) back in.
 PAGE_SIZE_CAP_MULTIPLIER = 4
+
+
+def parse_graph_datetime(value: str) -> datetime | None:
+    """Parse a Graph ISO 8601 string to an aware UTC datetime. ``None`` on failure.
+
+    Graph hands us strings like ``"2026-05-21T10:00:00Z"`` (mail
+    received times) and ``"2026-05-22T14:00:00.0000000"`` (event
+    dateTime — note the trailing fractional zeros and no zone). We
+    normalize both to aware UTC.
+    """
+    if not value:
+        return None
+    s = value.strip()
+    # Strip trailing Z → +00:00 for fromisoformat compatibility.
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _bearer_token(credential: Any) -> str:

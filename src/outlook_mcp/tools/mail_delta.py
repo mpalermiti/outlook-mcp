@@ -14,6 +14,7 @@ back on the next call. Pattern matches the existing pagination ``cursor``.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote, urljoin
 
@@ -72,6 +73,8 @@ async def list_inbox_delta(
     folder: str = "inbox",
     page_size: int = 50,
     delta_token: str | None = None,
+    *,
+    received_since: datetime | None = None,
 ) -> dict:
     """List inbox (or any folder) changes since the last delta token.
 
@@ -86,6 +89,12 @@ async def list_inbox_delta(
         page_size: Items per Graph page (1-100). Mapped to ``$top``.
         delta_token: Opaque cursor from a previous call. ``None`` on the
             first call.
+        received_since: First call only: request messages received at or after
+            this instant. Some consumer mailboxes ignore the filter; the digest
+            enforces its own bound and reports that fallback. Ignored with
+            ``delta_token`` — a cursor carries the filter of the call that started its sync.
+            ``outlook_changes_since`` bootstraps with it; the tool itself does
+            not take it.
 
     Returns:
         ``{messages, delta_token, has_more}`` where:
@@ -118,6 +127,13 @@ async def list_inbox_delta(
             f"me/mailFolders/{quote(folder_id, safe='')}/messages/delta",
         )
         initial_url = f"{initial_url}?$top={page_size}"
+        if received_since is not None:
+            # `receivedDateTime ge|gt` is the only $filter message delta takes.
+            # Graph encodes it into the nextLink and deltaLink, so the rest of
+            # this round and every later one stay inside it. Percent-encoded:
+            # `require_graph_url` refuses a URL with a space in it.
+            bound = received_since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            initial_url += "&$filter=" + quote(f"receivedDateTime ge {bound}", safe=":")
 
     raw_items, next_token, has_more = await fetch_delta_pages(
         credential,
