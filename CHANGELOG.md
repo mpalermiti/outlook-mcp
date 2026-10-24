@@ -6,6 +6,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.27.0] — 2026-10-24
+
 ### Fixed
 
 - **Failures outside the Graph SDK reach the model with their text and a remedy.** Only SDK
@@ -145,7 +147,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `is_markdown` together are refused. The supported subset is one `INSTRUCTIONS` bullet, sent
   once per session, so no docstring grows; the five booleans add 97 proxy tokens to the tool
   surface, within the 13,900 ceiling #143 set for the pair.
-
 - **A contact's email addresses can be added and removed one at a time** (#161).
   `outlook_update_contact`'s `email` replaces every address with the one given, so an agent
   asked to add someone's second address had to drop the first. `add_emails` and
@@ -192,8 +193,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   The fence is unchanged: `resolve_attachment_path` still governs every path argument. An
   inline file is bytes the agent already holds and could already put in a message body, so it
   widens nothing; the caps are there for the model's context. The tool surface grows by 233
-  proxy tokens, to 13,819 on top of the other contributions this release, so the budget's
-  ceiling is raised deliberately from 13,700 to 14,000.
+  proxy tokens, to 14,197 with the rest of this release, and the budget's ceiling is raised
+  deliberately to 14,350.
 
 ### Security
 
