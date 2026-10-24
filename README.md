@@ -9,7 +9,7 @@ MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-green)](https://registry.modelcontextprotocol.io/v0/servers?search=mpalermiti)
 
-> **Personal Microsoft accounts only** — `@outlook.com`, `@hotmail.com`, `@live.com`. Work/school accounts (Entra ID) are not supported in v1.
+> **Personal Microsoft accounts only** — `@outlook.com`, `@hotmail.com`, `@live.com`. Work/school accounts (Entra ID) are not supported: the server is built and tested on personal accounts. Fixes that make a tool behave on a work account, without changing what a personal account sees, are welcome.
 
 > **Disclaimer:** Independent open-source project. Not affiliated with, endorsed by, or supported by Microsoft Corporation. "Outlook" and "Microsoft Graph" are trademarks of Microsoft.
 
@@ -304,7 +304,7 @@ configured `timezone`; responses are always UTC.
 | `outlook_reply` | Reply or reply-all to a message, the text above the quoted original. Plain text keeps its paragraphs, line breaks and `- ` lists; a plain-text thread gets a plain-text reply. |
 | `outlook_forward` | Forward a message to one or more recipients with optional comment, which keeps its line breaks like a reply's text. |
 
-Bodies are plain text unless `is_html=True` (HTML, sent as written) or `is_markdown=True`. Markdown is converted to HTML for a safe subset: paragraphs, line breaks, `-`/`*`/`+` and numbered lists, `**bold**`, `*italic*`, `` `code` ``, and `[text](url)` links to `https:` and `mailto:` addresses only. Everything else, raw HTML included, is shown as written. `outlook_send_message`, `outlook_reply`, `outlook_forward` (its `comment`), `outlook_create_draft` and `outlook_update_draft` take it; on a plain-text thread a Markdown reply is sent as written, as plain text.
+Bodies are plain text unless `is_html=True` (HTML, sent as written) or `is_markdown=True`. Markdown is converted to HTML for a safe subset: paragraphs, line breaks, `-`/`*`/`+` and numbered lists, `**bold**`, `*italic*`, `` `code` ``, and `[text](url)` links to `https:` and `mailto:` addresses only. An image, `![alt](url)`, becomes a link to it, never an embedded picture. Everything else, raw HTML included, is shown as written. `outlook_send_message`, `outlook_reply`, `outlook_forward` (its `comment`), `outlook_create_draft` and `outlook_update_draft` take it; on a plain-text thread a Markdown reply is sent as written, as plain text.
 
 ### Mail Triage
 
@@ -640,7 +640,7 @@ uv run outlook-mcp
 
 - **Advanced mail** -- raw MIME export, internet message headers
 - **Calendar** -- cancel event (with attendee notification)
-- **Enterprise (Entra ID)** -- work/school account support
+- **Work/school-only tools** -- free/busy, meeting times, automatic replies, shared mailboxes: not planned for now (#133). If any are taken later, they come as an opt-in group that personal accounts never load
 
 Committed direction, and what was investigated and ruled out (inbox rules, mailbox settings), is in [ROADMAP.md](ROADMAP.md).
 

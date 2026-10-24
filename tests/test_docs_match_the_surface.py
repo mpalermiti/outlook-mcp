@@ -13,6 +13,7 @@ tool added or removed reddens a test instead of quietly making a doc wrong.
 Prose descriptions are deliberately not pinned. Only facts the code settles are.
 """
 
+import json
 import re
 from pathlib import Path
 
@@ -120,6 +121,19 @@ def test_the_concise_tools_named_are_the_ones_that_take_concise():
     assert readme and skill, "the concise-mode tool lists were not found"
     for found in (readme, skill):
         assert set(re.findall(r"`(outlook_\w+)`", found.group(1))) == takes_concise
+
+
+def test_the_counts_no_table_carries_match_the_surface():
+    # Two places state the tool count in prose, and nothing above reads either: the
+    # MCP registry's description in server.json, and the README's "isn't for you"
+    # line. A tool added without them leaves the registry showing the old number.
+    server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+    registry = re.search(r"\((\d+) tools\)", server["description"])
+    assert registry, "server.json description no longer says '(N tools)'"
+    assert int(registry.group(1)) == len(REGISTERED), "server.json's tool count is stale"
+    prose = re.search(r"this has (\d+) tools", README)
+    assert prose, "README 'this has N tools' line not found"
+    assert int(prose.group(1)) == len(REGISTERED), "the README's 'this has N tools' is stale"
 
 
 def test_the_readme_category_table_is_the_accepted_set():
