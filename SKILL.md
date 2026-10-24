@@ -84,7 +84,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_list_inbox` — List messages with filters (folder, unread, sender, date, uncategorized only, Focused class)
 - `outlook_read_message` — Get full message by ID, or by its Message-ID header value (`<abc@example.com>`)
 - `outlook_read_messages` — Bulk read up to 20 messages by ID in one `$batch` round-trip (use NOT N read_message calls)
-- `outlook_search_mail` — Search mail using KQL query; a `cursor` continues the search in the folder it started in
+- `outlook_search_mail` — Search mail using KQL query; a `cursor` continues the search in the folder it started in. Graph has been seen to stop a search a little past 250 results (observed on Exchange Online and Outlook.com); a last page past 250 carries `incomplete`
 - `outlook_list_folders` — List all mail folders
 - `outlook_list_inbox_delta` — List only inbox changes since last call (massive token savings for recurring agent jobs)
 

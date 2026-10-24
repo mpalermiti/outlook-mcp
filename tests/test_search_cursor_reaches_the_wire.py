@@ -14,6 +14,13 @@ for ``/me``.
 
 The cursor also carries the folder the search ran in, as ``list_events``'s
 carries its calendar, so a later page cannot drift to another folder.
+
+The last part is what Graph does at the end. A message ``$search`` stops a
+little past 250 results (275 with pages of 25 or more), with no
+``@odata.nextLink`` and no error, whatever ``$top`` asks for, so the last page
+of a search that matched thousands looks exactly like the last page of a
+complete one. The tool counts what it has served in the cursor and says so
+when a search ends past 250.
 """
 
 from __future__ import annotations
@@ -151,6 +158,8 @@ async def test_a_token_cannot_add_anything_to_the_request():
         {"skiptoken": ""},
         {"skiptoken": "t", "folder": 5},
         {"skiptoken": "t", "folder": "inbox/../../users/someone-else"},
+        {"skiptoken": "t", "served": -1},
+        {"served": "275"},
     ],
 )
 @pytest.mark.asyncio
@@ -222,3 +231,88 @@ async def test_a_cursor_from_a_search_of_all_mail_stays_there(monkeypatch):
 
     assert asked == []
     assert str(sent[1]).startswith(f"{ME}/messages?"), sent[1]
+
+
+async def _walk(client, count: int) -> list[dict]:
+    results, cursor = [], None
+    while True:
+        result = await search_mail(client, query="budget", count=count, cursor=cursor)
+        results.append(result)
+        cursor = result["cursor"]
+        if cursor is None:
+            return results
+
+
+@pytest.mark.asyncio
+async def test_a_search_graph_stopped_at_its_limit_says_so():
+    """100 + 100 + 75 and no nextLink: what Graph sends for a search that matched more."""
+    client, _ = _graph(
+        [
+            _page(0, 100, _next("messages")),
+            _page(100, 100, _next("messages")),
+            _page(200, 75, None),
+        ]
+    )
+
+    pages = await _walk(client, count=100)
+
+    assert [p["count"] for p in pages] == [100, 100, 75]
+    assert "incomplete" not in pages[0] and "incomplete" not in pages[1]
+    assert pages[-1]["has_more"] is False
+    assert "275" in pages[-1]["incomplete"]
+    assert "received<=" in pages[-1]["incomplete"], "the note must say how to reach older mail"
+
+
+@pytest.mark.asyncio
+async def test_small_pages_reach_the_limit_too():
+    """With $top=10 Graph sent 26 full pages and then an empty one with no nextLink."""
+    pages = [_page(i * 10, 10, _next("messages")) for i in range(26)] + [_page(260, 0, None)]
+    client, _ = _graph(pages)
+
+    walked = await _walk(client, count=10)
+
+    assert sum(p["count"] for p in walked) == 260
+    assert walked[-1]["count"] == 0
+    assert "260" in walked[-1]["incomplete"]
+
+
+@pytest.mark.parametrize(("rows", "cut"), [(250, False), (251, True)])
+@pytest.mark.asyncio
+async def test_graph_never_stops_a_search_at_250_or_fewer(rows, cut):
+    """Graph's stop was always past 250 (255 at $top=5), so a search that ends at 250 is whole."""
+    pages = [_page(i * 25, 25, _next("messages")) for i in range(10)]
+    pages.append(_page(250, rows - 250, None))
+    client, _ = _graph(pages)
+
+    walked = await _walk(client, count=25)
+
+    assert sum(p["count"] for p in walked) == rows
+    assert ("incomplete" in walked[-1]) is cut
+
+
+@pytest.mark.asyncio
+async def test_a_search_that_ends_below_the_limit_is_complete():
+    client, _ = _graph([_page(0, 100, _next("messages")), _page(100, 20, None)])
+
+    pages = await _walk(client, count=100)
+
+    assert [p["count"] for p in pages] == [100, 20]
+    assert all("incomplete" not in p for p in pages)
+
+
+@pytest.mark.asyncio
+async def test_a_larger_complete_search_note_does_not_assert_a_275_result_limit():
+    client, _ = _graph(
+        [
+            _page(0, 100, _next("messages")),
+            _page(100, 100, _next("messages")),
+            _page(200, 100, _next("messages")),
+            _page(300, 100, None),
+        ]
+    )
+    pages = await _walk(client, count=100)
+    note = pages[-1]["incomplete"]
+    assert "ended at 400 results" in note
+    assert "has been seen" in note
+    assert "older matches may be missing" in note
+    assert "received<=" in note

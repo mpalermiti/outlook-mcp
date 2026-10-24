@@ -6,6 +6,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **A mail search Graph cut short says so.** Graph ends a message `$search` a little past 250
+  results with no `@odata.nextLink` and no error, whatever `$top` asks for (275 for pages of 25
+  or more, measured on an Exchange Online mailbox holding tens of thousands of matches; Graph's
+  documentation says up to 1,000), which reads exactly like the end of a complete search.
+  `outlook_search_mail`'s cursor now counts what it has served, and the last page of a search
+  that ends past 250 carries `incomplete`: older matches may be missing, and adding
+  `received<=` with the last message's date reaches them.
+
 ## [1.27.0] — 2026-10-24
 
 ### Fixed
