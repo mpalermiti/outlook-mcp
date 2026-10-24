@@ -61,6 +61,7 @@ TOOL_GROUPS: dict[str, str] = {
     # attachments
     "outlook_list_attachments": "attachments",
     "outlook_download_attachment": "attachments",
+    "outlook_read_attachment": "attachments",
     "outlook_send_with_attachments": "attachments",
     # calendar
     "outlook_list_events": "calendar",
@@ -124,6 +125,7 @@ READ_ONLY: set[str] = {
     "outlook_list_thread",
     "outlook_list_drafts",
     "outlook_list_attachments",
+    "outlook_read_attachment",
     "outlook_list_events",
     "outlook_get_event",
     "outlook_list_calendars",

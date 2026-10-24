@@ -6,6 +6,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- `outlook_read_attachment` returns readable PDF pages, XLSX cells/formulas/saved results,
+  or UTF-8 text as paged tool content, without saving a server-side file. PDF/XLSX parsers
+  are an optional `documents` extra. Missing text, missing formula caches and parser limits
+  are explicit; no OCR or formula recalculation is performed. Byte downloads are unchanged.
+
 ## [1.27.0] — 2026-10-24
 
 ### Fixed

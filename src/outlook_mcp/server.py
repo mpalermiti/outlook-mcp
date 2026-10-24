@@ -45,6 +45,7 @@ from outlook_mcp.tools import (
     contacts_delta,
     digest,
     inference_overrides,
+    mail_attachment_read,
     mail_attachments,
     mail_delta,
     mail_drafts,
@@ -152,6 +153,9 @@ Working rules, each of which saves a round trip:
   return them. Never report a searched contact as uncategorised; read it back if you need to
   know. Addresses are on outlook_get_contact only, and writing one replaces it wholesale, so
   giving a new contact an address is create, then read, then update with every part.
+- To read a document attachment, use outlook_read_attachment (PDF/XLSX/UTF-8 text).
+  Download's save_path is on the server, which a remote client may not be able to open.
+  as_content=True returns the original bytes; document reading returns extracted text.
 """
 
 # SEP-2549: tell the client how long `tools/list` stays fresh, so it can stop
@@ -1592,6 +1596,26 @@ async def outlook_download_attachment(
         save_path,
         config=_get_config(ctx),
         as_content=as_content,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_read_attachment(
+    ctx: Context,
+    message_id: str,
+    attachment_id: str,
+    offset: int = 0,
+    max_chars: int = 20_000,
+) -> dict:
+    """Read PDF pages, XLSX cells/formulas/saved results, or UTF-8 text; no file is saved.
+
+    Up to 10 MiB; next_offset continues the text. max_chars: 1-50000. PDF/XLSX
+    need the documents extra. Scans need OCR; formulas are never recalculated.
+    """
+    client = _get_graph_client(ctx)
+    return await mail_attachment_read.read_attachment(
+        client.sdk_client, message_id, attachment_id, offset, max_chars
     )
 
 

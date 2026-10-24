@@ -444,6 +444,27 @@ async def download_attachment(
     attachment_id = validate_graph_id(attachment_id)
     save_path = download_destination(save_path, as_content, config.attachments_dir)
 
+    attachment, content = await fetch_attachment(graph_client, message_id, attachment_id)
+    name = sanitize_output(attachment.name or "")
+    content_type = sanitize_output(attachment.content_type or "")
+    if save_path is None:
+        return attachment_content(name, content_type, content)
+
+    write_download(save_path, content)
+    return {
+        "saved_to": save_path,
+        "name": name,
+        "size": attachment.size,
+        "content_type": content_type,
+    }
+
+
+async def fetch_attachment(
+    graph_client: Any, message_id: str, attachment_id: str
+) -> tuple[Any, bytes]:
+    """The SDK attachment and its already-decoded bytes, shared by download and reading."""
+    message_id = validate_graph_id(message_id)
+    attachment_id = validate_graph_id(attachment_id)
     attachment = (
         await graph_client.me.messages.by_message_id(message_id)
         .attachments.by_attachment_id(attachment_id)
@@ -464,18 +485,7 @@ async def download_attachment(
             "be an attached email or a link to a cloud file. Nothing was written."
         )
 
-    name = sanitize_output(attachment.name or "")
-    content_type = sanitize_output(attachment.content_type or "")
-    if save_path is None:
-        return attachment_content(name, content_type, content)
-
-    write_download(save_path, content)
-    return {
-        "saved_to": save_path,
-        "name": name,
-        "size": attachment.size,
-        "content_type": content_type,
-    }
+    return attachment, content
 
 
 async def _upload_large_file(

@@ -46,6 +46,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   - `todo_attachments.py` — To Do task attachments (inline base64 uploads ≤20 MiB, contentBytes downloads)
   - `mail_drafts.py` — Draft management
   - `mail_attachments.py` — Attachment handling
+  - `mail_attachment_read.py`, `_document_worker.py` — Paged document text, optional parsers
   - `mail_folders.py` — Folder management
   - `mail_thread.py` — Threading and copy
   - `batch.py` — Batch operations

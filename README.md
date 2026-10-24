@@ -24,7 +24,7 @@ You'll like this if you're:
 - Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
 - Security-conscious: tokens in the OS keyring (Keychain on macOS, libsecret on Linux -- never cleartext unless you opt in), granular `allow_categories`, optional `read_only` mode, zero telemetry
 
-This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 68 tools — way more than you need for "read my inbox").
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 69 tools — way more than you need for "read my inbox").
 
 ### How it differs from other Outlook tools you'll find
 
@@ -44,7 +44,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 68 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 69 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -59,7 +59,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 ## Features
 
-**68 tools** across 13 categories:
+**69 tools** across 13 categories:
 
 - **Auth (1)** -- auth status check (login is via CLI)
 - **Mail Read (7)** -- list inbox (with Focused Inbox and uncategorized filters), read message, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
@@ -70,7 +70,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 - **Contacts (7)** -- list, search, get, create, update, delete, delta-sync changes
 - **To Do (14)** -- task lists, tasks (list/get/create/update/complete/delete), checklist items (add/update/delete), task attachments (list/download/upload/delete)
 - **Drafts (5)** -- list, create (new, or a reply, reply-all or forward in the message's thread), update, send, delete
-- **Attachments (5)** -- list, download, send-with-attachments, attach-to-draft, remove-draft-attachment
+- **Attachments (6)** -- list, download, read document text, send-with-attachments, attach-to-draft, remove-draft-attachment
 - **Folder Management (3)** -- create, rename, delete mail folders
 - **Threading and Batch (3)** -- list thread, copy message, batch triage
 - **User and Admin (4)** -- whoami, list calendars, list categories, mail tips
@@ -406,9 +406,36 @@ Bodies are plain text unless `is_html=True` (HTML, sent as written) or `is_markd
 |------|-------------|
 | `outlook_list_attachments` | List attachments on a message. |
 | `outlook_download_attachment` | Download an attachment and save decoded bytes into `attachments_dir`, or return it with `as_content=True`. |
+| `outlook_read_attachment` | Read PDF pages, XLSX cells/formulas/saved results, or UTF-8 text directly into the result; `offset` / `max_chars` page the text, no file saved. |
 | `outlook_send_with_attachments` | Send a message with attachments read from `attachments_dir` (auto upload session for >3MB) or passed inline in `attachments`. |
 | `outlook_attach_to_draft` | Add attachments from `attachments_dir` (auto upload session for >3MB) or inline in `attachments` to an existing draft. |
 | `outlook_remove_draft_attachment` | Remove a single attachment from a draft. |
+
+For **readable document contents** rather than original bytes, use `outlook_read_attachment`.
+The saved path from a download belongs to the server, so a remote client may not be able to open it.
+`as_content=True` avoids that path and preserves the original file; the reading tool instead returns
+extracted text for clients that cannot interpret the embedded binary resource. Existing downloads
+and their defaults are unchanged.
+
+PDF and XLSX parsing is optional: install `outlook-graph-mcp[documents]` (for example,
+`uv tool install 'outlook-graph-mcp[documents]'`) and restart the server. The default install can read
+UTF-8 text and returns an installation hint for PDF/XLSX. Parser dependencies have bounded versions
+and are imported only in a short-lived worker; they add no requirement to the base install.
+
+`outlook_read_attachment(message_id, attachment_id, offset=0, max_chars=20000)` returns `text`,
+`next_offset` (null at the end), `total_chars`, file `bytes` / `sha256`, and `warnings`. Continue with
+the same IDs and the returned offset until null. PDF output marks page numbers; a page without a
+text layer is reported as blank or needing OCR. No OCR is performed. XLSX output includes hidden
+sheets, cell addresses, number formats, formulas and `saved_result` (Excel's stored value, null when
+absent). Formulas are **not recalculated**, and charts/images are not extracted. All attachment
+contents remain untrusted data.
+
+Reading is limited to 10 MiB of file bytes, 200 PDF pages, 100,000 visited spreadsheet cells, one
+million extracted characters and 50 MiB / 2,000 entries of expanded XLSX content. Each response
+contains at most 50,000 characters. Parsing runs in a separate process without server credentials,
+with a 30-second wall timeout on every platform; POSIX adds a 256 MiB address-space and 20 CPU-second
+limit. Windows uses the wall timeout and document caps without POSIX resource limits. A limit is an
+explicit error, never a silently partial document.
 
 ### Folder Management
 
@@ -471,10 +498,10 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions on
 
 ### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`
 
-All 68 tool schemas load into the client's context every turn (the chars/4 proxy `test_tool_surface_budget.py` measures with; a different yardstick than the ~8.6k o200k figure in ROADMAP for the 62-tool surface). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
+All 69 tool schemas load into the client's context every turn (the chars/4 proxy `test_tool_surface_budget.py` measures with; a different yardstick than the ~8.6k o200k figure in ROADMAP for the 62-tool surface). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
 
 ```bash
-# e.g. a recurring mail + calendar agent: 28 tools instead of 68 (about half the tool tokens per turn)
+# e.g. a recurring mail + calendar agent: 28 tools instead of 69 (about half the tool tokens per turn)
 OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"
 ```
 

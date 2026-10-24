@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 68 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 69 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -75,7 +75,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `triage_folder(folder="inbox", count=50)` — one scan, sorted, applied in a single batch call
 - `catch_up(since="24h")` — what changed, via the delta path
 
-## Tools (68)
+## Tools (69)
 
 ### Auth
 - `outlook_auth_status` — Check authentication status and read-only mode
@@ -152,6 +152,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 ### Attachments
 - `outlook_list_attachments` — List on a message
 - `outlook_download_attachment` — Download and save decoded bytes into `attachments_dir`, or return them with `as_content=True` (≤10 MB)
+- `outlook_read_attachment` — Read PDF pages, XLSX cells/formulas/saved results, or UTF-8 text without a server-side file; follow `next_offset` until null. PDF/XLSX need the `documents` extra; no OCR or formula recalculation
 - `outlook_send_with_attachments` — Send with files read from `attachments_dir` (auto upload session for >3MB) or passed inline in `attachments` (≤3MB each)
 - `outlook_attach_to_draft` — Add attachments to an existing draft, from `attachments_dir` (auto upload session for >3MB) or inline in `attachments` (≤3MB each)
 - `outlook_remove_draft_attachment` — Remove a single attachment from a draft
@@ -187,5 +188,5 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - Mail search uses KQL syntax
 - Start with `read_only: true`, flip when comfortable
 - **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 7 categories and example policies.
-- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context; unset loads all 68. Tools carry read-only / destructive annotations so clients can auto-approve reads.
+- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context; unset loads all 69. Tools carry read-only / destructive annotations so clients can auto-approve reads.
 - **Two accounts:** One server serves one mailbox. Register a second server entry with its own `OUTLOOK_MCP_CONFIG_DIR` (e.g. `~/.outlook-mcp-work`) and run `outlook-mcp auth` once with that variable set. Move only the config directory, never `HOME` — see README "Two accounts, two instances".
