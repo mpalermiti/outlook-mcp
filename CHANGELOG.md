@@ -43,7 +43,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `outlook_attach_to_event` attaches files from `attachments_dir` through the same code as
   `outlook_attach_to_draft`: every path is confined by `resolve_attachment_path`, a file up to
   3 MB is one POST, and a larger one uses Graph's upload session for events. It returns the new
-  attachment IDs. `outlook_remove_event_attachment` removes one, and `outlook_get_event` now lists
+  attachment IDs (none yet for a file sent through the upload session).
+  `outlook_remove_event_attachment` removes one, and `outlook_get_event` now lists
   `attachments` (ID, name, size, type and whether inline, never the bytes), reading them with a
   second request only when the event has any. Attendees are not sent the files when they are
   attached; they get them with the event's next update. So under an `allow_categories` that
@@ -67,29 +68,34 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   The opt-in read selects `internetMessageHeaders` and every field the formatters read, and
   `test_select_covers_the_formatter.py` pins that list against both. The headers themselves
   are not returned. The instructions every client receives say to use it before acting on a
-  message because of who sent it. On current main, the opt-in read brings the tool surface
-  from 14,197 to 14,272 proxy tokens; the existing 14,350 ceiling covers it.
-- **Attachments can be read as text: PDF pages, spreadsheet cells and plain text.**
+  message because of who sent it. When it merged, the opt-in read brought the tool surface
+  from 14,197 to 14,272 proxy tokens, inside the 14,350 ceiling of the time.
+- **Attachments can be read as text: PDF pages, spreadsheet cells and plain text (#182).**
   `outlook_read_attachment` returns readable PDF pages, XLSX cells/formulas/saved results,
   or text in its declared charset as paged tool content, without saving a server-side file. PDF/XLSX parsers
   are an optional `documents` extra; the tool is in the opt-in `documents` group, off by default.
   The parent serializes parsers and enforces RSS and wall limits on every platform. Parser errors
   are bounded and cleaned, metadata is checked before download, and worker fields are validated.
   Missing text, missing formula caches and parser limits
-  are explicit; no OCR or formula recalculation is performed. Byte downloads are unchanged.
+  are explicit; no OCR or formula recalculation is performed. A worksheet name over 31
+  characters is cut for display and ends in its one-based position, so names sharing a prefix
+  stay distinguishable (#187); the original names still select the workbook data. Byte
+  downloads are unchanged.
 - **An optional streamable-HTTP transport** (#126), for a server on another machine or in a
   container, or a client that cannot spawn a local process.
   `OUTLOOK_MCP_TRANSPORT=streamable-http` serves `/mcp` through the SDK's own streamable-HTTP
   app, stateless and answering JSON, on `OUTLOOK_MCP_HTTP_HOST`/`OUTLOOK_MCP_HTTP_PORT` (default
-  `127.0.0.1:8000`). It never starts without `OUTLOOK_MCP_HTTP_TOKEN`, loopback included, and
-  every request must carry it as a bearer or gets `401`. It speaks plain HTTP, so TLS belongs to
-  a proxy in front. stdio stays the default, unchanged; uvicorn is declared directly. See the README's
-  "Remote / HTTP transport".
+  `127.0.0.1:8000`). It never starts without a token, loopback included (`OUTLOOK_MCP_HTTP_TOKEN`,
+  or `OUTLOOK_MCP_HTTP_TOKEN_FILE` naming an owner-only file that is not a symlink), and every
+  request must carry it as a bearer or gets `401`. Host and Origin are checked against an
+  allow-list (`OUTLOOK_MCP_HTTP_ALLOWED_HOSTS` for a public name). It speaks plain HTTP, so
+  TLS belongs to a proxy in front. stdio stays the default, unchanged; uvicorn is declared
+  directly. See the README's "Remote / HTTP transport".
 
 ### Changed
 
 - **Where Graph honours the filter, `outlook_changes_since` follows mail received since its
-  first call's window.** Graph keeps that call's `receivedDateTime` filter in later cursors,
+  first call's window (#156).** Graph keeps that call's `receivedDateTime` filter in later cursors,
   so later rounds on those accounts report new mail
   and, for older messages, only what Graph's message delta still sends for them: deletes, moves
   out of the inbox and read/unread changes. A flag or category set on mail received before the
@@ -107,16 +113,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   attachment text now arrives as an embedded resource holding the original bytes, and
   `sanitize_output`, error text and every tool's result replace any other lone surrogate with
   U+FFFD (a split pair is joined back instead). No tool-surface change.
-- **Long worksheet names remain distinguishable after display truncation.** A cut name
-  ends in its one-based worksheet position, within the same 31-character bound, so
-  names sharing a prefix no longer label different sheets alike. Original names
-  still select the workbook data; names already within the limit are unchanged.
-- **An empty recipient list clears the recipients, instead of being read as "not mentioned".**
+- **An empty recipient list clears the recipients, instead of being read as "not mentioned"
+  (#183).**
   A reply-all draft arrives with Graph's own `to` and `cc` already on it, and `if cc:` dropped
   `cc=[]`, so the draft kept people the caller had explicitly removed — sending it mailed them.
   Omitted (`None`) still leaves Graph's choice alone; `[]` now reaches the create call as an
   empty collection, which is what Graph receives.
-- **A truncated image comes back as a resource, not as `ImageContent`.** Detection stopped at
+- **A truncated image comes back as a resource, not as `ImageContent` (#183).** Detection stopped at
   the signature, so a PNG cut before its IEND was sent as an image; a client that cannot open
   it can reject the whole tool result. Each type must now finish the way it starts: PNG ends
   with the IEND chunk itself (CRC included — the four letters alone were enough before), GIF
@@ -128,7 +131,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   was validated as an id and nothing else, so "Junk Email" was refused locally and a user
   folder's name reached Graph as an id. It now goes through the same resolver as every other
   folder argument, paths included.
-- **`outlook_changes_since` no longer reports an inbox's history as new on its second call.**
+- **`outlook_changes_since` no longer reports an inbox's history as new on its second call
+  (#156).**
   On an inbox of more than about 1,000 messages, the first call stopped partway through Graph's
   snapshot without saying so, and the next call reported the rest of the mailbox as new mail,
   with every old high-importance or flagged message in `urgent_flagged`. The first call now asks
@@ -140,7 +144,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   beside `delta_tokens` names any resource
   the per-call cap stopped mid-sync, and a reply with no new cursor hands back the token passed
   in instead of `None`.
-- **A mail search Graph cut short says so.** Graph ends a message `$search` a little past 250
+- **A mail search Graph cut short says so (#134).** Graph ends a message `$search` a little past 250
   results with no `@odata.nextLink` and no error, whatever `$top` asks for (275 for pages of 25
   or more, measured on an Exchange Online mailbox holding tens of thousands of matches; Graph's
   documentation says up to 1,000), which reads exactly like the end of a complete search.

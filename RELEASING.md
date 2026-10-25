@@ -14,7 +14,7 @@ Read-only. No writes, no sends, no mailbox state changes.
 
 If the script reports failures, do not tag. Either fix the affected tools or remove them from the release. v1.7.0 shipped four tools backed by `/me/mailboxSettings/*` that Microsoft Graph does not support on personal accounts; v1.7.1 yanked them. This script would have caught it in 30 seconds.
 
-When adding a new tool that hits a Graph endpoint family not yet covered, add a row to `ENDPOINTS` in `scripts/preflight.py`.
+When adding a new tool that hits a Graph endpoint family not yet covered, add a row to `ENDPOINTS` in `scripts/preflight.py`. A family that only exists under a real resource id (`.../tasks/{id}/...`) needs a row provisioned at run time, as `_todo_task_rows` does; a made-up id 404s for the wrong reason.
 
 ## 1b. Live query-shape tests
 
@@ -46,22 +46,25 @@ Response-shape checks for each tool family. Read-only.
 
 > These skipped silently for their entire existence — the fixture called a non-existent `AuthManager.login()`, and the `except Exception` swallowed the `AttributeError`. Fixed in 1.13.0. If you see `skipped` here, confirm it's really a missing token and not a broken fixture.
 
-## 1d. Write-tier guards (calendar only)
+## 1d. Write-tier guards (calendar, contacts, To Do, unsent drafts)
 
 ```bash
 OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write -v
 ```
 
-The only tier that writes. It creates short, bounded, attendee-free recurring events on the authenticated calendar and deletes each one in a `finally`.
+The only tier that writes. It creates marked items on the authenticated mailbox — short, bounded, attendee-free events (recurring ones included, with keys and attachments), contacts, tasks and drafts that are never sent — and deletes each one in a `finally`.
 
 It exists because recurrence cannot be validated any other way: a `PatternedRecurrence` that is well-formed to the SDK still 400s with `ErrorInvalidRecurrenceRange` if the range disagrees with the series master's start. `outlook_create_event` accepted a `recurrence` argument and silently discarded it for fourteen minor versions (#41) under a fully green mock suite — mocks assert what we *build*.
 
-Double-gated on purpose: the marker is deselected by default **and** the tier skips without `OUTLOOK_MCP_LIVE_WRITE=1`, so a cached token alone can never write to a calendar. Run it if you changed anything under `tools/_recurrence.py` or `calendar_write.py`. See the rules at the top of `tests/conftest.py` before adding to it.
+Double-gated on purpose: the marker is deselected by default **and** the tier skips without `OUTLOOK_MCP_LIVE_WRITE=1`, so a cached token alone can never write to a calendar. Run it if you changed a write path it covers: `tools/_recurrence.py`, `calendar_write.py`, `calendar_attachments.py`, `contacts.py`, `todo.py`, `todo_attachments.py` or `mail_drafts.py`. See the rules at the top of `tests/conftest.py` before adding to it.
 
 ## 2. Tests + lint
 
 ```bash
+uv sync --all-extras   # the `documents` parsers; without them their tests skip
 uv run pytest --tb=no -q
+OUTLOOK_MCP_TOOLSETS="$(uv run python -c 'from outlook_mcp import toolsets; print(",".join(sorted(set(toolsets.TOOL_GROUPS.values()))))')" \
+  uv run pytest --tb=no -q   # every toolset loaded, opt-in `documents` included, as CI runs it
 uv run ruff check src/ tests/ scripts/
 uv run ruff format --check src/ tests/ scripts/
 ```
@@ -74,12 +77,13 @@ Update in lockstep:
 
 - `pyproject.toml` — `version = "X.Y.Z"`
 - `server.json` — both `version` fields + `description` (tool count if it changed)
-- `.github/workflows/ci.yml` — both tool-count asserts. The fresh-install one pins the working tree's surface (a release that adds or removes a tool updates it in the same PR). The `published-install` one pins the count of the **PyPI-latest** release, so it is only correct until the next publish; leaving it stale turns the weekly canary permanently red the day the release lands
+- `uv.lock` — the `outlook-graph-mcp` package's own `version` line (`uv lock` rewrites it). CI runs `uv sync --locked`, which fails while it disagrees with `pyproject.toml`
+- `.github/workflows/ci.yml` — both tool-count asserts. Both count every registered tool, opt-in groups included — not the default surface, which leaves `documents` out. The fresh-install one pins the working tree's surface (a release that adds or removes a tool updates it in the same PR). The `published-install` one pins the count of the **PyPI-latest** release, so it is only correct until the next publish; leaving it stale turns the weekly canary permanently red the day the release lands
 - `CHANGELOG.md` — new `## [X.Y.Z] — YYYY-MM-DD` entry
 - `SKILL.md` — `## Tools (N)` heading + frontmatter `description` if count changed
 - `README.md` — counts and tables if they changed
 - `ROADMAP.md` — move shipped items from Near-term to Done
-- `CLAUDE.md` — tools listing if you added/removed a module
+- `CLAUDE.md` — the Architecture list if you added/removed a module, and the docstring count under Conventions if the default tool count changed
 
 ## 4. PR + merge
 
