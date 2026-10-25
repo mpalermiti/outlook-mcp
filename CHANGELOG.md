@@ -6,6 +6,96 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.28.0] — 2026-10-25
+
+### Added
+
+- **Folder arguments take a path, so any folder can be named, including one whose name another
+  folder shares** (#144). `Inbox/Travel/Flights` names Flights under Travel under Inbox, and a `/`
+  inside a folder's name is written `//` (`Inbox/Q1//Q2`; not a backslash, which JSON reads as a
+  plain `/`). The first part is a well-known name, as before with no request, or a top-level
+  folder; each later part is matched case-insensitively among the previous folder's children,
+  so a path costs one listing per level, where a nested name walks the whole tree. Every tool
+  that takes a folder gets it through `resolve_folder_id`: `outlook_list_inbox`,
+  `outlook_search_mail`, `outlook_move_message`, `outlook_copy_message`, `outlook_batch_triage`'s
+  move and `outlook_list_inbox_delta`. Until now a `/` meant an id, so a path went to Graph as
+  one and failed, a name containing `/` could not be named at all, and a name used under two
+  parents could only be reached by its id. An id-shaped reference whose first part names no
+  folder still goes through as an id; a path that goes wrong below a folder that exists, or that
+  has an empty part, keeps the resolver's own message. The ambiguity error now lists the
+  candidates' paths (the first five), `outlook_list_folders(recursive=True)` returns each
+  folder's `path` in the same form, and the path rule is in the server instructions. No lookup
+  cache: a cached path goes stale silently
+  when a folder is renamed and another takes its name.
+- **Event keys: find "the event for booking X" again** (#148). An agent recording a flight,
+  a stay or an appointment had nothing stable to find it by when a change to the same booking
+  arrived, only a subject and a time that both change, so it created a second event.
+  `outlook_create_event` and `outlook_update_event` take `key`, the caller's own reference,
+  stored in a hidden extended property this server owns. `outlook_get_event` returns it (`null`
+  when unset), and the default `outlook_list_events` listing shows it on the events that carry
+  one. The new `outlook_find_event_by_key` finds events by key in the default calendar or a named
+  one, with no date window, and returns single events and series masters, never occurrences. A
+  key is 1–128 letters, digits and `. _ : @ -`, refused otherwise before anything is sent. One
+  line in the connect-time instructions tells the agent to look a key up before creating. 68 → 69
+  tools.
+- **Files on calendar events** (#153). Drafts and To Do tasks could carry attachments and events
+  could not, so an agent putting a flight on the calendar had nowhere to put the e-ticket. The new
+  `outlook_attach_to_event` attaches files from `attachments_dir` through the same code as
+  `outlook_attach_to_draft`: every path is confined by `resolve_attachment_path`, a file up to
+  3 MB is one POST, and a larger one uses Graph's upload session for events. It returns the new
+  attachment IDs. `outlook_remove_event_attachment` removes one, and `outlook_get_event` now lists
+  `attachments` (ID, name, size, type and whether inline, never the bytes), reading them with a
+  second request only when the event has any. Attendees are not sent the files when they are
+  attached; they get them with the event's next update. So under an `allow_categories` that
+  withholds `mail_send`, attaching to an event with attendees is refused, as rewording one is, and
+  the tool is marked destructive. A missing file is refused with a message the agent can read.
+  69 → 71 tools.
+- **The read tools can say whether Microsoft verified who a message is from (#130).** A From
+  line is whatever the sender typed, so mail claiming to come from the user's bank or manager
+  could be spoofed, and nothing told the agent which it was. `outlook_read_message` and
+  `outlook_read_messages` take `include_sender_auth=True`, which adds `sender_authentication`:
+  `authenticated`, the From domain, Microsoft's `dkim`, `dmarc` and `compauth` results, and a
+  short `reason`. It is read from the `Authentication-Results` header Microsoft stamps on
+  receipt, and only the topmost one counts, since a sender can write that header into the
+  message too. The header is parsed as RFC 8601, with comments and quoted strings respected.
+  `authenticated` is true only for a pass aligned with the From domain: `dmarc=pass` for it,
+  `dkim=pass` signed by it or a subdomain, or `compauth=pass` where every `header.from` is it.
+  A failing `dmarc` or `compauth`, either stated twice, another service's header, or one that
+  cannot be parsed authenticates nothing. `authenticated` vouches for `from_domain` only, never
+  for the display name, and `false` means unverified, not spoofed. Off by default, so the
+  default read sends the same request and returns the same fields as before.
+  The opt-in read selects `internetMessageHeaders` and every field the formatters read, and
+  `test_select_covers_the_formatter.py` pins that list against both. The headers themselves
+  are not returned. The instructions every client receives say to use it before acting on a
+  message because of who sent it. On current main, the opt-in read brings the tool surface
+  from 14,197 to 14,272 proxy tokens; the existing 14,350 ceiling covers it.
+- **Attachments can be read as text: PDF pages, spreadsheet cells and plain text.**
+  `outlook_read_attachment` returns readable PDF pages, XLSX cells/formulas/saved results,
+  or text in its declared charset as paged tool content, without saving a server-side file. PDF/XLSX parsers
+  are an optional `documents` extra; the tool is in the opt-in `documents` group, off by default.
+  The parent serializes parsers and enforces RSS and wall limits on every platform. Parser errors
+  are bounded and cleaned, metadata is checked before download, and worker fields are validated.
+  Missing text, missing formula caches and parser limits
+  are explicit; no OCR or formula recalculation is performed. Byte downloads are unchanged.
+- **An optional streamable-HTTP transport** (#126), for a server on another machine or in a
+  container, or a client that cannot spawn a local process.
+  `OUTLOOK_MCP_TRANSPORT=streamable-http` serves `/mcp` through the SDK's own streamable-HTTP
+  app, stateless and answering JSON, on `OUTLOOK_MCP_HTTP_HOST`/`OUTLOOK_MCP_HTTP_PORT` (default
+  `127.0.0.1:8000`). It never starts without `OUTLOOK_MCP_HTTP_TOKEN`, loopback included, and
+  every request must carry it as a bearer or gets `401`. It speaks plain HTTP, so TLS belongs to
+  a proxy in front. stdio stays the default, unchanged; uvicorn is declared directly. See the README's
+  "Remote / HTTP transport".
+
+### Changed
+
+- **Where Graph honours the filter, `outlook_changes_since` follows mail received since its
+  first call's window.** Graph keeps that call's `receivedDateTime` filter in later cursors,
+  so later rounds on those accounts report new mail
+  and, for older messages, only what Graph's message delta still sends for them: deletes, moves
+  out of the inbox and read/unread changes. A flag or category set on mail received before the
+  window is no longer reported. A token stored by an earlier version keeps following the whole
+  inbox until the digest starts over (no token, or a 410 resync).
+
 ### Fixed
 
 - **A lone surrogate no longer ends the server** (#186). A lone UTF-16 surrogate has no
@@ -38,7 +128,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   was validated as an id and nothing else, so "Junk Email" was refused locally and a user
   folder's name reached Graph as an id. It now goes through the same resolver as every other
   folder argument, paths included.
-
 - **`outlook_changes_since` no longer reports an inbox's history as new on its second call.**
   On an inbox of more than about 1,000 messages, the first call stopped partway through Graph's
   snapshot without saying so, and the next call reported the rest of the mailbox as new mail,
@@ -51,7 +140,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   beside `delta_tokens` names any resource
   the per-call cap stopped mid-sync, and a reply with no new cursor hands back the token passed
   in instead of `None`.
-
 - **A mail search Graph cut short says so.** Graph ends a message `$search` a little past 250
   results with no `@odata.nextLink` and no error, whatever `$top` asks for (275 for pages of 25
   or more, measured on an Exchange Online mailbox holding tens of thousands of matches; Graph's
@@ -59,99 +147,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `outlook_search_mail`'s cursor now counts what it has served, and the last page of a search
   that ends past 250 carries `incomplete`: older matches may be missing, and adding
   `received<=` with the last message's date reaches them.
-
-### Added
-
-- **Folder arguments take a path, so any folder can be named, including one whose name another
-  folder shares** (#144). `Inbox/Travel/Flights` names Flights under Travel under Inbox, and a `/`
-  inside a folder's name is written `//` (`Inbox/Q1//Q2`; not a backslash, which JSON reads as a
-  plain `/`). The first part is a well-known name, as before with no request, or a top-level
-  folder; each later part is matched case-insensitively among the previous folder's children,
-  so a path costs one listing per level, where a nested name walks the whole tree. Every tool
-  that takes a folder gets it through `resolve_folder_id`: `outlook_list_inbox`,
-  `outlook_search_mail`, `outlook_move_message`, `outlook_copy_message`, `outlook_batch_triage`'s
-  move and `outlook_list_inbox_delta`. Until now a `/` meant an id, so a path went to Graph as
-  one and failed, a name containing `/` could not be named at all, and a name used under two
-  parents could only be reached by its id. An id-shaped reference whose first part names no
-  folder still goes through as an id; a path that goes wrong below a folder that exists, or that
-  has an empty part, keeps the resolver's own message. The ambiguity error now lists the
-  candidates' paths (the first five), `outlook_list_folders(recursive=True)` returns each
-  folder's `path` in the same form, and the path rule is in the server instructions. No lookup
-  cache: a cached path goes stale silently
-  when a folder is renamed and another takes its name.
-
-- **Event keys: find "the event for booking X" again** (#148). An agent recording a flight,
-  a stay or an appointment had nothing stable to find it by when a change to the same booking
-  arrived, only a subject and a time that both change, so it created a second event.
-  `outlook_create_event` and `outlook_update_event` take `key`, the caller's own reference,
-  stored in a hidden extended property this server owns. `outlook_get_event` returns it (`null`
-  when unset), and the default `outlook_list_events` listing shows it on the events that carry
-  one. The new `outlook_find_event_by_key` finds events by key in the default calendar or a named
-  one, with no date window, and returns single events and series masters, never occurrences. A
-  key is 1–128 letters, digits and `. _ : @ -`, refused otherwise before anything is sent. One
-  line in the connect-time instructions tells the agent to look a key up before creating. 68 → 69
-  tools.
-
-- **Files on calendar events** (#153). Drafts and To Do tasks could carry attachments and events
-  could not, so an agent putting a flight on the calendar had nowhere to put the e-ticket. The new
-  `outlook_attach_to_event` attaches files from `attachments_dir` through the same code as
-  `outlook_attach_to_draft`: every path is confined by `resolve_attachment_path`, a file up to
-  3 MB is one POST, and a larger one uses Graph's upload session for events. It returns the new
-  attachment IDs. `outlook_remove_event_attachment` removes one, and `outlook_get_event` now lists
-  `attachments` (ID, name, size, type and whether inline, never the bytes), reading them with a
-  second request only when the event has any. Attendees are not sent the files when they are
-  attached; they get them with the event's next update. So under an `allow_categories` that
-  withholds `mail_send`, attaching to an event with attendees is refused, as rewording one is, and
-  the tool is marked destructive. A missing file is refused with a message the agent can read.
-  69 → 71 tools.
-- **The read tools can say whether Microsoft verified who a message is from (#130).** A From
-  line is whatever the sender typed, so mail claiming to come from the user's bank or manager
-  could be spoofed, and nothing told the agent which it was. `outlook_read_message` and
-  `outlook_read_messages` take `include_sender_auth=True`, which adds `sender_authentication`:
-  `authenticated`, the From domain, Microsoft's `dkim`, `dmarc` and `compauth` results, and a
-  short `reason`. It is read from the `Authentication-Results` header Microsoft stamps on
-  receipt, and only the topmost one counts, since a sender can write that header into the
-  message too. The header is parsed as RFC 8601, with comments and quoted strings respected.
-  `authenticated` is true only for a pass aligned with the From domain: `dmarc=pass` for it,
-  `dkim=pass` signed by it or a subdomain, or `compauth=pass` where every `header.from` is it.
-  A failing `dmarc` or `compauth`, either stated twice, another service's header, or one that
-  cannot be parsed authenticates nothing. `authenticated` vouches for `from_domain` only, never
-  for the display name, and `false` means unverified, not spoofed. Off by default, so the
-  default read sends the same request and returns the same fields as before.
-  The opt-in read selects `internetMessageHeaders` and every field the formatters read, and
-  `test_select_covers_the_formatter.py` pins that list against both. The headers themselves
-  are not returned. The instructions every client receives say to use it before acting on a
-  message because of who sent it. On current main, the opt-in read brings the tool surface
-  from 14,197 to 14,272 proxy tokens; the existing 14,350 ceiling covers it.
 - **Oversized inline attachment input is refused before whitespace normalization** (#129).
   The exact decoded-size check remains, preceded by a cheap raw-length bound so a
   whitespace-heavy argument cannot allocate a large split list before being refused.
-
-- `outlook_read_attachment` returns readable PDF pages, XLSX cells/formulas/saved results,
-  or text in its declared charset as paged tool content, without saving a server-side file. PDF/XLSX parsers
-  are an optional `documents` extra; the tool is in the opt-in `documents` group, off by default.
-  The parent serializes parsers and enforces RSS and wall limits on every platform. Parser errors
-  are bounded and cleaned, metadata is checked before download, and worker fields are validated.
-  Missing text, missing formula caches and parser limits
-  are explicit; no OCR or formula recalculation is performed. Byte downloads are unchanged.
-
-### Changed
-
-- **Where Graph honours the filter, `outlook_changes_since` follows mail received since its
-  first call's window.** Graph keeps that call's `receivedDateTime` filter in later cursors,
-  so later rounds on those accounts report new mail
-  and, for older messages, only what Graph's message delta still sends for them: deletes, moves
-  out of the inbox and read/unread changes. A flag or category set on mail received before the
-  window is no longer reported. A token stored by an earlier version keeps following the whole
-  inbox until the digest starts over (no token, or a 410 resync).
-- **An optional streamable-HTTP transport** (#126), for a server on another machine or in a
-  container, or a client that cannot spawn a local process.
-  `OUTLOOK_MCP_TRANSPORT=streamable-http` serves `/mcp` through the SDK's own streamable-HTTP
-  app, stateless and answering JSON, on `OUTLOOK_MCP_HTTP_HOST`/`OUTLOOK_MCP_HTTP_PORT` (default
-  `127.0.0.1:8000`). It never starts without `OUTLOOK_MCP_HTTP_TOKEN`, loopback included, and
-  every request must carry it as a bearer or gets `401`. It speaks plain HTTP, so TLS belongs to
-  a proxy in front. stdio stays the default, unchanged; uvicorn is declared directly. See the README's
-  "Remote / HTTP transport".
 - **A large attachment that fails to upload no longer goes out missing (#125).** Files over
   3 MB go up in chunks through an upload session, and no chunk's reply was read: a refused
   chunk was skipped over, so `outlook_send_with_attachments` sent the draft and
