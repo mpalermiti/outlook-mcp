@@ -1814,8 +1814,8 @@ class TestEventAttachments:
     """Attach, list and remove, against Graph, for both upload paths.
 
     A file over 3 MB goes through the upload session and `_upload_large_file`,
-    whose chunk responses are unchecked (#125), so the listing afterwards is
-    what says the upload landed.
+    which checks each chunk's reply (#125) but returns no attachment ID, so the
+    listing afterwards is what says the upload landed.
     """
 
     async def test_files_are_attached_listed_and_removed(

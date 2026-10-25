@@ -76,8 +76,8 @@ async def attach_to_event(
 
     Returns the IDs of the attachments Graph reports, for
     ``outlook_remove_event_attachment``. A file over 3 MB has none yet:
-    ``_upload_large_file`` does not read the final chunk's response, which #125
-    is about.
+    ``_upload_large_file`` checks every chunk's reply (#125) but does not take
+    the attachment's ID from the last one.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_attach_to_event")
     event_id = validate_graph_id(event_id)
