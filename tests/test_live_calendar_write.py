@@ -15,15 +15,18 @@ unbounded ranges, calendar only, and everything created is deleted in a
 
 from __future__ import annotations
 
+import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from datetime import time as dt_time
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from outlook_mcp.tools._recurrence import maybe_zone
-from outlook_mcp.tools.calendar_read import get_event, list_events
+from outlook_mcp.tools.calendar_attachments import attach_to_event, remove_event_attachment
+from outlook_mcp.tools.calendar_read import find_events_by_key, get_event, list_events
 from outlook_mcp.tools.calendar_write import create_event, delete_event, update_event
 from tests.conftest import LIVE_WRITE_SUBJECT
 
@@ -1402,6 +1405,51 @@ class TestOccurrenceChangesAreNotDiscardedSilently:
                 await _instances(sdk, event_id, monday, _EAST), edited_day, deleted_day
             )
 
+    async def test_keying_a_series_keeps_them(self, real_graph_client, live_write_config):
+        """A key is not a reshape, so `update_event` patches it unguarded.
+
+        That is only safe if Graph agrees: a master patched with an extended
+        property must keep its edited and deleted occurrences, as a subject
+        patch does. Also checks the key comes back on the master, and that the
+        lookup finds the master rather than an occurrence.
+        """
+        sdk = real_graph_client.sdk_client
+        key = f"outlook-mcp:live-write:{uuid.uuid4().hex}"
+        async with self._series_with_changed_occurrences(
+            real_graph_client, live_write_config, " key-exceptions"
+        ) as (event_id, monday, edited_day, deleted_day):
+            await update_event(sdk, event_id=event_id, key=key, config=live_write_config)
+
+            self._assert_changes_survive(
+                await _instances(sdk, event_id, monday, _EAST), edited_day, deleted_day
+            )
+            assert (await get_event(sdk, event_id))["key"] == key
+            found = await find_events_by_key(sdk, key)
+            assert [(e["id"], e["type"]) for e in found["events"]] == [(event_id, "seriesMaster")]
+
+    async def test_attaching_to_a_series_keeps_them(self, real_graph_client, live_write_config):
+        """An attachment is not a reshape, so nothing guards it; Graph has to agree.
+
+        A master with one edited and one deleted occurrence gets a file. Both
+        changes must survive, as they do a subject patch, and the file must be
+        listed on the master.
+        """
+        sdk = real_graph_client.sdk_client
+        folder = Path(live_write_config.attachments_dir)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "series-note.txt").write_bytes(b"synthetic attachment for a live-write guard")
+
+        async with self._series_with_changed_occurrences(
+            real_graph_client, live_write_config, " attach-exceptions"
+        ) as (event_id, monday, edited_day, deleted_day):
+            await attach_to_event(sdk, event_id, ["series-note.txt"], config=live_write_config)
+
+            self._assert_changes_survive(
+                await _instances(sdk, event_id, monday, _EAST), edited_day, deleted_day
+            )
+            names = [a["name"] for a in (await get_event(sdk, event_id))["attachments"]]
+            assert names == ["series-note.txt"]
+
     async def test_changing_an_occurrence_moves_the_masters_change_key(
         self, real_graph_client, live_write_config
     ):
@@ -1628,3 +1676,181 @@ class TestMovingAMastersDateMovesItsOccurrences:
             self._assert_moved(
                 await _instances(sdk, event_id, monday, "UTC"), monday, time_of_day="00:00:00"
             )
+
+
+class TestCreatingInAnotherCalendar:
+    """`calendar` on create, and the claim that lets every other tool ignore it.
+
+    The tools that take an event ID go through `/me/events/{id}` whatever
+    calendar the event is on. That was checked read-only against events already
+    on four calendars of one mailbox; this proves it for an event the tool
+    created, on a calendar the test makes for itself and removes. A mailbox
+    with no writable second calendar is the common case, which is why the test
+    does not look for one.
+    """
+
+    @asynccontextmanager
+    async def _temporary_calendar(self, client):
+        from msgraph.generated.models.calendar import Calendar
+
+        created = await client.sdk_client.me.calendars.post(
+            Calendar(name=LIVE_WRITE_SUBJECT + " calendar")
+        )
+        try:
+            yield created
+        finally:
+            await client.sdk_client.me.calendars.by_calendar_id(created.id).delete()
+
+    async def test_an_event_created_there_is_reached_by_its_id_alone(
+        self, real_graph_client, live_write_config
+    ):
+        monday = _anchor_monday()
+        window = {
+            "after": f"{monday.isoformat()}T00:00:00Z",
+            "before": f"{monday.isoformat()}T23:59:00Z",
+        }
+        async with self._temporary_calendar(real_graph_client) as calendar:
+            created = await create_event(
+                real_graph_client.sdk_client,
+                subject=LIVE_WRITE_SUBJECT,
+                start=f"{monday.isoformat()}T09:00:00Z",
+                end=f"{monday.isoformat()}T09:30:00Z",
+                calendar=calendar.name,
+                config=live_write_config,
+            )
+            event_id = created["event_id"]
+            deleted = False
+            try:
+                there = await list_events(
+                    real_graph_client.sdk_client, calendar=calendar.id, **window
+                )
+                default = await list_events(real_graph_client.sdk_client, **window)
+                assert event_id in [e["id"] for e in there["events"]]
+                assert event_id not in [e["id"] for e in default["events"]]
+
+                # Every ID-based tool, with no calendar named.
+                assert (await get_event(real_graph_client.sdk_client, event_id))["id"] == event_id
+                await update_event(
+                    real_graph_client.sdk_client,
+                    event_id,
+                    subject=LIVE_WRITE_SUBJECT + " renamed",
+                    config=live_write_config,
+                )
+                detail = await get_event(real_graph_client.sdk_client, event_id)
+                assert detail["subject"].endswith(" renamed")
+                await delete_event(real_graph_client.sdk_client, event_id, config=live_write_config)
+                deleted = True
+                there = await list_events(
+                    real_graph_client.sdk_client, calendar=calendar.id, **window
+                )
+                assert event_id not in [e["id"] for e in there["events"]]
+            finally:
+                if not deleted:
+                    await delete_event(
+                        real_graph_client.sdk_client, event_id, config=live_write_config
+                    )
+
+
+class TestEventKeys:
+    """A key written by the tools is found by the tools, and only that key.
+
+    The offline suite pins what is sent; only Graph can say the `$filter` matches
+    what the POST stored. Each run uses a key no other event can have.
+    """
+
+    async def test_a_key_is_stored_found_and_replaced(self, real_graph_client, live_write_config):
+        sdk = real_graph_client.sdk_client
+        monday = _anchor_monday()
+        first = f"outlook-mcp:live-write:{uuid.uuid4().hex}"
+        second = f"outlook-mcp:live-write:{uuid.uuid4().hex}"
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" key",
+            start=f"{monday.isoformat()}T15:00:00Z",
+            end=f"{monday.isoformat()}T15:30:00Z",
+            key=first,
+        ) as event_id:
+            assert (await get_event(sdk, event_id))["key"] == first
+            found = await find_events_by_key(sdk, first)
+            assert [(e["id"], e["key"], e["type"]) for e in found["events"]] == [
+                (event_id, first, "singleInstance")
+            ]
+            listed = await list_events(
+                sdk,
+                after=f"{monday.isoformat()}T00:00:00Z",
+                before=f"{monday.isoformat()}T23:59:00Z",
+            )
+            assert [e.get("key") for e in listed["events"] if e["id"] == event_id] == [first]
+
+            await update_event(sdk, event_id=event_id, key=second, config=live_write_config)
+
+            assert (await get_event(sdk, event_id))["key"] == second
+            assert [e["id"] for e in (await find_events_by_key(sdk, second))["events"]] == [
+                event_id
+            ]
+            # Replaced, not added beside: the old key finds nothing.
+            assert (await find_events_by_key(sdk, first))["events"] == []
+
+    async def test_a_prefix_of_a_key_is_not_a_match(self, real_graph_client, live_write_config):
+        """`eq`, not `startswith`: "booking:12" must not find "booking:123"."""
+        sdk = real_graph_client.sdk_client
+        monday = _anchor_monday()
+        key = f"outlook-mcp:live-write:{uuid.uuid4().hex}"
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" key-prefix",
+            start=f"{monday.isoformat()}T16:00:00Z",
+            end=f"{monday.isoformat()}T16:30:00Z",
+            key=key,
+        ):
+            assert (await find_events_by_key(sdk, key[:-1]))["events"] == []
+
+
+class TestEventAttachments:
+    """Attach, list and remove, against Graph, for both upload paths.
+
+    A file over 3 MB goes through the upload session and `_upload_large_file`,
+    which checks each chunk's reply (#125) but returns no attachment ID, so the
+    listing afterwards is what says the upload landed.
+    """
+
+    async def test_files_are_attached_listed_and_removed(
+        self, real_graph_client, live_write_config
+    ):
+        sdk = real_graph_client.sdk_client
+        monday = _anchor_monday()
+        folder = Path(live_write_config.attachments_dir)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "itinerary.txt").write_bytes(b"synthetic itinerary for a live-write guard")
+        large_size = 3 * 1024 * 1024 + 4096
+        (folder / "large.bin").write_bytes(b"\x00" * large_size)
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" attachments",
+            start=f"{monday.isoformat()}T17:00:00Z",
+            end=f"{monday.isoformat()}T17:30:00Z",
+        ) as event_id:
+            assert (await get_event(sdk, event_id))["attachments"] == []
+
+            small = await attach_to_event(
+                sdk, event_id, ["itinerary.txt"], config=live_write_config
+            )
+            await attach_to_event(sdk, event_id, ["large.bin"], config=live_write_config)
+
+            listed = {a["name"]: a for a in (await get_event(sdk, event_id))["attachments"]}
+            assert set(listed) == {"itinerary.txt", "large.bin"}
+            assert listed["itinerary.txt"]["id"] == small["attachment_ids"][0]
+            assert listed["large.bin"]["size"] >= large_size
+            assert not any(a["is_inline"] for a in listed.values())
+
+            for attachment in listed.values():
+                await remove_event_attachment(
+                    sdk, event_id, attachment["id"], config=live_write_config
+                )
+            assert (await get_event(sdk, event_id))["attachments"] == []

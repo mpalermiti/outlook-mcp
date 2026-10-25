@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from outlook_mcp.config import Config
+from outlook_mcp.folder_resolver import resolve_folder_id
 from outlook_mcp.permissions import CATEGORY_MAIL_FOLDERS, check_permission
 from outlook_mcp.validation import WELL_KNOWN_FOLDERS, validate_graph_id
 
@@ -19,7 +20,8 @@ async def create_folder(
     """Create a mail folder.
 
     Creates a top-level folder under /me/mailFolders, or a child folder
-    under the specified parent_folder.
+    under the specified parent_folder: a well-known name, display name, path
+    or id, resolved like every other folder argument.
     """
     check_permission(config, CATEGORY_MAIL_FOLDERS, "outlook_create_folder")
 
@@ -29,7 +31,7 @@ async def create_folder(
     body.display_name = name
 
     if parent_folder:
-        parent_folder = validate_graph_id(parent_folder)
+        parent_folder = await resolve_folder_id(graph_client, parent_folder)
         result = await graph_client.me.mail_folders.by_mail_folder_id(
             parent_folder
         ).child_folders.post(body)

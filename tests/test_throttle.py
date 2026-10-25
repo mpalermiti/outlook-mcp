@@ -6,7 +6,12 @@ envelope-level retry for a throttled request, and per-sub-request retry for a
 $batch whose envelope is 200 but individual sub-responses are 429/503.
 """
 
+import pytest
+from kiota_abstractions.api_error import APIError
+
+from outlook_mcp.errors import GraphAPIError
 from outlook_mcp.throttle import (
+    call_without_replay,
     parse_retry_after,
     retry_throttled_subrequests,
     send_with_retry,
@@ -157,3 +162,91 @@ async def test_subrequest_429_bounded_records_final():
     merged = await retry_throttled_subrequests(post_batch, requests, max_retries=2, sleep=sleep)
     assert merged["0"]["status"] == 429  # bounded — recorded after retries exhausted
     assert len(slept) == 2
+
+
+# ── call_without_replay ───────────────────────────────────────────────
+
+_MAY_HAVE_GONE = "OUTCOME-UNKNOWN-HINT"
+
+
+class _FakeWrite:
+    """An SDK write: raises the queued errors in turn, then returns ``result``."""
+
+    def __init__(self, *errors, result="sent"):
+        self._errors = list(errors)
+        self.result = result
+        self.configs = []
+
+    async def __call__(self, config):
+        self.configs.append(config)
+        if self._errors:
+            raise self._errors.pop(0)
+        return self.result
+
+
+def _answered(status, headers=None):
+    return APIError("Graph said no", status, headers or {})
+
+
+async def test_write_goes_out_once_with_kiotas_retry_off():
+    write = _FakeWrite()
+    sleep, slept = _recording_sleep()
+    result = await call_without_replay(write, outcome_unknown=_MAY_HAVE_GONE, sleep=sleep)
+    assert result == "sent"
+    assert len(write.configs) == 1
+    (option,) = write.configs[0].options
+    assert option.should_retry is False  # kiota's RetryHandler stands down
+    assert slept == []
+
+
+async def test_write_throttled_is_sent_again_after_retry_after():
+    write = _FakeWrite(_answered(429, {"Retry-After": "7"}))
+    sleep, slept = _recording_sleep()
+    result = await call_without_replay(write, outcome_unknown=_MAY_HAVE_GONE, sleep=sleep)
+    assert result == "sent"
+    assert len(write.configs) == 2
+    assert slept == [7.0]
+
+
+async def test_write_throttled_without_retry_after_backs_off():
+    write = _FakeWrite(_answered(429), _answered(429))
+    sleep, slept = _recording_sleep()
+    await call_without_replay(write, outcome_unknown=_MAY_HAVE_GONE, sleep=sleep)
+    assert slept == [2.0, 4.0]
+
+
+async def test_write_still_throttled_after_max_retries_reports_the_429():
+    """Nothing went out, so the agent gets the 429's "back off and retry"."""
+    write = _FakeWrite(*[_answered(429, {"Retry-After": "1"})] * 5)
+    sleep, slept = _recording_sleep()
+    with pytest.raises(GraphAPIError) as caught:
+        await call_without_replay(write, outcome_unknown=_MAY_HAVE_GONE, max_retries=2, sleep=sleep)
+    assert len(write.configs) == 3  # initial + 2 retries
+    assert len(slept) == 2
+    assert caught.value.status_code == 429
+    assert _MAY_HAVE_GONE not in str(caught.value)
+    assert "Rate limited" in str(caught.value)
+
+
+async def test_write_throttled_for_three_minutes_is_not_waited_out():
+    """kiota does not wait out a Retry-After of MAX_DELAY (180 s) or more; nor does this."""
+    write = _FakeWrite(_answered(429, {"Retry-After": "180"}))
+    sleep, slept = _recording_sleep()
+    with pytest.raises(GraphAPIError) as caught:
+        await call_without_replay(write, outcome_unknown=_MAY_HAVE_GONE, sleep=sleep)
+    assert len(write.configs) == 1
+    assert slept == []
+    assert caught.value.status_code == 429
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+async def test_write_answered_5xx_is_not_sent_again(status):
+    """A 5xx does not say the write failed: it is reported, with the caller's hint."""
+    write = _FakeWrite(_answered(status, {"Retry-After": "1"}))
+    sleep, slept = _recording_sleep()
+    with pytest.raises(GraphAPIError) as caught:
+        await call_without_replay(write, outcome_unknown=_MAY_HAVE_GONE, sleep=sleep)
+    assert len(write.configs) == 1
+    assert slept == []
+    assert caught.value.status_code == status
+    assert caught.value.action == _MAY_HAVE_GONE

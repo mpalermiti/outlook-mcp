@@ -1,6 +1,6 @@
 [project]
 name = "outlook-graph-mcp"
-version = "1.26.0"
+version = "1.28.0"
 description = "MCP server for Microsoft Outlook via Microsoft Graph API"
 readme = "README.md"
 license = "MIT"
@@ -22,6 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "mcp[cli]>=2",
+    "uvicorn>=0.30",
     "msgraph-sdk>=1.55",
     # A floor, not a cap. kiota 1.13.0 (2026-09-18) moved per-request options
     # from a monkey-patched `request.options` attribute to
@@ -57,6 +58,12 @@ Repository = "https://github.com/mpalermiti/outlook-mcp"
 Issues = "https://github.com/mpalermiti/outlook-mcp/issues"
 
 [project.optional-dependencies]
+documents = [
+    "psutil>=7,<8",
+    "pypdf>=6.21.2,<7",
+    "openpyxl>=3.1.5,<4",
+    "defusedxml>=0.7.1,<1",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",

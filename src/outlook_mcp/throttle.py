@@ -11,9 +11,16 @@ inherit that behavior. These helpers restore it:
   individual sub-responses are 429/503, so a naive reader records those as
   permanent failures. This re-issues a smaller ``$batch`` of just the
   throttled sub-requests, honoring each sub-response's ``Retry-After``.
+  The SDK path needs it too: ``batch.batch_triage`` sends its ``$batch``
+  through the kiota adapter, whose ``RetryHandler`` retries the envelope
+  but never sees a sub-response.
 
 Graph also enforces a global 130,000-requests / 10-seconds app-wide ceiling on
 top of per-mailbox limits, so direct callers must back off on their own.
+
+The SDK writes that email someone take the opposite route: kiota's retry is off
+for them, because it would replay a send after a 503/504 (#131), and
+``call_without_replay`` keeps only the 429 retry.
 """
 
 from __future__ import annotations
@@ -21,6 +28,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any
+
+from outlook_mcp.errors import wrap_graph_error
 
 # Status codes Graph uses to signal "back off and retry".
 _RETRYABLE = (429, 503)
@@ -140,3 +149,47 @@ async def retry_throttled_subrequests(
         pending = retry_next
 
     return merged
+
+
+async def call_without_replay(
+    call: Callable[[Any], Awaitable[Any]],
+    *,
+    outcome_unknown: str,
+    max_retries: int = 3,
+    default_backoff: float = _DEFAULT_BACKOFF,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> Any:
+    """Make an SDK write that emails someone: re-sent after a 429, never after a 5xx.
+
+    kiota's ``RetryHandler`` re-sends a request answered 429, 503 or 504, POST
+    included. A 503 or 504 does not say the write failed, only that its answer did
+    not arrive, so for a send each re-send is another email (#131). Its
+    ``RetryHandlerOption`` can switch the handler off for one request but not narrow
+    the statuses it retries, so ``call`` is handed a request configuration that
+    switches it off, and the retry that is safe happens here: Graph fails a
+    throttled request, and says to send it again after ``Retry-After``. Like the
+    handler, up to ``max_retries`` times, and not for a wait of
+    ``RetryHandlerOption.MAX_DELAY`` or more.
+
+    ``call`` passes the configuration to the SDK method as
+    ``request_configuration``. A Graph error leaves as a ``GraphAPIError``, with
+    ``outcome_unknown`` as its hint on a 5xx.
+    """
+    from kiota_abstractions.api_error import APIError
+    from kiota_abstractions.base_request_configuration import RequestConfiguration
+    from kiota_http.middleware.options.retry_handler_option import RetryHandlerOption
+
+    once = RequestConfiguration(options=[RetryHandlerOption(should_retry=False)])
+    attempt = 0
+    while True:
+        try:
+            return await call(once)
+        except APIError as exc:
+            if exc.response_status_code == 429 and attempt < max_retries:
+                headers = dict(exc.response_headers or {})
+                wait = parse_retry_after(headers, default_backoff * (2**attempt))
+                if wait < RetryHandlerOption.MAX_DELAY:
+                    await sleep(wait)
+                    attempt += 1
+                    continue
+            raise wrap_graph_error(exc, outcome_unknown=outcome_unknown) from exc

@@ -27,9 +27,10 @@ Rules for ``live_write``, which exists precisely because it breaks that:
 * Double-gated — the marker is deselected by default *and* the tier skips
   unless ``OUTLOOK_MCP_LIVE_WRITE=1``. A cached token alone must never be
   enough to write to someone's calendar.
-* Calendar, contacts and To Do only — the three surfaces whose writes have no
-  outward side effect. No mail: nothing here may send, and a stray send is not
-  recoverable.
+* Calendar, contacts, To Do and unsent drafts only — the surfaces whose writes
+  have no outward side effect. Nothing here may send, and a stray send is not
+  recoverable: a draft is created, read back and deleted, never sent
+  (``tests/test_live_write_never_sends.py`` checks the tier's files for a send).
 * No attendees, ever. A recurring invite emails real people on every
   occurrence.
 * Bounded ranges only (``numbered``/``endDate``) — never ``noEnd``.
@@ -166,8 +167,8 @@ def live_write_config(real_config, tmp_path):
     """
     if os.environ.get("OUTLOOK_MCP_LIVE_WRITE") != "1":
         pytest.skip(
-            "Write tier is opt-in — set OUTLOOK_MCP_LIVE_WRITE=1 to let it "
-            "create and delete events, contacts and tasks on the authenticated account"
+            "Write tier is opt-in — set OUTLOOK_MCP_LIVE_WRITE=1 to let it create and "
+            "delete events, contacts, tasks and unsent drafts on the authenticated account"
         )
     if real_config.read_only:
         pytest.skip("Config is read_only — the write tier cannot run")
@@ -175,16 +176,23 @@ def live_write_config(real_config, tmp_path):
     # The real config may whitelist only some write categories (`allow_categories`
     # is a policy for the *server*, e.g. "my agent may not touch contacts"). The
     # tier's job is to exercise Graph, and the permission gate is unit-tested on
-    # its own, so open the three surfaces this tier is allowed to write on an
-    # in-process copy. ~/.outlook-mcp/config.json is never modified.
+    # its own, so open the four surfaces this tier is allowed to write on an
+    # in-process copy. ~/.outlook-mcp/config.json is never modified. Never
+    # `mail_send`: nothing in this tier may send.
     update = {"attachments_dir": str(tmp_path / "attachments")}
     if real_config.allow_categories:
         from outlook_mcp.permissions import (
             CATEGORY_CALENDAR_WRITE,
             CATEGORY_CONTACTS_WRITE,
+            CATEGORY_MAIL_DRAFTS,
             CATEGORY_TODO_WRITE,
         )
 
-        needed = {CATEGORY_CALENDAR_WRITE, CATEGORY_CONTACTS_WRITE, CATEGORY_TODO_WRITE}
+        needed = {
+            CATEGORY_CALENDAR_WRITE,
+            CATEGORY_CONTACTS_WRITE,
+            CATEGORY_MAIL_DRAFTS,
+            CATEGORY_TODO_WRITE,
+        }
         update["allow_categories"] = sorted(set(real_config.allow_categories) | needed)
     return real_config.model_copy(update=update)

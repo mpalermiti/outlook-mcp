@@ -85,6 +85,12 @@ _PAIRS = [
         calendar_read._CONCISE_SELECT,
         "calendar_read._CONCISE_SELECT",
     ),
+    (
+        "event attachment",
+        calendar_read._format_event_attachment,
+        calendar_read._ATTACHMENT_SELECT,
+        "calendar_read._ATTACHMENT_SELECT",
+    ),
 ]
 
 # The SDK renames exactly one field to dodge the Python keyword.
@@ -229,7 +235,69 @@ _UNENROLLED = {
         "demand dropping two fields the refusal needs. The refusal tests in "
         "`test_calendar_write.py` pin all four selected fields instead."
     ),
+    "mail_read._SENDER_AUTH_SELECT": (
+        "sent only with `include_sender_auth`, by both read paths, so it feeds two "
+        "formatters and must name every field each reads, `internetMessageHeaders` "
+        "included. A row would demand `attachments` as well, which is a relationship: "
+        "Graph returns it only for `$expand`, never for `$select`, and the default "
+        "read does not expand it either. "
+        "`test_the_sender_auth_select_covers_both_read_formatters` checks both "
+        "directions against both formatters, relationships aside."
+    ),
 }
+
+
+# Relationships of `message`: Graph returns them only for `$expand`, and `$select`
+# cannot fetch them. The read formatters read both: `attachments` always, and
+# `singleValueExtendedProperties` when `include_deferred_send` expands it.
+_MESSAGE_RELATIONSHIPS = {"attachments", "singleValueExtendedProperties"}
+
+
+def _keys_read_from(func) -> set[str]:
+    """Every ``param.get("key")`` the function makes on its first parameter.
+
+    ``_fields_read_from`` reads an SDK model's attributes; the ``$batch`` path's
+    formatter reads a raw Graph dict by its camelCase keys instead.
+    """
+    tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
+    param = fn.args.args[0].arg
+    return {
+        node.args[0].value
+        for node in ast.walk(fn)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "get"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == param
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+    }
+
+
+@pytest.mark.parametrize(
+    "formatter",
+    [mail_read._format_read_message_from_sdk, mail_read._format_read_message_from_raw],
+    ids=["sdk", "batch"],
+)
+def test_the_sender_auth_select_covers_both_read_formatters(formatter):
+    """The `_UNENROLLED` entry above, checked rather than excused.
+
+    The opt-in read replaces Graph's default projection with this `$select`, so a
+    field it misses comes back empty only when the caller asked for sender
+    authentication: the default read would still look right.
+    """
+    selected = {field.strip() for field in mail_read._SENDER_AUTH_SELECT.split(",")}
+    if formatter is mail_read._format_read_message_from_sdk:
+        read = {_graph_name(attr) for attr in _fields_read_from(formatter)}
+    else:
+        read = _keys_read_from(formatter)
+
+    assert read - _MESSAGE_RELATIONSHIPS == selected, (
+        f"{formatter.__name__} reads {sorted(read - _MESSAGE_RELATIONSHIPS - selected)} "
+        f"that _SENDER_AUTH_SELECT does not name, and the select names "
+        f"{sorted(selected - read)} that it never reads."
+    )
 
 
 def _select_constants() -> dict[str, str]:

@@ -18,10 +18,16 @@ needed beyond ``page_size``.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin
 
-from outlook_mcp.tools._delta import GRAPH_BASE, fetch_delta_pages, format_delta_item
+from outlook_mcp.tools._delta import (
+    GRAPH_BASE,
+    fetch_delta_pages,
+    format_delta_item,
+    parse_graph_datetime,
+)
 from outlook_mcp.validation import sanitize_output
 
 
@@ -75,10 +81,25 @@ def _format_contact_delta(raw: dict) -> dict:
     }
 
 
+def _changed_since(raw: dict, bound: datetime) -> bool:
+    """A tombstone, or a contact last modified at or after ``bound``.
+
+    A tombstone carries no timestamp, and a deletion is a change whenever it
+    happened. A contact whose timestamp is missing or unreadable is left out,
+    as the digest leaves out mail it cannot place in its window.
+    """
+    if "@removed" in raw:
+        return True
+    changed = parse_graph_datetime(raw.get("lastModifiedDateTime") or "")
+    return changed is not None and changed >= bound
+
+
 async def list_contacts_delta(
     graph_client: Any,
     page_size: int = 50,
     delta_token: str | None = None,
+    *,
+    modified_since: datetime | None = None,
 ) -> dict:
     """List contact changes since the last delta token.
 
@@ -89,6 +110,11 @@ async def list_contacts_delta(
             ``Prefer: odata.maxpagesize=N`` — Graph rejects every other
             query parameter on this endpoint.
         delta_token: Opaque cursor from a previous call.
+        modified_since: Keep only contacts whose ``lastModifiedDateTime`` is at
+            or after this instant, and every tombstone. Applied here, not by
+            Graph: this endpoint takes no ``$filter``. ``outlook_changes_since``
+            passes it on a first sync, so a whole address book is not reported
+            as new; the tool itself does not take it.
 
     Returns:
         ``{contacts, delta_token, has_more}`` — see ``mail_delta`` for
@@ -113,6 +139,9 @@ async def list_contacts_delta(
         resource="contacts",
         headers={"Prefer": f"odata.maxpagesize={page_size}"},
     )
+
+    if modified_since is not None:
+        raw_items = [item for item in raw_items if _changed_since(item, modified_since)]
 
     contacts = [format_delta_item(item, _format_contact_delta) for item in raw_items]
 

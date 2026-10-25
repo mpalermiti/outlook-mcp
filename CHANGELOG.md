@@ -6,6 +6,383 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Optional `expected_username` pins an instance to its sign-in username** (#179). A cached
+  record for another user is refused before credential construction; interactive
+  sign-in checks the returned record before saving or using it. No change when
+  unset, no tool-surface change, and no deletion of another instance's shared tokens.
+
+- **Optional `OUTLOOK_MCP_` inputs for existing configuration fields** (#180). Client ID input
+  may supply an app when the file has none; tenant/timezone inputs may override. Security
+  inputs may only tighten the valid file's policy or its defaults. Attempted loosening and
+  malformed or misspelt security inputs refuse startup and name the variable. Shared by
+  auth/serve/status; no automatic file writeback, new dependency, tool or scope. File-only
+  loading is unchanged.
+
+### Fixed
+
+- **HTTP startup explains a wildcard bind without allowed client hosts, and token-file
+  content errors name the token format instead of file permissions.** Wildcard-port
+  allow-list entries also accept the bare Host/Origin used on default HTTP/HTTPS ports;
+  the refused GET event stream advertises only POST.
+
+## [1.28.0] — 2026-10-25
+
+### Added
+
+- **Folder arguments take a path, so any folder can be named, including one whose name another
+  folder shares** (#144). `Inbox/Travel/Flights` names Flights under Travel under Inbox, and a `/`
+  inside a folder's name is written `//` (`Inbox/Q1//Q2`; not a backslash, which JSON reads as a
+  plain `/`). The first part is a well-known name, as before with no request, or a top-level
+  folder; each later part is matched case-insensitively among the previous folder's children,
+  so a path costs one listing per level, where a nested name walks the whole tree. Every tool
+  that takes a folder gets it through `resolve_folder_id`: `outlook_list_inbox`,
+  `outlook_search_mail`, `outlook_move_message`, `outlook_copy_message`, `outlook_batch_triage`'s
+  move and `outlook_list_inbox_delta`. Until now a `/` meant an id, so a path went to Graph as
+  one and failed, a name containing `/` could not be named at all, and a name used under two
+  parents could only be reached by its id. An id-shaped reference whose first part names no
+  folder still goes through as an id; a path that goes wrong below a folder that exists, or that
+  has an empty part, keeps the resolver's own message. The ambiguity error now lists the
+  candidates' paths (the first five), `outlook_list_folders(recursive=True)` returns each
+  folder's `path` in the same form, and the path rule is in the server instructions. No lookup
+  cache: a cached path goes stale silently
+  when a folder is renamed and another takes its name.
+- **Event keys: find "the event for booking X" again** (#148). An agent recording a flight,
+  a stay or an appointment had nothing stable to find it by when a change to the same booking
+  arrived, only a subject and a time that both change, so it created a second event.
+  `outlook_create_event` and `outlook_update_event` take `key`, the caller's own reference,
+  stored in a hidden extended property this server owns. `outlook_get_event` returns it (`null`
+  when unset), and the default `outlook_list_events` listing shows it on the events that carry
+  one. The new `outlook_find_event_by_key` finds events by key in the default calendar or a named
+  one, with no date window, and returns single events and series masters, never occurrences. A
+  key is 1–128 letters, digits and `. _ : @ -`, refused otherwise before anything is sent. One
+  line in the connect-time instructions tells the agent to look a key up before creating. 68 → 69
+  tools.
+- **Files on calendar events** (#153). Drafts and To Do tasks could carry attachments and events
+  could not, so an agent putting a flight on the calendar had nowhere to put the e-ticket. The new
+  `outlook_attach_to_event` attaches files from `attachments_dir` through the same code as
+  `outlook_attach_to_draft`: every path is confined by `resolve_attachment_path`, a file up to
+  3 MB is one POST, and a larger one uses Graph's upload session for events. It returns the new
+  attachment IDs (none yet for a file sent through the upload session).
+  `outlook_remove_event_attachment` removes one, and `outlook_get_event` now lists
+  `attachments` (ID, name, size, type and whether inline, never the bytes), reading them with a
+  second request only when the event has any. Attendees are not sent the files when they are
+  attached; they get them with the event's next update. So under an `allow_categories` that
+  withholds `mail_send`, attaching to an event with attendees is refused, as rewording one is, and
+  the tool is marked destructive. A missing file is refused with a message the agent can read.
+  69 → 71 tools.
+- **The read tools can say whether Microsoft verified who a message is from (#130).** A From
+  line is whatever the sender typed, so mail claiming to come from the user's bank or manager
+  could be spoofed, and nothing told the agent which it was. `outlook_read_message` and
+  `outlook_read_messages` take `include_sender_auth=True`, which adds `sender_authentication`:
+  `authenticated`, the From domain, Microsoft's `dkim`, `dmarc` and `compauth` results, and a
+  short `reason`. It is read from the `Authentication-Results` header Microsoft stamps on
+  receipt, and only the topmost one counts, since a sender can write that header into the
+  message too. The header is parsed as RFC 8601, with comments and quoted strings respected.
+  `authenticated` is true only for a pass aligned with the From domain: `dmarc=pass` for it,
+  `dkim=pass` signed by it or a subdomain, or `compauth=pass` where every `header.from` is it.
+  A failing `dmarc` or `compauth`, either stated twice, another service's header, or one that
+  cannot be parsed authenticates nothing. `authenticated` vouches for `from_domain` only, never
+  for the display name, and `false` means unverified, not spoofed. Off by default, so the
+  default read sends the same request and returns the same fields as before.
+  The opt-in read selects `internetMessageHeaders` and every field the formatters read, and
+  `test_select_covers_the_formatter.py` pins that list against both. The headers themselves
+  are not returned. The instructions every client receives say to use it before acting on a
+  message because of who sent it. When it merged, the opt-in read brought the tool surface
+  from 14,197 to 14,272 proxy tokens, inside the 14,350 ceiling of the time.
+- **Attachments can be read as text: PDF pages, spreadsheet cells and plain text (#182).**
+  `outlook_read_attachment` returns readable PDF pages, XLSX cells/formulas/saved results,
+  or text in its declared charset as paged tool content, without saving a server-side file. PDF/XLSX parsers
+  are an optional `documents` extra; the tool is in the opt-in `documents` group, off by default.
+  The parent serializes parsers and enforces RSS and wall limits on every platform. Parser errors
+  are bounded and cleaned, metadata is checked before download, and worker fields are validated.
+  Missing text, missing formula caches and parser limits
+  are explicit; no OCR or formula recalculation is performed. A worksheet name over 31
+  characters is cut for display and ends in its one-based position, so names sharing a prefix
+  stay distinguishable (#187); the original names still select the workbook data. Byte
+  downloads are unchanged.
+- **An optional streamable-HTTP transport** (#126), for a server on another machine or in a
+  container, or a client that cannot spawn a local process.
+  `OUTLOOK_MCP_TRANSPORT=streamable-http` serves `/mcp` through the SDK's own streamable-HTTP
+  app, stateless and answering JSON, on `OUTLOOK_MCP_HTTP_HOST`/`OUTLOOK_MCP_HTTP_PORT` (default
+  `127.0.0.1:8000`). It never starts without a token, loopback included (`OUTLOOK_MCP_HTTP_TOKEN`,
+  or `OUTLOOK_MCP_HTTP_TOKEN_FILE` naming an owner-only file that is not a symlink), and every
+  request must carry it as a bearer or gets `401`. Host and Origin are checked against an
+  allow-list (`OUTLOOK_MCP_HTTP_ALLOWED_HOSTS` for a public name). It speaks plain HTTP, so
+  TLS belongs to a proxy in front. stdio stays the default, unchanged; uvicorn is declared
+  directly. See the README's "Remote / HTTP transport".
+
+### Changed
+
+- **Where Graph honours the filter, `outlook_changes_since` follows mail received since its
+  first call's window (#156).** Graph keeps that call's `receivedDateTime` filter in later cursors,
+  so later rounds on those accounts report new mail
+  and, for older messages, only what Graph's message delta still sends for them: deletes, moves
+  out of the inbox and read/unread changes. A flag or category set on mail received before the
+  window is no longer reported. A token stored by an earlier version keeps following the whole
+  inbox until the digest starts over (no token, or a 410 resync).
+
+### Fixed
+
+- **A lone surrogate no longer ends the server** (#186). A lone UTF-16 surrogate has no
+  UTF-8 encoding. A text attachment whose declared charset decodes to one (utf-7 `+2AA-`, for
+  example) came back from `as_content=True` as text, an attachment name could carry one into
+  the same reply, and so could error text naming sender data. Each reached the SDK's stdio
+  writer, which raised, and the server process exited, so one email could end an agent's
+  session. In any other result the call failed with a bare `Error executing tool`. Such
+  attachment text now arrives as an embedded resource holding the original bytes, and
+  `sanitize_output`, error text and every tool's result replace any other lone surrogate with
+  U+FFFD (a split pair is joined back instead). No tool-surface change.
+- **An empty recipient list clears the recipients, instead of being read as "not mentioned"
+  (#183).**
+  A reply-all draft arrives with Graph's own `to` and `cc` already on it, and `if cc:` dropped
+  `cc=[]`, so the draft kept people the caller had explicitly removed — sending it mailed them.
+  Omitted (`None`) still leaves Graph's choice alone; `[]` now reaches the create call as an
+  empty collection, which is what Graph receives.
+- **A truncated image comes back as a resource, not as `ImageContent` (#183).** Detection stopped at
+  the signature, so a PNG cut before its IEND was sent as an image; a client that cannot open
+  it can reject the whole tool result. Each type must now finish the way it starts: PNG ends
+  with the IEND chunk itself (CRC included — the four letters alone were enough before), GIF
+  with its trailer, WEBP with a RIFF length that fits the bytes present. JPEG walks the
+  segments to the first scan and requires end-of-image after it, so a photo carrying a Samsung
+  trailer or a Motion Photo's appended video is still an image: decoders stop at EOI, and
+  refusing those would make a phone photo unviewable.
+- **`outlook_create_folder`'s `parent_folder` takes a name, as its description always said.** It
+  was validated as an id and nothing else, so "Junk Email" was refused locally and a user
+  folder's name reached Graph as an id. It now goes through the same resolver as every other
+  folder argument, paths included.
+- **`outlook_changes_since` no longer reports an inbox's history as new on its second call
+  (#156).**
+  On an inbox of more than about 1,000 messages, the first call stopped partway through Graph's
+  snapshot without saying so, and the next call reported the rest of the mailbox as new mail,
+  with every old high-importance or flagged message in `urgent_flagged`. The first call now asks
+  Graph for the last `fallback_window_hours` only. It also no longer counts every contact as new,
+  only those modified inside the window. Consumer mailboxes that ignore the mail filter
+  fall back to the client-side bound and report `_meta.mail_window_fallback`. An unfinished
+  mail bootstrap carries `mail_bootstrap_from` inside `delta_tokens`, so continuation
+  cannot count old snapshot items as new; pass the entire dictionary back. A new `has_more`
+  beside `delta_tokens` names any resource
+  the per-call cap stopped mid-sync, and a reply with no new cursor hands back the token passed
+  in instead of `None`.
+- **A mail search Graph cut short says so (#134).** Graph ends a message `$search` a little past 250
+  results with no `@odata.nextLink` and no error, whatever `$top` asks for (275 for pages of 25
+  or more, measured on an Exchange Online mailbox holding tens of thousands of matches; Graph's
+  documentation says up to 1,000), which reads exactly like the end of a complete search.
+  `outlook_search_mail`'s cursor now counts what it has served, and the last page of a search
+  that ends past 250 carries `incomplete`: older matches may be missing, and adding
+  `received<=` with the last message's date reaches them.
+- **Oversized inline attachment input is refused before whitespace normalization** (#129).
+  The exact decoded-size check remains, preceded by a cheap raw-length bound so a
+  whitespace-heavy argument cannot allocate a large split list before being refused.
+- **A large attachment that fails to upload no longer goes out missing (#125).** Files over
+  3 MB go up in chunks through an upload session, and no chunk's reply was read: a refused
+  chunk was skipped over, so `outlook_send_with_attachments` sent the draft and
+  `outlook_attach_to_draft` reported the file as attached without it. Each reply is now
+  checked. A refusal stops the upload with Graph's own error (the upload URL, which carries
+  its own authorization, stays out of it), and an upload Graph does not report as complete
+  (200 or 201), or a file that comes up short while it is read, fails as `IncompleteUpload`.
+  Nothing is sent after a failed upload, and `outlook_send_with_attachments` names the draft
+  it leaves in Drafts, so it can be deleted or finished with `outlook_attach_to_draft` rather
+  than duplicated by a retry. `outlook_attach_to_event` uploads through the same path.
+
+## [1.27.0] — 2026-10-24
+
+### Fixed
+
+- **Failures outside the Graph SDK reach the model with their text and a remedy.** Only SDK
+  errors were translated, so three others arrived as a bare `Error executing tool <name>`. A
+  stale cursor on a standalone delta tool (`410`, `syncStateNotFound`) now says to discard it and
+  sync again with no `delta_token`; the server log no longer carries that cursor either, which the
+  crash's traceback did. A failed `$batch` in `outlook_read_messages` carries Graph's own message
+  and the usual hint (back-off on `429`). A sign-in that lapses mid-session (a revoked or
+  idle-expired refresh token) gets the remedy startup would give: run `outlook-mcp auth`, or log
+  in again for `AADSTS70000`. And a reply that is not a JSON object is reported as an unreadable
+  Graph reply instead of as invalid input. `outlook_changes_since` still resyncs a stale token on
+  its own.
+- **`outlook_batch_triage` retries a throttled message instead of reporting it as failed.**
+  Graph answers a `$batch` with 200 even when it throttled some of the requests inside it, and
+  documents that the SDK's retry handler does not retry those; each comes back 429 with its own
+  `Retry-After`. `outlook_read_messages` has re-sent them since 1.12.0. The write batch goes
+  through the SDK adapter, whose retry handler covers the whole request, so it looked covered and
+  was not: a throttled move, flag or category change was returned as a per-message error. It now
+  re-sends just the throttled ones through the same `retry_throttled_subrequests`, up to three
+  times. If a re-send itself fails, only the re-sent messages are reported as failed, so the ones
+  an earlier round changed are not hidden behind an error. A batch Graph refused as a whole came
+  back as a successful call with every message marked `no response from batch` and Graph's reason
+  dropped; it is now one tool error in Graph's words, raised as every SDK call raises it.
+- **`outlook_batch_triage` no longer marks messages unread when asked to mark them read.**
+  `mark_read` treated any `value` other than `"true"` as unread, and the tool describes the value
+  as a status, so `"read"`, `"yes"` or `"True "` marked every message in the batch unread. It now
+  takes `true`/`false` or `read`/`unread`, in any case, and refuses anything else before sending.
+- **`outlook_search_mail`'s cursor moves to the next page.** Graph pages a message `$search`
+  only with `$skiptoken` (`$search` with `$skip` is `400 SearchWithSkip`), and
+  `build_request_config` dropped the token: no typed `users/*` query-parameters class has the
+  field. So every cursor fetched page one again, with `has_more` still true, and no search could
+  get past its first page. A cursor's page now goes out as the request plus Graph's
+  `$skiptoken`, which is what Graph's own `@odata.nextLink` is. The cursor also carries the
+  folder the search ran in, as `outlook_list_events`'s carries its calendar, so a later page
+  stays in that folder whatever `folder` it is passed.
+- **A contact's company can be changed.** `outlook_create_contact` takes `company` and
+  `outlook_get_contact` returns it, but `outlook_update_contact` could not write it, so a contact
+  who moved to another employer kept the old one unless it was deleted and recreated (#173).
+  `outlook_update_contact` now takes `company` (Graph's `companyName`), changed only when given,
+  like the tool's other fields.
+- **A send answered 503 or 504 is no longer sent again.** Every SDK request passes through
+  kiota's `RetryHandler`, which re-sends a request answered 429, 503 or 504, and POST and PATCH
+  are among the methods it retries. A 503 or 504 does not say the write failed, only that its
+  answer did not arrive, so a message, an invitation, an event update or an RSVP could go out up
+  to four times, and a draft that had already gone out could be reported as a failed send
+  (#131). The tools that can email someone (`outlook_send_message`, `outlook_reply`,
+  `outlook_forward`, `outlook_send_draft`, `outlook_send_with_attachments`,
+  `outlook_create_event`, `outlook_update_event` and `outlook_rsvp`) now make that write with
+  kiota's retry off. A 429 is still sent again after `Retry-After`: Graph fails a throttled
+  request and asks for it again. On a 5xx the error says the write may already have gone
+  through and where to check (Sent Items, the calendar, the event), instead of "Retry after a
+  short delay". Every other call keeps kiota's retries.
+- **A reply keeps its paragraphs, line breaks and the quoted original.** `outlook_reply` sent
+  plain text as the reply action's `comment`, and on an HTML message Graph joins its lines
+  with spaces, so a multi-paragraph reply with a list arrived as one run-on paragraph; on a
+  plain-text message the reply also turned into HTML. `is_html=True` sent `message.body`
+  instead, which replaces the whole body: the reply went out without the original (#167).
+  `outlook_forward`'s `comment` had the first problem. Both now create the reply or forward
+  draft with no text, patch the text in above the quote Graph wrote and send the draft: on an
+  HTML message right after the draft's `<body>` tag, plain text converted first (blank lines to
+  paragraphs, line breaks kept, `- ` or `* ` lines to a list, everything else escaped); on a
+  plain-text message as plain text. Checked against an Exchange Online mailbox. The send runs
+  without kiota's replay (#131). If the patch fails or Graph refuses the send, the draft is
+  deleted; after a 5xx, or a send cut off before Graph answered (a dropped connection), it is
+  left in Drafts and the error says to check Sent Items first and gives the draft's id. A
+  forward without a comment is still one call. The tool surface is unchanged.
+
+### Added
+
+- **`outlook_read_message` takes a Message-ID.** An agent often holds a message's Message-ID
+  header value (`<abc@example.com>`) rather than its Graph ID: from a forwarded message's
+  headers, a reply's `In-Reply-To`, or another tool. `message_id` now accepts one, recognised by
+  its `@`, which no Graph ID contains. It is looked up with an exact
+  `$filter=internetMessageId eq '...'` that selects only the ID, and then read as before, so the
+  response's `id` is the Graph ID every other tool takes. The value is matched exactly, angle
+  brackets included. Graph stores what the sender wrote, and a few senders leave the brackets
+  out. A Message-ID shared by copies in several folders is refused with their IDs instead of
+  guessed between. It costs one sentence in one docstring (+10 proxy tokens), with no ceiling
+  change.
+- **`outlook_create_event` takes `calendar`.** An event could be read from a secondary calendar
+  (`outlook_list_events`, #62) but only ever created in the default one (#141). `calendar` is
+  resolved the way `outlook_list_events` resolves it, with the same errors: omitted, blank or
+  `"primary"` is the default calendar and costs no extra request; otherwise a display name or an
+  ID from `outlook_list_calendars`. A calendar Graph lists as read-only (`canEdit: false`, such as
+  a birthdays or holiday calendar) is refused before anything is sent, naming the calendars that
+  can be written; Graph's own answer is a 403 whose hint blames the account type. The tools that
+  take an event ID need no `calendar`: `/me/events/{id}` reaches an event on any of the user's own
+  calendars.
+- **A contact's birthday can be set** (#163). `outlook_get_contact` returned `birthday`, but
+  neither write tool could set one. `outlook_create_contact` and `outlook_update_contact` take
+  `birthday`, a date (`YYYY-MM-DD`). Graph stores a birthday as an instant, so it is sent as
+  that date at 11:59 UTC: the same calendar date in every time zone from UTC−11 to UTC+12,
+  where midnight UTC would be the day before everywhere west of Greenwich, and the time the
+  birthdays already in a mailbox are stored at. Anything but a plain date is refused before
+  anything is sent. There is no clearing a birthday yet.
+- **A contact's categories, notes and middle name can be written** (#175). `outlook_get_contact`
+  returned `categories` and `personal_notes`, but no tool could set them, and Graph's `middleName`
+  was neither read nor written. `outlook_create_contact` and `outlook_update_contact` take
+  `categories`, `personal_notes` and `middle_name`, and `outlook_get_contact` returns
+  `middle_name`. On update, `categories` replaces the contact's whole list, as
+  `outlook_categorize_message` does a message's: `[]` removes every category, and omitting it
+  leaves them alone. The update description says so, since adding one category with a one-item
+  list would drop the rest.
+- **A draft can start as a reply, a reply-all or a forward, in the message's thread** (#143).
+  `outlook_create_draft` takes `reply_to_message_id` (with `reply_all=True` for reply-all) or
+  `forward_message_id`, and creates the draft with Graph's `createReply`, `createReplyAll` or
+  `createForward`: in Drafts, in the thread, with the original quoted below, and nothing sent.
+  Until now the only way to answer in the thread was `outlook_reply` or `outlook_forward`, which
+  send at once, and a new draft with "RE:" in its subject started a new conversation. For a
+  reply Graph picks the recipients and subject, and a `to`, `cc`, `bcc`, `subject`, `reply_to` or
+  `importance` passed with it replaces Graph's; a forward needs `to`, as Graph requires. The
+  body goes in afterwards, by one patch, above the quote Graph wrote: Graph's `comment` joins a
+  multi-line text's lines with spaces on an HTML message, so paragraphs, line breaks and lists
+  would arrive as one run-on paragraph, and `message.body` replaces the quoted original. On an
+  HTML message the body goes right after the draft's `<body>` tag, where Outlook puts a reply,
+  leaving the original's markup as Graph wrote it; plain text is converted first, blank lines
+  to paragraphs, line breaks kept and `- ` or `* ` lines to a list, everything else escaped. On
+  a plain-text message the draft stays plain text, with the text above the quote. Both checked
+  against an Exchange Online mailbox. `deferred_send_datetime` works as for a new draft, set by
+  the same patch. If that patch fails, the new draft is deleted, so a failed call leaves no
+  half-made reply. The result adds `to` and `cc` as
+  Graph addressed the draft. `to` and `subject` are optional in the schema now; a new draft
+  still needs both and is refused without them. The tool surface grows by 138 proxy tokens.
+- **Mail bodies can be written in Markdown** (#168). `outlook_send_message`, `outlook_reply`,
+  `outlook_forward` (its `comment`), `outlook_create_draft` and `outlook_update_draft` take
+  `is_markdown=True`, beside `is_html`. Agents write Markdown, and until now it went out as text
+  with its asterisks showing, or with `is_html=True` as text that isn't HTML. A safe subset is
+  converted to HTML: paragraphs, line breaks, `-`, `*`, `+` and numbered lists, `**bold**`,
+  `*italic*`, `` `code` ``, backslash escapes, and `[text](url)` links to `https:` and `mailto:`
+  addresses only; an image, `![alt](url)`, becomes a link to it. Everything else, raw HTML
+  included, is escaped and shown as written; headings, quotes and code blocks stay text, and
+  underscores are not emphasis (`snake_case` names are common in an agent's mail). No new
+  dependency: the converter is about 80 lines in
+  `tools/_mail_body.py`, every pattern linear in the line's length. A reply or forward, and a
+  reply or forward draft (#143), puts the HTML above the quote, as #167 does; on a plain-text
+  thread the Markdown is sent as written and the reply stays plain text. `is_html` and
+  `is_markdown` together are refused. The supported subset is one `INSTRUCTIONS` bullet, sent
+  once per session, so no docstring grows; the five booleans add 97 proxy tokens to the tool
+  surface, within the 13,900 ceiling #143 set for the pair.
+- **A contact's email addresses can be added and removed one at a time** (#161).
+  `outlook_update_contact`'s `email` replaces every address with the one given, so an agent
+  asked to add someone's second address had to drop the first. `add_emails` and
+  `remove_emails` change only the addresses they name: the contact is read, the change is
+  merged into the addresses it holds (kept ones go back as read, display name included), and
+  the update is pinned to that read with `If-Match`, so an edit made in between is refused with
+  `412` instead of being overwritten (#87). Refused before anything is written: `email` together
+  with either list, the same address in both, an empty list, removing an address the contact
+  doesn't have, and a result of more than three addresses, the number of email slots Exchange
+  keeps per contact. `email` is unchanged.
+- **Contacts can be found by phone number, however it is written** (#165). Graph's contact
+  `$search` finds a number only as it is stored, so a number from a signature or a missed call
+  without its country code, or with a different one, found nothing, and an agent concluded the
+  caller was not a contact. `outlook_search_contacts` takes `phone` in place of `query`: it reads
+  the contact listing (pages of 1,000, up to 10,000 contacts; nothing is kept) and matches when
+  the shorter number's digits end the longer's, as written or without leading zeros, with at
+  least seven digits. `+44 20 7946 0018` finds `020 7946 0018`. Graph has no server-side
+  alternative: `$filter` on contacts reaches only `emailAddresses`. Fewer than seven digits is
+  refused. `query` searches are unchanged.
+- **Attachments as content, for clients that can't see the server's disk** (#129). The
+  attachment tools moved files only through `attachments_dir`, so a remote or sandboxed client
+  could neither read an attachment nor attach a file, and a local one needed a second tool call
+  to look at a PDF or image it had just downloaded. Both directions can now carry the bytes in
+  the call instead, opt-in, and nothing is read from or written to disk:
+  - `outlook_download_attachment` and `outlook_download_task_attachment` take `as_content=True`
+    in place of `save_path`, which becomes optional; a call passes exactly one of the two. The
+    result is a JSON block with `name`, `size` and `content_type`, then the attachment: PNG,
+    JPEG, GIF and WebP up to 5 MB as an image, text up to 100,000 characters as text, and
+    anything else, PDFs included, as an embedded resource holding the base64 bytes and their
+    type. Text that does not decode cleanly, or carries control characters, goes out whole as
+    a resource rather than altered. Over 10 MB is refused, pointing to `save_path`.
+  - `outlook_send_with_attachments` and `outlook_attach_to_draft` take inline files in
+    `attachments`, `[{name, content_base64, content_type?}]`, beside `attachment_paths`, which
+    becomes optional. Each is limited to 3 MB, Graph's simple-attachment size, so no inline file
+    takes the upload-session path. A malformed item, a name that is a path and an unknown key
+    are refused before anything is sent. A call with neither `attachment_paths` nor
+    `attachments` is refused too: the server ignores an unknown argument, so a misspelt one
+    would otherwise send the mail, or report "attached", with no file. An `attach_to_draft` with
+    an empty list used to succeed with nothing attached; it is refused the same way.
+  - An image comes back as an image only when its bytes open as one, by their signature: a
+    sender can name anything `chart.png`, and some model APIs reject a whole result whose image
+    does not decode. A real image labelled as another image type goes out as what it is.
+
+  The fence is unchanged: `resolve_attachment_path` still governs every path argument. An
+  inline file is bytes the agent already holds and could already put in a message body, so it
+  widens nothing; the caps are there for the model's context. The tool surface grows by 233
+  proxy tokens, to 14,197 with the rest of this release, and the budget's ceiling is raised
+  deliberately to 14,350.
+
+### Security
+
+- **The agent is told attachments are written by other people, not only their names.** With
+  `as_content`, an attachment's text and images reach the model straight from this server, so
+  the connect-time rule and SKILL.md now name attachments themselves. Where only an
+  attachment's name reached the model before, a text attachment's body now does.
+
 ## [1.26.0] — 2026-10-23
 
 ### Fixed

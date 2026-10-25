@@ -91,6 +91,17 @@ class TestApplyPagination:
         cursor = encode_cursor_payload({"skip": 10, "calendar": "WORK456="})
         assert apply_pagination({}, count=25, cursor=cursor)["$skip"] == 10
 
+    @pytest.mark.parametrize("token", [7, "", None, ["t"]])
+    def test_a_skiptoken_that_is_not_a_non_empty_string_is_refused(self, token):
+        """It goes into a URL; refused here, before any lookup or request."""
+        cursor = encode_cursor_payload({"skiptoken": token})
+        with pytest.raises(ValueError, match="Invalid pagination cursor"):
+            apply_pagination({}, count=25, cursor=cursor)
+
+    def test_reads_a_skiptoken(self):
+        cursor = encode_cursor_payload({"skiptoken": "abc", "folder": "inbox"})
+        assert apply_pagination({}, count=25, cursor=cursor)["$skiptoken"] == "abc"
+
 
 class TestCursorPayload:
     """The cursor is an opaque JSON object; tools can carry more than a skip in it."""

@@ -1,8 +1,10 @@
 """Input validation — patterns ported from olkcli (MIT)."""
 
+import base64
+import binascii
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
@@ -43,11 +45,27 @@ _warned_legacy_config_zone: set[str] = set()
 # "AAMk…=\n" and "a@b.com\n" validated.
 _GRAPH_ID_RE = re.compile(r"^[a-zA-Z0-9_=+/\-]{1,1024}$")
 
+# A Message-ID header value, as Graph keeps it in `internetMessageId`: printable
+# ASCII without spaces, at most a header line (998, RFC 5322), and an `@`. No
+# Graph id can contain `@`, which is what tells the two apart. Angle brackets
+# are usual but not required: Graph stores the value as the sender wrote it
+# (3 of 200 measured had none) and matches it exactly, so nothing is added or
+# stripped here.
+_INTERNET_MESSAGE_ID_RE = re.compile(r"^[\x21-\x7e]{3,998}$")
+
 # Email pattern (simplified but sufficient for validation)
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
 
 # Phone pattern
 _PHONE_RE = re.compile(r"^[0-9 ()+.\-]{1,30}$")
+
+# An event key (`key` on the event tools) is stored in an extended property and
+# found with `ep/value eq '<key>'` inside a `$filter` string literal. So it is
+# held to characters no literal needs escaping for and no query string reads
+# differently: no quote, space, slash, `+` (a space to some decoders) or `%`.
+# 128 is room for a typed booking reference ("flight:AB12CD:LHR-JFK") with
+# plenty to spare.
+_EVENT_KEY_RE = re.compile(r"^[A-Za-z0-9._:@\-]{1,128}$")
 
 # KQL characters to strip. The value is embedded as `$search="<value>"`, so the
 # only real boundary is the string literal itself. Verified live against Graph:
@@ -75,6 +93,11 @@ _RELATIVE_UNITS = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 # ANSI escape sequences
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+# A lone UTF-16 surrogate is a legal code point in a str but has no UTF-8 encoding,
+# so a reply carrying one cannot be written: on stdio the SDK's writer raises and the
+# server process exits (#186). Senders reach one through a declared charset (utf-7
+# `+2AA-`) and through a JSON `\ud800` escape in anything Graph returns.
+_LONE_SURROGATE = re.compile(r"[\ud800-\udfff]")
 
 # ISO 8601 datetime: strict pattern to reject injection attempts
 _ISO_DATETIME_RE = re.compile(
@@ -172,6 +195,16 @@ def validate_graph_id(value: str) -> str:
         raise ValueError("Graph ID too long (max 1024 chars)")
     if not _GRAPH_ID_RE.fullmatch(value):
         raise ValueError(f"Graph ID contains invalid characters: {value[:50]}")
+    return value
+
+
+def validate_internet_message_id(value: str) -> str:
+    """Validate a Message-ID header value (``<id@host>``) for an exact lookup."""
+    if "@" not in value or not _INTERNET_MESSAGE_ID_RE.fullmatch(value):
+        raise ValueError(
+            f"Invalid Message-ID: {value[:50]!r}. Pass the header value whole, "
+            "e.g. <abc123@mail.example.com>."
+        )
     return value
 
 
@@ -460,6 +493,17 @@ def validate_folder_name(name: str) -> str:
     return validate_graph_id(name)
 
 
+def validate_event_key(value: str) -> str:
+    """Validate an event key: 1-128 letters, digits and ``. _ : @ -``, checked whole."""
+    if not isinstance(value, str) or not _EVENT_KEY_RE.fullmatch(value):
+        shown = sanitize_output(str(value)[:50])
+        raise ValueError(
+            f"Invalid event key '{shown}'. A key is 1-128 characters from letters, digits "
+            "and . _ : @ - with no spaces, e.g. booking:ABC123."
+        )
+    return value
+
+
 def validate_phone(value: str) -> str:
     """Validate a phone number."""
     if not _PHONE_RE.fullmatch(value):
@@ -467,8 +511,45 @@ def validate_phone(value: str) -> str:
     return value
 
 
+_BIRTHDAY_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def validate_birthday(value: str) -> datetime:
+    """A contact's birthday, ``YYYY-MM-DD``, as the instant Graph stores: 11:59 UTC.
+
+    Graph's ``birthday`` is a DateTimeOffset, so a date needs a time, and the time
+    decides which day a client in another zone sees. Every birthday on the
+    Exchange Online mailbox this was checked against is stored at 11:59 UTC, which
+    is the same calendar date in every zone from UTC-11 to UTC+12. Midnight UTC,
+    the obvious choice, is the day before everywhere west of Greenwich.
+
+    Only a plain date is accepted. A time would be thrown away here, and the
+    caller told "updated" with a value other than the one it sent.
+    """
+    refusal = f"Invalid birthday: {str(value)[:30]!r}. Use a date, YYYY-MM-DD (1990-05-01)."
+    if not isinstance(value, str) or not _BIRTHDAY_RE.fullmatch(value):
+        raise ValueError(refusal)
+    try:
+        day = date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(refusal) from None
+    return datetime(day.year, day.month, day.day, 11, 59, tzinfo=timezone.utc)
+
+
+def replace_lone_surrogates(text: str) -> str:
+    """``text`` with each lone surrogate replaced by U+FFFD, or ``text`` itself if it has none.
+
+    A high and a low surrogate left side by side, unjoined, are joined back into the
+    character they encode; only an unpaired one is replaced.
+    """
+    if text.isascii() or not _LONE_SURROGATE.search(text):
+        return text
+    return text.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+
+
 def sanitize_output(text: str, multiline: bool = False) -> str:
-    """Strip control characters and ANSI escapes from output text."""
+    """Strip control characters and ANSI escapes, and replace lone surrogates, in output text."""
+    text = replace_lone_surrogates(text)
     text = _ANSI_ESCAPE.sub("", text)
     text = _CONTROL_CHARS.sub("", text)
     if not multiline:
@@ -478,3 +559,72 @@ def sanitize_output(text: str, multiline: bool = False) -> str:
     else:
         text = text.replace("\t", " ")
     return text
+
+
+def has_control_characters(text: str) -> bool:
+    """True if ``text`` holds a character ``sanitize_output`` strips or replaces.
+
+    Tab, CR and LF are allowed.
+    """
+    return _CONTROL_CHARS.search(text) is not None or _LONE_SURROGATE.search(text) is not None
+
+
+def _one_line(text: str) -> bool:
+    return not has_control_characters(text) and not any(c in text for c in "\r\n\t")
+
+
+_INLINE_ATTACHMENT_KEYS = frozenset({"name", "content_base64", "content_type"})
+
+
+def validate_inline_attachment(item: object, where: str) -> tuple[str, str | None, bytes]:
+    """Validate one inline attachment, ``{name, content_base64, content_type?}``, and decode it.
+
+    Returns ``(name, content_type or None, bytes)``. The size cap is the caller's, because it
+    is a Graph limit rather than a shape. Unknown keys are refused, not ignored, so a misspelt
+    ``content`` cannot send an attachment with nothing in it. A name that is a path is refused
+    too: it reads no file, and a model that thinks it does should be told where paths go.
+    """
+    if not isinstance(item, dict):
+        raise ValueError(f"{where} must be an object with name and content_base64.")
+    unknown = sorted(set(item) - _INLINE_ATTACHMENT_KEYS)
+    if unknown:
+        raise ValueError(
+            f"{where} has unknown key(s) {unknown}; it takes name, content_base64 and, "
+            "optionally, content_type."
+        )
+    name = item.get("name")
+    if not isinstance(name, str) or not name.strip() or not _one_line(name):
+        raise ValueError(
+            f"{where} needs a name: a non-empty file name on one line, without control characters."
+        )
+    name = name.strip()
+    if name in {".", ".."}:
+        raise ValueError(f"{where} name {name!r} is not a file name.")
+    if len(name) > 255:
+        raise ValueError(
+            f"{where} name is {len(name)} characters long; a file name takes at most 255."
+        )
+    if "/" in name or "\\" in name:
+        raise ValueError(
+            f"{where} name {name!r} is a path. It is only the attachment's file name and reads "
+            "no file; a file in attachments_dir goes in attachment_paths."
+        )
+    content_type = item.get("content_type")
+    if content_type is not None and (
+        not isinstance(content_type, str) or not content_type.strip() or not _one_line(content_type)
+    ):
+        raise ValueError(
+            f"{where} content_type must be a MIME type such as application/pdf, or left out."
+        )
+    encoded = item.get("content_base64")
+    if not isinstance(encoded, str):
+        raise ValueError(f"{where} needs content_base64: the file's bytes, base64-encoded.")
+    # Whitespace is dropped first, so line-wrapped (MIME-style) base64 decodes too.
+    compact = "".join(encoded.split())
+    if not compact:
+        raise ValueError(f"{where} ({name}): content_base64 must not be empty.")
+    try:
+        content = base64.b64decode(compact, validate=True)
+    except binascii.Error:
+        raise ValueError(f"{where} ({name}): content_base64 is not valid base64.") from None
+    return name, content_type, content

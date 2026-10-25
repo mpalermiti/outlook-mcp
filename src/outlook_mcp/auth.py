@@ -16,6 +16,7 @@ from azure.identity import (
 
 from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config, _ensure_dir, atomic_write
 from outlook_mcp.errors import (
+    AccountMismatchError,
     AuthRequiredError,
     ClientIdMismatchError,
     OutlookMCPError,
@@ -137,6 +138,22 @@ _AADSTS70000_MARKER = "AADSTS70000"
 def _is_consent_dead_end(exc: BaseException) -> bool:
     """True for the "this session can never grant that scope" refusal."""
     return _AADSTS70000_MARKER in str(exc)
+
+
+def error_for_failed_refresh(exc: BaseException) -> OutlookMCPError:
+    """The error a token refresh that fails mid-session surfaces as.
+
+    Startup (``try_cached_token``) sorts a failed refresh with the same two
+    checks, and this gives each outcome the same remedy: the cache cannot be
+    stored safely, the session can never grant the scopes (AADSTS70000), or
+    the sign-in has simply lapsed (a revoked or idle-expired refresh token,
+    or azure-identity asking for interaction), which `outlook-mcp auth` fixes.
+    """
+    if _is_azure_unencrypted_refusal(exc):
+        return UnencryptedTokenCacheError()
+    if _is_consent_dead_end(exc):
+        return StaleConsentError()
+    return AuthRequiredError()
 
 
 # The Graph SDK always requests .default scope internally, so silent refresh
@@ -276,6 +293,15 @@ class AuthManager:
             kwargs["authentication_record"] = auth_record
         return DeviceCodeCredential(**kwargs)
 
+    def _account_matches(self, record: AuthenticationRecord | None) -> bool:
+        expected = self.config.expected_username
+        if expected is None:
+            return True
+        username = getattr(record, "username", None)
+        # Microsoft usernames are ASCII today, where lower is equivalent; casefold
+        # expresses caseless comparison, without resolving aliases.
+        return isinstance(username, str) and username.casefold() == expected.casefold()
+
     def login_interactive(self) -> None:
         """Run the device code flow interactively in the terminal.
 
@@ -322,6 +348,9 @@ class AuthManager:
 
         # Save the auth record for silent refresh by the MCP server
         record = getattr(cred, "_auth_record", None)
+        if not self._account_matches(record):
+            self.credential = None
+            raise AccountMismatchError()
         if record:
             _save_auth_record(record)
 
@@ -339,6 +368,12 @@ class AuthManager:
 
         record = _load_auth_record()
         if record is None:
+            return False
+
+        if not self._account_matches(record):
+            self.credential = None
+            self.startup_error = AccountMismatchError()
+            logger.warning("%s", self.startup_error)
             return False
 
         # A record pins the app it was saved for: azure-identity uses the

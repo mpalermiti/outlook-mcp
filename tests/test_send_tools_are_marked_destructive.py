@@ -59,6 +59,7 @@ def test_the_scan_finds_every_tool_that_can_send():
         "outlook_create_event",
         "outlook_update_event",
         "outlook_rsvp",
+        "outlook_attach_to_event",
     }
 
 

@@ -161,7 +161,7 @@ def cmd_logout() -> None:
 
 
 def cmd_serve() -> None:
-    """Start the MCP stdio server."""
+    """Start the MCP server (stdio by default; optional streamable HTTP)."""
     from outlook_mcp.server import main as serve_main
 
     serve_main()

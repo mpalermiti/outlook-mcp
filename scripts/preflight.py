@@ -52,15 +52,27 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0/"
 # base64 POST to ``.../tasks/{id}/attachments`` mutates the task, so it
 # stays out of this read-only script; the GET rows that ``_todo_task_rows``
 # adds cover the same resource family (a 403/501 "not supported for this
-# account type" shows up on the GETs too). The upload-session route
-# (``createUploadSession``) is deliberately not probed either: the tools
-# don't use it (its upload URL needs per-chunk Authorization/Content-Type
+# account type" shows up on the GETs too). The To Do upload-session route
+# (``createUploadSession``) is deliberately not probed either: the To Do
+# tools don't use it (its upload URL needs per-chunk Authorization/Content-Type
 # headers the current inline path doesn't), so its reachability says
-# nothing about this release.
+# nothing about this release. The mail and event attachment tools do use an
+# upload session for a file over 3 MB, but creating one is a POST that
+# changes the draft or event, so it is not probed here either (the
+# ``live_write`` tier's event-attachment round trip exercises the event one).
+#
+# Not probed here, because each needs a real resource id (a message or an
+# event with an attachment) that no static row has: mail attachments
+# (``me/messages/{id}/attachments``, the download and ``outlook_read_attachment``
+# reads) and event attachments (``me/events/{id}/attachments``). The live
+# tier reads event attachments; neither has a provisioned row yet.
 ENDPOINTS: list[tuple[str, str]] = [
     ("me", "Auth / whoami"),
     ("me/messages?$top=1", "Mail read / search"),
     ("me/mailFolders?$top=1", "Mail folders"),
+    # Subfolder listings: recursive `outlook_list_folders`, nested names and
+    # folder paths (`Inbox/Travel/Flights`) walk these one level at a time.
+    ("me/mailFolders/inbox/childFolders?$top=1", "Mail subfolders / folder paths"),
     ("me/mailFolders/drafts/messages?$top=1", "Drafts"),
     ("me/events?$top=1", "Calendar read"),
     ("me/calendars", "Calendar list"),

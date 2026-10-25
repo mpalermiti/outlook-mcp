@@ -5,13 +5,21 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from outlook_mcp.calendar_resolver import resolve_calendar_id
 from outlook_mcp.config import Config
+from outlook_mcp.errors import (
+    EVENT_MAY_HAVE_BEEN_CREATED,
+    INVITATIONS_MAY_HAVE_BEEN_SENT,
+    RESPONSE_MAY_HAVE_BEEN_SENT,
+    UPDATE_MAY_HAVE_BEEN_SENT,
+)
 from outlook_mcp.permissions import (
     CATEGORY_CALENDAR_WRITE,
     check_permission,
     check_sends_mail,
     mail_send_withheld,
 )
+from outlook_mcp.throttle import call_without_replay
 from outlook_mcp.tools._recurrence import (
     build_event_recurrence,
     check_recurrence_shape,
@@ -22,10 +30,12 @@ from outlook_mcp.tools._recurrence import (
     same_pattern,
     serialize_recurrence,
 )
+from outlook_mcp.tools.calendar_read import EVENT_KEY_PROPERTY_ID
 from outlook_mcp.validation import (
     resolve_config_event_timezone,
     validate_datetime,
     validate_email,
+    validate_event_key,
     validate_event_timezone,
     validate_graph_id,
 )
@@ -89,6 +99,22 @@ _ALL_DAY_ZONE_REFUSAL = (
     "To turn it into a timed event instead, pass is_all_day=False with real "
     "start and end times."
 )
+
+
+def _key_property(key: str) -> Any:
+    """The extended property that stamps an event with ``key``.
+
+    Sent in the event's own POST or PATCH; Graph upserts it by id, so an
+    update replaces the key in place. This server offers no way to clear one.
+    """
+    from msgraph.generated.models.single_value_legacy_extended_property import (
+        SingleValueLegacyExtendedProperty,
+    )
+
+    prop = SingleValueLegacyExtendedProperty()
+    prop.id = EVENT_KEY_PROPERTY_ID
+    prop.value = key
+    return prop
 
 
 def _has_attendees(event: Any) -> bool:
@@ -402,6 +428,8 @@ async def create_event(
     recurrence: dict | str | None = None,
     timezone: str | None = None,
     show_as: str | None = None,
+    calendar: str | None = None,
+    key: str | None = None,
     *,
     config: Config,
 ) -> dict:
@@ -443,7 +471,27 @@ async def create_event(
     positional argument for an external caller. ``show_as`` therefore sits
     after ``timezone``, and ``server.py``'s positional call has to agree — a
     disagreement there only misfires when a value is actually supplied, so a
-    green suite proves nothing about it.
+    green suite proves nothing about it. ``calendar`` is appended after
+    ``show_as`` for the same reason, and ``key`` after ``calendar``.
+
+    ``calendar`` is the one ``outlook_list_events`` reads, resolved the same
+    way: ``None``, blank or "primary" keeps ``POST /me/events`` with no extra
+    round trip; anything else is a display name or ID matched against
+    ``/me/calendars`` by ``calendar_resolver``, and the event is posted to that
+    calendar's own collection. A calendar Graph lists as read-only is refused
+    there rather than sent for a 403. Nothing else needs to know which calendar
+    an event is on: ``/me/events/{id}`` reaches events on any of the user's own
+    calendars — checked read-only on four calendars of one mailbox, and for an
+    event created here by ``TestCreatingInAnotherCalendar`` — so the tools that
+    take an event ID are unchanged. A calendar someone else shared is not
+    claimed: Graph documents its events under ``/me/calendars/{id}/events``.
+
+    ``key`` is the caller's own reference for the event — a booking number,
+    say — stored in a hidden extended property (``EVENT_KEY_PROPERTY_ID``) so
+    ``find_events_by_key`` can find the event again when a change to the same
+    booking arrives. Nothing here refuses a key another event already has:
+    looking first is the caller's step, and a check here could not stop two
+    concurrent creates anyway.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_create_event")
     if attendees:
@@ -481,6 +529,8 @@ async def create_event(
     # before anything is sent. `update_event` has the same ordering for a
     # sharper reason (see there); these two stay the same shape deliberately.
     resolved_show_as = _free_busy(show_as) if show_as is not None else None
+    if key is not None:
+        key = validate_event_key(key)
 
     from msgraph.generated.models.attendee import Attendee
     from msgraph.generated.models.body_type import BodyType
@@ -527,7 +577,24 @@ async def create_event(
     if resolved_show_as is not None:
         event.show_as = resolved_show_as
 
-    response = await graph_client.me.events.post(event)
+    if key is not None:
+        event.single_value_extended_properties = [_key_property(key)]
+
+    # Last, because it is the only check that asks Graph: every argument above
+    # is refused for free, and the calendar listing is paid for only by a call
+    # that is going to be sent.
+    calendar_id = await resolve_calendar_id(graph_client, calendar, writable=True)
+    events = (
+        graph_client.me.events
+        if calendar_id is None
+        else graph_client.me.calendars.by_calendar_id(calendar_id).events
+    )
+    response = await call_without_replay(
+        lambda once: events.post(event, request_configuration=once),
+        outcome_unknown=(
+            INVITATIONS_MAY_HAVE_BEEN_SENT if validated_attendees else EVENT_MAY_HAVE_BEEN_CREATED
+        ),
+    )
 
     return {
         "status": "created",
@@ -550,6 +617,7 @@ async def update_event(
     is_all_day: bool | None = None,
     show_as: str | None = None,
     timezone: str | None = None,
+    key: str | None = None,
     *,
     config: Config,
 ) -> dict:
@@ -648,6 +716,12 @@ async def update_event(
     not ``is_all_day``. Graph honours all six values on PATCH for a consumer
     mailbox, verified live. Omitting it leaves the event's current status alone;
     there is no value that clears one, because Graph has no such state.
+
+    ``key`` sets or replaces the event's key (see ``create_event``) and needs no
+    read: it is neither a time nor a pattern, so the occurrence check and the
+    pin for a series reshape do not apply. Whether Graph agrees that keying a
+    master leaves its changed occurrences alone is a live-tier question, asked
+    by ``test_keying_a_series_keeps_them``.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_update_event")
     if attendees:
@@ -705,6 +779,8 @@ async def update_event(
     # surface as that refusal, two reads later, instead of as the input error.
     if recurrence is not None:
         check_recurrence_shape(recurrence)
+    if key is not None:
+        key = validate_event_key(key)
 
     # The event as Graph currently holds it, fetched at most once and only when
     # something actually needs it: the zone a start/end patch must carry, the
@@ -915,15 +991,20 @@ async def update_event(
     if resolved_show_as is not None:
         event.show_as = resolved_show_as
 
-    request_builder = graph_client.me.events.by_event_id(event_id)
-    if if_match:
-        from kiota_abstractions.base_request_configuration import RequestConfiguration
+    if key is not None:
+        event.single_value_extended_properties = [_key_property(key)]
 
-        patch_config = RequestConfiguration()
-        patch_config.headers.add("If-Match", if_match)
-        response = await request_builder.patch(event, request_configuration=patch_config)
-    else:
-        response = await request_builder.patch(event)
+    request_builder = graph_client.me.events.by_event_id(event_id)
+
+    def _patch(once: Any) -> Any:
+        if if_match:
+            once.headers.try_add("If-Match", if_match)
+        return request_builder.patch(event, request_configuration=once)
+
+    # Not replayed after a 5xx either: on an event with attendees the patch is
+    # mailed to them as an update, and a pinned replay would only be refused
+    # with a 412 for the change key this very patch moved (#131).
+    response = await call_without_replay(_patch, outcome_unknown=UPDATE_MAY_HAVE_BEEN_SENT)
 
     return {
         "status": "updated",
@@ -975,7 +1056,10 @@ async def rsvp(
         if message:
             request_body.comment = message
         request_body.send_response = True
-        await event_builder.accept.post(request_body)
+        await call_without_replay(
+            lambda once: event_builder.accept.post(request_body, request_configuration=once),
+            outcome_unknown=RESPONSE_MAY_HAVE_BEEN_SENT,
+        )
         return {"status": "accepted", "event_id": event_id}
 
     elif response == "decline":
@@ -987,7 +1071,10 @@ async def rsvp(
         if message:
             request_body.comment = message
         request_body.send_response = True
-        await event_builder.decline.post(request_body)
+        await call_without_replay(
+            lambda once: event_builder.decline.post(request_body, request_configuration=once),
+            outcome_unknown=RESPONSE_MAY_HAVE_BEEN_SENT,
+        )
         return {"status": "declined", "event_id": event_id}
 
     elif response == "tentative":
@@ -1000,7 +1087,12 @@ async def rsvp(
         if message:
             request_body.comment = message
         request_body.send_response = True
-        await event_builder.tentatively_accept.post(request_body)
+        await call_without_replay(
+            lambda once: event_builder.tentatively_accept.post(
+                request_body, request_configuration=once
+            ),
+            outcome_unknown=RESPONSE_MAY_HAVE_BEEN_SENT,
+        )
         return {"status": "tentativelyAccepted", "event_id": event_id}
 
     else:

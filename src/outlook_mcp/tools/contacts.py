@@ -10,6 +10,7 @@ from outlook_mcp.permissions import CATEGORY_CONTACTS_WRITE, check_permission
 from outlook_mcp.validation import (
     sanitize_kql,
     sanitize_output,
+    validate_birthday,
     validate_email,
     validate_graph_id,
     validate_phone,
@@ -201,6 +202,74 @@ def _clear_phones(contact: Any, clear_phones: list[str]) -> None:
         contact.home_phones = []
 
 
+# Exchange keeps a contact's addresses in three fixed slots (EmailAddress1 to
+# EmailAddress3 in MS-OXWSCONT), so a merge that comes to more is refused here
+# rather than sent to a store that cannot hold it. Whether Graph would refuse a
+# fourth or drop it is not known offline; the live_write tier asks.
+_MAX_EMAILS = 3
+
+
+def _email_list(name: str, values: list[str] | None) -> list[str] | None:
+    """Validated, de-duplicated addresses from ``add_emails`` / ``remove_emails``.
+
+    Compared without case, as mail addresses are in practice; the first spelling
+    given is the one kept. An empty list is refused rather than read as "nothing
+    to do": a patch that carries nothing and answers "updated" is #41's shape.
+    """
+    if values is None:
+        return None
+    if not values:
+        raise ValueError(f"{name} is empty. Omit it to leave the addresses unchanged.")
+    seen: dict[str, str] = {}
+    for value in values:
+        validate_email(value)
+        seen.setdefault(value.lower(), value)
+    return list(seen.values())
+
+
+def _merged_emails(current: Any, adding: list[str], removing: list[str]) -> list[Any]:
+    """The contact's addresses with ``removing`` taken out and ``adding`` appended.
+
+    Kept addresses go back as they were read, ``name`` included, in their stored
+    order; an added one goes on the end with no name, as ``email`` writes it. The
+    entries are new models built field by field, not the ones the read returned,
+    so what is sent is exactly what is listed here.
+    """
+    from msgraph.generated.models.email_address import EmailAddress
+
+    stored = [
+        (address, getattr(entry, "name", None))
+        for entry in (getattr(current, "email_addresses", None) or [])
+        if (address := getattr(entry, "address", None))
+    ]
+    held = {address.lower() for address, _ in stored}
+    absent = [address for address in removing if address.lower() not in held]
+    if absent:
+        raise ValueError(
+            f"The contact has no address {', '.join(absent)}, so nothing was changed. "
+            f"Its addresses are: {', '.join(a for a, _ in stored) or 'none'}."
+        )
+
+    dropped = {address.lower() for address in removing}
+    kept = [(address, name) for address, name in stored if address.lower() not in dropped]
+    present = {address.lower() for address, _ in kept}
+    merged = kept + [(address, None) for address in adding if address.lower() not in present]
+    if len(merged) > _MAX_EMAILS:
+        raise ValueError(
+            f"A contact holds at most three email addresses, and this would leave "
+            f"{len(merged)}. Nothing was changed. Remove one in the same call to make room."
+        )
+
+    entries = []
+    for address, name in merged:
+        entry = EmailAddress()
+        entry.address = address
+        if name:
+            entry.name = name
+        entries.append(entry)
+    return entries
+
+
 def _primary_phone(contact: Any) -> str:
     """Pick the most representative phone from the consumer-Graph contact fields.
 
@@ -268,6 +337,7 @@ def _format_contact_detail(contact: Any) -> dict:
     return {
         "id": contact.id,
         "first_name": sanitize_output(contact.given_name or ""),
+        "middle_name": sanitize_output(getattr(contact, "middle_name", "") or ""),
         "last_name": sanitize_output(contact.surname or ""),
         "display_name": sanitize_output(contact.display_name or ""),
         "email_addresses": email_addresses,
@@ -325,13 +395,113 @@ async def list_contacts(
     }
 
 
+# A phone search reads the listing in pages of this size, and at most this many
+# pages: 10,000 contacts, past any address book a person keeps. A bigger one is
+# searched as far as the cap and says so with `has_more`.
+_PHONE_SCAN_PAGE = 1000
+_PHONE_SCAN_PAGES = 10
+
+# The shorter of two numbers has to have at least this many digits for one to be
+# read as the other with its country or area code. Fewer would let an extension or
+# a short code match every number that happens to end in it.
+_MIN_PHONE_DIGITS = 7
+
+
+def _phone_digits(number: str) -> str:
+    """The digits of a phone number, as written."""
+    return "".join(ch for ch in number if ch in "0123456789")
+
+
+def _same_number(wanted: str, stored: str) -> bool:
+    """Whether ``stored`` is the number whose digits are ``wanted``, written with or
+    without its country or area code: the shorter's digits end the longer's.
+
+    Compared as written and again without leading zeros, so an international
+    ``00`` or a trunk ``0`` on one side does not hide the match (``+44 20 7946
+    0018`` is ``020 7946 0018``), while a suffix that itself starts with 0
+    (``010 0199`` of ``+1 555 010 0199``) still matches.
+    """
+    digits = _phone_digits(stored)
+    for one, other in ((wanted, digits), (wanted.lstrip("0"), digits.lstrip("0"))):
+        shorter, longer = sorted((one, other), key=len)
+        if len(shorter) >= _MIN_PHONE_DIGITS and longer.endswith(shorter):
+            return True
+    return False
+
+
+def _holds_number(contact: Any, wanted: str) -> bool:
+    """Whether any of the contact's three consumer phone fields holds ``wanted``.
+
+    Spelled out field by field, as in ``_primary_phone``, so every field read is
+    one the scan's ``$select`` asks for.
+    """
+    numbers = [getattr(contact, "mobile_phone", "") or ""]
+    numbers += list(getattr(contact, "home_phones", None) or [])
+    numbers += list(getattr(contact, "business_phones", None) or [])
+    return any(_same_number(wanted, number) for number in numbers if number)
+
+
+async def _search_by_phone(graph_client: Any, wanted: str, count: int) -> dict:
+    """Contacts holding the number whose digits are ``wanted``, from the listing.
+
+    Graph's contact ``$search`` finds a number only as it is stored, and phone
+    fields cannot be filtered (``$filter`` on contacts reaches only
+    ``emailAddresses/any(a:a/address eq ...)``). So this reads the listing, only
+    the summary fields, and compares digits here. Nothing is kept after the call.
+    The pages are followed by their raw ``@odata.nextLink``, as
+    ``todo.fetch_all_task_lists`` follows its pages.
+    """
+    from msgraph.generated.users.item.contacts.contacts_request_builder import (
+        ContactsRequestBuilder,
+    )
+
+    req_config = build_request_config(
+        ContactsRequestBuilder.ContactsRequestBuilderGetQueryParameters,
+        {"$top": _PHONE_SCAN_PAGE, "$select": _SUMMARY_SELECT},
+    )
+    response = await graph_client.me.contacts.get(request_configuration=req_config)
+    matches: list[Any] = []
+    pages = 1
+    while True:
+        matches.extend(c for c in (response.value or []) if _holds_number(c, wanted))
+        next_link = getattr(response, "odata_next_link", None)
+        if not isinstance(next_link, str) or not next_link or pages >= _PHONE_SCAN_PAGES:
+            break
+        pages += 1
+        response = await graph_client.me.contacts.with_url(next_link).get()
+    unread = isinstance(next_link, str) and bool(next_link)
+
+    found = [_format_contact_summary(c) for c in matches[:count]]
+    return {
+        "contacts": found,
+        "count": len(found),
+        # No cursor: a scan cut short at the cap, or more matches than `count`,
+        # is all `has_more` can say.
+        "has_more": len(matches) > count or unread,
+        "cursor": None,
+    }
+
+
 async def search_contacts(
     graph_client: Any,
-    query: str,
+    query: str | None = None,
     count: int = 25,
+    phone: str | None = None,
 ) -> dict:
-    """Search contacts using KQL."""
+    """Search contacts using KQL, or by phone number (see ``_search_by_phone``)."""
     count = _clamp(count, 1, 100)
+    if (query is None) == (phone is None):
+        raise ValueError(
+            "Pass query or phone, not both: query is a KQL search, phone finds a number."
+        )
+    if phone is not None:
+        wanted = _phone_digits(validate_phone(phone))
+        if len(wanted) < _MIN_PHONE_DIGITS:
+            raise ValueError(
+                f"phone needs at least {_MIN_PHONE_DIGITS} digits to tell one number from another."
+            )
+        return await _search_by_phone(graph_client, wanted, count)
+
     safe_query = sanitize_kql(query)
 
     query_params: dict[str, Any] = {
@@ -381,6 +551,10 @@ async def create_contact(
     title: str | None = None,
     job_title: str | None = None,
     phone_type: str = "mobile",
+    birthday: str | None = None,
+    middle_name: str | None = None,
+    personal_notes: str | None = None,
+    categories: list[str] | None = None,
     *,
     config: Config,
 ) -> dict:
@@ -390,6 +564,8 @@ async def create_contact(
     display name; the job goes in ``job_title``. The two used to be one argument
     in practice — a model filling in a business card put the job in ``title``
     and got "Engineer Jane Doe" back (#119).
+
+    ``birthday`` is a date, stored at 11:59 UTC (see ``validate_birthday``).
     """
     check_permission(config, CATEGORY_CONTACTS_WRITE, "outlook_create_contact")
 
@@ -398,6 +574,7 @@ async def create_contact(
     if phone:
         validate_phone(phone)
     _check_phone_type(phone, phone_type)
+    born = validate_birthday(birthday) if birthday is not None else None
 
     from msgraph.generated.models.contact import Contact
     from msgraph.generated.models.email_address import EmailAddress
@@ -419,6 +596,14 @@ async def create_contact(
         new_contact.title = title
     if job_title:
         new_contact.job_title = job_title
+    if born is not None:
+        new_contact.birthday = born
+    if middle_name:
+        new_contact.middle_name = middle_name
+    if personal_notes:
+        new_contact.personal_notes = personal_notes
+    if categories:
+        new_contact.categories = categories
 
     created = await graph_client.me.contacts.post(new_contact)
 
@@ -436,12 +621,19 @@ async def update_contact(
     email: str | None = None,
     phone: str | None = None,
     phone_type: str = "mobile",
+    company: str | None = None,
     title: str | None = None,
     job_title: str | None = None,
     home_address: dict | None = None,
     business_address: dict | None = None,
     other_address: dict | None = None,
     clear_phones: list[str] | None = None,
+    birthday: str | None = None,
+    middle_name: str | None = None,
+    personal_notes: str | None = None,
+    categories: list[str] | None = None,
+    add_emails: list[str] | None = None,
+    remove_emails: list[str] | None = None,
     *,
     config: Config,
 ) -> dict:
@@ -458,7 +650,19 @@ async def update_contact(
     or home write replaces that list with ``[phone]``. ``clear_phones`` empties
     the named types, so a number filed as mobile moves to business in one patch.
     ``title`` is the name prefix, here so a job that landed in it can be
-    corrected in place (#119).
+    corrected in place (#119). ``birthday`` sets or replaces the date; there is
+    no clearing it. ``categories`` replaces the contact's whole list, as
+    ``outlook_categorize_message`` does a message's, so ``[]`` removes them all.
+
+    ``email`` replaces every address with the one given. ``add_emails`` and
+    ``remove_emails`` change only the addresses they name, so they are merged
+    into the addresses the contact has now: the contact is read, the merge is
+    computed from that read, and the PATCH is pinned to it with ``If-Match``.
+    That is #87's rule for a write that sends back something it read: an edit
+    made in between is refused with ``412`` rather than overwritten, and a read
+    with no change key goes out unpinned. Every argument is checked before the
+    read; the checks that need the stored addresses (a remove the contact does
+    not have, more than three in all) come after it and before any write.
     """
     check_permission(config, CATEGORY_CONTACTS_WRITE, "outlook_update_contact")
     contact_id = validate_graph_id(contact_id)
@@ -473,6 +677,19 @@ async def update_contact(
     _check_phone_type(phone, phone_type)
     if clear_phones is not None:
         _check_clear_phones(clear_phones, phone, phone_type)
+    born = validate_birthday(birthday) if birthday is not None else None
+    if email is not None and (add_emails is not None or remove_emails is not None):
+        raise ValueError(
+            "Pass email to replace every address, or add_emails / remove_emails to "
+            "change only the ones named — not both."
+        )
+    adding = _email_list("add_emails", add_emails)
+    removing = _email_list("remove_emails", remove_emails)
+    both = sorted({a.lower() for a in adding or []} & {a.lower() for a in removing or []})
+    if both:
+        raise ValueError(
+            f"{', '.join(both)} is in both add_emails and remove_emails. Name each address once."
+        )
 
     from msgraph.generated.models.contact import Contact
     from msgraph.generated.models.email_address import EmailAddress
@@ -490,10 +707,22 @@ async def update_contact(
         _assign_phone(patch_body, phone, phone_type)
     if clear_phones:
         _clear_phones(patch_body, clear_phones)
+    if company is not None:
+        patch_body.company_name = company
     if title is not None:
         patch_body.title = title
     if job_title is not None:
         patch_body.job_title = job_title
+    if born is not None:
+        patch_body.birthday = born
+    if middle_name is not None:
+        patch_body.middle_name = middle_name
+    if personal_notes is not None:
+        patch_body.personal_notes = personal_notes
+    # A list like the business/home numbers: Graph replaces it with what is sent,
+    # so `[]` removes every category and None leaves them alone.
+    if categories is not None:
+        patch_body.categories = categories
 
     if home_address is not None:
         patch_body.home_address = _build_address("home", home_address)
@@ -502,7 +731,23 @@ async def update_contact(
     if other_address is not None:
         patch_body.other_address = _build_address("other", other_address)
 
-    await graph_client.me.contacts.by_contact_id(contact_id).patch(patch_body)
+    request_builder = graph_client.me.contacts.by_contact_id(contact_id)
+    if_match: str | None = None
+    if adding is not None or removing is not None:
+        # Last, so every check above has run before anything is read. No
+        # $select, as in get_contact: the whole contact, change key included.
+        current = await request_builder.get()
+        patch_body.email_addresses = _merged_emails(current, adding or [], removing or [])
+        if_match = (getattr(current, "additional_data", None) or {}).get("@odata.etag")
+
+    if if_match:
+        from kiota_abstractions.base_request_configuration import RequestConfiguration
+
+        patch_config = RequestConfiguration()
+        patch_config.headers.add("If-Match", if_match)
+        await request_builder.patch(patch_body, request_configuration=patch_config)
+    else:
+        await request_builder.patch(patch_body)
 
     return {"status": "updated"}
 

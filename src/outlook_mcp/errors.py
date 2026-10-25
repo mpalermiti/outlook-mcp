@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any
+
 from mcp.server.mcpserver.exceptions import ToolError
+
+if TYPE_CHECKING:
+    import httpx
 
 # Closes every refusal that names a setting. These strings reach the model, and
 # the clients this server runs under give the agent file tools: a refusal that
@@ -49,9 +54,14 @@ class OutlookMCPError(ToolError):
         """Message plus recovery hint — this string is what the model reads.
 
         ``action`` exists to tell an agent what to do next, so it has to be in
-        the text the client receives, not only on the attribute.
+        the text the client receives, not only on the attribute. A lone surrogate
+        in either (a sender's file name, say) is replaced: the reply could not be
+        written otherwise (#186).
         """
-        return f"{self.message} {self.action}" if self.action else self.message
+        from outlook_mcp.validation import replace_lone_surrogates
+
+        text = f"{self.message} {self.action}" if self.action else self.message
+        return replace_lone_surrogates(text)
 
 
 class AuthRequiredError(OutlookMCPError):
@@ -205,6 +215,18 @@ class StaleConsentError(OutlookMCPError):
         )
 
 
+class AccountMismatchError(OutlookMCPError):
+    """A sign-in does not belong to the username configured for this instance."""
+
+    def __init__(self):
+        super().__init__(
+            "account_mismatch",
+            "The sign-in does not match expected_username in config.json, so it was not used.",
+            "Run `outlook-mcp auth` on the host and sign in as this instance's expected user, "
+            "or correct expected_username if it is wrong. " + LEAVE_SETTINGS_TO_THE_USER,
+        )
+
+
 class ClientIdMismatchError(OutlookMCPError):
     """Raised when the saved sign-in was made with a different app registration.
 
@@ -219,14 +241,14 @@ class ClientIdMismatchError(OutlookMCPError):
         super().__init__(
             "client_id_mismatch",
             f"The saved sign-in was made with a different app registration "
-            f"(client_id {saved[:8]}…) than the one now in config.json "
+            f"(client_id {saved[:8]}…) than the effective client_id "
             f"({configured[:8]}…), so it was not used.",
             "Run `outlook-mcp auth` on the host to sign in with the configured app.",
         )
 
 
 class ConfigLoadError(OutlookMCPError):
-    """The settings file could not be loaded; the server booted fail-safe.
+    """File or environment configuration was refused; the server booted fail-safe.
 
     ``main`` validates the config before the transport starts and exits with
     the repair on stderr. This error is the lifespan's backstop for the same
@@ -236,6 +258,16 @@ class ConfigLoadError(OutlookMCPError):
     """
 
     def __init__(self, reason: Exception, config_dir: str):
+        from outlook_mcp.config import EnvironmentConfigError
+
+        if isinstance(reason, EnvironmentConfigError):
+            super().__init__(
+                "config_load_failed",
+                f"Environment configuration was refused ({reason}); the server booted read-only.",
+                "Fix the named variable in the launch environment and restart the server. "
+                + LEAVE_SETTINGS_TO_THE_USER,
+            )
+            return
         super().__init__(
             "config_load_failed",
             f"The settings file could not be loaded ({reason}); the server booted read-only.",
@@ -349,6 +381,13 @@ _HINT_TABLE: dict[tuple[int, str | None], str] = {
         "Rate limited by Microsoft Graph. Back off and retry; respect any Retry-After header."
     ),
     (503, None): ("Microsoft Graph is temporarily unavailable. Retry after a short delay."),
+    # Only a delta cursor gets a 410: Graph no longer holds the sync state it
+    # names (syncStateNotFound), because it aged out of Graph's cache or the sync
+    # was reset. No retry brings it back, so the exit is a fresh sync.
+    (410, None): (
+        "The sync state this delta_token points to is gone (it expired or was reset). "
+        "Discard the cursor and start a fresh sync by calling again with no delta_token."
+    ),
 }
 
 
@@ -367,12 +406,52 @@ def _lookup_hint(status_code: int | None, error_code: str | None) -> str | None:
     return _HINT_TABLE.get((status_code, None))
 
 
-def wrap_graph_error(exc: Exception) -> GraphAPIError:
+# What a 5xx means for a write that can email someone (#131). A 5xx says Graph failed,
+# not where: the message may have gone out before the answer was lost, so the 503 row's
+# "retry" would send it twice. These calls run without kiota's replay
+# (`throttle.call_without_replay`), and the agent is told to look before sending again.
+# Any 5xx, not only the 503/504 kiota retries: a needless check costs one read, a
+# needless retry a duplicate email.
+MESSAGE_MAY_HAVE_BEEN_SENT = (
+    "Graph failed without saying whether the message went out, so it may already have "
+    "been sent. Check Sent Items before sending it again."
+)
+# The same for a reply or forward sent from the draft it was written into
+# (``mail_write._send_in_thread``): one that did not go out is still in Drafts.
+DRAFT_MAY_HAVE_BEEN_SENT = (
+    "Graph failed without saying whether the message went out, so it may already have "
+    "been sent. Check Sent Items before sending it again; if it is not there, it is still "
+    "in Drafts."
+)
+INVITATIONS_MAY_HAVE_BEEN_SENT = (
+    "Graph failed without saying whether the event was created, so it may already exist "
+    "and its invitations may already have been sent. Check the calendar before creating "
+    "it again."
+)
+RESPONSE_MAY_HAVE_BEEN_SENT = (
+    "Graph failed without saying whether the response went out, so the organizer may "
+    "already have it. Read the event before responding again."
+)
+UPDATE_MAY_HAVE_BEEN_SENT = (
+    "Graph failed without saying whether the change was saved, so it may already have "
+    "been made and any attendees sent the update. Read the event before updating it again."
+)
+# The same doubt for an event with no attendees, where nothing was emailed.
+EVENT_MAY_HAVE_BEEN_CREATED = (
+    "Graph failed without saying whether the event was created, so it may already exist. "
+    "Check the calendar before creating it again."
+)
+
+
+def wrap_graph_error(exc: Exception, *, outcome_unknown: str | None = None) -> GraphAPIError:
     """Convert a Graph SDK exception into a structured ``GraphAPIError``.
 
     Catches the msgraph SDK's ``ODataError`` and its parent
     ``kiota_abstractions.api_error.APIError``. Extracts status code,
     error code, and message, and attaches a recovery hint when known.
+
+    ``outcome_unknown`` replaces the hint on a 5xx, for a write whose effect a
+    server error leaves in doubt (one of the outcome-unknown hints above).
 
     Raises ``TypeError`` if ``exc`` is not a recognized Graph SDK error —
     callers should pass through non-Graph exceptions unchanged.
@@ -415,10 +494,79 @@ def wrap_graph_error(exc: Exception) -> GraphAPIError:
         message = f"Graph API error (status {status_code})"
 
     hint = _lookup_hint(status_code, error_code)
+    if outcome_unknown is not None and status_code is not None and status_code >= 500:
+        hint = outcome_unknown
 
     return GraphAPIError(
         status_code if status_code is not None else 0,
         error_code,
         message,
         action=hint,
+    )
+
+
+def wrap_http_status_error(exc: Exception) -> GraphAPIError:
+    """Convert a raw-httpx ``HTTPStatusError`` into a ``GraphAPIError``.
+
+    The delta tools and ``outlook_read_messages`` reach Graph through httpx,
+    not the SDK, so a refusal there arrives as ``httpx.HTTPStatusError``.
+    ``wrap_graph_error`` does not recognise it, and the MCP SDK reports any
+    unrecognised exception to the model as a bare ``Error executing tool
+    <name>``. Graph's error body has the same ``{"error": {"code", "message"}}``
+    shape on both paths, so this returns what the SDK path would, hint included.
+
+    Built from the status and the body only. ``str(exc)`` names the request
+    URL, and on the delta paths that URL is the caller's cursor.
+    """
+    response = exc.response  # type: ignore[attr-defined]
+    status_code: int = response.status_code
+
+    try:
+        body = response.json()
+    except ValueError:  # a gateway's HTML page, or no body at all
+        body = None
+    error = body.get("error") if isinstance(body, dict) else None
+
+    error_code: str | None = None
+    message: str | None = None
+    if isinstance(error, dict):
+        if isinstance(error.get("code"), str) and error["code"]:
+            error_code = error["code"]
+        if isinstance(error.get("message"), str) and error["message"]:
+            message = error["message"]
+
+    error_code = error_code or "UnknownError"
+    message = message or f"Graph API error (status {status_code})"
+    return GraphAPIError(
+        status_code, error_code, message, action=_lookup_hint(status_code, error_code)
+    )
+
+
+def graph_json(response: httpx.Response) -> dict[str, Any]:
+    """Read a raw-httpx Graph reply: the JSON object it carries, or ``GraphAPIError``.
+
+    For the paths that reach Graph without the SDK (delta and ``$batch``),
+    after ``raise_for_status()``. A bare ``response.json()`` raises
+    ``JSONDecodeError`` (or ``UnicodeDecodeError`` for bytes that are not
+    UTF-8), both ``ValueError``s, which ``_wrap_tool_errors`` reports as the
+    caller's invalid input; and JSON that is not an object fails on its first
+    ``.get()`` as a crash. Neither is a mistake in the arguments, and the reply
+    may not be Graph's at all.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict):
+        return body
+    status_code = response.status_code
+    raise GraphAPIError(
+        status_code,
+        "UnreadableResponse",
+        f"The reply (HTTP {status_code}) was not a JSON object, so it could not be read "
+        "as a Microsoft Graph response.",
+        action=(
+            "Retry after a short delay. If it keeps happening, something between this "
+            "server and Microsoft Graph, such as a proxy, may be answering in its place."
+        ),
     )

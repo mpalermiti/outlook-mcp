@@ -762,3 +762,313 @@ class TestAmbiguousHourKeepsItsFold:
         """Only the defaulted path reads the clock at all."""
         start, _ = _compute_calendar_range(7, "2026-11-01T00:00:00", None, self.ZONE)
         assert start == "2026-11-01T07:00:00Z"
+
+
+# ── event keys ────────────────────────────────────────────────────────
+
+_KEY_PROP = "String {51f1f359-76ee-427e-ac52-22691bf5b2f8} Name EventKey"
+_KEY_EXPAND = f"singleValueExtendedProperties($filter=id eq '{_KEY_PROP}')"
+
+
+def _keyed(event, value, prop_id=_KEY_PROP):
+    prop = MagicMock()
+    prop.id = prop_id
+    prop.value = value
+    event.single_value_extended_properties = [prop]
+    return event
+
+
+def _unkeyed(event):
+    event.single_value_extended_properties = None
+    return event
+
+
+class TestTheKeyPropertyIsFixed:
+    def test_the_property_id_never_changes(self):
+        """Events already stamped become unfindable if this string moves."""
+        from outlook_mcp.tools.calendar_read import EVENT_KEY_PROPERTY_ID
+
+        assert EVENT_KEY_PROPERTY_ID == _KEY_PROP
+
+
+class TestGetEventReturnsItsKey:
+    @staticmethod
+    def _client(event):
+        builder = MagicMock()
+        builder.get = AsyncMock(return_value=event)
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+        return client, builder
+
+    async def test_the_read_expands_only_the_key_property(self):
+        client, builder = self._client(_unkeyed(_make_mock_event()))
+
+        await get_event(client, event_id="AAMkAG123=")
+
+        assert _query_params(builder.get).expand == [_KEY_EXPAND]
+        # Still no $select: every other property comes back as before.
+        assert _query_params(builder.get).select is None
+
+    async def test_a_keyed_event_reports_its_key(self):
+        client, _ = self._client(_keyed(_make_mock_event(), "booking:ABC123"))
+
+        assert (await get_event(client, event_id="AAMkAG123="))["key"] == "booking:ABC123"
+
+    async def test_graph_may_spell_the_property_id_in_another_case(self):
+        client, _ = self._client(_keyed(_make_mock_event(), "booking:ABC123", _KEY_PROP.upper()))
+
+        assert (await get_event(client, event_id="AAMkAG123="))["key"] == "booking:ABC123"
+
+    async def test_an_unkeyed_event_reports_none(self):
+        client, _ = self._client(_unkeyed(_make_mock_event()))
+
+        assert (await get_event(client, event_id="AAMkAG123="))["key"] is None
+
+    async def test_another_property_is_not_a_key(self):
+        other = "String {00000000-0000-0000-0000-000000000000} Name EventKey"
+        client, _ = self._client(_keyed(_make_mock_event(), "someone-else", other))
+
+        assert (await get_event(client, event_id="AAMkAG123="))["key"] is None
+
+
+class TestListEventsReturnsKeys:
+    @staticmethod
+    def _client(events):
+        client = MagicMock()
+        client.me.calendar_view.get = AsyncMock(
+            return_value=MagicMock(value=events, odata_next_link=None)
+        )
+        return client
+
+    async def test_the_listing_expands_the_key_and_shows_it_where_set(self):
+        client = self._client(
+            [
+                _keyed(_make_mock_event(id="K1="), "booking:ABC123"),
+                _unkeyed(_make_mock_event(id="U1=")),
+            ]
+        )
+
+        result = await list_events(client, days=7, timezone="UTC")
+
+        assert _query_params(client.me.calendar_view.get).expand == [_KEY_EXPAND]
+        keyed, plain = result["events"]
+        assert keyed["key"] == "booking:ABC123"
+        # Absent rather than null: most events have no key, and a null on every
+        # row of a page is paid for on every listing.
+        assert "key" not in plain
+
+    async def test_concise_sends_no_expand_and_returns_no_key(self):
+        client = self._client([_keyed(_make_mock_event(id="K1="), "booking:ABC123")])
+
+        result = await list_events(client, days=7, timezone="UTC", concise=True)
+
+        assert _query_params(client.me.calendar_view.get).expand is None
+        assert "key" not in result["events"][0]
+
+    async def test_a_secondary_calendar_listing_expands_it_too(self):
+        client, builder = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+        builder.calendar_view.get.return_value.value = [
+            _keyed(_make_mock_event(id="K1="), "booking:ABC123")
+        ]
+
+        result = await list_events(client, days=7, timezone="UTC", calendar="Work")
+
+        assert _query_params(builder.calendar_view.get).expand == [_KEY_EXPAND]
+        assert result["events"][0]["key"] == "booking:ABC123"
+
+
+class TestFindEventsByKey:
+    @staticmethod
+    def _client(events, next_link=None):
+        client = MagicMock()
+        client.me.events.get = AsyncMock(
+            return_value=MagicMock(value=events, odata_next_link=next_link)
+        )
+        return client
+
+    async def test_the_filter_matches_this_property_and_this_value(self):
+        from outlook_mcp.tools.calendar_read import _SUMMARY_SELECT, find_events_by_key
+
+        client = self._client([])
+
+        await find_events_by_key(client, "booking:ABC123")
+
+        params = _query_params(client.me.events.get)
+        assert params.filter == (
+            f"singleValueExtendedProperties/Any(ep: ep/id eq '{_KEY_PROP}' "
+            "and ep/value eq 'booking:ABC123')"
+        )
+        assert params.expand == [_KEY_EXPAND]
+        assert params.select == [f.strip() for f in _SUMMARY_SELECT.split(",")]
+        assert params.top == 25
+
+    async def test_a_quote_in_the_key_is_doubled_in_the_literal(self, monkeypatch):
+        """The validator refuses a quote today; the filter must not rely on it."""
+        from outlook_mcp.tools import calendar_read
+
+        monkeypatch.setattr(calendar_read, "validate_event_key", lambda key: key)
+        client = self._client([])
+
+        await calendar_read.find_events_by_key(client, "o'brien:1")
+
+        assert _query_params(client.me.events.get).filter.endswith("and ep/value eq 'o''brien:1')")
+
+    async def test_matches_come_back_in_the_listing_shape_with_their_key(self):
+        from outlook_mcp.tools.calendar_read import find_events_by_key
+
+        master = _keyed(_make_mock_event(id="M1=", type=MagicMock(value="seriesMaster")), "k:1")
+        client = self._client([master])
+
+        result = await find_events_by_key(client, "k:1")
+
+        assert result["key"] == "k:1"
+        assert result["count"] == 1
+        assert result["has_more"] is False
+        found = result["events"][0]
+        assert found["id"] == "M1="
+        assert found["type"] == "seriesMaster"
+        assert found["key"] == "k:1"
+        assert {"subject", "start", "end", "show_as"} <= set(found)
+
+    async def test_nothing_found_is_an_empty_answer_not_an_error(self):
+        from outlook_mcp.tools.calendar_read import find_events_by_key
+
+        result = await find_events_by_key(self._client([]), "k:1")
+
+        assert result == {"key": "k:1", "events": [], "count": 0, "has_more": False}
+
+    async def test_more_than_a_page_says_so(self):
+        from outlook_mcp.tools.calendar_read import find_events_by_key
+
+        events = [_keyed(_make_mock_event(id=f"E{i}="), "k:1") for i in range(25)]
+        client = self._client(
+            events, next_link="https://graph.microsoft.com/v1.0/me/events?$skip=25"
+        )
+
+        result = await find_events_by_key(client, "k:1")
+
+        assert result["count"] == 25
+        assert result["has_more"] is True
+
+    async def test_an_invalid_key_is_refused_before_any_request(self):
+        from outlook_mcp.tools.calendar_read import find_events_by_key
+
+        client = self._client([])
+        client.me.calendars.get = AsyncMock()
+
+        with pytest.raises(ValueError, match="Invalid event key"):
+            await find_events_by_key(client, "it's", calendar="Work")
+
+        client.me.events.get.assert_not_called()
+        client.me.calendars.get.assert_not_called()
+
+    async def test_a_named_calendar_is_searched_instead_of_the_default(self):
+        from outlook_mcp.tools.calendar_read import find_events_by_key
+
+        client, builder = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+        builder.events.get = AsyncMock(return_value=MagicMock(value=[], odata_next_link=None))
+        client.me.events.get = AsyncMock()
+
+        await find_events_by_key(client, "k:1", calendar="work")
+
+        client.me.calendars.by_calendar_id.assert_called_once_with("WORK456=")
+        builder.events.get.assert_called_once()
+        client.me.events.get.assert_not_called()
+        assert "ep/value eq 'k:1'" in _query_params(builder.events.get).filter
+
+    async def test_an_unknown_calendar_is_refused_naming_what_exists(self):
+        from outlook_mcp.tools.calendar_read import find_events_by_key
+
+        client, _ = _client_with_calendars(_make_calendars(*TWO_CALENDARS))
+
+        with pytest.raises(ValueError, match="not found"):
+            await find_events_by_key(client, "k:1", calendar="Holidays")
+
+
+class TestEventKeyQueriesOnTheWire:
+    """The URLs the real SDK pipeline sends, decoded the way Graph decodes them.
+
+    `mail_read` builds its one extended-property `$expand` as a raw URL because
+    kiota once dropped the inner `$filter`. These go through the typed request
+    builders, so the test that matters is what reaches the transport.
+    """
+
+    @staticmethod
+    def _client(answer: dict):
+        import httpx
+        from azure.core.credentials import AccessToken
+        from kiota_authentication_azure.azure_identity_authentication_provider import (
+            AzureIdentityAuthenticationProvider,
+        )
+        from msgraph import GraphServiceClient
+        from msgraph import graph_request_adapter as _gra
+        from msgraph_core import GraphClientFactory
+
+        class _Credential:
+            def get_token(self, *args, **kwargs):
+                return AccessToken("not-a-real-token", 9_999_999_999)
+
+        sent: list[httpx.Request] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return httpx.Response(200, json=answer)
+
+        http_client = GraphClientFactory.create_with_default_middleware(
+            options=_gra.options,
+            client=httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+        )
+        auth = AzureIdentityAuthenticationProvider(
+            _Credential(), scopes=["https://graph.microsoft.com/.default"]
+        )
+        return GraphServiceClient(request_adapter=_gra.GraphRequestAdapter(auth, http_client)), sent
+
+    @staticmethod
+    def _query(request) -> dict[str, str]:
+        from urllib.parse import parse_qs
+
+        return {k: v[0] for k, v in parse_qs(request.url.query.decode()).items()}
+
+    async def test_the_lookup_filter_reaches_graph_intact(self):
+        from outlook_mcp.tools.calendar_read import find_events_by_key
+
+        client, sent = self._client({"value": []})
+
+        await find_events_by_key(client, "flight:ab12cd:LHR-JFK")
+
+        (request,) = sent
+        assert request.url.path == "/v1.0/me/events"
+        query = self._query(request)
+        assert query["$filter"] == (
+            f"singleValueExtendedProperties/Any(ep: ep/id eq '{_KEY_PROP}' "
+            "and ep/value eq 'flight:ab12cd:LHR-JFK')"
+        )
+        assert query["$expand"] == _KEY_EXPAND
+        assert query["$top"] == "25"
+
+    async def test_the_key_expand_reaches_graph_on_a_read_and_a_listing(self):
+        client, sent = self._client(
+            {"id": "AAMkAG123=", "subject": "s", "value": [], "singleValueExtendedProperties": []}
+        )
+
+        await get_event(client, event_id="AAMkAG123=")
+        await list_events(client, days=7, timezone="UTC")
+
+        read, listing = sent
+        assert read.url.path == "/v1.0/me/events/AAMkAG123="
+        assert self._query(read) == {"$expand": _KEY_EXPAND}
+        assert listing.url.path == "/v1.0/me/calendarView"
+        assert self._query(listing)["$expand"] == _KEY_EXPAND
+
+    async def test_a_key_graph_returns_is_read_back(self):
+        client, _ = self._client(
+            {
+                "id": "AAMkAG123=",
+                "subject": "s",
+                "singleValueExtendedProperties": [
+                    {"id": _KEY_PROP.lower(), "value": "booking:ABC123"}
+                ],
+            }
+        )
+
+        assert (await get_event(client, event_id="AAMkAG123="))["key"] == "booking:ABC123"

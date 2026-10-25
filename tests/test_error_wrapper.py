@@ -6,7 +6,7 @@ import pytest
 from msgraph.generated.models.o_data_errors.main_error import MainError
 from msgraph.generated.models.o_data_errors.o_data_error import ODataError
 
-from outlook_mcp.errors import GraphAPIError, wrap_graph_error
+from outlook_mcp.errors import MESSAGE_MAY_HAVE_BEEN_SENT, GraphAPIError, wrap_graph_error
 
 
 def _make_odata_error(status_code: int, code: str | None, message: str | None) -> ODataError:
@@ -160,6 +160,31 @@ def test_wrap_500_unknown_has_no_hint():
     assert wrapped.status_code == 500
     assert wrapped.error_code == "InternalServerError"
     assert wrapped.action is None
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+def test_wrap_5xx_on_a_send_says_it_may_already_have_gone(status):
+    """A 5xx on a write that emails someone leaves its outcome unknown (#131).
+
+    The 503 row says to retry, which for a send is how the duplicate happens. The
+    send paths pass the hint for what they send, and it replaces the table's.
+    """
+    exc = _make_odata_error(status, "ServiceUnavailable", "Try again")
+    wrapped = wrap_graph_error(exc, outcome_unknown=MESSAGE_MAY_HAVE_BEEN_SENT)
+    assert wrapped.status_code == status
+    assert wrapped.action == MESSAGE_MAY_HAVE_BEEN_SENT
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [(400, "ErrorInvalidRecipients"), (404, "ErrorItemNotFound"), (429, "TooManyRequests")],
+)
+def test_wrap_4xx_on_a_send_keeps_the_tables_hint(status, code):
+    """A 4xx is a refusal: nothing went out, so the usual hint stands."""
+    exc = _make_odata_error(status, code, "Refused")
+    assert wrap_graph_error(exc, outcome_unknown=MESSAGE_MAY_HAVE_BEEN_SENT).action == (
+        wrap_graph_error(exc).action
+    )
 
 
 def test_wrap_non_graph_exception_raises_typeerror():

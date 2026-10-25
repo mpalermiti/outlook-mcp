@@ -33,7 +33,7 @@ If a task can only be verified against a real mailbox, write the live test, leav
 
 **This repo is public.** Everything under `agent/` and on the rolling PR is visible to anyone. Write nothing private: no local paths outside the repo, no account details, no unreleased security findings.
 
-Neo's own checkout at `~/ClaudeCode/outlook-mcp` is off-limits; work only in this checkout.
+The live checkout at `~/ClaudeCode/outlook-mcp` is off-limits; work only in this checkout.
 
 ## Verification rules
 The suite above must be green before and after every session. Every behaviour change starts with a test that fails for the right reason. A write-path change is proven by the serialized payload (`test_write_payloads_reach_the_wire.py` style), not by the model object. Docs changes are checked against `src/` by grep or a test, never from memory.

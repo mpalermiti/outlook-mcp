@@ -38,6 +38,7 @@ the mailbox lacks the data a given assertion needs. They must never assume this
 maintainer's mailbox.
 """
 
+import os
 from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
 
@@ -45,10 +46,21 @@ import pytest
 from msgraph.generated.models.event_type import EventType
 from msgraph.generated.models.free_busy_status import FreeBusyStatus
 
+from outlook_mcp.folder_resolver import resolve_folder_id
+from outlook_mcp.sender_auth import NO_FROM, NO_HEADER, UNREADABLE
+from outlook_mcp.tools._delta import parse_graph_datetime, require_graph_url
 from outlook_mcp.tools.calendar_delta import list_events_delta
 from outlook_mcp.tools.calendar_read import list_events
 from outlook_mcp.tools.contacts import list_contacts, search_contacts
-from outlook_mcp.tools.mail_read import list_inbox, search_mail
+from outlook_mcp.tools.contacts_delta import list_contacts_delta
+from outlook_mcp.tools.mail_delta import list_inbox_delta
+from outlook_mcp.tools.mail_read import (
+    list_folders,
+    list_inbox,
+    read_message,
+    read_messages,
+    search_mail,
+)
 from outlook_mcp.tools.mail_thread import list_thread
 from outlook_mcp.tools.todo import get_task, list_tasks
 
@@ -155,6 +167,67 @@ async def test_list_thread_is_accepted(real_graph_client, sample):
     assert received == sorted(received), "list_thread orders oldest-first"
 
 
+# ── read_message by Message-ID: an exact $filter on internetMessageId ──
+# A filter Graph rejects is a loud 400. The quiet failure is one that finds
+# nothing: a Message-ID altered on the way, by quoting or by a `+` read as a
+# space, matches no message and reads as "not in this mailbox".
+
+
+async def test_read_message_finds_a_message_by_its_message_id(real_graph_client):
+    """The lookup must land on the message the Message-ID was read from.
+
+    Harvested with the SDK, because no tool returns `internetMessageId`. A
+    Message-ID with `+`, `/` or `=` goes first: those mean something in a URL
+    query, so finding its message shows the value reached Graph intact.
+    """
+    from msgraph.generated.users.item.messages.messages_request_builder import (
+        MessagesRequestBuilder,
+    )
+
+    from outlook_mcp.pagination import build_request_config
+    from outlook_mcp.tools.mail_read import read_message
+
+    client = real_graph_client.sdk_client
+    page = await client.me.messages.get(
+        request_configuration=build_request_config(
+            MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters,
+            {"$select": "id,internetMessageId", "$top": 50},
+        )
+    )
+    harvested = [m for m in page.value or [] if m.id and "@" in (m.internet_message_id or "")]
+    if not harvested:
+        pytest.skip("no message with a Message-ID among the first 50")
+    harvested.sort(key=lambda m: not any(c in m.internet_message_id for c in "+/="))
+
+    for message in harvested:
+        try:
+            result = await read_message(client, message.internet_message_id, concise=True)
+        except ValueError as exc:
+            if "matches" in str(exc):
+                continue  # this one has a copy in another folder; try the next
+            raise
+        assert result["id"] == message.id, (
+            "the Message-ID lookup returned a different message than the one it was read from"
+        )
+        return
+    pytest.skip("every harvested Message-ID belongs to more than one copy")
+
+
+async def test_an_unknown_message_id_is_not_found_rather_than_refused(real_graph_client):
+    """An apostrophe, `&`, `#`, `%` and `+` must still make a filter Graph accepts.
+
+    If the quoting or the encoding broke the literal, Graph answers 400, which
+    arrives as GraphAPIError, not NotFoundError.
+    """
+    from outlook_mcp.errors import NotFoundError
+    from outlook_mcp.tools.mail_read import read_message
+
+    with pytest.raises(NotFoundError):
+        await read_message(
+            real_graph_client.sdk_client, "<zzqqxx'nomatch&a#b%20c+d/e=f@example.invalid>"
+        )
+
+
 # ── #30: sanitize_kql stripped ':' ──
 # The dangerous mode here is silent: 200 with zero results. Assert on data.
 
@@ -239,6 +312,117 @@ async def test_search_rejects_query_that_sanitizes_to_empty(real_graph_client):
         await search_mail(real_graph_client.sdk_client, query="*", count=5)
 
 
+# ── $search paging: Graph pages by $skiptoken, and stops a little past 250 ──
+# Both failure modes are silent. No typed request builder has a `$skiptoken`
+# field, so a cursor that loses the token fetches page one again with has_more
+# still true. And Graph ends a long search with no nextLink and no error, which
+# reads exactly like the end of a complete one.
+
+# Matches every message, so the result size is the folder's size.
+_SEARCH_EVERYTHING = "received>=2000-01-01"
+
+
+@pytest.mark.parametrize("folder", [None, "inbox"])
+async def test_search_cursor_moves_to_the_next_page(real_graph_client, folder):
+    """Page two of a search must not be page one again, in all mail or in one folder.
+
+    Until the cursor went out through `get_page`, it did: `build_request_config`
+    dropped the `$skiptoken`, so every page was the first, with has_more true.
+    Page two of a folder search goes to the folder the cursor carries.
+    """
+    client = real_graph_client.sdk_client
+    first = await search_mail(client, query=_SEARCH_EVERYTHING, count=25, folder=folder)
+    if not first["has_more"]:
+        pytest.skip(f"the search fits on one page ({first['count']} messages)")
+
+    second = await search_mail(client, query=_SEARCH_EVERYTHING, count=25, cursor=first["cursor"])
+
+    assert second["count"] > 0, "Graph said there was more, and page two came back empty"
+    seen = {m["id"] for m in first["messages"]}
+    repeated = [m["id"] for m in second["messages"] if m["id"] in seen]
+    assert not repeated, (
+        f"page two repeated {len(repeated)} of page one's {len(seen)} messages: the "
+        "$skiptoken did not reach Graph"
+    )
+
+
+async def test_a_search_graph_cut_short_says_so(real_graph_client):
+    """Walk a populated folder's search and compare it with the folder's own count.
+
+    Defaults to the largest folder in the first top-level listing (one GET).
+    OUTLOOK_MCP_LIVE_SEARCH_FOLDER selects a name or ID instead, including a
+    folder beyond that page. No mailbox writes or fixtures are needed.
+
+    The folder's `totalItemCount` is the answer key: Graph counts it without
+    searching. Exchange Online and Outlook.com have been observed stopping at 275
+    (255-275 by page size), so a populated folder can end short and
+    the last page must say so. The other direction is a claim about the
+    constant: if Graph returns all of a folder past 300 and the tool still says
+    `incomplete`, this account type's limit is not just past 250, and
+    `SEARCH_STOPS_AFTER` needs its number. The 300 margin keeps a few messages
+    the index has not caught up with from deciding either way.
+    """
+    from outlook_mcp.tools.mail_read import SEARCH_STOPS_AFTER
+
+    client = real_graph_client.sdk_client
+    requested = os.environ.get("OUTLOOK_MCP_LIVE_SEARCH_FOLDER", "").strip()
+    if requested:
+        folder_id = await resolve_folder_id(client, requested)
+        folder = await client.me.mail_folders.by_mail_folder_id(folder_id).get()
+        total = folder.total_item_count or 0
+        folder_label = getattr(folder, "display_name", None) or requested
+    else:
+        listing = await list_folders(client)
+        folders = listing["folders"]
+        if not folders:
+            pytest.skip(
+                "No top-level mail folders; set OUTLOOK_MCP_LIVE_SEARCH_FOLDER to a name or ID"
+            )
+        folder = max(folders, key=lambda item: item["total"])
+        folder_id, total = folder["id"], folder["total"]
+        folder_label = folder.get("name") or folder_id
+    if total <= 300:
+        pytest.skip(
+            f"folder {folder_label!r} holds {total} messages, "
+            "too few to reach Graph's search limit; "
+            "set OUTLOOK_MCP_LIVE_SEARCH_FOLDER to a folder holding more than 300"
+        )
+
+    ids: set[str] = set()
+    walked, cursor = 0, None
+    for _ in range(15):  # 1,500 results, bounded; Graph's documentation says up to 1,000
+        page = await search_mail(
+            client, query=_SEARCH_EVERYTHING, count=100, folder=folder_id, cursor=cursor
+        )
+        walked += page["count"]
+        ids.update(m["id"] for m in page["messages"])
+        cursor = page["cursor"]
+        if cursor is None:
+            break
+    else:
+        pytest.skip(
+            f"folder {folder_label!r}: Graph was still paging after {walked} results; "
+            "no limit to observe here"
+        )
+
+    assert len(ids) == walked, (
+        f"folder {folder_label!r}: the walk returned {walked} results but only {len(ids)} ids"
+    )
+    if walked < total:
+        assert "incomplete" in page, (
+            f"Graph ended the search in folder {folder_label!r} at {walked} of {total} messages "
+            "and the "
+            "tool said nothing, so a caller takes the result as complete"
+        )
+    else:
+        assert "incomplete" not in page, (
+            f"Graph returned all {total} messages in folder {folder_label!r} "
+            "and the tool still called the "
+            f"search incomplete: this account type's limit is not just past "
+            f"{SEARCH_STOPS_AFTER}, so SEARCH_STOPS_AFTER needs its number"
+        )
+
+
 # ── contacts: what $select actually brings back ──
 # A $select is the same class of string as a $filter — the mocked suite can only
 # assert we sent it. Whether Graph honours it, and on which endpoint, is a live
@@ -293,6 +477,31 @@ def _searchable(contact) -> str | None:
         if len(cleaned) >= 3:
             return cleaned
     return None
+
+
+async def test_a_contact_read_carries_its_change_key_where_the_merge_looks(real_graph_client):
+    """`update_contact`'s `add_emails` / `remove_emails` pin their PATCH to the read.
+
+    The offline tests mock a contact whose change key sits in
+    `additional_data["@odata.etag"]`, which is where the merge reads it. A mock
+    cannot say the SDK still puts it there: if msgraph moved or dropped it, the
+    pin would silently become None, the patch would go out unpinned (#87's
+    fallback), and every offline test would still pass. Read-only: one listing
+    row and one plain GET of that contact, the GET the merge itself sends.
+    """
+    page = await list_contacts(real_graph_client.sdk_client, count=1)
+    if not page["contacts"]:
+        pytest.skip("No contacts in this mailbox")
+    contact_id = page["contacts"][0]["id"]
+
+    contact = await real_graph_client.sdk_client.me.contacts.by_contact_id(contact_id).get()
+
+    extras = getattr(contact, "additional_data", None) or {}
+    assert extras.get("@odata.etag"), (
+        "the SDK no longer exposes a contact's change key at "
+        'additional_data["@odata.etag"], so add_emails / remove_emails send an '
+        f"unpinned patch. additional_data keys: {sorted(extras)}"
+    )
 
 
 async def test_the_contact_listing_returns_the_categories_it_selects(contact_walk):
@@ -412,6 +621,103 @@ async def event_walk(real_graph_client):
     if not _EVENT_WALK:
         _EVENT_WALK.update(await _walk_events_for_select_fields(real_graph_client.sdk_client))
     return _EVENT_WALK
+
+
+async def test_the_calendar_listing_says_which_calendars_can_be_written(real_graph_client):
+    """`outlook_create_event(calendar=...)` refuses a calendar listed with
+    `canEdit: false`, and lets one through when the listing says nothing.
+
+    So a listing that stopped carrying `canEdit` would turn the refusal off
+    without failing anything offline: every write would go to Graph and come
+    back as the 403 the refusal exists to explain. Read-only: one listing.
+    """
+    from outlook_mcp.calendar_resolver import fetch_all_calendars
+
+    calendars = await fetch_all_calendars(real_graph_client.sdk_client)
+
+    assert calendars, "the account lists no calendars at all"
+    assert all(isinstance(cal.can_edit, bool) for cal in calendars), [
+        (cal.name, cal.can_edit) for cal in calendars
+    ]
+    defaults = [cal for cal in calendars if cal.is_default_calendar]
+    assert defaults and all(cal.can_edit for cal in defaults)
+
+
+async def test_the_event_key_lookup_is_accepted(real_graph_client):
+    """`find_events_by_key` sends an `Any()` lambda over extended properties.
+
+    A shape Graph refused would be a 400 on every lookup, and a lookup that
+    fails is read by an agent as "no such booking", which is when it creates a
+    duplicate. A key no event can carry must come back as an empty answer.
+    Read-only: one filtered listing of the default calendar.
+    """
+    from outlook_mcp.tools.calendar_read import find_events_by_key
+
+    result = await find_events_by_key(
+        real_graph_client.sdk_client, "outlook-mcp:live-guard:no-event-has-this-key"
+    )
+
+    assert result["events"] == [] and result["has_more"] is False
+
+
+async def test_the_event_key_expand_is_accepted_on_a_listing_and_a_read(real_graph_client):
+    """The listing and `get_event` expand the key property with an inner `$filter`.
+
+    `mail_read` builds its one expand of this kind as a raw URL because kiota
+    once dropped the inner filter; these go through the typed builders. So
+    this asks Graph to accept both shapes and checks a listed event's key reads
+    back the same way on both paths. Read-only.
+    """
+    from outlook_mcp.tools.calendar_read import get_event
+
+    after, before = _wide_window()
+    page = await list_events(real_graph_client.sdk_client, after=after, before=before, count=10)
+    if not page["events"]:
+        pytest.skip("No events in the window to read back")
+    listed = page["events"][0]
+    detail = await get_event(real_graph_client.sdk_client, listed["id"])
+
+    assert detail["key"] == listed.get("key")
+
+
+async def test_an_events_attachments_are_listed_without_their_bytes(real_graph_client):
+    """`get_event` lists attachments with a `$select` on `/events/{id}/attachments`.
+
+    Without that `$select` Graph sends every file's `contentBytes`. A shape Graph
+    refused would fail every read of an event with files; one it ignored would
+    pass the offline suite while pulling whole files into each read. So the raw
+    response is checked for `contentBytes` too. Read-only: reads at most 20
+    events, and skips when none has a file.
+    """
+    from msgraph.generated.users.item.events.item.attachments.attachments_request_builder import (
+        AttachmentsRequestBuilder,
+    )
+
+    from outlook_mcp.pagination import build_request_config
+    from outlook_mcp.tools.calendar_read import _ATTACHMENT_SELECT, get_event
+
+    sdk = real_graph_client.sdk_client
+    after, before = _wide_window()
+    page = await list_events(sdk, after=after, before=before, count=20)
+    for listed in page["events"]:
+        detail = await get_event(sdk, listed["id"])
+        if detail["attachments"]:
+            break
+    else:
+        pytest.skip("No event with attachments among the first 20 in the window")
+
+    for attachment in detail["attachments"]:
+        assert attachment["id"] and attachment["name"]
+        assert isinstance(attachment["size"], int) and attachment["size"] > 0
+        assert isinstance(attachment["is_inline"], bool)
+
+    raw = await sdk.me.events.by_event_id(detail["id"]).attachments.get(
+        request_configuration=build_request_config(
+            AttachmentsRequestBuilder.AttachmentsRequestBuilderGetQueryParameters,
+            {"$select": _ATTACHMENT_SELECT},
+        )
+    )
+    assert raw.value and all(getattr(a, "content_bytes", None) is None for a in raw.value)
 
 
 async def test_the_event_listing_returns_the_show_as_it_selects(event_walk):
@@ -596,6 +902,122 @@ async def test_the_event_delta_carries_type_without_a_select(real_graph_client):
 # Nothing is left for the live tier to see here, because an omitted field has
 # no wire behaviour for Graph to get wrong — unlike the positive cases above,
 # where a `$select` Graph silently ignores is invisible to a mock.
+
+
+# ── outlook_changes_since: the first sync's window ──
+# The digest's bootstrap asks message delta for `receivedDateTime ge <bound>`
+# and keeps contacts by `lastModifiedDateTime`. Mocks see the URL we build and
+# the field we read; only Graph can say the filter is honoured and the field is
+# sent.
+
+
+async def test_the_mail_bootstrap_honours_its_window_or_reports_a_fallback(real_graph_client):
+    """Prove the digest's bound on accounts that honour or ignore Graph's filter.
+
+    Read-only. Every observed live message outside the bound must be absent
+    from the digest, and ignored filters must be reported explicitly.
+    """
+    from unittest.mock import patch
+
+    from outlook_mcp.tools import digest
+
+    bound = datetime.now(dt_timezone.utc).replace(microsecond=0) - timedelta(days=7)
+    older = await list_inbox(
+        real_graph_client.sdk_client, before=bound.strftime("%Y-%m-%dT%H:%M:%SZ"), count=1
+    )
+    if not older["messages"]:
+        pytest.skip("No inbox message older than the bound — nothing to exclude")
+
+    observed = []
+
+    async def read_page(*args, **kwargs):
+        page = await list_inbox_delta(*args, **kwargs)
+        observed.extend(page["messages"])
+        return page
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return bound + timedelta(days=7)
+
+    from unittest.mock import AsyncMock
+
+    with (
+        patch.object(digest, "datetime", FrozenDatetime),
+        patch.object(digest, "list_inbox_delta", new=read_page),
+        patch.object(
+            digest,
+            "list_events_delta",
+            new=AsyncMock(return_value={"events": [], "delta_token": None, "has_more": False}),
+        ),
+        patch.object(
+            digest,
+            "list_contacts_delta",
+            new=AsyncMock(return_value={"contacts": [], "delta_token": None, "has_more": False}),
+        ),
+    ):
+        result = await digest.changes_since(real_graph_client, fallback_window_hours=7 * 24)
+    token = result["delta_tokens"]["mail"]
+    assert token, "Graph returned no cursor for a filtered first sync"
+    assert require_graph_url(token, source="live-check", resource="mail") == token
+    live = [item for item in observed if not item.get("is_deleted")]
+    recent = [
+        item
+        for item in live
+        if (
+            parse_graph_datetime(item.get("received") or "")
+            or datetime.min.replace(tzinfo=dt_timezone.utc)
+        )
+        >= bound
+    ]
+    assert result["mail"]["new_count"] == len(recent)
+    assert all(
+        parse_graph_datetime(item["received_at"]) >= bound
+        for item in result["mail"]["urgent_flagged"]
+    )
+    ignored = any(
+        (stamp := parse_graph_datetime(item.get("received") or "")) is not None and stamp < bound
+        for item in live
+    )
+    print(
+        f"mail delta received-time filter: {'ignored; client fallback' if ignored else 'honoured'}"
+    )
+    assert ("mail_window_fallback" in result.get("_meta", {})) is ignored
+    assert result["delta_tokens"].get("mail_bootstrap_from") == (
+        bound.strftime("%Y-%m-%dT%H:%M:%SZ") if result["has_more"]["mail"] else None
+    )
+
+
+async def test_the_contacts_delta_carries_last_modified_without_a_select(real_graph_client):
+    """The premise behind `list_contacts_delta(modified_since=...)`.
+
+    `/me/contacts/delta` takes neither `$filter` nor `$select`, so the digest's
+    first sync keeps contacts by the `lastModifiedDateTime` Graph is assumed to
+    send on every one. If Graph stops sending it, every contact is dropped and
+    the first digest reports none changed, with no error. With a bound in the
+    distant past, the filter must keep exactly the contacts an unfiltered call
+    returns.
+    """
+    everything = await list_contacts_delta(real_graph_client, page_size=100)
+    if everything["has_more"]:
+        pytest.skip("More contacts than one call returns; two snapshots would not line up")
+    live = {c["id"] for c in everything["contacts"] if not c["is_deleted"]}
+    if not live:
+        pytest.skip("No contacts to read lastModifiedDateTime from")
+
+    kept = await list_contacts_delta(
+        real_graph_client,
+        page_size=100,
+        modified_since=datetime(2000, 1, 1, tzinfo=dt_timezone.utc),
+    )
+
+    dropped = live - {c["id"] for c in kept["contacts"] if not c["is_deleted"]}
+    assert not dropped, (
+        f"{len(dropped)} of {len(live)} contacts carry no readable lastModifiedDateTime on the "
+        f"delta path, so the digest's first sync cannot place them in its window."
+    )
+
+
 # ── todo: $expand=checklistItems on a single-task GET ──
 
 
@@ -647,3 +1069,101 @@ async def test_get_task_checklist_expand_is_accepted(real_graph_client):
     assert [(i["is_checked"], i["created"]) for i in again["checklist_items"]] == [
         (i["is_checked"], i["created"]) for i in items
     ]
+
+
+async def _a_contact_with_a_phone(client):
+    """A listed contact whose summary phone has 7+ significant digits, or None."""
+    from outlook_mcp.tools.contacts import _MIN_PHONE_DIGITS, _phone_digits
+
+    cursor = None
+    for _ in range(10):  # 1,000 contacts, bounded
+        page = await list_contacts(client, count=100, cursor=cursor)
+        for contact in page["contacts"]:
+            if len(_phone_digits(contact["phone"])) >= _MIN_PHONE_DIGITS:
+                return contact
+        if not page["has_more"]:
+            return None
+        cursor = page["cursor"]
+    return None
+
+
+async def test_a_phone_search_finds_a_stored_number_however_it_is_written(real_graph_client):
+    """`phone=` reads the listing in pages of 1,000 and compares digits.
+
+    Two things only Graph can answer: that the listing accepts this `$top` with the
+    summary `$select`, and that the pages are walked to the contact. The number is
+    searched as its bare digits and as its last seven, neither of which is how it
+    is stored. Read-only.
+    """
+    contact = await _a_contact_with_a_phone(real_graph_client.sdk_client)
+    if contact is None:
+        pytest.skip("No listed contact has a phone number of seven digits or more")
+    digits = "".join(ch for ch in contact["phone"] if ch.isdigit())
+
+    for written in (digits, digits[-7:]):
+        found = await search_contacts(real_graph_client.sdk_client, phone=written, count=100)
+        assert contact["id"] in {c["id"] for c in found["contacts"]}, (
+            f"phone search missed a stored number written as {len(written)} digits; "
+            f"{found['count']} other match(es)"
+        )
+
+
+async def test_contact_search_still_misses_a_part_of_a_number(real_graph_client):
+    """The reason `phone=` exists, pinned: Graph's `$search` does not find a stored
+    number from its last seven digits. If it starts to, the scan can go."""
+    contact = await _a_contact_with_a_phone(real_graph_client.sdk_client)
+    if contact is None:
+        pytest.skip("No listed contact has a phone number of seven digits or more")
+    digits = "".join(ch for ch in contact["phone"] if ch.isdigit())
+    if len(digits) <= 7:
+        pytest.skip("The harvested number has no more than seven digits")
+
+    found = await search_contacts(real_graph_client.sdk_client, query=digits[-7:], count=25)
+    assert contact["id"] not in {c["id"] for c in found["contacts"]}, (
+        "Graph's contact $search now finds a number from its last digits; "
+        "outlook_search_contacts(phone=...) may no longer need to read the listing"
+    )
+
+
+# ── #130: the opt-in read's $select ──
+# Once `$select` names anything, Graph returns only what it names. A field the
+# opt-in select forgot would come back empty only for a caller who asked for
+# sender authentication, and a mock returns whatever it is handed.
+
+
+async def test_the_sender_auth_read_returns_what_the_default_read_does(real_graph_client):
+    page = await list_inbox(real_graph_client.sdk_client, count=5, concise=True)
+    if not page["messages"]:
+        pytest.skip("Mailbox inbox is empty — nothing to read")
+    for summary in page["messages"]:
+        default = await read_message(real_graph_client.sdk_client, summary["id"])
+        opted_in = await read_message(
+            real_graph_client.sdk_client, summary["id"], include_sender_auth=True
+        )
+        opted_in.pop("sender_authentication")
+        assert opted_in == default
+
+
+async def test_microsofts_own_header_parses_on_real_mail(real_graph_client):
+    """Microsoft's stamp always parses; a reading of `unreadable` is a gap in the parser.
+
+    Also checks the `$batch` path selects the same headers: its sub-request URLs
+    carry the `$select` as text, where the single read goes through kiota.
+    """
+    page = await list_inbox(real_graph_client.sdk_client, count=10, concise=True)
+    ids = [m["id"] for m in page["messages"]]
+    if not ids:
+        pytest.skip("Mailbox inbox is empty — nothing to read")
+    single = [
+        (await read_message(real_graph_client.sdk_client, i, include_sender_auth=True))[
+            "sender_authentication"
+        ]
+        for i in ids
+    ]
+    batched = await read_messages(real_graph_client, ids, include_sender_auth=True)
+    assert [m["sender_authentication"] for m in batched["messages"]] == single
+
+    reasons = [v["reason"] for v in single]
+    assert UNREADABLE not in reasons, reasons
+    if all(r in (NO_HEADER, NO_FROM) for r in reasons):
+        pytest.skip(f"none of the newest {len(ids)} messages carries Microsoft's header")

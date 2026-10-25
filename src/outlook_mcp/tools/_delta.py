@@ -29,12 +29,13 @@ receive the token is checked against ``graph.microsoft.com`` first.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 
-from outlook_mcp.errors import ForeignCursorError, UntrustedURLError
+from outlook_mcp.errors import ForeignCursorError, UntrustedURLError, graph_json
 from outlook_mcp.graph import GRAPH_HOST  # the only host that may receive a Graph token
 from outlook_mcp.throttle import send_with_retry
 
@@ -76,6 +77,29 @@ _PATH_TRICKS = re.compile(r"(?:^|/)(?:\.|%2e){1,2}(?:/|$)|%2f|%5c|\\", re.IGNORE
 # inside one delta-sync round. Callers continue by passing the returned
 # delta_token (a nextLink) back in.
 PAGE_SIZE_CAP_MULTIPLIER = 4
+
+
+def parse_graph_datetime(value: str) -> datetime | None:
+    """Parse a Graph ISO 8601 string to an aware UTC datetime. ``None`` on failure.
+
+    Graph hands us strings like ``"2026-05-21T10:00:00Z"`` (mail
+    received times) and ``"2026-05-22T14:00:00.0000000"`` (event
+    dateTime — note the trailing fractional zeros and no zone). We
+    normalize both to aware UTC.
+    """
+    if not value:
+        return None
+    s = value.strip()
+    # Strip trailing Z → +00:00 for fromisoformat compatibility.
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _bearer_token(credential: Any) -> str:
@@ -239,7 +263,7 @@ async def fetch_delta_pages(
             # SDK's kiota RetryHandler, so it must honor Retry-After itself).
             r = await send_with_retry(client, "GET", url, headers=base_headers)
             r.raise_for_status()
-            body = r.json()
+            body = graph_json(r)
 
             page_items = body.get("value") or []
             collected.extend(page_items)

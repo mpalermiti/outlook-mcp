@@ -1301,7 +1301,8 @@ class TestEventTimezone:
             config=_CFG_LA,
         )
 
-        assert "request_configuration" not in builder.patch.call_args.kwargs
+        config_sent = builder.patch.call_args.kwargs["request_configuration"]
+        assert not config_sent.headers.get("If-Match")
 
     @pytest.mark.parametrize(
         "change",
@@ -2572,3 +2573,381 @@ class TestCalendarWritesThatSendEmail:
 
         assert result["status"] == "accepted"
         builder.accept.post.assert_called_once()
+
+
+# ── create_event: which calendar ──────────────────────────────────────
+
+
+def _calendar(name: str, cal_id: str, can_edit: bool | None = True):
+    """A calendar as `/me/calendars` returns it; `can_edit=None` is a calendar
+    whose listing carries no `canEdit` at all."""
+    cal = MagicMock()
+    cal.name = name
+    cal.id = cal_id
+    cal.can_edit = can_edit
+    return cal
+
+
+_CALENDARS = [
+    _calendar("Calendar", "DEFAULT1="),
+    _calendar("Kids + School", "KIDS77="),
+    _calendar("Birthdays", "BDAY42=", can_edit=False),
+]
+
+
+def _client_with_calendars(calendars=None):
+    """A client whose `/me/calendars` lists ``calendars`` and whose default and
+    per-calendar event collections both accept a POST."""
+    client = MagicMock()
+    client.me.calendars.get = AsyncMock(
+        return_value=MagicMock(value=list(_CALENDARS if calendars is None else calendars))
+    )
+    client.me.calendars.get.return_value.odata_next_link = None
+    client.me.events.post = AsyncMock(return_value=_created("Dentist", "AAMkAGdef="))
+    secondary = MagicMock()
+    secondary.events.post = AsyncMock(return_value=_created("Dentist", "AAMkAGsec="))
+    client.me.calendars.by_calendar_id = MagicMock(return_value=secondary)
+    return client, secondary
+
+
+async def _create(client, **kwargs):
+    return await create_event(
+        client,
+        subject="Dentist",
+        start="2026-11-03T09:00:00",
+        end="2026-11-03T09:30:00",
+        config=_CFG,
+        **kwargs,
+    )
+
+
+class TestCreateEventInAChosenCalendar:
+    """`calendar` puts the event where `outlook_list_events` would read it back.
+
+    The default calendar stays `POST /me/events` with no extra round trip, which
+    is every call made before this argument existed.
+    """
+
+    async def test_omitted_calendar_posts_to_the_default_with_no_listing(self):
+        client, secondary = _client_with_calendars()
+
+        result = await _create(client)
+
+        assert result["event_id"] == "AAMkAGdef="
+        client.me.events.post.assert_called_once()
+        client.me.calendars.get.assert_not_called()
+        secondary.events.post.assert_not_called()
+
+    @pytest.mark.parametrize("alias", ["primary", "PRIMARY", "", "   "])
+    async def test_primary_and_blank_mean_the_default_calendar(self, alias):
+        client, secondary = _client_with_calendars()
+
+        await _create(client, calendar=alias)
+
+        client.me.events.post.assert_called_once()
+        client.me.calendars.get.assert_not_called()
+        secondary.events.post.assert_not_called()
+
+    async def test_a_display_name_posts_to_that_calendar(self):
+        client, secondary = _client_with_calendars()
+
+        result = await _create(client, calendar="kids + school")
+
+        client.me.calendars.by_calendar_id.assert_called_once_with("KIDS77=")
+        secondary.events.post.assert_called_once()
+        client.me.events.post.assert_not_called()
+        assert result["event_id"] == "AAMkAGsec="
+        # The event itself is the one that would have gone to the default.
+        posted = secondary.events.post.call_args[0][0]
+        assert posted.subject == "Dentist"
+
+    async def test_an_id_posts_to_that_calendar(self):
+        client, secondary = _client_with_calendars()
+
+        await _create(client, calendar="KIDS77=")
+
+        client.me.calendars.by_calendar_id.assert_called_once_with("KIDS77=")
+        secondary.events.post.assert_called_once()
+
+    async def test_an_unknown_calendar_is_refused_naming_what_exists(self):
+        client, secondary = _client_with_calendars()
+
+        with pytest.raises(ValueError) as exc:
+            await _create(client, calendar="Holidays")
+
+        message = str(exc.value)
+        assert "Calendar 'Holidays' not found" in message
+        assert "Kids + School" in message
+        client.me.events.post.assert_not_called()
+        secondary.events.post.assert_not_called()
+
+    async def test_an_ambiguous_name_is_refused_with_the_candidates(self):
+        client, secondary = _client_with_calendars(
+            [_calendar("Calendar", "DEFAULT1="), _calendar("Work", "W1="), _calendar("work", "W2=")]
+        )
+
+        with pytest.raises(ValueError) as exc:
+            await _create(client, calendar="Work")
+
+        assert "ambiguous" in str(exc.value)
+        assert "W1=" in str(exc.value) and "W2=" in str(exc.value)
+        secondary.events.post.assert_not_called()
+
+    async def test_a_read_only_calendar_is_refused_before_the_post(self):
+        """Graph's answer would be a 403 whose hint blames the account type."""
+        client, secondary = _client_with_calendars()
+
+        with pytest.raises(ValueError) as exc:
+            await _create(client, calendar="Birthdays")
+
+        message = str(exc.value)
+        assert "Birthdays" in message
+        assert "read-only" in message
+        # Names where the event can go instead, and leaves out where it cannot.
+        assert "Kids + School" in message
+        assert "Calendar" in message
+        assert message.count("Birthdays") == 1
+        client.me.calendars.by_calendar_id.assert_not_called()
+        secondary.events.post.assert_not_called()
+        client.me.events.post.assert_not_called()
+
+    async def test_a_read_only_calendar_given_by_id_is_refused_too(self):
+        client, secondary = _client_with_calendars()
+
+        with pytest.raises(ValueError, match="read-only"):
+            await _create(client, calendar="BDAY42=")
+
+        secondary.events.post.assert_not_called()
+
+    async def test_a_calendar_that_reports_no_can_edit_is_left_to_graph(self):
+        """Only an explicit `canEdit: false` refuses; Graph has the last word otherwise."""
+        client, secondary = _client_with_calendars(
+            [_calendar("Calendar", "DEFAULT1="), _calendar("Team", "TEAM9=", can_edit=None)]
+        )
+
+        await _create(client, calendar="Team")
+
+        secondary.events.post.assert_called_once()
+
+    async def test_a_bad_argument_is_refused_before_the_calendar_listing(self):
+        """The listing is the only request this argument adds; a call that will
+        be refused anyway must not pay for it."""
+        client, _ = _client_with_calendars()
+
+        with pytest.raises(ValueError):
+            await create_event(
+                client,
+                subject="Dentist",
+                start="not a date",
+                end="2026-11-03T09:30:00",
+                calendar="Kids + School",
+                config=_CFG,
+            )
+        with pytest.raises(ValueError):
+            await _create(client, calendar="Kids + School", show_as="maybe")
+        with pytest.raises(ValueError):
+            await _create(client, calendar="Kids + School", recurrence="fortnightly-ish")
+
+        client.me.calendars.get.assert_not_called()
+
+    async def test_a_read_only_config_is_refused_before_the_calendar_listing(self):
+        client, _ = _client_with_calendars()
+
+        with pytest.raises(ReadOnlyError):
+            await create_event(
+                client,
+                subject="Dentist",
+                start="2026-11-03T09:00:00",
+                end="2026-11-03T09:30:00",
+                calendar="Kids + School",
+                config=_CFG_RO,
+            )
+
+        client.me.calendars.get.assert_not_called()
+
+    async def test_attendees_still_need_mail_send_on_another_calendar(self):
+        client, secondary = _client_with_calendars()
+
+        with pytest.raises(PermissionDeniedError):
+            await create_event(
+                client,
+                subject="Sync",
+                start="2026-11-03T09:00:00",
+                end="2026-11-03T09:30:00",
+                attendees=["someone@example.com"],
+                calendar="Kids + School",
+                config=_CFG_CAL_ONLY,
+            )
+
+        client.me.calendars.get.assert_not_called()
+        secondary.events.post.assert_not_called()
+
+
+class TestCreateEventCalendarOnTheWire:
+    """The URL the real SDK pipeline sends, not the builder a mock was handed.
+
+    A mock asserts which request builder was called; it cannot see the path that
+    builder produces, nor how kiota encodes an ID ending in `=`. So this builds
+    the client the way `msgraph` does (as `test_me_rewrite_reaches_the_wire.py`
+    does) over a mock transport, and asserts on what reaches it.
+    """
+
+    @staticmethod
+    def _client(calendars: list[dict]):
+        import httpx
+        from azure.core.credentials import AccessToken
+        from kiota_authentication_azure.azure_identity_authentication_provider import (
+            AzureIdentityAuthenticationProvider,
+        )
+        from msgraph import GraphServiceClient
+        from msgraph import graph_request_adapter as _gra
+        from msgraph_core import GraphClientFactory
+
+        class _Credential:
+            def get_token(self, *args, **kwargs):
+                return AccessToken("not-a-real-token", 9_999_999_999)
+
+        sent: list[httpx.Request] = []
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            if request.method == "GET" and request.url.path.endswith("/me/calendars"):
+                return httpx.Response(200, json={"value": calendars})
+            if request.method == "POST" and request.url.path.endswith("/events"):
+                return httpx.Response(201, json={"id": "AAMkAGnew=", "subject": "Dentist"})
+            raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+        http_client = GraphClientFactory.create_with_default_middleware(
+            options=_gra.options,
+            client=httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+        )
+        auth = AzureIdentityAuthenticationProvider(
+            _Credential(), scopes=["https://graph.microsoft.com/.default"]
+        )
+        return GraphServiceClient(request_adapter=_gra.GraphRequestAdapter(auth, http_client)), sent
+
+    _LISTED = [
+        {"id": "AAMkDEF=", "name": "Calendar", "canEdit": True},
+        {"id": "AAMkKIDS=", "name": "Kids + School", "canEdit": True},
+    ]
+
+    async def test_a_named_calendar_is_posted_to_its_own_events_collection(self):
+        import json
+
+        client, sent = self._client(self._LISTED)
+
+        result = await _create(client, calendar="Kids + School")
+
+        assert result["event_id"] == "AAMkAGnew="
+        assert [(r.method, r.url.path) for r in sent] == [
+            ("GET", "/v1.0/me/calendars"),
+            ("POST", "/v1.0/me/calendars/AAMkKIDS=/events"),
+        ]
+        assert json.loads(sent[-1].content)["subject"] == "Dentist"
+
+    async def test_the_default_calendar_is_one_post_to_me_events(self):
+        client, sent = self._client(self._LISTED)
+
+        await _create(client)
+
+        assert [(r.method, r.url.path) for r in sent] == [("POST", "/v1.0/me/events")]
+
+
+# ── event keys ────────────────────────────────────────────────────────
+
+_KEY_PROP = "String {51f1f359-76ee-427e-ac52-22691bf5b2f8} Name EventKey"
+
+
+class TestEventKeyWrites:
+    async def test_create_stamps_the_key_on_the_event(self):
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Flight"))
+
+        await create_event(
+            mock_client,
+            subject="Flight",
+            start="2026-11-03T09:00:00",
+            end="2026-11-03T11:00:00",
+            key="flight:AB12CD:LHR-JFK",
+            config=_CFG,
+        )
+
+        (prop,) = _posted(mock_client).single_value_extended_properties
+        assert prop.id == _KEY_PROP
+        assert prop.value == "flight:AB12CD:LHR-JFK"
+
+    async def test_create_without_a_key_sends_no_property(self):
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Flight"))
+
+        await create_event(
+            mock_client,
+            subject="Flight",
+            start="2026-11-03T09:00:00",
+            end="2026-11-03T11:00:00",
+            config=_CFG,
+        )
+
+        assert _posted(mock_client).single_value_extended_properties is None
+
+    async def test_create_refuses_an_invalid_key_before_sending(self):
+        mock_client = AsyncMock()
+
+        with pytest.raises(ValueError, match="Invalid event key"):
+            await create_event(
+                mock_client,
+                subject="Flight",
+                start="2026-11-03T09:00:00",
+                end="2026-11-03T11:00:00",
+                key="has space",
+                config=_CFG,
+            )
+
+        mock_client.me.events.post.assert_not_called()
+
+    async def test_update_sets_the_key_and_nothing_else(self):
+        builder, client = _client_with(_current_event())
+
+        await update_event(client, event_id="AAMkAG123=", key="booking:ABC123", config=_CFG)
+
+        patched = builder.patch.call_args[0][0]
+        (prop,) = patched.single_value_extended_properties
+        assert (prop.id, prop.value) == (_KEY_PROP, "booking:ABC123")
+        assert patched.subject is None and patched.start is None and patched.recurrence is None
+
+    async def test_keying_a_series_master_reads_nothing_first(self):
+        """A key is not a reshape: no anchor read, no occurrence check, no pin.
+
+        Graph restores a series' changed occurrences when its times or pattern
+        change; a key changes neither. The live tier checks that against Graph.
+        """
+        master = _current_event(event_type="seriesMaster", edited=[MagicMock()])
+        builder, client = _client_with(master)
+
+        await update_event(client, event_id="AAMkAG123=", key="booking:ABC123", config=_CFG)
+
+        builder.get.assert_not_called()
+        # No pin, asked of the header alone: the update may still carry a request
+        # configuration for something else, such as switching kiota's retries off.
+        sent = builder.patch.call_args.kwargs.get("request_configuration")
+        assert sent is None or not sent.headers.get("If-Match")
+
+    async def test_update_refuses_an_invalid_key_before_any_request(self):
+        builder, client = _client_with(_current_event())
+
+        with pytest.raises(ValueError, match="Invalid event key"):
+            await update_event(client, event_id="AAMkAG123=", key="", config=_CFG)
+
+        builder.get.assert_not_called()
+        builder.patch.assert_not_called()
+
+    async def test_a_key_on_an_event_with_attendees_needs_no_mail_send(self):
+        """The reword gate covers what Outlook shows attendees (subject, body and
+        location); a key is not one of them, so it pays for no read."""
+        builder, client = _client_with(_meeting())
+
+        await update_event(
+            client, event_id="AAMkAG123=", key="booking:ABC123", config=_CFG_CAL_ONLY
+        )
+
+        builder.patch.assert_called_once()

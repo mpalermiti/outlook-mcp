@@ -42,6 +42,7 @@ def _make_mock_contact(**overrides):
             "id",
             "display_name",
             "given_name",
+            "middle_name",
             "surname",
             "company_name",
             "title",
@@ -62,6 +63,7 @@ def _make_mock_contact(**overrides):
     contact.id = overrides.get("id", "contact123")
     contact.display_name = overrides.get("display_name", "John Doe")
     contact.given_name = overrides.get("given_name", "John")
+    contact.middle_name = overrides.get("middle_name", "")
     contact.surname = overrides.get("surname", "Doe")
     contact.company_name = overrides.get("company_name", "Acme")
     contact.title = overrides.get("title", "Dr.")
@@ -905,6 +907,15 @@ class TestGetContactAsksGraphForEverything:
         assert builder.get.call_args.args == ()
         assert builder.get.call_args.kwargs == {}
 
+    async def test_get_contact_returns_the_middle_name(self):
+        """The write tools take `middle_name`, so the read returns it under the same name."""
+        detail = await get_contact(
+            _make_contact_by_id_mock(_make_mock_contact(middle_name="Quincy")), "contact123"
+        )
+
+        assert detail["middle_name"] == "Quincy"
+        assert detail["first_name"] == "John"
+
     async def test_every_field_the_detail_formatter_reads_survives_the_round_trip(self):
         """A cheap structural echo of the guard the listing paths get for free."""
         detail = await get_contact(_make_contact_by_id_mock(_make_mock_contact()), "contact123")
@@ -912,6 +923,7 @@ class TestGetContactAsksGraphForEverything:
         assert set(detail) == {
             "id",
             "first_name",
+            "middle_name",
             "last_name",
             "display_name",
             "email_addresses",
@@ -942,3 +954,678 @@ async def test_title_is_described_as_the_name_prefix_where_the_model_reads_it(to
     description = tools[tool].description
     assert "name prefix" in description
     assert "not the job" in description
+
+
+_BIRTHDAY_STORED = "1990-05-01T11:59:00+00:00"
+
+
+class TestBirthday:
+    """`outlook_get_contact` has always returned `birthday`; nothing could write one."""
+
+    async def test_create_writes_the_birthday(self):
+        mock_client = MagicMock()
+        mock_client.me.contacts.post = AsyncMock(return_value=MagicMock(id="C1"))
+        await create_contact(mock_client, first_name="Jane", birthday="1990-05-01", config=_CFG)
+        posted = mock_client.me.contacts.post.call_args[0][0]
+        assert posted.birthday.isoformat() == _BIRTHDAY_STORED
+
+    async def test_update_writes_the_birthday(self):
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(
+            mock_client, contact_id="contact123", birthday="1990-05-01", config=_CFG
+        )
+        patched = mock_client.me.contacts.by_contact_id.return_value.patch.call_args[0][0]
+        assert patched.birthday.isoformat() == _BIRTHDAY_STORED
+
+    async def test_omitting_it_leaves_it_alone(self):
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        await update_contact(mock_client, contact_id="contact123", first_name="Jane", config=_CFG)
+        patched = mock_client.me.contacts.by_contact_id.return_value.patch.call_args[0][0]
+        assert patched.birthday is None
+
+    async def test_create_refuses_a_bad_date_before_anything_is_sent(self):
+        mock_client = MagicMock()
+        mock_client.me.contacts.post = AsyncMock()
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            await create_contact(mock_client, first_name="Jane", birthday="1 May", config=_CFG)
+        mock_client.me.contacts.post.assert_not_called()
+
+    async def test_update_refuses_a_bad_date_before_anything_is_sent(self):
+        mock_client = _make_contact_by_id_mock(_make_mock_contact())
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            await update_contact(
+                mock_client, contact_id="contact123", birthday="1990-13-01", config=_CFG
+            )
+        mock_client.me.contacts.by_contact_id.return_value.patch.assert_not_called()
+
+    def test_what_the_write_stores_the_read_returns_as_that_date(self):
+        """The read path returns Graph's instant; its date is the date written."""
+        from outlook_mcp.validation import validate_birthday
+
+        stored = validate_birthday("1990-05-01")
+        detail = _format_contact_detail(_make_mock_contact(birthday=stored))
+        assert detail["birthday"].startswith("1990-05-01")
+
+
+class TestBirthdayThroughTheServer:
+    """`server.py` passes the contact arguments positionally, so a `birthday` in its
+    neighbour's slot (`phone_type` on create, `clear_phones` on update) would be
+    refused there, or read as something else."""
+
+    async def test_create_birthday_lands_in_birthday(self):
+        from unittest.mock import patch
+
+        from outlook_mcp import server as server_mod
+
+        sdk = MagicMock()
+        sdk.me.contacts.post = AsyncMock(return_value=MagicMock(id="C1"))
+        client = MagicMock()
+        client.sdk_client = sdk
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=_CFG),
+        ):
+            await server_mod.outlook_create_contact(
+                MagicMock(), first_name="Jane", phone="+15555550100", birthday="1990-05-01"
+            )
+        posted = sdk.me.contacts.post.call_args[0][0]
+        assert posted.birthday.isoformat() == _BIRTHDAY_STORED
+        assert posted.mobile_phone == "+15555550100"
+
+    async def test_update_birthday_lands_in_birthday(self):
+        from unittest.mock import patch
+
+        from outlook_mcp import server as server_mod
+
+        sdk = _make_contact_by_id_mock(_make_mock_contact())
+        client = MagicMock()
+        client.sdk_client = sdk
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=_CFG),
+        ):
+            await server_mod.outlook_update_contact(
+                MagicMock(), contact_id="contact123", birthday="1990-05-01"
+            )
+        patched = sdk.me.contacts.by_contact_id.return_value.patch.call_args[0][0]
+        assert patched.birthday.isoformat() == _BIRTHDAY_STORED
+        assert patched.business_phones is None
+        assert patched.home_phones is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["outlook_create_contact", "outlook_update_contact"])
+async def test_birthday_is_described_as_a_date_where_the_model_reads_it(tool):
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+
+    assert "birthday" in tools[tool].input_schema["properties"]
+    assert "YYYY-MM-DD" in tools[tool].description
+
+
+#: A contact's change key in the shape Graph returns it in ``@odata.etag``.
+_CONTACT_ETAG = 'W/"EQAAABYAAAA9sMfE2cIhRb3f6CTJkTSZAAD0dvmb"'
+
+
+def _stored_addresses(*pairs):
+    """Graph ``emailAddress`` entries, as (address, name) pairs."""
+    entries = []
+    for address, name in pairs:
+        entry = MagicMock(spec=["address", "name"])
+        entry.address = address
+        entry.name = name
+        entries.append(entry)
+    return entries
+
+
+def _contact_holding(*pairs, etag=_CONTACT_ETAG):
+    """A contact read back from Graph with these addresses and this change key.
+
+    ``additional_data`` is set explicitly: ``_make_mock_contact``'s spec leaves it
+    out, and an auto-created MagicMock attribute would hand the code a change key
+    no Graph response contains.
+    """
+    contact = _make_mock_contact(email_addresses=_stored_addresses(*pairs))
+    contact.additional_data = {"@odata.etag": etag} if etag is not None else {}
+    return contact
+
+
+class TestAddAndRemoveEmails:
+    """`email` replaces every address with one; these change only the ones named.
+
+    The merge is computed from a read, so the PATCH sends back addresses this
+    call did not write. By #87's rule a write that sends back what it read pins
+    the version it read, so the patch carries `If-Match`.
+    """
+
+    @staticmethod
+    def _builder(mock_client):
+        return mock_client.me.contacts.by_contact_id.return_value
+
+    def _sent(self, mock_client):
+        """(address, name) for every address in the PATCH, in order."""
+        builder = self._builder(mock_client)
+        builder.patch.assert_called_once()
+        sent = builder.patch.call_args[0][0].email_addresses
+        return [(e.address, e.name) for e in sent]
+
+    async def test_an_added_address_keeps_the_ones_already_there(self):
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        await update_contact(
+            mock_client, contact_id="contact123", add_emails=["jane@example.com"], config=_CFG
+        )
+        assert self._sent(mock_client) == [("jane@contoso.com", "Jane"), ("jane@example.com", None)]
+
+    async def test_a_removed_address_takes_only_itself_out(self):
+        mock_client = _make_contact_by_id_mock(
+            _contact_holding(
+                ("jane@contoso.com", "Jane"),
+                ("old@example.com", "old@example.com"),
+                ("jane@example.net", "Jane (home)"),
+            )
+        )
+        await update_contact(
+            mock_client, contact_id="contact123", remove_emails=["old@example.com"], config=_CFG
+        )
+        assert self._sent(mock_client) == [
+            ("jane@contoso.com", "Jane"),
+            ("jane@example.net", "Jane (home)"),
+        ]
+
+    async def test_add_and_remove_in_one_patch(self):
+        mock_client = _make_contact_by_id_mock(
+            _contact_holding(("jane@contoso.com", "Jane"), ("old@example.com", None))
+        )
+        await update_contact(
+            mock_client,
+            contact_id="contact123",
+            add_emails=["jane@example.com"],
+            remove_emails=["old@example.com"],
+            config=_CFG,
+        )
+        assert self._sent(mock_client) == [("jane@contoso.com", "Jane"), ("jane@example.com", None)]
+
+    async def test_addresses_compare_without_case(self):
+        """Mail addresses are case-insensitive in practice; a re-add in other case is
+        the same address, and a remove in other case removes it."""
+        mock_client = _make_contact_by_id_mock(
+            _contact_holding(("Jane@Contoso.com", "Jane"), ("Old@Example.com", None))
+        )
+        await update_contact(
+            mock_client,
+            contact_id="contact123",
+            add_emails=["jane@contoso.com", "NEW@example.com", "new@example.com"],
+            remove_emails=["OLD@example.COM"],
+            config=_CFG,
+        )
+        assert self._sent(mock_client) == [("Jane@Contoso.com", "Jane"), ("NEW@example.com", None)]
+
+    async def test_removing_the_last_address_sends_an_empty_list(self):
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        await update_contact(
+            mock_client, contact_id="contact123", remove_emails=["jane@contoso.com"], config=_CFG
+        )
+        assert self._sent(mock_client) == []
+
+    async def test_a_remove_of_an_address_the_contact_lacks_is_refused(self):
+        """A misspelt remove would otherwise report "updated" and leave the real
+        address in place — #41's shape. The message names what is stored."""
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        with pytest.raises(ValueError, match=r"no address jnae@contoso\.com.*jane@contoso\.com"):
+            await update_contact(
+                mock_client,
+                contact_id="contact123",
+                remove_emails=["jnae@contoso.com"],
+                config=_CFG,
+            )
+        self._builder(mock_client).patch.assert_not_called()
+
+    async def test_more_than_three_addresses_is_refused(self):
+        """Exchange keeps three email slots per contact; a fourth is refused here
+        rather than sent to a store that cannot hold it."""
+        mock_client = _make_contact_by_id_mock(
+            _contact_holding(("a@contoso.com", None), ("b@contoso.com", None))
+        )
+        with pytest.raises(ValueError, match="three"):
+            await update_contact(
+                mock_client,
+                contact_id="contact123",
+                add_emails=["c@contoso.com", "d@contoso.com"],
+                config=_CFG,
+            )
+        self._builder(mock_client).patch.assert_not_called()
+
+    async def test_three_addresses_are_allowed(self):
+        mock_client = _make_contact_by_id_mock(
+            _contact_holding(("a@contoso.com", None), ("b@contoso.com", None))
+        )
+        await update_contact(
+            mock_client, contact_id="contact123", add_emails=["c@contoso.com"], config=_CFG
+        )
+        assert [a for a, _ in self._sent(mock_client)] == [
+            "a@contoso.com",
+            "b@contoso.com",
+            "c@contoso.com",
+        ]
+
+    async def test_a_swap_at_the_limit_is_allowed(self):
+        """The limit is on the result, not on the stored count plus the additions."""
+        mock_client = _make_contact_by_id_mock(
+            _contact_holding(
+                ("a@contoso.com", None), ("b@contoso.com", None), ("c@contoso.com", None)
+            )
+        )
+        await update_contact(
+            mock_client,
+            contact_id="contact123",
+            add_emails=["d@contoso.com"],
+            remove_emails=["a@contoso.com"],
+            config=_CFG,
+        )
+        assert [a for a, _ in self._sent(mock_client)] == [
+            "b@contoso.com",
+            "c@contoso.com",
+            "d@contoso.com",
+        ]
+
+    async def test_the_patch_is_pinned_to_the_version_it_read(self):
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        await update_contact(
+            mock_client, contact_id="contact123", add_emails=["jane@example.com"], config=_CFG
+        )
+        builder = self._builder(mock_client)
+        # The header itself: a request configuration carrying nothing, or another
+        # change key, would pass a weaker assertion.
+        config_sent = builder.patch.call_args.kwargs["request_configuration"]
+        assert config_sent.headers.get("If-Match") == {_CONTACT_ETAG}
+
+    async def test_without_a_change_key_the_patch_goes_unpinned(self):
+        """#87's rule for a missing key: send unpinned, as every other write does."""
+        mock_client = _make_contact_by_id_mock(
+            _contact_holding(("jane@contoso.com", "Jane"), etag=None)
+        )
+        await update_contact(
+            mock_client, contact_id="contact123", add_emails=["jane@example.com"], config=_CFG
+        )
+        builder = self._builder(mock_client)
+        assert "request_configuration" not in builder.patch.call_args.kwargs
+        assert self._sent(mock_client)[-1] == ("jane@example.com", None)
+
+    async def test_a_patch_without_them_reads_nothing_and_is_not_pinned(self):
+        """The control: every other argument is the caller's value, last-writer-wins."""
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        await update_contact(mock_client, contact_id="contact123", first_name="Janet", config=_CFG)
+        builder = self._builder(mock_client)
+        builder.get.assert_not_called()
+        assert "request_configuration" not in builder.patch.call_args.kwargs
+        assert builder.patch.call_args[0][0].email_addresses is None
+
+    async def test_the_other_fields_travel_in_the_same_pinned_patch(self):
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        await update_contact(
+            mock_client,
+            contact_id="contact123",
+            job_title="Engineer",
+            add_emails=["jane@example.com"],
+            config=_CFG,
+        )
+        builder = self._builder(mock_client)
+        assert builder.patch.call_args[0][0].job_title == "Engineer"
+        assert builder.patch.call_args.kwargs["request_configuration"].headers.get("If-Match")
+
+    @pytest.mark.parametrize(
+        "lists",
+        [
+            {"add_emails": ["jane@example.com"]},
+            {"remove_emails": ["jane@contoso.com"]},
+        ],
+    )
+    async def test_email_with_either_list_is_refused_before_anything_is_read(self, lists):
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        with pytest.raises(ValueError, match="not both"):
+            await update_contact(
+                mock_client,
+                contact_id="contact123",
+                email="jane@example.org",
+                config=_CFG,
+                **lists,
+            )
+        self._builder(mock_client).get.assert_not_called()
+        self._builder(mock_client).patch.assert_not_called()
+
+    async def test_one_address_in_both_lists_is_refused(self):
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        with pytest.raises(ValueError, match="both add_emails and remove_emails"):
+            await update_contact(
+                mock_client,
+                contact_id="contact123",
+                add_emails=["Jane@contoso.com"],
+                remove_emails=["jane@contoso.com"],
+                config=_CFG,
+            )
+        self._builder(mock_client).get.assert_not_called()
+
+    @pytest.mark.parametrize("name", ["add_emails", "remove_emails"])
+    async def test_an_empty_list_is_refused(self, name):
+        """A list naming nothing is a patch that carries nothing and says "updated"."""
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        with pytest.raises(ValueError, match=f"{name} is empty"):
+            await update_contact(mock_client, contact_id="contact123", config=_CFG, **{name: []})
+        self._builder(mock_client).get.assert_not_called()
+
+    @pytest.mark.parametrize("name", ["add_emails", "remove_emails"])
+    async def test_every_address_is_validated_before_anything_is_read(self, name):
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        with pytest.raises(ValueError, match="Invalid email address"):
+            await update_contact(
+                mock_client,
+                contact_id="contact123",
+                config=_CFG,
+                **{name: ["jane@example.com", "not an address"]},
+            )
+        self._builder(mock_client).get.assert_not_called()
+
+    async def test_read_only_mode_refuses_before_reading(self):
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        with pytest.raises(ReadOnlyError):
+            await update_contact(
+                mock_client,
+                contact_id="contact123",
+                add_emails=["jane@example.com"],
+                config=_CFG_RO,
+            )
+        self._builder(mock_client).get.assert_not_called()
+
+    async def test_email_still_replaces_every_address(self):
+        """Today's behaviour, unchanged: one address in, the rest gone, nothing read."""
+        mock_client = _make_contact_by_id_mock(
+            _contact_holding(("jane@contoso.com", "Jane"), ("old@example.com", None))
+        )
+        await update_contact(
+            mock_client, contact_id="contact123", email="jane@example.org", config=_CFG
+        )
+        assert [a for a, _ in self._sent(mock_client)] == ["jane@example.org"]
+        self._builder(mock_client).get.assert_not_called()
+
+
+class TestAddAndRemoveEmailsThroughTheServer:
+    """`server.py` hands `update_contact` its arguments positionally, and the two
+    lists have the same type, so a swap would add what was meant to be removed.
+    These run the real handler behind the real wrapper, one list at a time."""
+
+    @staticmethod
+    async def _call(**arguments):
+        from unittest.mock import patch
+
+        from outlook_mcp import server as server_mod
+
+        sdk = _make_contact_by_id_mock(
+            _contact_holding(("jane@contoso.com", "Jane"), ("old@example.com", None))
+        )
+        client = MagicMock()
+        client.sdk_client = sdk
+        ctx = MagicMock()
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=_CFG),
+        ):
+            await server_mod.outlook_update_contact(ctx, contact_id="contact123", **arguments)
+        builder = sdk.me.contacts.by_contact_id.return_value
+        return [e.address for e in builder.patch.call_args[0][0].email_addresses]
+
+    async def test_add_emails_adds(self):
+        assert await self._call(add_emails=["jane@example.com"]) == [
+            "jane@contoso.com",
+            "old@example.com",
+            "jane@example.com",
+        ]
+
+    async def test_remove_emails_removes(self):
+        assert await self._call(remove_emails=["old@example.com"]) == ["jane@contoso.com"]
+
+
+@pytest.mark.asyncio
+async def test_update_says_email_replaces_and_the_lists_merge_where_the_model_reads_it():
+    """The replace-everything behaviour of `email` is silent data loss for a caller who
+    meant "add"; the tool description is the only text a client sees."""
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+
+    description = tools["outlook_update_contact"].description
+    assert "add_emails" in description
+    assert "remove_emails" in description
+    assert "REPLACES" in description
+
+
+_NEXT_PAGE = "https://graph.microsoft.com/v1.0/me/contacts?$top=1000&$select=id&$skip=1000"
+
+
+def _with_phones(display_name, mobile="", business=(), home=()):
+    return _make_mock_contact(
+        id=f"id-{display_name}",
+        display_name=display_name,
+        mobile_phone=mobile,
+        business_phones=list(business),
+        home_phones=list(home),
+    )
+
+
+def _paged_contacts_mock(*pages):
+    """A contacts listing that pages: each page but the last carries a nextLink,
+    followed through `with_url` as the other nextLink walks here do."""
+    responses = [
+        MagicMock(value=list(page), odata_next_link=_NEXT_PAGE if i < len(pages) - 1 else None)
+        for i, page in enumerate(pages)
+    ]
+    client = MagicMock()
+    client.me.contacts.get = AsyncMock(return_value=responses[0])
+    follow = MagicMock()
+    follow.get = AsyncMock(side_effect=responses[1:] or [None])
+    client.me.contacts.with_url = MagicMock(return_value=follow)
+    return client
+
+
+class TestPhoneSearch:
+    """Graph's contact `$search` finds a number only as it is stored.
+
+    Checked against an Exchange Online mailbox: a whole number as stored is found,
+    the same number without its country code is not, and neither is a part of one.
+    Graph documents no contact property for `$search` and lets `$filter` reach only
+    `emailAddresses/any(a:a/address eq ...)`. So `phone` reads the listing and
+    compares digits: a number matches when the digits of the shorter of the two end
+    the longer's, as written or without leading zeros (a `00` prefix, a trunk 0),
+    and the shorter has at least seven.
+    """
+
+    @staticmethod
+    def _found(result):
+        return [c["display_name"] for c in result["contacts"]]
+
+    async def test_a_number_without_its_country_code_finds_the_international_one(self):
+        client = _paged_contacts_mock([_with_phones("Jane", mobile="+44 7700 900123")])
+        result = await search_contacts(client, phone="07700 900123")
+        assert self._found(result) == ["Jane"]
+
+    async def test_an_international_number_finds_a_national_one_with_a_trunk_zero(self):
+        client = _paged_contacts_mock([_with_phones("Jane", mobile="020 7946 0018")])
+        result = await search_contacts(client, phone="+44 20 7946 0018")
+        assert self._found(result) == ["Jane"]
+
+    async def test_a_00_prefix_is_the_same_as_a_plus(self):
+        client = _paged_contacts_mock([_with_phones("Jane", mobile="+1 (555) 010-0199")])
+        result = await search_contacts(client, phone="001 555 010 0199")
+        assert self._found(result) == ["Jane"]
+
+    async def test_business_and_home_numbers_are_compared_too(self):
+        client = _paged_contacts_mock(
+            [
+                _with_phones("Office", business=["+1 555 010 0100", "+1 555 010 0101"]),
+                _with_phones("Home", home=["+1 555 010 0102"]),
+                _with_phones("Other", mobile="+1 555 010 0103"),
+            ]
+        )
+        assert self._found(await search_contacts(client, phone="5550100101")) == ["Office"]
+        client = _paged_contacts_mock([_with_phones("Home", home=["+1 555 010 0102"])])
+        assert self._found(await search_contacts(client, phone="555-010-0102")) == ["Home"]
+
+    async def test_a_different_number_is_not_found(self):
+        client = _paged_contacts_mock([_with_phones("Jane", mobile="+44 7700 900123")])
+        result = await search_contacts(client, phone="07700 900124")
+        assert result["contacts"] == []
+        assert result["count"] == 0
+        assert result["has_more"] is False
+
+    async def test_digits_inside_a_number_do_not_match(self):
+        """Only the end of a number identifies it; seven digits from its middle are
+        the end of nobody's number."""
+        client = _paged_contacts_mock([_with_phones("Jane", mobile="+1 555 010 0199")])
+        result = await search_contacts(client, phone="555 0100")
+        assert result["contacts"] == []
+
+    async def test_a_short_stored_number_never_matches(self):
+        """An extension or a short code ends many long numbers; seven digits is the floor."""
+        client = _paged_contacts_mock([_with_phones("Desk", business=["4567"])])
+        result = await search_contacts(client, phone="+1 555 010 4567")
+        assert result["contacts"] == []
+
+    async def test_seven_digits_match_and_six_are_refused(self):
+        client = _paged_contacts_mock([_with_phones("Jane", mobile="+1 555 123 4567")])
+        assert self._found(await search_contacts(client, phone="123 4567")) == ["Jane"]
+        with pytest.raises(ValueError, match="at least 7 digits"):
+            await search_contacts(client, phone="23 4567")
+
+    async def test_a_short_number_is_refused_before_anything_is_read(self):
+        client = _paged_contacts_mock([])
+        with pytest.raises(ValueError, match="at least 7 digits"):
+            await search_contacts(client, phone="+1 23 45")
+        client.me.contacts.get.assert_not_called()
+
+    async def test_the_last_digits_find_a_number_even_when_they_start_with_zero(self):
+        """Leading zeros are ignored only as a second try: stripped first, `010 0199`
+        would be six digits and refused, though it ends the stored number."""
+        client = _paged_contacts_mock([_with_phones("Jane", mobile="+1 555 010 0199")])
+        result = await search_contacts(client, phone="010 0199")
+        assert self._found(result) == ["Jane"]
+
+    async def test_a_number_with_other_characters_is_refused(self):
+        client = _paged_contacts_mock([])
+        with pytest.raises(ValueError, match="Invalid phone number"):
+            await search_contacts(client, phone="call 555 010 0199")
+        client.me.contacts.get.assert_not_called()
+
+    async def test_query_and_phone_together_are_refused(self):
+        client = _paged_contacts_mock([])
+        with pytest.raises(ValueError, match="query or phone"):
+            await search_contacts(client, query="Jane", phone="+1 555 010 0199")
+        client.me.contacts.get.assert_not_called()
+
+    async def test_neither_is_refused(self):
+        client = _paged_contacts_mock([])
+        with pytest.raises(ValueError, match="query or phone"):
+            await search_contacts(client)
+        client.me.contacts.get.assert_not_called()
+
+    async def test_the_listing_is_read_without_search_in_large_pages(self):
+        client = _paged_contacts_mock([])
+        await search_contacts(client, phone="+1 555 010 0199")
+        qp = client.me.contacts.get.call_args.kwargs["request_configuration"].query_parameters
+        assert qp.search is None
+        assert qp.top == 1000
+        assert ",".join(qp.select) == _SUMMARY_SELECT
+
+    async def test_every_page_is_followed_by_its_next_link(self):
+        client = _paged_contacts_mock(
+            [_with_phones("First", mobile="+1 555 010 0100")],
+            [_with_phones("Second", mobile="+1 555 010 0199")],
+        )
+        result = await search_contacts(client, phone="5550100199")
+        assert self._found(result) == ["Second"]
+        client.me.contacts.with_url.assert_called_once_with(_NEXT_PAGE)
+        assert result["has_more"] is False
+
+    async def test_the_scan_stops_at_its_cap_and_says_the_rest_was_not_read(self):
+        from outlook_mcp.tools import contacts as contacts_mod
+
+        endless = MagicMock(value=[_with_phones("Jane", mobile="+1 555 010 0199")])
+        endless.odata_next_link = _NEXT_PAGE
+        client = MagicMock()
+        client.me.contacts.get = AsyncMock(return_value=endless)
+        follow = MagicMock()
+        follow.get = AsyncMock(return_value=endless)
+        client.me.contacts.with_url = MagicMock(return_value=follow)
+
+        result = await search_contacts(client, phone="5550100199", count=100)
+
+        assert follow.get.await_count == contacts_mod._PHONE_SCAN_PAGES - 1
+        assert result["count"] == contacts_mod._PHONE_SCAN_PAGES
+        # No cursor to hand back, so `has_more` alone says the scan was cut short.
+        assert result["has_more"] is True
+        assert result["cursor"] is None
+
+    async def test_count_caps_the_matches_returned(self):
+        client = _paged_contacts_mock(
+            [
+                _with_phones("A", mobile="+1 555 010 0199"),
+                _with_phones("B", business=["555 010 0199"]),
+                _with_phones("C", home=["15550100199"]),
+            ]
+        )
+        result = await search_contacts(client, phone="+1 555 010 0199", count=2)
+        assert self._found(result) == ["A", "B"]
+        assert result["count"] == 2
+        assert result["has_more"] is True
+        assert result["cursor"] is None
+
+    async def test_matches_have_the_search_shape(self):
+        """The same rows a `query` search returns: no `categories`, since the
+        search path never claims to know them."""
+        client = _paged_contacts_mock([_with_phones("Jane", mobile="+44 7700 900123")])
+        result = await search_contacts(client, phone="7700900123")
+        assert set(result["contacts"][0]) == {"id", "display_name", "email", "phone", "company"}
+
+    async def test_a_query_search_is_unchanged(self):
+        client = _make_contacts_mock([_make_mock_contact()])
+        result = await search_contacts(client, query="John")
+        qp = client.me.contacts.get.call_args.kwargs["request_configuration"].query_parameters
+        assert qp.search == '"John"'
+        assert result["count"] == 1
+
+
+class TestPhoneSearchThroughTheServer:
+    """`server.py` passes `query`, `count` and `phone` positionally."""
+
+    async def test_phone_reaches_the_phone_search(self):
+        from unittest.mock import patch
+
+        from outlook_mcp import server as server_mod
+
+        sdk = _paged_contacts_mock([_with_phones("Jane", mobile="+44 7700 900123")])
+        client = MagicMock()
+        client.sdk_client = sdk
+        with patch.object(server_mod, "_get_graph_client", return_value=client):
+            result = await server_mod.outlook_search_contacts(MagicMock(), phone="07700 900123")
+        assert [c["display_name"] for c in result["contacts"]] == ["Jane"]
+
+    async def test_count_still_reaches_count(self):
+        from unittest.mock import patch
+
+        from outlook_mcp import server as server_mod
+
+        sdk = _make_contacts_mock([])
+        client = MagicMock()
+        client.sdk_client = sdk
+        with patch.object(server_mod, "_get_graph_client", return_value=client):
+            await server_mod.outlook_search_contacts(MagicMock(), query="John", count=7)
+        qp = sdk.me.contacts.get.call_args.kwargs["request_configuration"].query_parameters
+        assert qp.top == 7
+
+
+@pytest.mark.asyncio
+async def test_phone_search_is_described_where_the_model_reads_it():
+    async with Client(mcp) as client:
+        tools = {t.name: t for t in (await client.list_tools()).tools}
+
+    tool = tools["outlook_search_contacts"]
+    assert "phone" in tool.input_schema["properties"]
+    assert "query" not in tool.input_schema.get("required", [])
+    assert "phone" in tool.description

@@ -6,16 +6,18 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
 
 ## Tech Stack
 - Python 3.10+, MCP Python SDK 2.x (`MCPServer`), msgraph-sdk, azure-identity, Pydantic v2
+- uvicorn for the opt-in HTTP transport; the optional `documents` extra adds pypdf, openpyxl, psutil and defusedxml for `outlook_read_attachment`
 - Package manager: uv
 - Testing: pytest + pytest-asyncio
 
 ## Commands
-- `uv run pytest` — run tests (offline unit suite; `integration`/`live` markers are deselected by default)
+- `uv run pytest` — run tests (offline unit suite; `integration`/`live`/`live_write` markers are deselected by default). The PDF/XLSX parser tests skip unless `uv sync --all-extras` installed the `documents` extra
+- `OUTLOOK_MCP_TOOLSETS="$(uv run python -c 'from outlook_mcp import toolsets; print(",".join(sorted(set(toolsets.TOOL_GROUPS.values()))))')" uv run pytest -q` — the same suite with every toolset loaded, opt-in `documents` included, as CI also runs it
 - `uv run pytest -m live -v` — live query-shape guards; run before tagging if you changed any `$filter`/`$orderby`/`$search` construction (see `RELEASING.md` 1b)
 - `uv run pytest -m integration -v` — live response-shape smoke tests
 - `uv run ruff check src/ tests/ scripts/` — lint
 - `uv run ruff format src/ tests/ scripts/` — format (CI runs `ruff format --check` on the same paths and fails on any file it would change)
-- `uv run outlook-mcp` — start server (stdio)
+- `uv run outlook-mcp` — start server (stdio; `OUTLOOK_MCP_TRANSPORT=streamable-http` serves HTTP instead, see the README)
 - `uv run python scripts/preflight.py` — pre-release Graph smoke test (must pass before tagging; see `RELEASING.md`)
 
 ## Releasing
@@ -27,25 +29,30 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 
 ## Architecture
 - `src/outlook_mcp/server.py` — `MCPServer` entry point, lifespan context
+- `src/outlook_mcp/http_transport.py` — Opt-in streamable-HTTP transport (`OUTLOOK_MCP_TRANSPORT`): settings checked before anything binds, bearer-token gate, Host/Origin allow-list, uvicorn config. stdio stays the default
 - `src/outlook_mcp/auth.py` — Device code OAuth2 via azure-identity
 - `src/outlook_mcp/graph.py` — Graph client factory
 - `src/outlook_mcp/config.py` — Config file management (`~/.outlook-mcp/`, or `OUTLOOK_MCP_CONFIG_DIR` — one directory per server instance, one instance per account)
+- `src/outlook_mcp/_config_env.py` — Optional `OUTLOOK_MCP_*` environment input over the config file (#180): `client_id` only when the file has none, `tenant_id` and `timezone` as overrides; the security settings only tighten the file's policy, and a value that would loosen it is refused at startup (README "Environment configuration")
 - `src/outlook_mcp/validation.py` — Input validation (OData, KQL, IDs, datetimes, time zones)
 - `src/outlook_mcp/errors.py` — Exception hierarchy. `OutlookMCPError` inherits the SDK's `ToolError`; this is load-bearing, not cosmetic (see Conventions)
 - `src/outlook_mcp/pagination.py` — Cursor-based pagination
 - `src/outlook_mcp/cli.py` — `outlook-mcp` entry point: `serve` (default), `auth`, `status`, `logout`
 - `src/outlook_mcp/permissions.py` — `read_only` and `allow_categories` write gating (the seven write categories)
-- `src/outlook_mcp/folder_resolver.py`, `calendar_resolver.py` — Display name / well-known name → Graph id resolution for mail folders and calendars
-- `src/outlook_mcp/throttle.py` — Retry-After honoring for the raw-httpx delta/`$batch` paths (SDK path already retries via kiota)
-- `src/outlook_mcp/toolsets.py` — Tool annotations + config-gated toolset selection (`OUTLOOK_MCP_TOOLSETS`); `configure()` runs once after registration
+- `src/outlook_mcp/folder_resolver.py`, `calendar_resolver.py` — Display name / well-known name → Graph id resolution for mail folders and calendars; a mail folder can also be a path, `Inbox/Travel/Flights`, with `//` for a `/` in a name (#144)
+- `src/outlook_mcp/throttle.py` — Retry-After honoring for the raw-httpx delta/`$batch` paths (SDK path already retries via kiota), and `call_without_replay` for the SDK writes that can email someone: kiota's retry off, 429 retried here, never a 5xx (#131)
+- `src/outlook_mcp/toolsets.py` — Tool annotations + config-gated toolset selection (`OUTLOOK_MCP_TOOLSETS`); an opt-in group (`OPTIONAL_GROUPS`: `documents`) loads only when named; `configure()` runs once after registration
+- `src/outlook_mcp/sender_auth.py` — Microsoft's `Authentication-Results` verdict on a message's From domain, for `include_sender_auth` (#130). Pure: no Graph, no I/O
 - `src/outlook_mcp/tools/` — One file per tool group:
   - `mail_read.py`, `mail_write.py`, `mail_triage.py` — Tier 1 (auth tools live directly in `server.py`)
   - `calendar_read.py`, `calendar_write.py` — Tier 1
+  - `calendar_attachments.py` — Event attachments (attach from `attachments_dir`, with the mail tools' upload session for >3MB; remove one)
   - `contacts.py` — Contact CRUD
   - `todo.py` — To Do task management
   - `todo_attachments.py` — To Do task attachments (inline base64 uploads ≤20 MiB, contentBytes downloads)
   - `mail_drafts.py` — Draft management
-  - `mail_attachments.py` — Attachment handling
+  - `mail_attachments.py` — Mail attachments: list, download (to `attachments_dir`, or `as_content`), send and attach to drafts; home of `resolve_attachment_path`, the download helpers the To Do tools share, and the >3MB upload session the event tools reuse
+  - `mail_attachment_read.py`, `_document_worker.py` — `outlook_read_attachment` (opt-in `documents` group): PDF, XLSX and text attachments as paged text. PDF/XLSX parse in `_document_worker.py`, a short-lived clean-environment subprocess the parent bounds by memory, wall time and output — containment, not a sandbox
   - `mail_folders.py` — Folder management
   - `mail_thread.py` — Threading and copy
   - `batch.py` — Batch operations
@@ -57,6 +64,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   - `contacts_delta.py` — Contacts delta-sync queries (`outlook_list_contacts_delta`)
   - `_delta.py` — Shared httpx-backed delta helper (raw HTTP bypasses the SDK)
   - `_recurrence.py` — Shared recurrence conversion for calendar events and To Do tasks (Graph models both identically)
+  - `_mail_body.py` — Shared mail-body conversion: plain text and Markdown (`is_markdown`, a safe subset) as HTML, and a reply's or forward's text above the quote Graph wrote
   - `digest.py` — Composed "since last call" digest (`outlook_changes_since`) wrapping the three delta tools
 
 ## Conventions
@@ -76,8 +84,15 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   `Error executing tool <name>` with the message withheld. That is not a detail: it silently
   suppressed the entire hierarchy from 1.14.0 to 1.19.0 while every type assertion stayed green.
   A new error type inherits from `OutlookMCPError`, and `__str__` carries the `action` hint
-  because that string is what the agent reads. Guarded by `test_error_text_reaches_client.py`
-- Cross-tool guidance goes in `INSTRUCTIONS` (sent once per session) or a prompt, never into 68
+  because that string is what the agent reads. Guarded by `test_error_text_reaches_client.py`.
+  `_wrap_tool_errors` also converts the two non-SDK failures every raw-httpx path can raise:
+  `httpx.HTTPStatusError` (from `raise_for_status()`, rebuilt without the URL) and
+  azure-identity's `ClientAuthenticationError`. A raw path reads its reply with
+  `errors.graph_json(response)`, never a bare `response.json()`: otherwise its
+  `JSONDecodeError`, a `ValueError`, is reported as invalid input. The wrapper also replaces
+  any lone surrogate left in a tool's result, and `OutlookMCPError.__str__` does the same for
+  error text: one in a content block or in error text ends the stdio server (#186)
+- Cross-tool guidance goes in `INSTRUCTIONS` (sent once per session) or a prompt, never into 71
   docstrings — a docstring is paid for on every turn by every client. A docstring stays
   self-sufficient for using *that* tool; sequencing across tools does not belong there
 - Anything taking a host filesystem path routes through `resolve_attachment_path`. Paths come
@@ -88,7 +103,9 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   2026-07) and the budget test's own **chars/4 proxy** measure for the current surface (the
   To Do detail tools added ~+12% per turn; the budget test header records the measured value).
   Metadata that is correct but inert — `openWorldHint`, which is `true` by default anyway, or
-  titles that restate the tool name — is not free. `test_tool_surface_budget.py` holds the line
+  titles that restate the tool name — is not free. `test_tool_surface_budget.py` holds the line:
+  one ceiling for the default surface, and a separate one with the opt-in `documents` group
+  loaded, so an opt-in tool cannot raise every user's per-turn cost
 - Datetimes: UTC in responses, config timezone for input interpretation
 - Delete: soft delete (move to Deleted Items) by default
 - Dependency bounds: an unbounded requirement can break every fresh install without a single commit. `mcp[cli]` with no upper bound shipped a package that could not be installed for five weeks (2026-07-28 → 09-03) while CI stayed green — `uv sync` resolves through `uv.lock`, so the `test` job never sees what a new user actually gets. The `fresh-install` (per push) and `published-install` (weekly cron) jobs in `ci.yml` are the guard against this class; keep them working. They are necessary, not sufficient: in 2026-09 a *transitive* dependency (`microsoft-kiota-*` 1.13) broke every `/me` call on fresh installs of 1.22.0 (#80) while both jobs stayed green, because they check that the package imports and registers its tools — never what reaches Graph. `tests/test_me_rewrite_reaches_the_wire.py` checks the URL the real middleware sends, against whatever versions the environment resolved. When a dependency's new release breaks us, cap it with a comment naming the upstream fix that lifts the cap

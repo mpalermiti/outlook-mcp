@@ -29,17 +29,41 @@ jobs:
           - os: windows-latest
             python-version: "3.12"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
+          version: "0.13.5"
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --all-extras
+      - run: uv sync --locked --all-extras
       - run: uv run ruff check src/ tests/ scripts/
       # `ruff check` passing says nothing about formatting: a separate tool with
       # a separate verdict. With nothing running this, 49 of 105 files had
       # drifted from the documented formatter (#78).
       - run: uv run ruff format --check src/ tests/ scripts/
       - run: uv run pytest --cov=outlook_mcp -v
+      # Opt-in tools must pass the same registry, wrapper and annotation guards
+      # as the default surface; installing parser extras alone does not load them.
+      - name: Test with every toolset loaded
+        # Windows defaults to PowerShell; this assignment needs bash everywhere.
+        shell: bash
+        run: |
+          OUTLOOK_MCP_TOOLSETS="$(uv run python -c 'from outlook_mcp import toolsets; print(",".join(sorted(set(toolsets.TOOL_GROUPS.values()))))')" \
+            uv run pytest -q
+
+  documents-macos:
+    if: github.event_name != 'schedule'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.5"
+          python-version: "3.13"
+      - run: uv sync --locked --all-extras
+      - run: >-
+          uv run pytest tests/test_readable_attachments.py tests/test_document_paging.py
+          tests/test_document_review_guards.py tests/test_document_followups.py -v
 
   # Guards the failure mode that shipped 1.12.0 and 1.13.0 broken for five weeks:
   # `mcp[cli]` was declared with no upper bound, mcp 2.0.0 removed
@@ -54,9 +78,10 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
+          version: "0.13.5"
           python-version: "3.13"
       - name: Build wheel
         run: uv build
@@ -83,7 +108,7 @@ jobs:
           "$RUNNER_TEMP/fresh/bin/python" - <<'PY'
           import outlook_mcp.server as s
           tools = [a for a in dir(s) if a.startswith("outlook_")]
-          assert len(tools) == 68, f"expected 68 tools, got {len(tools)}"
+          assert len(tools) == 72, f"expected 72 tools, got {len(tools)}"
           print(f"OK: server imports, {len(tools)} tools registered")
           PY
       - name: Request URLs must not be logged
@@ -109,7 +134,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the pinned mcp-publisher and verify its checksum
         run: scripts/install-mcp-publisher.sh
 
@@ -135,9 +160,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Only for the /me script below — the package under test comes from PyPI.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
+          version: "0.13.5"
           python-version: "3.13"
       - name: Install the latest published release from PyPI
         run: |
@@ -156,7 +182,7 @@ jobs:
         run: |
           "$RUNNER_TEMP/pypi/bin/python" tests/test_me_rewrite_reaches_the_wire.py
       - name: Published server must import and register its full tool surface
-        # 68 is what the *published* release registers — not a typo for the
+        # 72 is what the *published* release registers — not a typo for the
         # working tree's count. Update this number only when a release ships
         # with a different surface (see RELEASING.md).
         run: |
@@ -164,12 +190,12 @@ jobs:
           import outlook_mcp.server as s
           tools = [a for a in dir(s) if a.startswith("outlook_")]
           # This asserts the count in the *published* release, not this branch's.
-          # Bump at release time to whatever PyPI is serving (68 while 1.25.x is
+          # Bump at release time to whatever PyPI is serving (72 while 1.28.x is
           # latest) — this file is in
           # RELEASING.md §3's lockstep
           # list precisely so the weekly canary doesn't go permanently red the
           # moment a release publishes.
-          assert len(tools) == 68, f"expected 68 tools, got {len(tools)}"
+          assert len(tools) == 72, f"expected 72 tools, got {len(tools)}"
           print(f"OK: published package imports, {len(tools)} tools registered")
           PY
       - name: CLI entrypoint must be wired and runnable

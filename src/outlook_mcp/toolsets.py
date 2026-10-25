@@ -28,6 +28,7 @@ from mcp.types import ToolAnnotations
 # Toolset groups a client can enable via OUTLOOK_MCP_TOOLSETS. The "account"
 # group (auth/identity) is always available regardless of selection.
 ALWAYS_ON_GROUPS = {"account"}
+OPTIONAL_GROUPS = {"documents"}
 
 # name -> toolset group. Every registered tool MUST appear here (drift-guarded).
 TOOL_GROUPS: dict[str, str] = {
@@ -61,14 +62,18 @@ TOOL_GROUPS: dict[str, str] = {
     # attachments
     "outlook_list_attachments": "attachments",
     "outlook_download_attachment": "attachments",
+    "outlook_read_attachment": "documents",
     "outlook_send_with_attachments": "attachments",
     # calendar
     "outlook_list_events": "calendar",
     "outlook_get_event": "calendar",
+    "outlook_find_event_by_key": "calendar",
     "outlook_create_event": "calendar",
     "outlook_update_event": "calendar",
     "outlook_delete_event": "calendar",
     "outlook_rsvp": "calendar",
+    "outlook_attach_to_event": "calendar",
+    "outlook_remove_event_attachment": "calendar",
     "outlook_list_calendars": "calendar",
     # contacts
     "outlook_list_contacts": "contacts",
@@ -124,8 +129,10 @@ READ_ONLY: set[str] = {
     "outlook_list_thread",
     "outlook_list_drafts",
     "outlook_list_attachments",
+    "outlook_read_attachment",
     "outlook_list_events",
     "outlook_get_event",
+    "outlook_find_event_by_key",
     "outlook_list_calendars",
     "outlook_list_contacts",
     "outlook_get_contact",
@@ -169,13 +176,15 @@ DESTRUCTIVE: set[str] = {
     "outlook_delete_folder",
     "outlook_delete_inbox_override",
     "outlook_remove_draft_attachment",
+    "outlook_attach_to_event",
+    "outlook_remove_event_attachment",
 }
 
 
 def parse_toolsets(value: str | None) -> set[str] | None:
     """Parse ``OUTLOOK_MCP_TOOLSETS`` into a set of group names.
 
-    ``None`` (unset) or an empty/blank value means "all toolsets" — the
+    ``None`` (unset) or an empty/blank value means "all default toolsets" — the
     backward-compatible default. Otherwise a comma-separated list, lowercased
     and stripped. Unknown group names simply match no tools.
     """
@@ -188,12 +197,13 @@ def parse_toolsets(value: str | None) -> set[str] | None:
 def select_kept_tools(names: list[str], enabled: set[str] | None) -> set[str]:
     """Return the subset of ``names`` to keep given the enabled toolsets.
 
-    ``enabled=None`` keeps everything. Otherwise keep a tool when its group is
+    ``enabled=None`` keeps all groups except optional groups (documents).
+    Otherwise keep a tool when its group is
     enabled or is an always-on group (account/auth). A name with no known group
     is kept (fail-open — gating must never silently drop an unclassified tool).
     """
     if enabled is None:
-        return set(names)
+        return {name for name in names if TOOL_GROUPS.get(name) not in OPTIONAL_GROUPS}
     keep: set[str] = set()
     for name in names:
         group = TOOL_GROUPS.get(name)

@@ -15,12 +15,24 @@ Behavior summary:
 
 - **First call** (no tokens, or a key is missing): call the underlying
   delta tool with no token to bootstrap. Graph's first response is a
-  *full snapshot*, not "what changed", so we filter to the last
-  ``fallback_window_hours`` to avoid flooding the digest with historical
-  items. For calendar, we pass ``[now - window, now + 7d]`` so the
-  bootstrap snapshot captures recent + upcoming changes.
+  *full snapshot*, not "what changed", so each resource is held to the
+  last ``fallback_window_hours``. Mail asks Graph for it with
+  ``receivedDateTime ge``, the only kind of ``$filter`` message delta
+  takes. Some consumer mailboxes accept but ignore it, so the client also
+  enforces the bound and reports that fallback. If the snapshot exceeds the
+  cap, `mail_bootstrap_from` travels inside `delta_tokens` until it finishes;
+  continuing the snapshot cannot report historical mail as new. Calendar passes
+  ``[now - window, now + 7d]`` as its view, so the bootstrap snapshot
+  captures recent + upcoming changes. Contacts delta takes no filter, so
+  contacts are kept only when their ``lastModifiedDateTime`` falls in the
+  window.
 - **Subsequent call** (with tokens): use the token verbatim; drain
   pagination up to a safety cap; classify each returned item.
+- **``has_more``** (per resource, beside ``delta_tokens``): the safety cap
+  stopped that resource before Graph finished the round. Its token resumes
+  the round; call again with it.
+- A reply with no new cursor means the old one is still good, so the
+  caller's token is handed back rather than ``None``.
 - **`syncStateNotFound` recovery**: if a stored token is too old, Graph
   returns 410. We drop the bad token, re-do that resource as a "first
   call", and surface ``_meta.resync`` in the response so the caller
@@ -36,6 +48,7 @@ from typing import Any
 
 import httpx
 
+from outlook_mcp.tools._delta import parse_graph_datetime
 from outlook_mcp.tools.calendar_delta import list_events_delta
 from outlook_mcp.tools.contacts_delta import list_contacts_delta
 from outlook_mcp.tools.mail_delta import list_inbox_delta
@@ -54,29 +67,6 @@ _CALENDAR_LOOKAHEAD_DAYS = 7
 
 # Cap on the by_sender top-N.
 _TOP_SENDERS = 5
-
-
-def _parse_iso(value: str) -> datetime | None:
-    """Parse a Graph ISO 8601 string to an aware UTC datetime. ``None`` on failure.
-
-    Graph hands us strings like ``"2026-05-21T10:00:00Z"`` (mail
-    received times) and ``"2026-05-22T14:00:00.0000000"`` (event
-    dateTime — note the trailing fractional zeros and no zone). We
-    normalize both to aware UTC.
-    """
-    if not value:
-        return None
-    s = value.strip()
-    # Strip trailing Z → +00:00 for fromisoformat compatibility.
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    try:
-        dt = datetime.fromisoformat(s)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 def _is_sync_state_not_found(exc: Exception) -> bool:
@@ -99,23 +89,31 @@ async def _drain_mail(
     graph_client: Any,
     *,
     delta_token: str | None,
-) -> tuple[list[dict], str | None]:
-    """Drain mail delta pages up to the internal cap. Returns (items, token)."""
+    received_since: datetime | None,
+) -> tuple[list[dict], str | None, bool]:
+    """Drain mail delta pages up to the internal cap. Returns (items, token, has_more).
+
+    A page with no new cursor means the one in hand is still good, so the
+    token returned is never ``None`` when the caller passed one.
+    """
     items: list[dict] = []
     token = delta_token
-    last_token: str | None = None
+    last_token: str | None = delta_token
+    has_more = False
     for _ in range(_MAX_INTERNAL_PAGES):
         page = await list_inbox_delta(
             graph_client,
             page_size=_PAGE_SIZE,
             delta_token=token,
+            received_since=received_since,
         )
         items.extend(page["messages"])
         last_token = page["delta_token"] if page["delta_token"] is not None else last_token
-        if not page["has_more"]:
+        has_more = page["has_more"]
+        if not has_more:
             break
         token = page["delta_token"]
-    return items, last_token
+    return items, last_token, has_more
 
 
 async def _drain_events(
@@ -124,11 +122,12 @@ async def _drain_events(
     start: str | None,
     end: str | None,
     delta_token: str | None,
-) -> tuple[list[dict], str | None]:
-    """Drain calendar delta pages up to the internal cap. Returns (items, token)."""
+) -> tuple[list[dict], str | None, bool]:
+    """Drain calendar delta pages up to the internal cap. See ``_drain_mail``."""
     items: list[dict] = []
     token = delta_token
-    last_token: str | None = None
+    last_token: str | None = delta_token
+    has_more = False
     for _ in range(_MAX_INTERNAL_PAGES):
         page = await list_events_delta(
             graph_client,
@@ -139,33 +138,38 @@ async def _drain_events(
         )
         items.extend(page["events"])
         last_token = page["delta_token"] if page["delta_token"] is not None else last_token
-        if not page["has_more"]:
+        has_more = page["has_more"]
+        if not has_more:
             break
         token = page["delta_token"]
-    return items, last_token
+    return items, last_token, has_more
 
 
 async def _drain_contacts(
     graph_client: Any,
     *,
     delta_token: str | None,
-) -> tuple[list[dict], str | None]:
-    """Drain contacts delta pages up to the internal cap. Returns (items, token)."""
+    modified_since: datetime | None,
+) -> tuple[list[dict], str | None, bool]:
+    """Drain contacts delta pages up to the internal cap. See ``_drain_mail``."""
     items: list[dict] = []
     token = delta_token
-    last_token: str | None = None
+    last_token: str | None = delta_token
+    has_more = False
     for _ in range(_MAX_INTERNAL_PAGES):
         page = await list_contacts_delta(
             graph_client,
             page_size=_PAGE_SIZE,
             delta_token=token,
+            modified_since=modified_since,
         )
         items.extend(page["contacts"])
         last_token = page["delta_token"] if page["delta_token"] is not None else last_token
-        if not page["has_more"]:
+        has_more = page["has_more"]
+        if not has_more:
             break
         token = page["delta_token"]
-    return items, last_token
+    return items, last_token, has_more
 
 
 # ── Classifiers ────────────────────────────────────────────────────────
@@ -201,7 +205,7 @@ def _classify_mail(
 
         # Window filter on bootstrap.
         if window_start is not None:
-            received_dt = _parse_iso(item.get("received") or "")
+            received_dt = parse_graph_datetime(item.get("received") or "")
             if received_dt is None or received_dt < window_start:
                 continue
 
@@ -315,28 +319,48 @@ async def _run_mail(
     *,
     token: str | None,
     window_start: datetime,
-) -> tuple[dict, str | None, bool]:
+    bootstrap_from: datetime | None = None,
+) -> tuple[dict, str | None, bool, bool, datetime | None, bool]:
     """Run the mail resource end-to-end with resync recovery.
 
-    Returns ``(section, new_token, resynced)`` — ``resynced`` is True when a
-    stale token forced a full re-bootstrap. Each runner reports its own
-    resync so the composed digest can order them deterministically (the
-    runners execute concurrently and must not share mutable state).
+    Returns section, cursor, has_more, resynced, pending bootstrap bound and
+    whether Graph ignored the filter. ``resynced`` is
+    True when a stale token forced a full re-bootstrap. Each runner reports
+    its own resync so the composed digest can order them deterministically
+    (the runners execute concurrently and must not share mutable state).
     """
-    bootstrap_window: datetime | None = window_start if token is None else None
+    bootstrap_window = window_start if token is None else bootstrap_from
     resynced = False
 
     try:
-        items, new_token = await _drain_mail(graph_client, delta_token=token)
+        items, new_token, has_more = await _drain_mail(
+            graph_client, delta_token=token, received_since=bootstrap_window
+        )
     except Exception as exc:
         if token is not None and _is_sync_state_not_found(exc):
             resynced = True
-            items, new_token = await _drain_mail(graph_client, delta_token=None)
             bootstrap_window = window_start
+            items, new_token, has_more = await _drain_mail(
+                graph_client, delta_token=None, received_since=bootstrap_window
+            )
         else:
             raise
 
-    return _classify_mail(items, window_start=bootstrap_window), new_token, resynced
+    section = _classify_mail(items, window_start=bootstrap_window)
+    filter_ignored = bootstrap_window is not None and any(
+        not item.get("is_deleted")
+        and (received := parse_graph_datetime(item.get("received") or "")) is not None
+        and received < bootstrap_window
+        for item in items
+    )
+    return (
+        section,
+        new_token,
+        has_more,
+        resynced,
+        bootstrap_window if has_more else None,
+        filter_ignored,
+    )
 
 
 async def _run_events(
@@ -345,14 +369,14 @@ async def _run_events(
     token: str | None,
     bootstrap_start: str,
     bootstrap_end: str,
-) -> tuple[dict, str | None, bool]:
+) -> tuple[dict, str | None, bool, bool]:
     """Run the events resource end-to-end with resync recovery.
 
-    Returns ``(section, new_token, resynced)`` — see ``_run_mail``.
+    Returns ``(section, new_token, has_more, resynced)`` — see ``_run_mail``.
     """
     resynced = False
     if token is None:
-        items, new_token = await _drain_events(
+        items, new_token, has_more = await _drain_events(
             graph_client,
             start=bootstrap_start,
             end=bootstrap_end,
@@ -360,7 +384,7 @@ async def _run_events(
         )
     else:
         try:
-            items, new_token = await _drain_events(
+            items, new_token, has_more = await _drain_events(
                 graph_client,
                 start=None,
                 end=None,
@@ -369,7 +393,7 @@ async def _run_events(
         except Exception as exc:
             if _is_sync_state_not_found(exc):
                 resynced = True
-                items, new_token = await _drain_events(
+                items, new_token, has_more = await _drain_events(
                     graph_client,
                     start=bootstrap_start,
                     end=bootstrap_end,
@@ -378,29 +402,38 @@ async def _run_events(
             else:
                 raise
 
-    return _classify_events(items), new_token, resynced
+    return _classify_events(items), new_token, has_more, resynced
 
 
 async def _run_contacts(
     graph_client: Any,
     *,
     token: str | None,
-) -> tuple[dict, str | None, bool]:
+    window_start: datetime,
+) -> tuple[dict, str | None, bool, bool]:
     """Run the contacts resource end-to-end with resync recovery.
 
-    Returns ``(section, new_token, resynced)`` — see ``_run_mail``.
+    Returns ``(section, new_token, has_more, resynced)`` — see ``_run_mail``.
+    A bootstrap keeps only contacts changed inside the window: the snapshot
+    is the whole address book, not what changed in it.
     """
     resynced = False
     try:
-        items, new_token = await _drain_contacts(graph_client, delta_token=token)
+        items, new_token, has_more = await _drain_contacts(
+            graph_client,
+            delta_token=token,
+            modified_since=window_start if token is None else None,
+        )
     except Exception as exc:
         if token is not None and _is_sync_state_not_found(exc):
             resynced = True
-            items, new_token = await _drain_contacts(graph_client, delta_token=None)
+            items, new_token, has_more = await _drain_contacts(
+                graph_client, delta_token=None, modified_since=window_start
+            )
         else:
             raise
 
-    return _classify_contacts(items), new_token, resynced
+    return _classify_contacts(items), new_token, has_more, resynced
 
 
 # ── Public entry point ────────────────────────────────────────────────
@@ -417,7 +450,7 @@ async def changes_since(
     underlying v1.9.0 delta *tool functions* directly (not the MCPServer
     wrappers) so it composes cleanly without going through the server.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
     window_start = now - timedelta(hours=max(0, fallback_window_hours))
     bootstrap_end_dt = now + timedelta(days=_CALENDAR_LOOKAHEAD_DAYS)
 
@@ -429,20 +462,34 @@ async def changes_since(
     mail_token = tokens.get("mail")
     events_token = tokens.get("events")
     contacts_token = tokens.get("contacts")
+    mail_bootstrap_from = None
+    value = tokens.get("mail_bootstrap_from")
+    if mail_token is not None and value is not None:
+        mail_bootstrap_from = parse_graph_datetime(value) if isinstance(value, str) else None
+        if mail_bootstrap_from is None:
+            raise ValueError("mail_bootstrap_from must be the timestamp returned in delta_tokens.")
 
     # The three resources are independent — fetch them concurrently. Each
     # runner handles its own stale-token resync internally, so a 410 on one
     # resource never cancels the others; only a genuine error propagates and
     # cancels siblings (matching the previous sequential behavior).
     (
-        (mail_section, mail_new_token, mail_resynced),
-        (events_section, events_new_token, events_resynced),
-        (contacts_section, contacts_new_token, contacts_resynced),
+        (
+            mail_section,
+            mail_new_token,
+            mail_has_more,
+            mail_resynced,
+            mail_bootstrap_pending,
+            mail_filter_ignored,
+        ),
+        (events_section, events_new_token, events_has_more, events_resynced),
+        (contacts_section, contacts_new_token, contacts_has_more, contacts_resynced),
     ) = await asyncio.gather(
         _run_mail(
             graph_client,
             token=mail_token,
             window_start=window_start,
+            bootstrap_from=mail_bootstrap_from,
         ),
         _run_events(
             graph_client,
@@ -453,6 +500,7 @@ async def changes_since(
         _run_contacts(
             graph_client,
             token=contacts_token,
+            window_start=window_start,
         ),
     )
 
@@ -477,13 +525,34 @@ async def changes_since(
             "events": events_new_token,
             "contacts": contacts_new_token,
         },
+        # Beside the tokens because it qualifies them: True means the safety
+        # cap stopped that resource mid-round, and its token resumes it.
+        "has_more": {
+            "mail": mail_has_more,
+            "events": events_has_more,
+            "contacts": contacts_has_more,
+        },
         "window": {
-            "from": bootstrap_start_iso,
+            "from": (
+                mail_bootstrap_from
+                if mail_bootstrap_from is not None and not mail_resynced
+                else window_start
+            ).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "to": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         },
     }
 
+    if mail_bootstrap_pending is not None:
+        result["delta_tokens"]["mail_bootstrap_from"] = mail_bootstrap_pending.strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
     if resync_log:
         result["_meta"] = {"resync": resync_log}
+    if mail_filter_ignored:
+        result.setdefault("_meta", {})["mail_window_fallback"] = (
+            "Graph ignored the receivedDateTime filter; mail was bounded client-side. "
+            "Replace the stored delta_tokens dict with this one; never merge them. "
+            "If has_more.mail is true, pass it back to finish the snapshot with the same bound."
+        )
 
     return result

@@ -6,17 +6,60 @@ import json
 from typing import Any
 from urllib.parse import quote
 
+import httpx
+from kiota_abstractions.api_error import APIError
 from kiota_abstractions.method import Method
 from kiota_abstractions.request_information import RequestInformation
-from opentelemetry import trace
+from msgraph.generated.models.o_data_errors.o_data_error import ODataError
 
 from outlook_mcp.config import Config
+from outlook_mcp.errors import wrap_graph_error
 from outlook_mcp.folder_resolver import resolve_folder_id
 from outlook_mcp.permissions import CATEGORY_MAIL_TRIAGE, check_permission
+from outlook_mcp.throttle import retry_throttled_subrequests
 from outlook_mcp.validation import validate_graph_id
 
 _VALID_ACTIONS = ("move", "flag", "categorize", "mark_read")
 _VALID_FLAG_STATUSES = ("flagged", "complete", "notFlagged")
+
+# `value` for mark_read. Anything else used to mean False, so a value such as
+# "yes" marked every message unread; now it is refused before anything is sent.
+_MARK_READ_VALUES = {"true": True, "read": True, "false": False, "unread": False}
+
+# The error mapping every msgraph request builder passes: a non-2xx envelope is
+# raised as `ODataError` carrying Graph's code and message, which
+# `_wrap_tool_errors` turns into the same `GraphAPIError` any SDK call produces.
+_ERROR_MAPPING = {"XXX": ODataError}
+
+_NOT_ANSWERED = (
+    "The retried request did not complete or its reply could not be read, so it is not "
+    "known whether this message was changed. Re-read it before retrying."
+)
+
+
+def _failed_round(requests: list[dict], reason: str) -> dict:
+    """A retry round that failed, as per-message errors.
+
+    An earlier round has already changed messages by then, so raising would
+    hide which ones; only the re-sent requests are reported as failed.
+    """
+    return {
+        "responses": [
+            {"id": r["id"], "status": 0, "body": {"error": {"message": reason}}} for r in requests
+        ]
+    }
+
+
+def _parse_mark_read(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    is_read = _MARK_READ_VALUES.get(str(value).strip().lower())
+    if is_read is None:
+        raise ValueError(
+            f"mark_read value must be 'true' or 'false' ('read' and 'unread' also work); "
+            f"got {value!r}"
+        )
+    return is_read
 
 
 def _build_subrequest(index: int, message_id: str, action: str, value: Any) -> dict:
@@ -53,7 +96,7 @@ def _build_subrequest(index: int, message_id: str, action: str, value: Any) -> d
             "headers": {"Content-Type": "application/json"},
         }
     if action == "mark_read":
-        is_read = value.lower() == "true" if isinstance(value, str) else bool(value)
+        is_read = _parse_mark_read(value)
         return {
             "id": request_id,
             "method": "PATCH",
@@ -99,24 +142,47 @@ async def batch_triage(
     subrequests = [
         _build_subrequest(i, mid, action, resolved_value) for i, mid in enumerate(message_ids)
     ]
-    batch_body = {"requests": subrequests}
 
-    req = RequestInformation()
-    req.url = "https://graph.microsoft.com/v1.0/$batch"
-    req.http_method = Method.POST
-    req.headers.try_add("Content-Type", "application/json")
-    req.headers.try_add("Accept", "application/json")
-    req.content = json.dumps(batch_body).encode("utf-8")
+    rounds_sent = 0
 
-    tracer = trace.get_tracer("outlook_mcp.batch_triage")
-    with tracer.start_as_current_span("batch_triage") as span:
-        response = await graph_client.request_adapter.get_http_response_message(req, span)
-    payload = response.json()
+    async def post_batch(requests: list[dict]) -> dict:
+        nonlocal rounds_sent
+        is_retry = rounds_sent > 0
+        rounds_sent += 1
+
+        req = RequestInformation()
+        req.url = "https://graph.microsoft.com/v1.0/$batch"
+        req.http_method = Method.POST
+        req.headers.try_add("Content-Type", "application/json")
+        req.headers.try_add("Accept", "application/json")
+        req.content = json.dumps({"requests": requests}).encode("utf-8")
+        try:
+            # kiota retries a throttled envelope (429/503/504) itself; a refused
+            # one is raised through `_ERROR_MAPPING` in Graph's own words.
+            content = await graph_client.request_adapter.send_primitive_async(
+                req, "bytes", _ERROR_MAPPING
+            )
+        except (APIError, httpx.HTTPError) as exc:
+            if not is_retry:
+                raise
+            reason = str(wrap_graph_error(exc)) if isinstance(exc, APIError) else _NOT_ANSWERED
+            return _failed_round(requests, reason)
+        try:
+            return json.loads(content or b"")
+        except ValueError:  # JSONDecodeError, or bytes that are not UTF-8
+            if not is_retry:
+                raise
+            return _failed_round(requests, _NOT_ANSWERED)
+
+    # Graph answers the envelope with 200 even when it throttled sub-requests:
+    # each one is checked against the mailbox's limits on its own and can come
+    # back 429 with its own Retry-After, and the SDK's retry handler never sees
+    # those. Re-send just those, as `outlook_read_messages` does.
+    responses_by_id = await retry_throttled_subrequests(post_batch, subrequests)
 
     id_to_message = {str(i): mid for i, mid in enumerate(message_ids)}
     results_by_id: dict[str, dict] = {}
-    for sub in payload.get("responses", []):
-        sub_id = str(sub.get("id"))
+    for sub_id, sub in responses_by_id.items():
         mid = id_to_message.get(sub_id)
         if mid is None:
             continue

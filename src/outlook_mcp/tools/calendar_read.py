@@ -20,6 +20,7 @@ from outlook_mcp.validation import (
     resolve_timezone,
     sanitize_output,
     validate_datetime,
+    validate_event_key,
     validate_graph_id,
 )
 
@@ -41,10 +42,61 @@ _SUMMARY_SELECT = (
     "id,subject,start,end,location,isAllDay,organizer,responseStatus,isOnlineMeeting,showAs,type"
 )
 
+# An event's attachments as `get_event` lists them: what each one is, never its
+# bytes. Without the `$select`, `contentBytes` of every file comes back, base64.
+_ATTACHMENT_SELECT = "id,name,contentType,size,isInline"
+
 # Concise mode needs `attendees` and `isOrganizer` to compute its two derived
 # fields, and nothing else — keep it tight so a day-at-a-glance scan never pulls
 # event bodies.
 _CONCISE_SELECT = "id,subject,start,end,location,isAllDay,isOrganizer,isOnlineMeeting,attendees"
+
+
+# Where an event's `key` lives: a named extended property this server owns.
+# Outlook does not display it, and a `$filter` can match on it, which is what
+# `find_events_by_key` does. The GUID was generated once for this purpose.
+# NEVER CHANGE IT: every event already stamped becomes unfindable by key the
+# moment it moves. Written by `calendar_write`, read here.
+EVENT_KEY_PROPERTY_ID = "String {51f1f359-76ee-427e-ac52-22691bf5b2f8} Name EventKey"
+
+# Expands that one property and no other. An event can carry extended
+# properties other software wrote; without the inner filter they would all come
+# back on every read.
+_EVENT_KEY_EXPAND = f"singleValueExtendedProperties($filter=id eq '{EVENT_KEY_PROPERTY_ID}')"
+
+# More than this many events sharing one key is not a lookup any more; the
+# answer says `has_more` rather than paging through them.
+_FIND_LIMIT = 25
+
+
+def event_key(event: Any) -> str | None:
+    """The event's key, or ``None``.
+
+    Compared case-insensitively: Graph does not promise to echo a property id
+    in the case it was written in, and it lowercases the hex of the
+    `SystemTime 0x3FEF` property `mail_read` reads.
+
+    Called beside the formatters rather than from them: the key comes from an
+    ``$expand``, not from the ``$select`` that ``test_select_covers_the_formatter``
+    holds each formatter to.
+    """
+    wanted = EVENT_KEY_PROPERTY_ID.casefold()
+    for prop in getattr(event, "single_value_extended_properties", None) or []:
+        if (getattr(prop, "id", None) or "").casefold() == wanted:
+            return getattr(prop, "value", None)
+    return None
+
+
+def _with_key(summary: dict, event: Any) -> dict:
+    """``summary`` plus ``key`` when the event has one.
+
+    Absent rather than ``None`` on a listing: most events carry no key, and a
+    null on every row of a page is a cost every listing would pay.
+    """
+    key = event_key(event)
+    if key is not None:
+        summary["key"] = key
+    return summary
 
 
 def _clamp(value: int, low: int, high: int) -> int:
@@ -280,6 +332,9 @@ async def list_events(
     query_params["end_date_time"] = end_utc
     query_params["$orderby"] = "start/dateTime"
     query_params["$select"] = _CONCISE_SELECT if concise else _SUMMARY_SELECT
+    if not concise:
+        # Concise scans do not carry the key, so they do not pay to expand it.
+        query_params["$expand"] = _EVENT_KEY_EXPAND
 
     from msgraph.generated.users.item.calendar_view.calendar_view_request_builder import (
         CalendarViewRequestBuilder,
@@ -302,7 +357,7 @@ async def list_events(
     if concise:
         events = [_format_event_concise(e) for e in (response.value or [])]
     else:
-        events = [_format_event_summary(e) for e in (response.value or [])]
+        events = [_with_key(_format_event_summary(e), e) for e in (response.value or [])]
 
     next_cursor = wrap_nextlink(response.odata_next_link)
     if next_cursor is not None:
@@ -320,13 +375,115 @@ async def list_events(
     }
 
 
+def _format_event_attachment(attachment: Any) -> dict:
+    """One attachment as ``get_event`` lists it; the name is the sender's text."""
+    content_type = attachment.content_type
+    return {
+        "id": attachment.id,
+        "name": sanitize_output(attachment.name or ""),
+        "size": attachment.size,
+        "content_type": sanitize_output(content_type) if content_type else None,
+        "is_inline": bool(attachment.is_inline),
+    }
+
+
+async def _event_attachments(builder: Any) -> list[dict]:
+    """Every attachment on the event ``builder`` addresses, following ``@odata.nextLink``."""
+    from msgraph.generated.users.item.events.item.attachments.attachments_request_builder import (  # noqa: E501
+        AttachmentsRequestBuilder,
+    )
+
+    config = build_request_config(
+        AttachmentsRequestBuilder.AttachmentsRequestBuilderGetQueryParameters,
+        {"$select": _ATTACHMENT_SELECT},
+    )
+    response = await builder.attachments.get(request_configuration=config)
+    found = list(response.value or []) if response else []
+    while isinstance(getattr(response, "odata_next_link", None), str) and response.odata_next_link:
+        response = await builder.attachments.with_url(response.odata_next_link).get()
+        found.extend((response.value or []) if response else [])
+    return [_format_event_attachment(a) for a in found]
+
+
 async def get_event(
     graph_client: Any,
     event_id: str,
 ) -> dict:
-    """Get full details for a single event."""
+    """Get full details for a single event, with its ``key`` (``None`` when unset)
+    and its attachments listed.
+
+    The attachments are a second request, made only when Graph reports
+    ``hasAttachments``, so an event without files costs what it always did.
+    """
     event_id = validate_graph_id(event_id)
 
-    event = await graph_client.me.events.by_event_id(event_id).get()
+    from msgraph.generated.users.item.events.item.event_item_request_builder import (
+        EventItemRequestBuilder,
+    )
 
-    return _format_event_detail(event)
+    config = build_request_config(
+        EventItemRequestBuilder.EventItemRequestBuilderGetQueryParameters,
+        {"$expand": _EVENT_KEY_EXPAND},
+    )
+    builder = graph_client.me.events.by_event_id(event_id)
+    event = await builder.get(request_configuration=config)
+    attachments = await _event_attachments(builder) if event.has_attachments is True else []
+
+    return {**_format_event_detail(event), "key": event_key(event), "attachments": attachments}
+
+
+async def find_events_by_key(
+    graph_client: Any,
+    key: str,
+    calendar: str | None = None,
+) -> dict:
+    """The events in one calendar whose key is ``key``.
+
+    ``GET /me/events`` (or ``/me/calendars/{id}/events``) filtered on the key
+    property, so the search has no date window: a booking months out is found
+    as readily as tomorrow's. It returns single events and series masters,
+    never occurrences — the master is the one to update, and patching an
+    occurrence would make it an exception instead.
+
+    Without ``calendar`` the search covers the default calendar, which is what
+    ``/me/events`` lists (Graph's user resource: "Default is to show Events
+    under the Default Calendar"); ``calendar`` is resolved as for
+    ``list_events``. Nothing matching is an empty answer, not an error.
+    """
+    key = validate_event_key(key)
+    calendar_id = await resolve_calendar_id(graph_client, calendar)
+
+    from msgraph.generated.users.item.events.events_request_builder import EventsRequestBuilder
+
+    # The key is validated to characters that need no escaping. Its quotes are
+    # doubled all the same, as mail_read does for its literals, so the literal
+    # stays closed if that alphabet ever grows.
+    literal = key.replace("'", "''")
+    query = {
+        "$filter": (
+            f"singleValueExtendedProperties/Any(ep: ep/id eq '{EVENT_KEY_PROPERTY_ID}' "
+            f"and ep/value eq '{literal}')"
+        ),
+        "$expand": _EVENT_KEY_EXPAND,
+        "$select": _SUMMARY_SELECT,
+        "$top": _FIND_LIMIT,
+    }
+    # As in list_events: the per-calendar builder's query-parameters class is
+    # field-for-field the same, and kiota reads them off the object.
+    events = (
+        graph_client.me.events
+        if calendar_id is None
+        else graph_client.me.calendars.by_calendar_id(calendar_id).events
+    )
+    response = await events.get(
+        request_configuration=build_request_config(
+            EventsRequestBuilder.EventsRequestBuilderGetQueryParameters, query
+        )
+    )
+    found = [_with_key(_format_event_summary(e), e) for e in (response.value or [])]
+    return {
+        "key": key,
+        "events": found,
+        "count": len(found),
+        "has_more": response.odata_next_link is not None,
+    }

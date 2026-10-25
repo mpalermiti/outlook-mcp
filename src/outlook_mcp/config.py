@@ -9,7 +9,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    PrivateAttr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from outlook_mcp.permissions import VALID_CATEGORIES
 
@@ -74,7 +81,7 @@ _LEGACY_KEYS = {
 # is normally accepted with a warning (a newer release's config must still boot
 # an older one), but a misspelling of one of these is refused instead — ignoring
 # `"readOnly": true` ran a writable server its operator believed was read-only.
-_SAFETY_KEYS = ("read_only", "allow_categories", "read_only_consent")
+_SAFETY_KEYS = ("read_only", "allow_categories", "read_only_consent", "expected_username")
 
 
 def _squash(key: str) -> str:
@@ -82,25 +89,41 @@ def _squash(key: str) -> str:
     return "".join(ch for ch in key.lower() if ch.isalnum())
 
 
-def _misspelt_safety_key(key: str) -> str | None:
+def _misspelt_safety_key(key: str, keys: tuple[str, ...] = _SAFETY_KEYS) -> str | None:
     """The safety key an unknown `key` plainly means, or None.
 
     A different spelling of the same words, or a one-or-two-letter slip
-    (`difflib` ratio 0.8 or better). Deliberately narrow: only these three keys,
-    so every other unknown key keeps loading with a warning.
+    (`difflib` ratio 0.8 or better). Deliberately narrow: only these keys,
+    so every other unknown key keeps loading with a warning in file configuration.
     """
-    for safety_key in _SAFETY_KEYS:
+    for safety_key in keys:
         if _squash(key) == _squash(safety_key):
             return safety_key
-    close = difflib.get_close_matches(key.lower(), _SAFETY_KEYS, n=1, cutoff=0.8)
+    close = difflib.get_close_matches(key.lower(), keys, n=1, cutoff=0.8)
     return close[0] if close else None
+
+
+class EnvironmentConfigError(ValueError):
+    """An explicitly supplied environment value is invalid or would loosen policy."""
 
 
 class Config(BaseModel):
     """Outlook MCP server configuration."""
 
+    # A narrowed environment directory must stay inside the file's resolved root
+    # at use time too: a child can become a symlink after configuration loads.
+    # This is runtime policy metadata, never another persisted configuration key.
+    _attachments_file_root: str | None = PrivateAttr(default=None)
+
     client_id: str | None = Field(default=None, description="Azure AD app client ID (BYOID)")
     tenant_id: str = Field(default=DEFAULT_TENANT_ID)
+    expected_username: str | None = Field(
+        default=None,
+        description=(
+            "Optional sign-in username for this instance. Refuse a saved or new "
+            "sign-in for another username; case-insensitive, without alias resolution."
+        ),
+    )
     read_only: bool = Field(default=False)
     read_only_consent: bool = Field(
         default=False,
@@ -203,6 +226,16 @@ class Config(BaseModel):
             )
         return self
 
+    @field_validator("expected_username")
+    @classmethod
+    def _validate_expected_username(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+            raise ValueError("expected_username must be a non-empty sign-in username on one line.")
+        return value
+
     @field_validator("allow_categories")
     @classmethod
     def _validate_allow_categories(cls, value: list[str]) -> list[str]:
@@ -266,7 +299,12 @@ def config_repair_lines(exc: Exception) -> list[str]:
     is something the operator can act on.
     """
     lines: list[str]
-    if isinstance(exc, ValidationError):
+    if isinstance(exc, EnvironmentConfigError):
+        lines = [
+            f"Cannot load environment configuration — the server cannot start: {exc}",
+            "Fix the named variable in the launch environment and restart the server.",
+        ]
+    elif isinstance(exc, ValidationError):
         lines = ["The config file is invalid — the server cannot start:"]
         for e in exc.errors():
             field = ".".join(str(p) for p in e["loc"]) or "config"
@@ -319,7 +357,15 @@ def _refuse_non_directory(config_dir: str) -> None:
 
 
 def load_config(config_dir: str = DEFAULT_CONFIG_DIR) -> Config:
-    """Load config from disk. Returns defaults if no config file exists."""
+    """Load valid file/default settings, then non-persistent environment inputs."""
+    baseline = _load_file_config(config_dir)
+    from outlook_mcp._config_env import apply_environment
+
+    return apply_environment(baseline, os.environ)
+
+
+def _load_file_config(config_dir: str) -> Config:
+    """The existing file loader; environment input never bypasses its refusals."""
     _refuse_non_directory(config_dir)
     file_path = Path(config_dir) / "config.json"
 

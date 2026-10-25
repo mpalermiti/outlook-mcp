@@ -34,12 +34,14 @@ import os
 from typing import Any
 
 import httpx
+from mcp.types import ContentBlock
 
 from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.permissions import CATEGORY_TODO_WRITE, check_permission
 from outlook_mcp.tools.mail_attachments import (
-    _validated_download_target,
+    attachment_content,
+    download_destination,
     resolve_attachment_path,
     write_download,
 )
@@ -158,12 +160,13 @@ async def download_task_attachment(
     graph_client: Any,
     task_id: str,
     attachment_id: str,
-    save_path: str,
+    save_path: str | None = None,
     list_id: str | None = None,
     *,
     config: Config,
-) -> dict:
-    """Download a To Do task attachment's content to a local file.
+    as_content: bool = False,
+) -> dict | list[ContentBlock]:
+    """Download a To Do task attachment's content to a local file, or return it as content.
 
     GET /me/todo/lists/{id}/tasks/{taskId}/attachments/{attId}, bytes from
     contentBytes (kiota decodes the base64). The payload is cross-checked
@@ -172,12 +175,15 @@ async def download_task_attachment(
     bytes are fetched *before* the destination is touched, and the write lands
     via a temp file + atomic replace — an empty or failed download never
     truncates a staged file under its trusted name. A 0-byte attachment
-    (size 0, no contentBytes) writes an honest 0-byte file.
+    (size 0, no contentBytes) writes an honest 0-byte file. With ``as_content`` the
+    verified bytes go back as MCP content instead (see ``attachment_content``) and nothing
+    is written.
     """
     task_id = validate_graph_id(task_id)
     attachment_id = validate_graph_id(attachment_id)
-    save_path = resolve_attachment_path(save_path, config.attachments_dir)
-    save_path = _validated_download_target(save_path, config.attachments_dir)
+    save_path = download_destination(
+        save_path, as_content, config.attachments_dir, file_root=config._attachments_file_root
+    )
     resolved_id = await _resolve_list_id(graph_client, list_id)
 
     attachment = await (
@@ -192,14 +198,18 @@ async def download_task_attachment(
             "gone; re-list with outlook_list_task_attachments"
         )
     content = _verified_content_bytes(attachment, attachment_id)
+    name = sanitize_output(attachment.name or "")
+    content_type = sanitize_output(attachment.content_type or "")
+    if save_path is None:
+        return attachment_content(name, content_type, content)
 
     write_download(save_path, content)
 
     return {
         "saved_to": save_path,
-        "name": sanitize_output(attachment.name or ""),
+        "name": name,
         "size": len(content),
-        "content_type": sanitize_output(attachment.content_type or ""),
+        "content_type": content_type,
     }
 
 
@@ -219,7 +229,9 @@ async def upload_task_attachment(
     check_permission(config, CATEGORY_TODO_WRITE, "outlook_upload_task_attachment")
     task_id = validate_graph_id(task_id)
 
-    file_path = resolve_attachment_path(file_path, config.attachments_dir)
+    file_path = resolve_attachment_path(
+        file_path, config.attachments_dir, file_root=config._attachments_file_root
+    )
     if not os.path.isfile(file_path):
         # ValueError, not FileNotFoundError: _wrap_tool_errors only forwards
         # ValueError text to the model, and the path is the thing it needs.

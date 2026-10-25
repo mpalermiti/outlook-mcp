@@ -8,12 +8,21 @@ from urllib.parse import quote
 
 import httpx
 
+from outlook_mcp import sender_auth
+from outlook_mcp.errors import graph_json
 from outlook_mcp.folder_resolver import (
-    fetch_all_child_folders,
     fetch_all_top_level_folders,
     resolve_folder_id,
+    walk_folder_tree,
 )
-from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
+from outlook_mcp.pagination import (
+    apply_pagination,
+    build_request_config,
+    decode_cursor_payload,
+    encode_cursor_payload,
+    get_page,
+    wrap_nextlink,
+)
 from outlook_mcp.throttle import retry_throttled_subrequests, send_with_retry
 from outlook_mcp.validation import (
     sanitize_kql,
@@ -21,6 +30,7 @@ from outlook_mcp.validation import (
     validate_datetime,
     validate_email,
     validate_graph_id,
+    validate_internet_message_id,
 )
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0/"
@@ -54,6 +64,20 @@ def _concise_summary(summary: dict) -> dict:
 SUMMARY_SELECT = (
     "id,subject,from,receivedDateTime,isRead,importance,"
     "bodyPreview,hasAttachments,categories,flag,conversationId,inferenceClassification"
+)
+
+
+# The read tools' `$select` for `include_sender_auth` (#130). Graph returns
+# `internetMessageHeaders` only when `$select` names it, and once `$select` names
+# anything Graph returns only what it names, so this names every property the
+# read formatters read as well. It is sent only on that opt-in: the default read sends
+# no `$select` and stays exactly what it was. `attachments` is not here: it is a
+# relationship, which Graph returns only for `$expand`, and the default read does
+# not expand it either. `test_select_covers_the_formatter.py` pins the list
+# against both formatters.
+_SENDER_AUTH_SELECT = (
+    "id,subject,from,toRecipients,ccRecipients,receivedDateTime,body,isRead,"
+    "importance,hasAttachments,categories,flag,conversationId,internetMessageHeaders"
 )
 
 
@@ -218,7 +242,12 @@ async def list_inbox(
 
 
 def _format_read_message_from_sdk(
-    msg: Any, format: str, concise: bool, deferred_value: str | None, include_deferred_send: bool
+    msg: Any,
+    format: str,
+    concise: bool,
+    deferred_value: str | None,
+    include_deferred_send: bool,
+    include_sender_auth: bool = False,
 ) -> dict:
     """Build the ``read_message`` wire shape from an SDK ``Message`` object.
 
@@ -308,11 +337,19 @@ def _format_read_message_from_sdk(
     if include_deferred_send:
         result["deferred_send_datetime"] = deferred_value
 
+    if include_sender_auth:
+        headers = [(h.name or "", h.value or "") for h in msg.internet_message_headers or []]
+        result["sender_authentication"] = sender_auth.sender_authentication(headers, from_addr)
+
     return result
 
 
 def _format_read_message_from_raw(
-    raw: dict, format: str, concise: bool, include_deferred_send: bool
+    raw: dict,
+    format: str,
+    concise: bool,
+    include_deferred_send: bool,
+    include_sender_auth: bool = False,
 ) -> dict:
     """Build the ``read_message`` wire shape from a raw Graph JSON dict.
 
@@ -410,6 +447,13 @@ def _format_read_message_from_raw(
                 break
         result["deferred_send_datetime"] = deferred_value
 
+    if include_sender_auth:
+        headers = [
+            ((h or {}).get("name") or "", (h or {}).get("value") or "")
+            for h in raw.get("internetMessageHeaders") or []
+        ]
+        result["sender_authentication"] = sender_auth.sender_authentication(headers, from_addr)
+
     return result
 
 
@@ -424,14 +468,53 @@ def _make_body_preview(content: str, limit: int = 200) -> str:
     return collapsed[:limit]
 
 
+async def resolve_message_id(graph_client: Any, message_id: str) -> str:
+    """The Graph id for ``message_id``: a Graph id, or a Message-ID header value.
+
+    A value with an ``@`` is a Message-ID (no Graph id can contain one) and is
+    looked up with an exact ``$filter`` on ``internetMessageId``, selecting only
+    the id. Every copy of a message shares its Message-ID (the Inbox copy of a
+    message sent to yourself and the Sent Items one, or a copied message), so
+    more than one match is refused with the ids rather than guessed between.
+    """
+    if "@" not in message_id:
+        return validate_graph_id(message_id)
+    internet_message_id = validate_internet_message_id(message_id)
+    literal = internet_message_id.replace("'", "''")
+
+    from msgraph.generated.users.item.messages.messages_request_builder import (
+        MessagesRequestBuilder,
+    )
+
+    from outlook_mcp.errors import NotFoundError
+
+    response = await graph_client.me.messages.get(
+        request_configuration=build_request_config(
+            MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters,
+            {"$filter": f"internetMessageId eq '{literal}'", "$select": "id", "$top": 10},
+        )
+    )
+    ids = [m.id for m in (response.value or []) if m.id]
+    shown = sanitize_output(internet_message_id[:120])
+    if not ids:
+        raise NotFoundError("Message with Message-ID", shown)
+    if len(ids) > 1:
+        raise ValueError(
+            f"Message-ID {shown} matches {len(ids)} messages, copies in different "
+            f"folders: {', '.join(ids)}. Read one by its id."
+        )
+    return ids[0]
+
+
 async def read_message(
     graph_client: Any,
     message_id: str,
     format: str = "text",
     include_deferred_send: bool = False,
     concise: bool = False,
+    include_sender_auth: bool = False,
 ) -> dict:
-    """Read a single message by ID.
+    """Read a single message by ID, or by its Message-ID (see ``resolve_message_id``).
 
     Pass ``include_deferred_send=True`` to surface the
     PR_DEFERRED_SEND_TIME extended property (the value Exchange reads to
@@ -442,8 +525,12 @@ async def read_message(
     and surface a single-line ``body_preview`` (first 200 chars, whitespace
     collapsed). Headers (from/to/cc/subject/received/importance/...) are
     preserved. Default False keeps the existing shape.
+
+    Pass ``include_sender_auth=True`` to add ``sender_authentication``,
+    Microsoft's verdict on the From domain (``sender_auth``). It selects
+    ``internetMessageHeaders``, which Graph returns only when asked for.
     """
-    message_id = validate_graph_id(message_id)
+    message_id = await resolve_message_id(graph_client, message_id)
 
     deferred_value: str | None = None
 
@@ -476,6 +563,8 @@ async def read_message(
             f"?$expand=singleValueExtendedProperties("
             f"$filter={encoded_filter})"
         )
+        if include_sender_auth:
+            raw_url += f"&$select={_SENDER_AUTH_SELECT}"
 
         info = RequestInformation()
         info.http_method = Method.GET
@@ -499,15 +588,29 @@ async def read_message(
             if (prop.id or "").lower() == target:
                 deferred_value = prop.value
                 break
+    elif include_sender_auth:
+        from msgraph.generated.users.item.messages.item.message_item_request_builder import (
+            MessageItemRequestBuilder,
+        )
+
+        req_config = build_request_config(
+            MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters,
+            {"$select": _SENDER_AUTH_SELECT},
+        )
+        msg = await graph_client.me.messages.by_message_id(message_id).get(
+            request_configuration=req_config
+        )
     else:
         msg = await graph_client.me.messages.by_message_id(message_id).get()
 
     return _format_read_message_from_sdk(
-        msg, format, concise, deferred_value, include_deferred_send
+        msg, format, concise, deferred_value, include_deferred_send, include_sender_auth
     )
 
 
-def _build_read_subrequest_url(message_id: str, include_deferred_send: bool) -> str:
+def _build_read_subrequest_url(
+    message_id: str, include_deferred_send: bool, include_sender_auth: bool = False
+) -> str:
     """Build the per-sub-request URL path for ``read_messages``.
 
     Matches what ``read_message`` requests:
@@ -516,17 +619,20 @@ def _build_read_subrequest_url(message_id: str, include_deferred_send: bool) -> 
     - ``include_deferred_send=True``: adds the singleValueExtendedProperties
       expansion filtered to ``PR_DEFERRED_SEND_TIME``, same as the raw URL
       ``read_message`` builds via Kiota's ``RAW_URL_KEY`` path.
+    - ``include_sender_auth=True``: adds ``$select=_SENDER_AUTH_SELECT``.
     """
     safe_id = quote(message_id, safe="")
-    if not include_deferred_send:
-        return f"/me/messages/{safe_id}"
+    query = []
+    if include_deferred_send:
+        from outlook_mcp.tools.mail_drafts import _PR_DEFERRED_SEND_TIME_ID
 
-    from outlook_mcp.tools.mail_drafts import _PR_DEFERRED_SEND_TIME_ID
-
-    filter_expr = f"id eq '{_PR_DEFERRED_SEND_TIME_ID}'"
-    # Match ``read_message``: keep ``= '`` literal, percent-encode the rest.
-    encoded_filter = quote(filter_expr, safe="= '")
-    return f"/me/messages/{safe_id}?$expand=singleValueExtendedProperties($filter={encoded_filter})"
+        filter_expr = f"id eq '{_PR_DEFERRED_SEND_TIME_ID}'"
+        # Match ``read_message``: keep ``= '`` literal, percent-encode the rest.
+        encoded_filter = quote(filter_expr, safe="= '")
+        query.append(f"$expand=singleValueExtendedProperties($filter={encoded_filter})")
+    if include_sender_auth:
+        query.append(f"$select={_SENDER_AUTH_SELECT}")
+    return f"/me/messages/{safe_id}" + ("?" + "&".join(query) if query else "")
 
 
 async def read_messages(
@@ -535,6 +641,7 @@ async def read_messages(
     format: str = "text",
     concise: bool = False,
     include_deferred_send: bool = False,
+    include_sender_auth: bool = False,
 ) -> dict:
     """Read up to 20 messages by ID in a single Graph ``$batch`` round-trip.
 
@@ -557,6 +664,9 @@ async def read_messages(
         include_deferred_send: When True, fetch the
             PR_DEFERRED_SEND_TIME extended property on each message and
             surface it as ``deferred_send_datetime``.
+        include_sender_auth: When True, select each message's
+            ``internetMessageHeaders`` and surface Microsoft's verdict on its
+            From domain as ``sender_authentication``.
 
     Returns:
         ``{messages, failures, requested, succeeded, failed}`` where
@@ -565,7 +675,8 @@ async def read_messages(
         ``{id, status, code, message}`` for sub-requests that didn't
         return 2xx. Input-validation errors raise ``ValueError``;
         transport-level errors raise ``httpx.HTTPStatusError`` (a 5xx on
-        the whole batch is *not* a partial failure).
+        the whole batch is *not* a partial failure), and a reply that is
+        not a JSON object raises ``GraphAPIError``.
     """
     if not message_ids:
         raise ValueError("message_ids must not be empty")
@@ -584,7 +695,7 @@ async def read_messages(
             {
                 "id": str(i),
                 "method": "GET",
-                "url": _build_read_subrequest_url(mid, include_deferred_send),
+                "url": _build_read_subrequest_url(mid, include_deferred_send, include_sender_auth),
             }
         )
 
@@ -610,7 +721,7 @@ async def read_messages(
                 content=json.dumps({"requests": reqs}),
             )
             resp.raise_for_status()
-            return resp.json()
+            return graph_json(resp)
 
         # $batch returns HTTP 200 even when individual sub-requests are
         # throttled (429/503). retry_throttled_subrequests re-issues just the
@@ -640,7 +751,9 @@ async def read_messages(
 
         if 200 <= status < 300:
             messages.append(
-                _format_read_message_from_raw(body, format, concise, include_deferred_send)
+                _format_read_message_from_raw(
+                    body, format, concise, include_deferred_send, include_sender_auth
+                )
             )
         else:
             err = body.get("error") or {}
@@ -662,6 +775,17 @@ async def read_messages(
     }
 
 
+# Graph ends a message `$search` a little past 250 results, whatever `$top`
+# asks for, and says nothing: the last page has no @odata.nextLink, exactly
+# like the end of a complete search. Measured 2026-10-23 on an Exchange Online
+# mailbox, three queries that each matched tens of thousands of messages: 275
+# results for `$top` from 25 to 1000, 260 for 10, 255 for 5, never 250 or
+# fewer. (Graph's documentation says up to 1,000.) So a search that ends past
+# 250 is reported as possibly cut short. One that genuinely matched 251-275
+# messages reads the same, which only costs the caller a narrower search.
+SEARCH_STOPS_AFTER = 250
+
+
 async def search_mail(
     graph_client: Any,
     query: str,
@@ -674,47 +798,89 @@ async def search_mail(
 
     concise: when True, drop ``preview`` and ``categories`` from each message
     (smaller payload for triage scans). Default False preserves the existing shape.
+
+    Graph pages a ``$search`` only with ``$skiptoken``, which ``get_page``
+    sends. A cursor continues the search it came from: the folder is stored in
+    it, so a later page neither re-resolves the name nor drifts to another
+    folder (or to all mail) when the argument is omitted or changed.
+
+    The cursor also counts the results served so far, so the last page of a
+    search that ends past ``SEARCH_STOPS_AFTER`` carries ``incomplete``: a
+    note saying older matches may be missing and how to reach them. A search
+    that ends at or below it has no such key.
     """
     count = _clamp(count, 1, 100)
     safe_query = sanitize_kql(query)
 
+    # Decode before any network call, so a bad cursor is refused for free:
+    # `apply_pagination` refuses a `skiptoken` that is not a non-empty string.
+    payload = decode_cursor_payload(cursor) if cursor else {}
+    served = payload.get("served", 0)
+    if not isinstance(served, int) or isinstance(served, bool) or served < 0:
+        raise ValueError("Invalid pagination cursor")
     query_params = apply_pagination({}, count, cursor)
     query_params["$search"] = safe_query
     query_params["$select"] = SUMMARY_SELECT
 
-    if folder:
-        folder = await resolve_folder_id(graph_client, folder)
+    if "folder" in payload:
+        # Caller-held state that goes into a URL path: validate, never trust.
+        folder_id = payload["folder"]
+        if folder_id is not None:
+            if not isinstance(folder_id, str):
+                raise ValueError("Invalid pagination cursor")
+            folder_id = validate_graph_id(folder_id)
+    elif folder:
+        folder_id = await resolve_folder_id(graph_client, folder)
+    else:
+        folder_id = None
+
+    if folder_id is not None:
         from msgraph.generated.users.item.mail_folders.item.messages import (
             messages_request_builder as folder_mrb,
         )
 
-        req_config = build_request_config(
+        response = await get_page(
+            graph_client.me.mail_folders.by_mail_folder_id(folder_id).messages,
             folder_mrb.MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters,
             query_params,
-        )
-        response = await graph_client.me.mail_folders.by_mail_folder_id(folder).messages.get(
-            request_configuration=req_config
         )
     else:
         from msgraph.generated.users.item.messages.messages_request_builder import (
             MessagesRequestBuilder as MeMessagesRequestBuilder,
         )
 
-        req_config = build_request_config(
-            MeMessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters, query_params
+        response = await get_page(
+            graph_client.me.messages,
+            MeMessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters,
+            query_params,
         )
-        response = await graph_client.me.messages.get(request_configuration=req_config)
 
     messages = [_format_message_summary(m) for m in (response.value or [])]
     if concise:
         messages = [_concise_summary(m) for m in messages]
+    served += len(messages)
 
-    return {
+    next_cursor = wrap_nextlink(response.odata_next_link)
+    if next_cursor is not None:
+        # Pin the folder into the cursor (None = all mail), so the next page is
+        # unambiguously a continuation of this search.
+        next_cursor = encode_cursor_payload(
+            {**decode_cursor_payload(next_cursor), "folder": folder_id, "served": served}
+        )
+
+    result = {
         "messages": messages,
         "count": len(messages),
         "has_more": response.odata_next_link is not None,
-        "cursor": wrap_nextlink(response.odata_next_link),
+        "cursor": next_cursor,
     }
+    if response.odata_next_link is None and served > SEARCH_STOPS_AFTER:
+        result["incomplete"] = (
+            f"This search ended at {served} results with no next page. Graph has been seen to "
+            "stop a search around 275 without saying so, so older matches may be missing: "
+            "add received<= with the last message's date to the query to reach them."
+        )
+    return result
 
 
 def _folder_to_dict(f: Any) -> dict:
@@ -745,13 +911,10 @@ async def list_folders(
 
     if recursive:
         collected: list[dict] = []
-        queue: list[Any] = await fetch_all_top_level_folders(graph_client)
-        while queue:
-            f = queue.pop(0)
-            collected.append(_folder_to_dict(f))
-            if (getattr(f, "child_folder_count", 0) or 0) > 0:
-                children = await fetch_all_child_folders(graph_client, f.id)
-                queue.extend(children)
+        top_level = await fetch_all_top_level_folders(graph_client)
+        async for f, path in walk_folder_tree(graph_client, top_level):
+            # The form resolve_folder_id takes back, "/" in a name doubled.
+            collected.append({**_folder_to_dict(f), "path": sanitize_output(path)})
 
         return {
             "folders": collected,

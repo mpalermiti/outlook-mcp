@@ -49,6 +49,34 @@ class TestCreateFolder:
         mock_client.me.mail_folders.by_mail_folder_id.assert_called_once_with("AAMkAGparent123=")
         child_mock.child_folders.post.assert_called_once()
 
+    async def test_create_under_a_display_name_resolves_it(self):
+        """The docstring has always said "name or ID"; a name used to reach Graph as an id."""
+        receipts = _mock_folder("AAMkReceipts=", "Receipts")
+        receipts.child_folder_count = 0
+        mock_client = MagicMock()
+        mock_client.me.mail_folders.get = AsyncMock(
+            return_value=MagicMock(value=[receipts], odata_next_link=None)
+        )
+        parent = MagicMock()
+        parent.child_folders.post = AsyncMock(return_value=_mock_folder())
+        mock_client.me.mail_folders.by_mail_folder_id.return_value = parent
+
+        await create_folder(mock_client, name="2026", parent_folder="Receipts", config=_CFG)
+
+        mock_client.me.mail_folders.by_mail_folder_id.assert_called_once_with("AAMkReceipts=")
+        parent.child_folders.post.assert_awaited_once()
+
+    async def test_create_under_a_well_known_alias_resolves_it(self):
+        """ "Junk Email" used to fail locally: a space is not valid in an id."""
+        mock_client = MagicMock()
+        parent = MagicMock()
+        parent.child_folders.post = AsyncMock(return_value=_mock_folder())
+        mock_client.me.mail_folders.by_mail_folder_id.return_value = parent
+
+        await create_folder(mock_client, name="Held", parent_folder="Junk Email", config=_CFG)
+
+        mock_client.me.mail_folders.by_mail_folder_id.assert_called_once_with("junkemail")
+
     async def test_create_raises_read_only(self):
         """create_folder raises ReadOnlyError in read-only mode."""
         mock_client = MagicMock()

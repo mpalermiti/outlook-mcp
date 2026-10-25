@@ -49,7 +49,11 @@ from outlook_mcp.config import Config
 from outlook_mcp.tools import (
     calendar_write,
     contacts,
+    mail_attachments,
     mail_drafts,
+    mail_folders,
+    mail_thread,
+    mail_triage,
     mail_write,
     todo,
     todo_attachments,
@@ -187,6 +191,39 @@ class TestCalendarWrite:
             # camelCase `showAs`, not the Python `show_as`. An enum assigned to
             # an SDK field is only as good as what kiota emits for it.
             '"showAs": "tentative"',
+        )
+
+    async def test_an_event_key_reaches_the_wire_on_create_and_update(self):
+        """The key lives in a hidden extended property, under Graph's camelCase name."""
+        client = AsyncMock()
+        client.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="s"))
+        await calendar_write.create_event(
+            client,
+            subject="s",
+            start="2026-09-07T12:30:00Z",
+            end="2026-09-07T13:30:00Z",
+            key="SENTINEL-KEY-4b1",
+            config=_CFG,
+        )
+        assert_on_wire(
+            client.me.events.post.call_args[0][0],
+            '"singleValueExtendedProperties"',
+            '"String {51f1f359-76ee-427e-ac52-22691bf5b2f8} Name EventKey"',
+            '"value": "SENTINEL-KEY-4b1"',
+        )
+
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+        await calendar_write.update_event(
+            client, event_id="AAMkAG123=", key="SENTINEL-KEY-4b3", config=_CFG
+        )
+        assert_on_wire(
+            builder.patch.call_args[0][0],
+            '"singleValueExtendedProperties"',
+            '"String {51f1f359-76ee-427e-ac52-22691bf5b2f8} Name EventKey"',
+            '"value": "SENTINEL-KEY-4b3"',
         )
 
     async def test_create_event_puts_the_anchor_zone_on_the_wire(self):
@@ -469,11 +506,31 @@ class TestMailWrite:
             "sentinel.replyto@example.com",
         )
 
-    async def test_reply_html_body_reaches_the_wire(self):
-        builder = MagicMock()
-        builder.reply.post = AsyncMock()
+    # A reply, and a forward with a comment, go through a draft: the create call,
+    # the PATCH with the text and the send are separate payloads (#143 follow-up).
+
+    @staticmethod
+    def _thread_client():
+        from msgraph.generated.models.body_type import BodyType
+
+        created = MagicMock(id="R1")
+        created.body = MagicMock(
+            content="<html><body><div>QUOTED-ORIGINAL</div></body></html>",
+            content_type=BodyType.Html,
+        )
+        source = MagicMock()
+        for action in ("create_reply", "create_reply_all", "create_forward"):
+            getattr(source, action).post = AsyncMock(return_value=created)
+        draft = MagicMock()
+        draft.patch = AsyncMock()
+        draft.send.post = AsyncMock()
+        builders = {"AAMkAG123=": source, "R1": draft}
         client = MagicMock()
-        client.me.messages.by_message_id.return_value = builder
+        client.me.messages.by_message_id = MagicMock(side_effect=lambda i: builders[i])
+        return client, source, draft
+
+    async def test_reply_html_body_reaches_the_wire(self):
+        client, source, draft = self._thread_client()
 
         await mail_write.reply(
             client,
@@ -483,31 +540,30 @@ class TestMailWrite:
             config=_CFG,
         )
 
+        assert "SENTINEL-REPLY-7d1" not in wire(source.create_reply.post.call_args[0][0])
         assert_on_wire(
-            builder.reply.post.call_args[0][0],
-            "SENTINEL-REPLY-7d1",
+            draft.patch.call_args[0][0],
+            "<html><body><i>SENTINEL-REPLY-7d1</i><div>QUOTED-ORIGINAL</div></body></html>",
             '"contentType": "html"',
         )
 
     async def test_reply_plain_body_reaches_the_wire(self):
-        builder = MagicMock()
-        builder.reply.post = AsyncMock()
-        client = MagicMock()
-        client.me.messages.by_message_id.return_value = builder
+        client, source, draft = self._thread_client()
 
         await mail_write.reply(
-            client, message_id="AAMkAG123=", body="SENTINEL-REPLY-7d2", config=_CFG
+            client, message_id="AAMkAG123=", body="SENTINEL-REPLY-7d2\nline two", config=_CFG
         )
 
-        # kiota emits action-parameter keys in PascalCase ("Comment", "Message",
-        # "SaveToSentItems"); Graph accepts them — reply has always worked this way.
-        assert_on_wire(builder.reply.post.call_args[0][0], '"Comment": "SENTINEL-REPLY-7d2"')
+        # Not as "Comment": Graph joins its lines with spaces on an HTML message.
+        assert '"Comment"' not in wire(source.create_reply.post.call_args[0][0])
+        assert_on_wire(
+            draft.patch.call_args[0][0],
+            "<html><body><p>SENTINEL-REPLY-7d2<br>line two</p><div>QUOTED-ORIGINAL</div>",
+            '"contentType": "html"',
+        )
 
     async def test_forward_every_argument_reaches_the_wire(self):
-        builder = MagicMock()
-        builder.forward.post = AsyncMock()
-        client = MagicMock()
-        client.me.messages.by_message_id.return_value = builder
+        client, source, draft = self._thread_client()
 
         await mail_write.forward(
             client,
@@ -517,10 +573,94 @@ class TestMailWrite:
             config=_CFG,
         )
 
+        create = wire(source.create_forward.post.call_args[0][0])
+        assert (
+            '"toRecipients": [{"emailAddress": {"address": "sentinel.fwd@example.com"}}]' in create
+        )
+        # On `message` only, not also the action's own ToRecipients: Graph 400s on both.
+        assert '"ToRecipients"' not in create
+        assert_on_wire(draft.patch.call_args[0][0], "<p>SENTINEL-COMMENT-8e1</p>")
+
+    async def test_forward_without_a_comment_reaches_the_wire(self):
+        builder = MagicMock()
+        builder.forward.post = AsyncMock()
+        client = MagicMock()
+        client.me.messages.by_message_id.return_value = builder
+
+        await mail_write.forward(
+            client, message_id="AAMkAG123=", to=["sentinel.fwd2@example.com"], config=_CFG
+        )
+
+        assert_on_wire(builder.forward.post.call_args[0][0], "sentinel.fwd2@example.com")
+
+
+class TestInlineMailAttachments:
+    """Inline attachments (#129): the decoded file goes out as ``contentBytes``.
+
+    The needle is the file's exact base64, so a match is byte-for-byte fidelity on the
+    wire — the upload half of the round trip `test_attachments_as_content.py` checks for
+    downloads, with a PDF and a PNG whose bytes are not valid UTF-8.
+    """
+
+    async def test_attach_to_draft_inline_file_reaches_the_wire(self, tmp_path):
+        import base64 as _b64
+
+        from tests.test_attachments_as_content import PDF
+
+        client = MagicMock()
+        draft = client.me.messages.by_message_id.return_value
+        draft.get = AsyncMock(return_value=MagicMock(is_draft=True))
+        draft.attachments.post = AsyncMock(return_value=MagicMock(id="A1"))
+
+        await mail_attachments.attach_to_draft(
+            client,
+            draft_id="AAMkAG123=",
+            attachments=[
+                {
+                    "name": "SENTINEL-INLINE-b71.pdf",
+                    "content_base64": _b64.b64encode(PDF).decode(),
+                    "content_type": "application/x-sentinel-b72",
+                }
+            ],
+            config=Config(client_id="test", attachments_dir=str(tmp_path / "att")),
+        )
+
         assert_on_wire(
-            builder.forward.post.call_args[0][0],
-            "sentinel.fwd@example.com",
-            "SENTINEL-COMMENT-8e1",
+            draft.attachments.post.call_args.args[0],
+            '"@odata.type": "#microsoft.graph.fileAttachment"',
+            '"name": "SENTINEL-INLINE-b71.pdf"',
+            '"contentType": "application/x-sentinel-b72"',
+            f'"contentBytes": "{_b64.b64encode(PDF).decode()}"',
+        )
+
+    async def test_send_with_attachments_inline_file_reaches_the_wire(self, tmp_path):
+        import base64 as _b64
+
+        from tests.test_attachments_as_content import PNG
+
+        client = MagicMock()
+        client.me.send_mail.post = AsyncMock()
+
+        await mail_attachments.send_with_attachments(
+            client,
+            to=["sentinel.to@example.com"],
+            subject="SENTINEL-SUBJECT-c71",
+            body="SENTINEL-BODY-c72",
+            attachments=[
+                {"name": "SENTINEL-INLINE-c73.png", "content_base64": _b64.b64encode(PNG).decode()}
+            ],
+            config=Config(client_id="test", attachments_dir=str(tmp_path / "att")),
+        )
+
+        assert_on_wire(
+            client.me.send_mail.post.call_args.args[0],
+            "sentinel.to@example.com",
+            "SENTINEL-SUBJECT-c71",
+            "SENTINEL-BODY-c72",
+            '"@odata.type": "#microsoft.graph.fileAttachment"',
+            '"name": "SENTINEL-INLINE-c73.png"',
+            '"contentType": "image/png"',
+            f'"contentBytes": "{_b64.b64encode(PNG).decode()}"',
         )
 
 
@@ -585,6 +725,283 @@ class TestMailDrafts:
             "2026-12-02T09:00:00",
         )
 
+    # Drafts in a thread (#143). The create call and the PATCH are separate
+    # payloads, so each is serialized on its own.
+
+    @staticmethod
+    def _thread_client(content="<html><body><div>QUOTED-ORIGINAL</div></body></html>", html=True):
+        from msgraph.generated.models.body_type import BodyType
+
+        draft = MagicMock(id="AAMkThreadDraft=", to_recipients=[], cc_recipients=[])
+        draft.body = MagicMock(
+            content=content, content_type=BodyType.Html if html else BodyType.Text
+        )
+        source = MagicMock()
+        for action in ("create_reply", "create_reply_all", "create_forward"):
+            getattr(source, action).post = AsyncMock(return_value=draft)
+        new_draft = MagicMock()
+        new_draft.patch = AsyncMock()
+        builders = {"AAMkOriginal=": source, "AAMkThreadDraft=": new_draft}
+        client = MagicMock()
+        client.me.messages.by_message_id = MagicMock(side_effect=lambda i: builders[i])
+        return client, source, new_draft
+
+    async def test_reply_draft_every_argument_reaches_the_wire(self):
+        client, source, new_draft = self._thread_client()
+
+        await mail_drafts.create_draft(
+            client,
+            to=["sentinel.to3@example.com"],
+            subject="SENTINEL-SUBJECT-a11",
+            body="SENTINEL-BODY-a12",
+            cc=["sentinel.cc3@example.com"],
+            bcc=["sentinel.bcc3@example.com"],
+            importance="high",
+            reply_to=["sentinel.rt3@example.com"],
+            deferred_send_datetime="2026-12-03T09:00:00Z",
+            reply_to_message_id="AAMkOriginal=",
+            config=_CFG,
+        )
+
+        create = source.create_reply.post.call_args[0][0]
+        assert_on_wire(
+            create,
+            "SENTINEL-SUBJECT-a11",
+            "sentinel.to3@example.com",
+            "sentinel.cc3@example.com",
+            "sentinel.bcc3@example.com",
+            '"importance": "high"',
+            "sentinel.rt3@example.com",
+        )
+        # The body is not on the create call: Graph's `comment` would flatten it.
+        assert "SENTINEL-BODY-a12" not in wire(source.create_reply.post.call_args[0][0])
+        assert_on_wire(
+            new_draft.patch.call_args[0][0],
+            "<html><body><p>SENTINEL-BODY-a12</p><div>QUOTED-ORIGINAL</div></body></html>",
+            '"contentType": "html"',
+            "2026-12-03T09:00:00",
+            "0x3FEF",
+        )
+
+    async def test_reply_all_draft_reaches_the_wire(self):
+        client, source, new_draft = self._thread_client()
+
+        await mail_drafts.create_draft(
+            client,
+            to=None,
+            subject=None,
+            body="SENTINEL-BODY-a21",
+            reply_to_message_id="AAMkOriginal=",
+            reply_all=True,
+            config=_CFG,
+        )
+
+        assert '"Comment"' not in wire(source.create_reply_all.post.call_args[0][0])
+        assert_on_wire(
+            new_draft.patch.call_args[0][0], "<p>SENTINEL-BODY-a21</p>", '"contentType": "html"'
+        )
+
+    async def test_forward_draft_reaches_the_wire(self):
+        client, source, new_draft = self._thread_client()
+
+        await mail_drafts.create_draft(
+            client,
+            to=["sentinel.fwd2@example.com"],
+            subject=None,
+            body="SENTINEL-BODY-a31",
+            forward_message_id="AAMkOriginal=",
+            config=_CFG,
+        )
+
+        body = wire(source.create_forward.post.call_args[0][0])
+        assert '"Comment"' not in body
+        assert_on_wire(
+            new_draft.patch.call_args[0][0], "<p>SENTINEL-BODY-a31</p>", '"contentType": "html"'
+        )
+        # On `message`, not also the action's own ToRecipients: Graph 400s on both.
+        assert (
+            '"toRecipients": [{"emailAddress": {"address": "sentinel.fwd2@example.com"}}]' in body
+        )
+        assert '"ToRecipients"' not in body
+
+    async def test_html_reply_draft_body_reaches_the_wire_above_the_quote(self):
+        client, source, new_draft = self._thread_client()
+
+        await mail_drafts.create_draft(
+            client,
+            to=None,
+            subject=None,
+            body="<b>SENTINEL-BODY-a41</b>",
+            is_html=True,
+            reply_to_message_id="AAMkOriginal=",
+            config=_CFG,
+        )
+
+        assert '"Comment"' not in wire(source.create_reply.post.call_args[0][0])
+        assert_on_wire(
+            new_draft.patch.call_args[0][0],
+            '"contentType": "html"',
+            "<html><body><b>SENTINEL-BODY-a41</b><div>QUOTED-ORIGINAL</div></body></html>",
+        )
+
+    async def test_plain_reply_draft_reaches_the_wire_with_its_layout(self):
+        """Graph's `comment` joined these lines with spaces; the PATCH keeps them."""
+        client, _, new_draft = self._thread_client()
+
+        await mail_drafts.create_draft(
+            client,
+            to=None,
+            subject=None,
+            body="SENTINEL-a51 one\nSENTINEL-a52 two\n\nSENTINEL-a53\n\n- SENTINEL-a54",
+            reply_to_message_id="AAMkOriginal=",
+            config=_CFG,
+        )
+
+        assert_on_wire(
+            new_draft.patch.call_args[0][0],
+            '"contentType": "html"',
+            "<html><body><p>SENTINEL-a51 one<br>SENTINEL-a52 two</p><p>SENTINEL-a53</p>"
+            "<ul><li>SENTINEL-a54</li></ul><div>QUOTED-ORIGINAL</div></body></html>",
+        )
+
+    async def test_plain_reply_draft_on_a_plain_text_original_reaches_the_wire_as_text(self):
+        client, _, new_draft = self._thread_client(content="\r\nQUOTED-ORIGINAL\r\n", html=False)
+
+        await mail_drafts.create_draft(
+            client,
+            to=None,
+            subject=None,
+            body="SENTINEL-a61\nSENTINEL-a62",
+            reply_to_message_id="AAMkOriginal=",
+            config=_CFG,
+        )
+
+        assert_on_wire(
+            new_draft.patch.call_args[0][0],
+            '"contentType": "text"',
+            '"content": "SENTINEL-a61\\r\\nSENTINEL-a62\\r\\n\\r\\nQUOTED-ORIGINAL\\r\\n"',
+        )
+
+
+class TestMarkdownBodies:
+    """`is_markdown` (#168): the body reaches the wire as HTML converted from Markdown."""
+
+    _MD = "**SENTINEL-MD-b1**\n\n- [SENTINEL-MD-b2](https://example.com/b3)"
+    _HTML = (
+        "<p><strong>SENTINEL-MD-b1</strong></p>"
+        '<ul><li><a href=\\"https://example.com/b3\\">SENTINEL-MD-b2</a></li></ul>'
+    )
+
+    async def test_send_message(self):
+        client = MagicMock()
+        client.me.send_mail.post = AsyncMock()
+
+        await mail_write.send_message(
+            client, ["a@example.com"], "s", self._MD, is_markdown=True, config=_CFG
+        )
+
+        assert_on_wire(
+            client.me.send_mail.post.call_args[0][0], self._HTML, '"contentType": "html"'
+        )
+
+    async def test_create_draft(self):
+        client = MagicMock()
+        client.me.messages.post = AsyncMock(return_value=MagicMock(id="D1"))
+
+        await mail_drafts.create_draft(
+            client, ["a@example.com"], "s", self._MD, is_markdown=True, config=_CFG
+        )
+
+        assert_on_wire(client.me.messages.post.call_args[0][0], self._HTML, '"contentType": "html"')
+
+    async def test_update_draft(self):
+        builder = MagicMock()
+        builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
+        builder.patch = AsyncMock()
+        client = MagicMock()
+        client.me.messages.by_message_id.return_value = builder
+
+        await mail_drafts.update_draft(
+            client, "AAMkAG123=", body=self._MD, is_markdown=True, config=_CFG
+        )
+
+        assert_on_wire(builder.patch.call_args[0][0], self._HTML, '"contentType": "html"')
+
+    async def test_reply_and_forward(self):
+        for call in (
+            lambda c: mail_write.reply(c, "AAMkAG123=", self._MD, is_markdown=True, config=_CFG),
+            lambda c: mail_write.forward(
+                c, "AAMkAG123=", ["a@example.com"], comment=self._MD, is_markdown=True, config=_CFG
+            ),
+        ):
+            client, _, draft = TestMailWrite._thread_client()
+
+            await call(client)
+
+            assert_on_wire(draft.patch.call_args[0][0], self._HTML, '"contentType": "html"')
+
+
+# ── folder paths (#144) ───────────────────────────────────────────────
+
+
+def _folder_tree_client():
+    """Inbox/Travel/Flights, listed level by level; the move/copy/create builders
+    are shared so each test can read what was posted."""
+    travel = MagicMock(id="AAMkTravelFolder=", display_name="Travel", child_folder_count=1)
+    flights = MagicMock(id="AAMkFlightsFolder=", display_name="Flights", child_folder_count=0)
+    children = {"inbox": [travel], "AAMkTravelFolder=": [flights]}
+    builders = {}
+
+    def by_folder(folder_id):
+        if folder_id not in builders:
+            b = MagicMock()
+            b.child_folders.get = AsyncMock(
+                return_value=MagicMock(value=children.get(folder_id, []), odata_next_link=None)
+            )
+            b.child_folders.post = AsyncMock(return_value=MagicMock(id="N1", display_name="n"))
+            builders[folder_id] = b
+        return builders[folder_id]
+
+    client = MagicMock()
+    client.me.mail_folders.by_mail_folder_id = MagicMock(side_effect=by_folder)
+    message = MagicMock()
+    message.move.post = AsyncMock()
+    message.copy.post = AsyncMock()
+    client.me.messages.by_message_id.return_value = message
+    return client, message, builders
+
+
+class TestFolderPaths:
+    async def test_move_to_a_path_puts_that_folder_on_the_wire(self):
+        client, message, _ = _folder_tree_client()
+
+        await mail_triage.move_message(
+            client, message_id="AAMkAG123=", folder="Inbox/Travel/Flights", config=_CFG
+        )
+
+        # Action-parameter keys are PascalCase on the wire, as for reply.
+        assert_on_wire(message.move.post.call_args[0][0], '"DestinationId": "AAMkFlightsFolder="')
+
+    async def test_copy_to_a_path_puts_that_folder_on_the_wire(self):
+        client, message, _ = _folder_tree_client()
+
+        await mail_thread.copy_message(
+            client, message_id="AAMkAG123=", folder="Inbox/Travel", config=_CFG
+        )
+
+        assert_on_wire(message.copy.post.call_args[0][0], '"DestinationId": "AAMkTravelFolder="')
+
+    async def test_create_folder_under_a_path_posts_to_that_folder(self):
+        client, _, builders = _folder_tree_client()
+
+        await mail_folders.create_folder(
+            client, name="SENTINEL-FOLDER-c01", parent_folder="Inbox/Travel", config=_CFG
+        )
+
+        posted = builders["AAMkTravelFolder="].child_folders.post
+        posted.assert_awaited_once()
+        assert_on_wire(posted.call_args[0][0], "SENTINEL-FOLDER-c01")
+
 
 # ── contacts ──────────────────────────────────────────────────────────
 
@@ -603,6 +1020,10 @@ class TestContacts:
             company="SENTINEL-COMPANY-b11",
             title="SENTINEL-TITLE-b12",
             job_title="SENTINEL-JOBTITLE-b13",
+            birthday="1987-06-05",
+            middle_name="SentinelMiddle",
+            personal_notes="SENTINEL-NOTES-b17",
+            categories=["SENTINEL-CATEGORY-b18"],
             config=_CFG,
         )
 
@@ -617,6 +1038,11 @@ class TestContacts:
             # `title` is Graph's name prefix ("Dr."), `jobTitle` the job (#119).
             '"title": "SENTINEL-TITLE-b12"',
             '"jobTitle": "SENTINEL-JOBTITLE-b13"',
+            # A date in, an instant out: Graph's `birthday` is a DateTimeOffset.
+            '"birthday": "1987-06-05T11:59:00+00:00"',
+            '"middleName": "SentinelMiddle"',
+            '"personalNotes": "SENTINEL-NOTES-b17"',
+            '"categories": ["SENTINEL-CATEGORY-b18"]',
         )
 
     async def test_create_contact_job_title_never_becomes_the_name_prefix(self):
@@ -643,6 +1069,7 @@ class TestContacts:
             last_name="SentinelLast2",
             email="sentinel.contact2@example.com",
             phone="+15555550101",
+            company="SENTINEL-COMPANY-b16",
             job_title="SENTINEL-JOBTITLE-b14",
             home_address={
                 "street": "SentinelStreet2",
@@ -653,6 +1080,10 @@ class TestContacts:
             },
             business_address={"city": "SentinelBusinessCity2"},
             other_address={"city": "SentinelOtherCity2"},
+            birthday="1988-07-06",
+            middle_name="SentinelMiddle2",
+            personal_notes="SENTINEL-NOTES-b19",
+            categories=["SENTINEL-CATEGORY-b20", "SENTINEL-CATEGORY-b21"],
             config=_CFG,
         )
 
@@ -662,6 +1093,7 @@ class TestContacts:
             "SentinelLast2",
             "sentinel.contact2@example.com",
             "+15555550101",
+            '"companyName": "SENTINEL-COMPANY-b16"',
             '"jobTitle": "SENTINEL-JOBTITLE-b14"',
             # An address is a nested model, so "reaches the wire" also means
             # kiota serialized the child object under the right camelCase keys —
@@ -673,7 +1105,54 @@ class TestContacts:
             '"countryOrRegion": "SentinelCountry2"',
             '"businessAddress": {"city": "SentinelBusinessCity2"}',
             '"otherAddress": {"city": "SentinelOtherCity2"}',
+            '"birthday": "1988-07-06T11:59:00+00:00"',
+            '"middleName": "SentinelMiddle2"',
+            '"personalNotes": "SENTINEL-NOTES-b19"',
+            '"categories": ["SENTINEL-CATEGORY-b20", "SENTINEL-CATEGORY-b21"]',
         )
+
+    async def test_update_contact_can_change_the_company(self):
+        """Create sets `company`; update could not, so a job change left the old employer."""
+        builder = MagicMock()
+        builder.patch = AsyncMock()
+        client = MagicMock()
+        client.me.contacts.by_contact_id.return_value = builder
+
+        await contacts.update_contact(
+            client, contact_id="AAMkAG123=", company="Contoso Ltd", config=_CFG
+        )
+
+        body = wire(builder.patch.call_args[0][0])
+        assert '"companyName": "Contoso Ltd"' in body
+        assert '"jobTitle"' not in body
+
+    async def test_update_contact_categories_replace_the_list_and_empty_clears_it(self):
+        """Graph replaces a contact's categories with the list sent; [] removes them all."""
+        builder = MagicMock()
+        builder.patch = AsyncMock()
+        client = MagicMock()
+        client.me.contacts.by_contact_id.return_value = builder
+
+        await contacts.update_contact(client, contact_id="AAMkAG123=", categories=[], config=_CFG)
+
+        body = wire(builder.patch.call_args[0][0])
+        assert '"categories": []' in body
+
+    async def test_update_contact_leaves_categories_alone_unless_given(self):
+        """A notes edit must not touch the categories (or anything else)."""
+        builder = MagicMock()
+        builder.patch = AsyncMock()
+        client = MagicMock()
+        client.me.contacts.by_contact_id.return_value = builder
+
+        await contacts.update_contact(
+            client, contact_id="AAMkAG123=", personal_notes="Met at the fair", config=_CFG
+        )
+
+        body = wire(builder.patch.call_args[0][0])
+        assert '"personalNotes": "Met at the fair"' in body
+        assert '"categories"' not in body
+        assert '"middleName"' not in body
 
     async def test_update_contact_can_correct_the_name_prefix(self):
         """#119 follow-up: a job stuck in the prefix was only fixable by recreating."""
@@ -782,6 +1261,68 @@ class TestContacts:
 
         assert_on_wire(builder.patch.call_args[0][0], '"businessPhones": []', '"homePhones": []')
         assert '"mobilePhone"' not in wire(builder.patch.call_args[0][0])
+
+    async def test_update_contact_merged_addresses_reach_the_wire(self):
+        """`add_emails` / `remove_emails` send the whole merged list, and nothing else.
+
+        The kept address goes back with the `name` it was read with, the added one
+        with none, and the removed one not at all. A PATCH replaces the collection,
+        so an address missing here is an address deleted.
+        """
+        stored = MagicMock(spec=["address", "name"])
+        stored.address = "sentinel.kept@example.com"
+        stored.name = "SENTINEL-NAME-b16"
+        dropped = MagicMock(spec=["address", "name"])
+        dropped.address = "sentinel.dropped@example.com"
+        dropped.name = None
+        current = MagicMock(spec=["email_addresses", "additional_data"])
+        current.email_addresses = [stored, dropped]
+        current.additional_data = {"@odata.etag": 'W/"sentinel"'}
+
+        builder = MagicMock()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock()
+        client = MagicMock()
+        client.me.contacts.by_contact_id.return_value = builder
+
+        await contacts.update_contact(
+            client,
+            contact_id="AAMkAG123=",
+            add_emails=["sentinel.added@example.com"],
+            remove_emails=["sentinel.dropped@example.com"],
+            config=_CFG,
+        )
+
+        model = builder.patch.call_args[0][0]
+        assert_on_wire(
+            model,
+            '"emailAddresses": [{"address": "sentinel.kept@example.com", '
+            '"name": "SENTINEL-NAME-b16"}, {"address": "sentinel.added@example.com"}]',
+        )
+        assert "sentinel.dropped@example.com" not in wire(builder.patch.call_args[0][0])
+
+    async def test_update_contact_removing_every_address_sends_an_empty_list(self):
+        current = MagicMock(spec=["email_addresses", "additional_data"])
+        only = MagicMock(spec=["address", "name"])
+        only.address = "sentinel.only@example.com"
+        only.name = "Only"
+        current.email_addresses = [only]
+        current.additional_data = {}
+
+        builder = MagicMock()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock()
+        client = MagicMock()
+        client.me.contacts.by_contact_id.return_value = builder
+
+        await contacts.update_contact(
+            client,
+            contact_id="AAMkAG123=",
+            remove_emails=["sentinel.only@example.com"],
+            config=_CFG,
+        )
+
+        assert_on_wire(builder.patch.call_args[0][0], '"emailAddresses": []')
 
     async def test_phone_type_defaults_to_mobile(self):
         """Today's behaviour stays the default: existing callers are unaffected."""

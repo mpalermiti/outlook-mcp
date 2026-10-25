@@ -1,11 +1,13 @@
 """Tests for MCP server tool registration."""
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from outlook_mcp.errors import GraphAPIError
 from outlook_mcp.server import _wrap_tool_errors, mcp
+from outlook_mcp.toolsets import parse_toolsets
 
 EXPECTED_TOOLS = [
     # Auth (3)
@@ -34,12 +36,15 @@ EXPECTED_TOOLS = [
     # Calendar read (3)
     "outlook_list_events",
     "outlook_get_event",
+    "outlook_find_event_by_key",
     "outlook_list_events_delta",
     # Calendar write (4)
     "outlook_create_event",
     "outlook_update_event",
     "outlook_delete_event",
     "outlook_rsvp",
+    "outlook_attach_to_event",
+    "outlook_remove_event_attachment",
     # ── Tier 2 ──────────────────────────────────────────
     # Contacts (7)
     "outlook_list_contacts",
@@ -96,23 +101,30 @@ EXPECTED_TOOLS = [
 ]
 
 
+def _expected_tool_names() -> set[str]:
+    """The explicit documents opt-in adds one tool to the 71 default names."""
+    expected = set(EXPECTED_TOOLS)
+    if "documents" in (parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")) or set()):
+        expected.add("outlook_read_attachment")
+    return expected
+
+
 def test_tool_count():
-    """All 68 tools are registered (auth is CLI-only now)."""
+    """71 default tools, or 72 when the documents group is explicitly enabled."""
     registered = set(mcp._tool_manager._tools.keys())
-    assert len(registered) == 68
+    assert len(registered) == len(_expected_tool_names())
 
 
 def test_all_tools_registered():
     """Every expected tool name is registered on the server."""
     registered = set(mcp._tool_manager._tools.keys())
-    for name in EXPECTED_TOOLS:
-        assert name in registered, f"Missing tool: {name}"
+    assert registered == _expected_tool_names()
 
 
 def test_no_unexpected_tools():
     """No extra tools beyond the expected set."""
     registered = set(mcp._tool_manager._tools.keys())
-    expected = set(EXPECTED_TOOLS)
+    expected = _expected_tool_names()
     extra = registered - expected
     assert not extra, f"Unexpected tools registered: {extra}"
 
@@ -120,6 +132,38 @@ def test_no_unexpected_tools():
 def test_server_metadata():
     """Server has correct name."""
     assert mcp.name == "outlook-mcp"
+
+
+@pytest.mark.parametrize(
+    ("selection", "enabled"),
+    [("", False), ("mail,attachments", False), ("mail,attachments,documents", True)],
+)
+def test_document_instructions_only_reach_clients_with_the_reader(selection, enabled):
+    import json
+    import subprocess
+    import sys
+
+    probe = """import asyncio,json
+from mcp.client import Client
+from outlook_mcp.server import mcp
+async def main():
+    async with Client(mcp) as client:
+        tools=(await client.list_tools()).tools
+        payload={"instructions":client.instructions or "", "tools":[t.name for t in tools]}
+        print(json.dumps(payload))
+asyncio.run(main())
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        env={**os.environ, "OUTLOOK_MCP_TOOLSETS": selection},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    received = json.loads(result.stdout.strip().splitlines()[-1])
+    assert ("outlook_read_attachment" in received["instructions"]) is enabled
+    assert ("outlook_read_attachment" in received["tools"]) is enabled
 
 
 def test_tools_have_descriptions():
@@ -303,6 +347,120 @@ async def test_wrap_tool_errors_end_to_end_via_mocked_implementation():
     assert "retry" in exc_info.value.action.lower()
 
 
+class TestUpdateContactArgumentOrder:
+    """`server.py` hands `update_contact` its arguments positionally, and `company`,
+    `title` and `job_title` are three neighbouring `str | None` slots (#173). Swapped
+    in one file only, a new employer would land in the name prefix and show up in the
+    display name, the #119 bug again. As in the calendar tests above, these run the
+    real handler behind the real wrapper and assert on the patch that reaches Graph,
+    one value at a time, since a test passing all three would still pass a swap.
+    """
+
+    @staticmethod
+    async def _update(**fields):
+        from unittest.mock import AsyncMock
+
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        builder = MagicMock()
+        builder.patch = AsyncMock()
+        sdk = MagicMock()
+        sdk.me.contacts.by_contact_id.return_value = builder
+        client = MagicMock()
+        client.sdk_client = sdk
+
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=Config(client_id="test")),
+        ):
+            await server_mod.outlook_update_contact(MagicMock(), contact_id="AAMkAG123=", **fields)
+        return builder.patch.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_company_alone_lands_in_company_name(self):
+        contact = await self._update(company="Contoso Ltd")
+        assert contact.company_name == "Contoso Ltd"
+        assert contact.title is None
+        assert contact.job_title is None
+
+    @pytest.mark.asyncio
+    async def test_title_alone_lands_in_the_name_prefix(self):
+        contact = await self._update(title="Dr.")
+        assert contact.title == "Dr."
+        assert contact.company_name is None
+        assert contact.job_title is None
+
+    @pytest.mark.asyncio
+    async def test_job_title_alone_lands_in_job_title(self):
+        contact = await self._update(job_title="Engineer")
+        assert contact.job_title == "Engineer"
+        assert contact.company_name is None
+        assert contact.title is None
+
+    @pytest.mark.asyncio
+    async def test_middle_name_alone_lands_in_middle_name(self):
+        contact = await self._update(middle_name="Quincy")
+        assert contact.middle_name == "Quincy"
+        assert contact.personal_notes is None
+        assert contact.given_name is None
+
+    @pytest.mark.asyncio
+    async def test_personal_notes_alone_land_in_personal_notes(self):
+        contact = await self._update(personal_notes="Met at the fair")
+        assert contact.personal_notes == "Met at the fair"
+        assert contact.middle_name is None
+
+    @pytest.mark.asyncio
+    async def test_categories_alone_land_in_categories(self):
+        contact = await self._update(categories=["Suppliers"])
+        assert contact.categories == ["Suppliers"]
+        assert contact.personal_notes is None
+
+
+class TestCreateContactArgumentOrder:
+    """The same positional hand-off on create: `middle_name` and `personal_notes`
+    are neighbouring `str | None` slots after `birthday`, and a swap would file a
+    note as a name, or a name as a note, with nothing raised."""
+
+    @staticmethod
+    async def _create(**fields):
+        from unittest.mock import AsyncMock
+
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        sdk = MagicMock()
+        sdk.me.contacts.post = AsyncMock(return_value=MagicMock(id="C1"))
+        client = MagicMock()
+        client.sdk_client = sdk
+
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=Config(client_id="test")),
+        ):
+            await server_mod.outlook_create_contact(MagicMock(), first_name="Jane", **fields)
+        return sdk.me.contacts.post.call_args[0][0]
+
+    @pytest.mark.asyncio
+    async def test_middle_name_alone_lands_in_middle_name(self):
+        contact = await self._create(middle_name="Quincy")
+        assert contact.middle_name == "Quincy"
+        assert contact.personal_notes is None
+
+    @pytest.mark.asyncio
+    async def test_personal_notes_alone_land_in_personal_notes(self):
+        contact = await self._create(personal_notes="Met at the fair")
+        assert contact.personal_notes == "Met at the fair"
+        assert contact.middle_name is None
+
+    @pytest.mark.asyncio
+    async def test_categories_alone_land_in_categories(self):
+        contact = await self._create(categories=["Suppliers"])
+        assert contact.categories == ["Suppliers"]
+        assert contact.personal_notes is None
+
+
 class TestCalendarWriteArgumentOrder:
     """`server.py` hands both calendar write tools their arguments positionally.
 
@@ -434,6 +592,134 @@ class TestCalendarWriteArgumentOrder:
         event = sdk.me.events.post.call_args[0][0]
         assert event.start.time_zone == "Europe/London"
         assert event.show_as is None
+
+    @staticmethod
+    def _sdk_with_a_second_calendar():
+        from unittest.mock import AsyncMock
+
+        cal = MagicMock()
+        cal.name, cal.id, cal.can_edit = "Kids", "KIDS77=", True
+        sdk = MagicMock()
+        sdk.me.calendars.get = AsyncMock(return_value=MagicMock(value=[cal], odata_next_link=None))
+        sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        secondary = MagicMock()
+        secondary.events.post = AsyncMock(return_value=MagicMock(id="E2", subject="Review"))
+        sdk.me.calendars.by_calendar_id = MagicMock(return_value=secondary)
+        return sdk, secondary
+
+    @pytest.mark.asyncio
+    async def test_calendar_alone_is_not_read_as_show_as(self):
+        """`calendar` is appended after `show_as`, the slot a swap would put it in.
+
+        Swapped, `calendar="Kids"` raises `Invalid show_as: Kids`, and only when
+        a value is supplied.
+        """
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        sdk, secondary = self._sdk_with_a_second_calendar()
+        client = MagicMock()
+        client.sdk_client = sdk
+
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=Config(client_id="test")),
+        ):
+            await server_mod.outlook_create_event(
+                self._ctx(),
+                subject="Review",
+                start="2026-09-07T12:30:00Z",
+                end="2026-09-07T13:00:00Z",
+                calendar="Kids",
+            )
+
+        sdk.me.calendars.by_calendar_id.assert_called_once_with("KIDS77=")
+        event = secondary.events.post.call_args[0][0]
+        assert event.show_as is None
+        sdk.me.events.post.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_show_as_beside_calendar_is_not_read_as_a_calendar(self):
+        """The other direction: swapped, `show_as` is looked up as a calendar name."""
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        sdk, secondary = self._sdk_with_a_second_calendar()
+        client = MagicMock()
+        client.sdk_client = sdk
+
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=Config(client_id="test")),
+        ):
+            await server_mod.outlook_create_event(
+                self._ctx(),
+                subject="Review",
+                start="2026-09-07T12:30:00Z",
+                end="2026-09-07T13:00:00Z",
+                show_as="tentative",
+            )
+
+        sdk.me.calendars.get.assert_not_called()
+        event = sdk.me.events.post.call_args[0][0]
+        assert event.show_as.value == "tentative"
+
+    @pytest.mark.asyncio
+    async def test_key_alone_is_not_read_as_show_as(self):
+        """`key` is appended after `show_as`; swapped, it raises `Invalid show_as`."""
+        from unittest.mock import AsyncMock
+
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        sdk = AsyncMock()
+        sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        client = MagicMock()
+        client.sdk_client = sdk
+
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=Config(client_id="test")),
+        ):
+            await server_mod.outlook_create_event(
+                self._ctx(),
+                subject="Review",
+                start="2026-09-07T12:30:00Z",
+                end="2026-09-07T13:00:00Z",
+                key="booking:ABC123",
+            )
+
+        event = sdk.me.events.post.call_args[0][0]
+        assert event.show_as is None
+        assert event.single_value_extended_properties[0].value == "booking:ABC123"
+
+    @pytest.mark.asyncio
+    async def test_update_key_alone_is_not_read_as_a_timezone(self):
+        """`key` is appended after `timezone`; swapped, the call is refused for
+        lacking start and end."""
+        from unittest.mock import AsyncMock
+
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        sdk = MagicMock()
+        sdk.me.events.by_event_id = MagicMock(return_value=builder)
+        client = MagicMock()
+        client.sdk_client = sdk
+
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=Config(client_id="test")),
+        ):
+            await server_mod.outlook_update_event(
+                self._ctx(), event_id="AAMkAG123=", key="booking:ABC123"
+            )
+
+        event = builder.patch.call_args[0][0]
+        assert event.single_value_extended_properties[0].value == "booking:ABC123"
+        assert event.start is None
 
     @pytest.mark.asyncio
     async def test_update_event_arguments_land_in_the_right_slots(self):

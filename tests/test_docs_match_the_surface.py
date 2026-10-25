@@ -13,13 +13,17 @@ tool added or removed reddens a test instead of quietly making a doc wrong.
 Prose descriptions are deliberately not pinned. Only facts the code settles are.
 """
 
+import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from mcp.client import Client
 
-from outlook_mcp import toolsets
+from outlook_mcp import server, toolsets
 from outlook_mcp.permissions import VALID_CATEGORIES
 from outlook_mcp.server import mcp
 
@@ -27,7 +31,39 @@ ROOT = Path(__file__).resolve().parent.parent
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 SKILL = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 
-REGISTERED = set(mcp._tool_manager._tools)
+LOADED = set(mcp._tool_manager._tools)
+REGISTERED = {
+    name for name in vars(server) if name.startswith("outlook_") and callable(getattr(server, name))
+}
+
+
+def test_default_surface_omits_only_optional_groups():
+    """Pin a fresh default process even when this suite enables every group."""
+    probe = (
+        "import json\n"
+        "from outlook_mcp.server import mcp\n"
+        "print(json.dumps(sorted(mcp._tool_manager._tools)))\n"
+    )
+    env = {**os.environ}
+    env.pop("OUTLOOK_MCP_TOOLSETS", None)
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    default = set(json.loads(result.stdout.strip().splitlines()[-1]))
+    assert len(default) == 71
+    assert default == toolsets.select_kept_tools(list(REGISTERED), None)
+    assert "outlook_read_attachment" not in default
+
+
+def test_current_surface_follows_the_requested_toolsets():
+    selected = toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS"))
+    assert LOADED == toolsets.select_kept_tools(list(REGISTERED), selected)
+
 
 # The README's "Features" list names its categories in words; their counts are
 # only checkable against its own "Tool Reference" tables, which carry the names.
@@ -76,15 +112,16 @@ def test_each_readme_feature_count_matches_its_reference_table():
 
 @pytest.mark.parametrize("doc", ["README.md", "SKILL.md"])
 def test_every_total_tool_count_is_the_registered_count(doc):
-    """`68 tools`, `Tools (68)`, `all 68` and `instead of 68` all mean the whole surface.
+    """`72 tools`, `Tools (72)` and `all 72` describe the full declared surface.
 
     A historical measurement names its own surface with a hyphen (`the 62-tool
-    surface`) and is not matched.
+    surface`) and is not matched. The selected/default comparison is checked
+    separately against those two registrations below.
     """
     text = (ROOT / doc).read_text(encoding="utf-8")
     totals = re.findall(
         r"\b(\d+) (?:typed Graph |discrete )?tools\b(?! instead)"
-        r"|Tools \((\d+)\)|\b[Aa]ll (\d+)\b|instead of (\d+)\b",
+        r"|Tools \((\d+)\)|\b[Aa]ll (\d+)\b",
         text,
     )
     numbers = {int(n) for groups in totals for n in groups if n}
@@ -93,13 +130,14 @@ def test_every_total_tool_count_is_the_registered_count(doc):
 
 
 def test_the_readme_toolset_example_loads_what_it_says():
-    """The example's tool count is what that selection, plus `account`, registers."""
+    """Compare the example's selected and default registrations, including `account`."""
     m = re.search(r'OUTLOOK_MCP_TOOLSETS="([a-z,]+)"', README)
     assert m, "README OUTLOOK_MCP_TOOLSETS example not found"
-    groups = set(m.group(1).split(",")) | toolsets.ALWAYS_ON_GROUPS
-    loaded = sum(1 for g in toolsets.TOOL_GROUPS.values() if g in groups)
-    stated = re.search(r"(\d+) tools instead of", README)
-    assert stated and int(stated.group(1)) == loaded
+    selected = toolsets.select_kept_tools(list(REGISTERED), set(m.group(1).split(",")))
+    default = toolsets.select_kept_tools(list(REGISTERED), None)
+    stated = re.search(r"(\d+) tools instead of (\d+)\b", README)
+    assert stated, "README selected/default tool comparison not found"
+    assert (int(stated.group(1)), int(stated.group(2))) == (len(selected), len(default))
 
 
 def test_the_readme_toolset_groups_are_the_selectable_ones():
@@ -120,6 +158,19 @@ def test_the_concise_tools_named_are_the_ones_that_take_concise():
     assert readme and skill, "the concise-mode tool lists were not found"
     for found in (readme, skill):
         assert set(re.findall(r"`(outlook_\w+)`", found.group(1))) == takes_concise
+
+
+def test_the_counts_no_table_carries_match_the_surface():
+    # Two places state the tool count in prose, and nothing above reads either: the
+    # MCP registry's description in server.json, and the README's "isn't for you"
+    # line. A tool added without them leaves the registry showing the old number.
+    server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+    registry = re.search(r"\((\d+) tools\)", server["description"])
+    assert registry, "server.json description no longer says '(N tools)'"
+    assert int(registry.group(1)) == len(REGISTERED), "server.json's tool count is stale"
+    prose = re.search(r"this has (\d+) tools", README)
+    assert prose, "README 'this has N tools' line not found"
+    assert int(prose.group(1)) == len(REGISTERED), "the README's 'this has N tools' is stale"
 
 
 def test_the_readme_category_table_is_the_accepted_set():

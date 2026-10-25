@@ -57,7 +57,9 @@ async def fetch_all_calendars(graph_client: Any, top: int = 100) -> list[Any]:
     return collected
 
 
-async def resolve_calendar_id(graph_client: Any, calendar_ref: str | None) -> str | None:
+async def resolve_calendar_id(
+    graph_client: Any, calendar_ref: str | None, *, writable: bool = False
+) -> str | None:
     """Resolve a caller-supplied calendar reference to a Graph calendar ID.
 
     Returns ``None`` for the default calendar — ``None``, blank, or "primary"
@@ -70,6 +72,14 @@ async def resolve_calendar_id(graph_client: Any, calendar_ref: str | None) -> st
 
     Raises ValueError, naming the calendars that do exist, when nothing matches
     or more than one name does.
+
+    ``writable=True`` is for a write. A calendar Graph lists with
+    ``canEdit: false`` (a birthdays or holiday calendar, a view-only share) is
+    then refused here, naming the calendars that can be written, because Graph's
+    own answer is a 403 whose hint blames the account type. Only an explicit
+    ``false`` refuses: a calendar listed without ``canEdit`` goes through, and
+    Graph has the last word. The default calendar needs no listing for this —
+    it is the user's own.
     """
     if calendar_ref is None:
         return None
@@ -78,10 +88,27 @@ async def resolve_calendar_id(graph_client: Any, calendar_ref: str | None) -> st
         return None
 
     calendars = await fetch_all_calendars(graph_client)
+    found = _match(calendars, trimmed)
+    if writable and getattr(found, "can_edit", None) is False:
+        name = sanitize_output((found.name or trimmed)[:50])
+        others = ", ".join(
+            sanitize_output(cal.name or "(unnamed)")
+            for cal in calendars
+            if cal is not found and getattr(cal, "can_edit", None) is not False
+        )
+        raise ValueError(
+            f"Calendar '{name}' is read-only to this account (Graph lists it with "
+            f"canEdit: false), so nothing can be written to it. Calendars you can "
+            f"write to: {others or '(none listed)'}."
+        )
+    return found.id
 
+
+def _match(calendars: list[Any], trimmed: str) -> Any:
+    """The one calendar ``trimmed`` names: an exact ID first, then a display name."""
     for cal in calendars:
         if cal.id and cal.id == trimmed:
-            return cal.id
+            return cal
 
     wanted = _fold(trimmed)
     matches = [cal for cal in calendars if cal.name and _fold(cal.name) == wanted]
@@ -92,7 +119,7 @@ async def resolve_calendar_id(graph_client: Any, calendar_ref: str | None) -> st
             # None means "the default calendar" to the caller, so a calendar
             # Graph returned without an ID must not fall through as one.
             raise ValueError(f"Calendar '{shown}' was returned with no ID; cannot query it.")
-        return matches[0].id
+        return matches[0]
     if len(matches) > 1:
         candidates = ", ".join(f"{sanitize_output(cal.name)} = {cal.id}" for cal in matches)
         raise ValueError(
