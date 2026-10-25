@@ -44,12 +44,12 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 72 discrete tools so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 72 discrete tools (71 load by default; the document reader is [opt-in](#toolset-selection-optional--outlook_mcp_toolsets)) so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
 - **[OpenClaw](https://openclaw.ai)** — native MCP support, available via [ClawHub](https://clawhub.ai/skills?q=outlook-mcp)
-- **[Claude Code](https://claude.com/claude-code)** — add to `~/.claude/settings.json` under `mcpServers`
+- **[Claude Code](https://claude.com/claude-code)** — `claude mcp add outlook -- outlook-mcp`
 - **[Cursor](https://cursor.com)** — MCP-compatible
 - **Any MCP client** — it's a standard stdio MCP server, with an opt-in [streamable-HTTP transport](#remote--http-transport-optional--outlook_mcp_transport) for clients that cannot spawn a local process
 
@@ -59,7 +59,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 ## Features
 
-**72 tools** across 13 categories:
+**72 tools** across 13 categories. 71 load by default; `outlook_read_attachment` is in the opt-in `documents` group (see [Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets)).
 
 - **Auth (1)** -- auth status check (login is via CLI)
 - **Mail Read (7)** -- list inbox (with Focused Inbox and uncategorized filters), read message, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
@@ -70,7 +70,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 - **Contacts (7)** -- list, search, get, create, update, delete, delta-sync changes
 - **To Do (14)** -- task lists, tasks (list/get/create/update/complete/delete), checklist items (add/update/delete), task attachments (list/download/upload/delete)
 - **Drafts (5)** -- list, create (new, or a reply, reply-all or forward in the message's thread), update, send, delete
-- **Attachments (6)** -- list, download, read document text, send-with-attachments, attach-to-draft, remove-draft-attachment
+- **Attachments (6)** -- list, download, read document text (opt-in), send-with-attachments, attach-to-draft, remove-draft-attachment
 - **Folder Management (3)** -- create, rename, delete mail folders
 - **Threading and Batch (3)** -- list thread, copy message, batch triage
 - **User and Admin (4)** -- whoami, list calendars, list categories, mail tips
@@ -93,7 +93,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 Two pure-code upgrades that make the tools cheaper and more recoverable for AI agents:
 
-- **Concise mode** — pass `concise=True` to the six high-volume read tools (`outlook_list_inbox`, `outlook_read_message`, `outlook_read_messages`, `outlook_search_mail`, `outlook_list_events`, `outlook_list_thread`) to drop bulky fields: full message bodies, quoted prior-message text in threads, body previews and categories on inbox listings — typical payload reduction ~10×. On `outlook_list_events` the trade is different and smaller: the attendee list becomes a count, and `organizer`, `response_status`, `type` and `show_as` come off, so a concise scan cannot tell a recurring occurrence from a one-off. Default `concise=False` preserves the existing response shape — strict backward compat.
+- **Concise mode** — pass `concise=True` to the six high-volume read tools (`outlook_list_inbox`, `outlook_read_message`, `outlook_read_messages`, `outlook_search_mail`, `outlook_list_events`, `outlook_list_thread`) to drop bulky fields: full message bodies, quoted prior-message text in threads, body previews and categories on inbox listings — typical payload reduction ~10×. On `outlook_list_events` the trade is different and smaller: `organizer`, `response_status`, `type`, `show_as` and `key` come off, `is_organizer` and `attendees_count` are added, and `is_online` is spelled `is_online_meeting`, so a concise scan cannot tell a recurring occurrence from a one-off. Default `concise=False` preserves the existing response shape — strict backward compat.
 
 - **Structured Graph errors** — every tool turns msgraph SDK exceptions into a tool error whose text carries Graph's message and a recovery hint: re-auth on 401, a link to the repo's [ROADMAP dead-ends list](https://github.com/mpalermiti/outlook-mcp/blob/main/ROADMAP.md#investigated-and-not-viable) on 403/`ErrorAccessDenied`, re-list on 404/`ErrorItemNotFound`, back-off on 429, retry on 503 — except on the tools that can email someone (mail, invitations, event updates, RSVPs), where a 5xx says the write may already have gone through and where to check, because those writes are never re-sent after one. `OutlookMCPError` subclasses and validation errors pass through unchanged.
 
@@ -144,6 +144,10 @@ uv tool install outlook-graph-mcp
 # or: pipx install outlook-graph-mcp
 # or: pip install outlook-graph-mcp
 ```
+
+To read PDF and XLSX attachments as text, install the optional `documents` extra instead
+(`uv tool install 'outlook-graph-mcp[documents]'`) and enable the opt-in `documents` group;
+see [Attachments](#attachments).
 
 **Option B — from source:**
 
@@ -217,19 +221,20 @@ Restart the OpenClaw gateway after registering. See the [OpenClaw MCP docs](http
 Run this once on the machine where the MCP server will run:
 
 ```bash
-uv run outlook-mcp auth
+outlook-mcp auth          # installed from PyPI
+uv run outlook-mcp auth   # from a source checkout
 ```
 
 You'll get a URL and a code. Open the URL in any browser, enter the code, and sign in with your Microsoft account. Tokens are cached in the OS keyring — the MCP server picks them up automatically.
 
 The consent screen lists the full read-write set (`Mail.ReadWrite`, `Mail.Send`, `Calendars.ReadWrite`, `Contacts.ReadWrite`, `Tasks.ReadWrite`, `MailboxSettings.Read`, `User.Read`) — even when the config starts with `read_only: true`, because `read_only` gates the tools, not the token (see [What `read_only` does and does not do](#what-read_only-does-and-does-not-do)), and the scopes a first consent leaves out can never be granted later without logging in again. (The one exception is `read_only_consent: true`, which asks for the read permissions only; it exists for a separate read-only app, described under the same heading.) Every request afterwards — silent refresh and each Graph call — uses the `.default` scope, which on an already-consented account means exactly "the set you granted". That ordering is deliberate: on personal accounts a first consent asking only for `.default` can land a session with no delegated permissions, which then can't be redeemed (`AADSTS70000`) without logging in again ([#82](https://github.com/mpalermiti/outlook-mcp/issues/82)).
 
-Other CLI commands:
+Other CLI commands (prefix `uv run` from a source checkout):
 
 ```bash
-uv run outlook-mcp status   # Check auth status
-uv run outlook-mcp logout   # Clear credentials
-uv run outlook-mcp serve    # Start MCP server (default, used by OpenClaw/Claude)
+outlook-mcp status   # Check auth status
+outlook-mcp logout   # Remove this instance's auth record (the OS token cache is left to age out)
+outlook-mcp serve    # Start MCP server (default; stdio, or HTTP with OUTLOOK_MCP_TRANSPORT)
 ```
 
 ---
@@ -263,7 +268,7 @@ The path varies by distro: Debian/Ubuntu use `/etc/ssl/certs/ca-certificates.crt
 
 ### Token cache stored unencrypted (Linux)
 
-A one-time startup warning about the token cache falling back to plaintext means `libsecret`/PyGObject isn't importable — see [Privacy and Security](#privacy-and-security) for the fix.
+On Linux without an encrypted store (`libsecret`/PyGObject not importable, or no running Secret Service), `outlook-mcp auth` and the server refuse to write the token cache in cleartext, and every tool call says why. Install the system packages for an encrypted store — see [Privacy and Security](#privacy-and-security) — or set `allow_unencrypted_token_cache: true` to accept a plaintext cache file, after which the server logs a one-time warning at startup.
 
 ---
 
@@ -275,6 +280,13 @@ relative offset: `7d` is seven days **ago**, `+7d` is seven days **from now**, a
 this moment. Units are `m`, `h`, `d`, `w`. Bare means *ago*, matching the usual CLI
 convention, so a due date in the future needs the `+`. Zone-less input is interpreted in your
 configured `timezone`; responses are always UTC.
+
+**Folders.** Every `folder` argument, `outlook_create_folder`'s `parent_folder` and
+`outlook_batch_triage`'s move target take a well-known name (`inbox`, `junkemail`), a display
+name (`Junk Email`), a Graph ID, or a path: `Inbox/Travel/Flights` is Flights under Travel under
+Inbox. A `/` inside a folder's own name is written `//` (`Inbox/Q1//Q2`). A display name finds a
+top-level folder of that name first; a name that several nested folders share is refused, and
+the error lists their paths. `outlook_rename_folder` and `outlook_delete_folder` take an ID.
 
 ### Auth
 
@@ -288,19 +300,19 @@ configured `timezone`; responses are always UTC.
 
 | Tool | Description |
 |------|-------------|
-| `outlook_list_inbox` | List messages in a folder. `folder` accepts display names, well-known names, paths (`Inbox/Travel/Flights`), or Graph IDs. Filter by read status, sender, date range, Focused Inbox classification. Pagination via `skip`. |
-| `outlook_read_message` | Get full message by ID, or by its Message-ID header value (`<abc@example.com>`, matched exactly; the response's `id` is the Graph ID the other tools take). Format: `text`, `html`, or `full` (both). Pass `include_deferred_send=True` to also surface the draft's scheduled delivery time. Pass `include_sender_auth=True` to add `sender_authentication`, Microsoft's verdict on the From domain: `authenticated`, the `dkim`, `dmarc` and `compauth` results, and a short `reason`. Only Microsoft's own topmost `Authentication-Results` header counts, and `authenticated` is true only for a pass aligned with the From domain. It vouches for `from_domain` only, never for the display name, and `false` means unverified, not spoofed. |
+| `outlook_list_inbox` | List messages in a folder. `folder` accepts display names, well-known names, paths (`Inbox/Travel/Flights`), or Graph IDs. Filter by read status, sender, date range, Focused Inbox classification, or no categories (`uncategorized_only`). Pagination via `cursor` (or `skip`). |
+| `outlook_read_message` | Get full message by ID, or by its Message-ID header value (`<abc@example.com>`, matched exactly; the response's `id` is the Graph ID the other tools take). Format: `text`, `html`, or `full` (both). Pass `include_deferred_send=True` to also surface the draft's scheduled delivery time. Pass `include_sender_auth=True` to add `sender_authentication`, Microsoft's verdict on the From domain: `authenticated`, `from_domain`, the `dkim`, `dmarc` and `compauth` results, and a short `reason`. Only Microsoft's own topmost `Authentication-Results` header counts, and `authenticated` is true only for a pass aligned with the From domain. It vouches for `from_domain` only, never for the display name, and `false` means unverified, not spoofed. |
 | `outlook_read_messages` | Bulk read up to 20 messages by ID via Graph `$batch` in one round-trip. Per-message shape matches `outlook_read_message` byte-for-byte for the same `(format, concise, include_deferred_send, include_sender_auth)`. Partial-failure tolerant: 404s on some IDs surface in `failures[]` without failing the whole call. Use NOT N `outlook_read_message` calls. |
 | `outlook_search_mail` | Search mail using KQL query. Optionally scope to a folder by name, path or ID. A `cursor` continues the search in the folder it started in. Graph has been seen to end a search a little past 250 results without saying so (255–275 on Exchange Online; 275 also observed on Outlook.com), so a last page past 250 carries `incomplete`, a note that older matches may be missing and how to reach them. |
-| `outlook_list_folders` | List mail folders with counts, `parent_id`, and `child_count`. Pass `recursive=true` to walk the full folder tree (subfolders included); each folder then carries its `path`, the form every folder argument accepts. |
-| `outlook_list_inbox_delta` | List only inbox changes since the last call. First call returns a full snapshot plus a `delta_token`; subsequent calls (token passed back) return only added/updated/deleted items. Deletes come back as `{id, is_deleted: True}`. Cursor is stateless — agent persists and replays. |
-| `outlook_changes_since` | One structured "since last call" digest composing mail/events/contacts deltas. Returns counts + `urgent_flagged` mail + top-5 `by_sender` + new/cancelled events. Each resource has an independent `delta_token`; stale-token recovery (HTTP 410) auto-resyncs that resource and surfaces `_meta.resync`. The first call covers the last `fallback_window_hours` (default 24): Mail requests Graph's received-time filter and enforces it client-side when ignored (`_meta.mail_window_fallback`); contacts are kept by last-modified time, and events by the calendar view. `has_more` names any resource the per-call cap stopped mid-sync; replace the stored `delta_tokens` dictionary with the returned one and pass it back; do not merge the dictionaries. It keeps `mail_bootstrap_from` while a mail bootstrap is unfinished, so continuation keeps the original bound and reports it in `window.from`. A reply with no new cursor hands back the token passed in. Designed for recurring agent loops. |
+| `outlook_list_folders` | List mail folders with counts, `parent_id`, and `child_count`. Pass `recursive=true` to walk the full folder tree (subfolders included); each folder then carries its `path`, the form every `folder` argument accepts. |
+| `outlook_list_inbox_delta` | List only inbox changes since the last call. `folder` (default `inbox`) takes a name, path or ID. First call returns a full snapshot plus a `delta_token`; subsequent calls (token passed back) return only added/updated/deleted items. Deletes come back as `{id, is_deleted: True}`. Cursor is stateless — agent persists and replays. |
+| `outlook_changes_since` | One structured "since last call" digest composing mail/events/contacts deltas. Returns counts + `urgent_flagged` mail + top-5 `by_sender` + new/cancelled events. Each resource has an independent `delta_token`; stale-token recovery (HTTP 410) auto-resyncs that resource and surfaces `_meta.resync`. The first call covers the last `fallback_window_hours` (default 24): Mail requests Graph's received-time filter and enforces it client-side when ignored (`_meta.mail_window_fallback`); contacts are kept by last-modified time, and events by the calendar view (the window plus the next 7 days). Where Graph honours the mail filter, later calls keep it: mail received before the window reports only deletes, moves out of the inbox and read/unread changes, not new flags or categories. `has_more` names any resource the per-call cap stopped mid-sync; replace the stored `delta_tokens` dictionary with the returned one and pass it back; do not merge the dictionaries. It keeps `mail_bootstrap_from` while a mail bootstrap is unfinished, so continuation keeps the original bound and reports it in `window.from`. A reply with no new cursor hands back the token passed in. Designed for recurring agent loops. |
 
 ### Mail Write
 
 | Tool | Description |
 |------|-------------|
-| `outlook_send_message` | Send email. Supports TO/CC/BCC, HTML or Markdown body, importance level. |
+| `outlook_send_message` | Send email. Supports TO/CC/BCC, HTML or Markdown body, importance level, `reply_to` and a read receipt (`request_read_receipt`). |
 | `outlook_reply` | Reply or reply-all to a message, the text above the quoted original. Plain text keeps its paragraphs, line breaks and `- ` lists; a plain-text thread gets a plain-text reply. |
 | `outlook_forward` | Forward a message to one or more recipients with optional comment, which keeps its line breaks like a reply's text. |
 
@@ -333,11 +345,11 @@ Bodies are plain text unless `is_html=True` (HTML, sent as written) or `is_markd
 
 | Tool | Description |
 |------|-------------|
-| `outlook_create_event` | Create event with location and attendees. (`is_online` has no effect on personal accounts — Graph ignores `isOnlineMeeting` for consumer mailboxes.) Pass `recurrence` to create a **series**: a shorthand (`daily`, `weekdays`, `weekly`, `monthly`, `yearly`, anchored on `start`) or a full [Graph recurrence object](https://learn.microsoft.com/graph/api/resources/patternedrecurrence) for anything else. `range.startDate` defaults to the event's start date. `show_as` sets the free/busy status Outlook labels "Show as" — `free`, `tentative`, `busy`, `oof` (out of office), `workingElsewhere`, or `unknown`; omit it and Graph applies its own default of `busy`. `calendar` creates it in another calendar, resolved as `outlook_list_events` resolves it: omit (or `"primary"`) for the default, otherwise a display name or an ID from `outlook_list_calendars`. A calendar Graph lists as read-only (`canEdit: false`) is refused before anything is sent. The tools that take an event ID need no `calendar`: an ID reaches an event on any of your own calendars. `key` stores your own reference for the event (a booking number, say: 1–128 letters, digits and `. _ : @ -`) in a hidden extended property, so `outlook_find_event_by_key` can find the event again when a change to the same booking arrives. Nothing stops two events sharing a key; look it up before creating. |
+| `outlook_create_event` | Create event with location and attendees. (`is_online` has no effect on personal accounts — Graph ignores `isOnlineMeeting` for consumer mailboxes.) Pass `recurrence` to create a **series**: a shorthand (`daily`, `weekdays`, `weekly`, `monthly`, `yearly`, anchored on `start`) or a full [Graph recurrence object](https://learn.microsoft.com/graph/api/resources/patternedrecurrence) for anything else. `range.startDate` defaults to the event's start date. `timezone` (an IANA name such as `America/Los_Angeles`, never an abbreviation) is the zone the event is anchored in and a series is expanded in; omit it for the config `timezone`. `show_as` sets the free/busy status Outlook labels "Show as" — `free`, `tentative`, `busy`, `oof` (out of office), `workingElsewhere`, or `unknown`; omit it and Graph applies its own default of `busy`. `calendar` creates it in another calendar, resolved as `outlook_list_events` resolves it: omit (or `"primary"`) for the default, otherwise a display name or an ID from `outlook_list_calendars`. A calendar Graph lists as read-only (`canEdit: false`) is refused before anything is sent. The tools that take an event ID need no `calendar`: an ID reaches an event on any of your own calendars. `key` stores your own reference for the event (a booking number, say: 1–128 letters, digits and `. _ : @ -`) in a hidden extended property, so `outlook_find_event_by_key` can find the event again when a change to the same booking arrives. Nothing stops two events sharing a key; look it up before creating. |
 | `outlook_update_event` | Update event fields (subject, time, location, body, attendees, all-day, `show_as`). Only patches changed fields. Pass `recurrence` to turn a single event into a series, or `remove_recurrence=True` to turn a series back into a single event. `attendees` **replaces** the whole guest list and emails invitations/cancellations; `is_all_day` needs `start`+`end` in the same call, while `show_as` patches on its own. Patching a time keeps the zone the event is anchored in; `timezone` (with `start`+`end`) re-anchors it elsewhere, which is how a series created before zones existed gets repaired. A `start`, `end` or `recurrence` patch to a series with edited or deleted occurrences is refused, naming them — Graph would silently discard every one. `key` sets or replaces the event's key and patches on its own; there is no clearing one. |
 | `outlook_delete_event` | Delete a calendar event. |
 | `outlook_rsvp` | RSVP to an event: `accept`, `decline`, or `tentative`. Optionally include a message. |
-| `outlook_attach_to_event` | Attach files to an event — an e-ticket on a flight, say. `attachment_paths` resolve inside `attachments_dir`, as for `outlook_attach_to_draft`; a missing file, or one path outside it, attaches nothing. Files over 3 MB use an upload session. Returns the new attachment IDs (none yet for an upload-session file). Attendees are not sent the files when they are attached; they get them with the event's next update, so on an event with attendees this needs `mail_send` under a restricted `allow_categories`. |
+| `outlook_attach_to_event` | Attach files to an event — an e-ticket on a flight, say. `attachment_paths` resolve inside `attachments_dir`, as for `outlook_attach_to_draft`; a missing file, or one path outside it, attaches nothing. Files over 3 MB use an upload session; a chunk Graph refuses, or an upload it does not report complete, stops the call with an error rather than reporting the file attached. Returns the new attachment IDs (none yet for an upload-session file). Attendees are not sent the files when they are attached; they get them with the event's next update, so on an event with attendees this needs `mail_send` under a restricted `allow_categories`. |
 | `outlook_remove_event_attachment` | Remove one attachment from an event, by the ID `outlook_attach_to_event` returned or `outlook_get_event` lists. |
 
 ### Contacts
@@ -400,19 +412,22 @@ Bodies are plain text unless `is_html=True` (HTML, sent as written) or `is_markd
 > `as_content=True` on either download returns the attachment in the result, up to 10 MB:
 > PNG, JPEG, GIF and WebP up to 5 MB as images, text up to 100,000 characters as text, and
 > anything else, PDFs included, as an embedded resource holding the base64 bytes and their
-> type. Text that carries control characters, or a lone surrogate its charset decoded to,
-> also comes back as that resource, so it arrives unaltered. `attachments` on the two send tools takes inline files,
+> type. An image cut short (a PNG with no end chunk, say) comes back as that resource too.
+> Text that carries control characters, or a lone surrogate its charset decoded to,
+> also comes back as that resource, so it arrives unaltered. `attachments` on
+> `outlook_send_with_attachments` and `outlook_attach_to_draft` takes inline files,
 > `[{name, content_base64, content_type?}]`, up to 3 MB each (Graph's simple-attachment
 > size). The fence still governs every path argument. An inline file is bytes the agent
 > already holds and could already put in a message body, so it widens nothing.
+> `outlook_attach_to_event` and `outlook_upload_task_attachment` take paths only.
 
 | Tool | Description |
 |------|-------------|
 | `outlook_list_attachments` | List attachments on a message. |
 | `outlook_download_attachment` | Download an attachment and save decoded bytes into `attachments_dir`, or return it with `as_content=True`. |
-| `outlook_read_attachment` | Read PDF pages, XLSX cells/formulas/saved results, or text in its declared charset (UTF-8 by default); `offset` / `max_chars` page the text, no file saved. |
-| `outlook_send_with_attachments` | Send a message with attachments read from `attachments_dir` (auto upload session for >3MB) or passed inline in `attachments`. |
-| `outlook_attach_to_draft` | Add attachments from `attachments_dir` (auto upload session for >3MB) or inline in `attachments` to an existing draft. |
+| `outlook_read_attachment` | **Opt-in** (`documents` group, not loaded by default; see below). Read PDF pages, XLSX cells/formulas/saved results, or text in its declared charset (UTF-8 by default); `offset` / `max_chars` page the text, no file saved. |
+| `outlook_send_with_attachments` | Send a message with attachments read from `attachments_dir` (auto upload session for >3MB) or passed inline in `attachments`. If a large upload fails, nothing is sent, and the error names the draft left in Drafts so it can be deleted or finished with `outlook_attach_to_draft` instead of sent twice. |
+| `outlook_attach_to_draft` | Add attachments from `attachments_dir` (auto upload session for >3MB) or inline in `attachments` to an existing draft. A failed large upload is an error, never a file reported as attached. Returns the new attachment IDs (none yet for an upload-session file). |
 | `outlook_remove_draft_attachment` | Remove a single attachment from a draft. |
 
 For **readable document contents** rather than original bytes, use `outlook_read_attachment`.
@@ -422,8 +437,12 @@ extracted text for clients that cannot interpret the embedded binary resource. E
 and their defaults are unchanged.
 
 PDF and XLSX parsing is optional: install `outlook-graph-mcp[documents]` (for example,
-`uv tool install 'outlook-graph-mcp[documents]'`). Enable the opt-in `documents` group with
+`uv tool install 'outlook-graph-mcp[documents]'`, `pipx install 'outlook-graph-mcp[documents]'`,
+`pip install 'outlook-graph-mcp[documents]'`, or `uv sync --extra documents` in a source
+checkout). Enable the opt-in `documents` group with
 `OUTLOOK_MCP_TOOLSETS=mail,attachments,documents` (plus any other groups you need) and restart.
+Naming groups loads only those, so list every group you want; see
+[Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets).
 When enabled, a base install can read text in its declared charset (UTF-8 by default),
 and returns an installation hint for PDF/XLSX. Parser dependencies have bounded versions
 and are imported only in a short-lived worker; they add no requirement to the base install.
@@ -468,8 +487,8 @@ A limit is an explicit error, never a silently partial document.
 | Tool | Description |
 |------|-------------|
 | `outlook_create_folder` | Create mail folder (top-level, or nested under `parent_folder`: a name, path or ID). |
-| `outlook_rename_folder` | Rename a mail folder. |
-| `outlook_delete_folder` | Delete a mail folder (refuses well-known folders). |
+| `outlook_rename_folder` | Rename a mail folder, by ID. |
+| `outlook_delete_folder` | Delete a mail folder by ID (refuses well-known folders). |
 
 ### Threading and Batch
 
@@ -533,6 +552,10 @@ OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"
 
 Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`, `documents`. Unset loads the 71 default schemas; `documents` is off until explicitly named. The full declared surface contains 72 tools. This only affects which tools are advertised; enabled tools behave identically.
 
+Naming any group loads only the groups named, plus `account`, and a name that is not a group matches nothing. So to add `documents` to the default set, name all eleven: `OUTLOOK_MCP_TOOLSETS=mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents`.
+
+The groups are not the headings of the Tool Reference. `mail` holds the mail read, write and triage tools, `outlook_list_thread`, `outlook_copy_message` and `outlook_batch_triage`, but `outlook_list_folders` is in `folders`; the Focused Inbox tools (`outlook_reclassify_message` and the three override tools) are in `admin`, with categories and mail tips; the three `*_delta` tools are in `delta` and `outlook_changes_since` in `digest`; `outlook_list_calendars` is in `calendar`; the two draft-attachment tools are in `drafts` and `outlook_read_attachment` in `documents`; and `account` is `outlook_auth_status` and `outlook_whoami`.
+
 ### Two accounts, two instances (optional) — `OUTLOOK_MCP_CONFIG_DIR`
 
 One server process serves one mailbox. To work against two accounts, register **two client entries** and give each its own settings directory with `OUTLOOK_MCP_CONFIG_DIR` — pair it with `OUTLOOK_MCP_TOOLSETS` so each instance also only loads the tool groups it needs:
@@ -576,17 +599,18 @@ outlook-mcp serve
 
 The client then connects to `https://<your proxy>/mcp` and sends `Authorization: Bearer <token>`.
 
+`OUTLOOK_MCP_TRANSPORT` takes `stdio` (the default, also when unset or empty) or `streamable-http`. Any other value, a port outside 1–65535, a malformed `OUTLOOK_MCP_HTTP_ALLOWED_HOSTS`, or a missing or malformed token stops the server at startup with the reason, before anything binds.
+
 For a container, explicitly set `OUTLOOK_MCP_HTTP_HOST=0.0.0.0` and `OUTLOOK_MCP_HTTP_ALLOWED_HOSTS=mcp.example.com` for the public hostname your proxy forwards. Every public bind prints a plain-HTTP warning before it starts. The token protects against other OS users and browser pages; code running as your OS user can read the client configuration or launch the server itself. Forwarded headers are not trusted.
 
-
-A secret file can replace the environment token: set `OUTLOOK_MCP_HTTP_TOKEN_FILE` to a regular file containing only the token (an ending newline is fine), and unset `OUTLOOK_MCP_HTTP_TOKEN`. Both set is refused. On POSIX the file must belong to the server user with no group or other permissions (`chmod 600`); symlinks are refused. On Windows, restrict the file ACL to the server account yourself; the server does not validate Windows ACLs. File contents and paths are never included in token-file errors.
+A secret file can replace the environment token: set `OUTLOOK_MCP_HTTP_TOKEN_FILE` to a regular file of at most 4096 bytes containing only the token (an ending newline is fine), and unset `OUTLOOK_MCP_HTTP_TOKEN`. Both set is refused. On POSIX the file must belong to the server user with no group or other permissions (`chmod 600`); symlinks are refused. On Windows, restrict the file ACL to the server account yourself; the server does not validate Windows ACLs. File contents and paths are never included in token-file errors.
 
 **This changes who can reach the mailbox.** Over stdio, only the process that started the server can. Over HTTP, one request to the port is enough for anything that holds a token, so the token is the whole of the access control:
 
-- **A token is required on every bind, loopback included.** The server refuses to start without `OUTLOOK_MCP_HTTP_TOKEN`. On loopback, a port with no token would let other OS users or browser pages read the mailbox with one HTTP request. Every request must carry `Authorization: Bearer <token>` or gets `401`. The token is one value of at least 32 characters from `A–Z a–z 0–9 -._~+/`; to change it, restart the server with the new one.
+- **A token is required on every bind, loopback included.** The server refuses to start without a token from `OUTLOOK_MCP_HTTP_TOKEN` or `OUTLOOK_MCP_HTTP_TOKEN_FILE`. On loopback, a port with no token would let other OS users or browser pages read the mailbox with one HTTP request. Every request must carry `Authorization: Bearer <token>` or gets `401`. The token is one value of at least 32 characters from `A–Z a–z 0–9 -._~+/`, at least 8 of them different (trailing `=` padding is allowed); to change it, restart the server with the new one.
 - **Plain HTTP sends the token in the clear.** The server does not terminate TLS. On any bind other machines can reach, the token and everything the tools return cross the network readable by anything on the path, unless a reverse proxy in front of the server terminates TLS. Put it behind one, and let the proxy authenticate callers too if more than one client will reach it.
 - **Host and Origin checks apply to every bind.** Loopback binds accept loopback hosts and origins. `OUTLOOK_MCP_HTTP_ALLOWED_HOSTS` optionally adds comma-separated hostnames or IPs, with an optional port (for example `mcp.example.com` or `mcp.example.com:8443`). On a public bind it selects the permitted hosts; unset permits only the literal bind address. Bare names permit any port. Invalid Host is refused with 421; a supplied Origin must match an allowed host over HTTP or HTTPS, or gets 403. Clients without Origin work. A same-host proxy can send `Host: 127.0.0.1:<port>`.
-- **File paths are on the server.** Attach and send-with-attachments paths resolve inside the server’s `attachments_dir`; a remote client cannot hand over its own local path. A downloaded file and `saved_to` stay on the server, and a path refusal may name the server’s absolute attachments directory.
+- **File paths are on the server.** Attach and send-with-attachments paths resolve inside the server’s `attachments_dir`; a remote client cannot hand over its own local path. A downloaded file and `saved_to` stay on the server, and a path refusal may name the server’s absolute attachments directory. Inline `attachments` and `as_content=True` carry the bytes in the call instead (see [Attachments](#attachments)).
 - **It is stateless.** The server issues no `Mcp-Session-Id` and answers each request with JSON rather than an event stream. No tool sends anything to the client mid-call, so nothing is lost.
 - **One process still serves one account.** Pair it with `OUTLOOK_MCP_CONFIG_DIR`, as for stdio (one process, one port and one settings directory per mailbox), and run `outlook-mcp auth` where the server runs, with the same environment. A container usually has no keyring; see [Token cache stored unencrypted (Linux)](#token-cache-stored-unencrypted-linux).
 - No token, request URL or request line is logged.
@@ -688,7 +712,7 @@ When `allow_categories` is set, any tool in a non-allowed category returns a per
 - **Zero telemetry.** No analytics, no tracking, no usage data collected.
 - **Zero local caching.** Every call goes directly to Microsoft Graph. No local email/calendar storage. (One carve-out: the To Do default-list id is resolved once per process and kept for the session — an id, not content; see `outlook_list_tasks`.)
 - **Zero third-party calls.** The server only talks to `graph.microsoft.com` and `login.microsoftonline.com`.
-- **Token storage.** OAuth tokens are persisted via `azure-identity`'s `TokenCachePersistenceOptions`. On macOS the OS Keychain is used; on Windows, DPAPI; on Linux with PyGObject/libsecret available, gnome-keyring. On Linux *without* libsecret (e.g. the isolated venv created by `uv tool install`), tokens fall back to a `0600` plaintext file at `~/.IdentityService/` and the MCP logs a one-time warning at startup. For encrypted storage on Linux, install `python3-gi gnome-keyring libsecret-1-0` and re-create the venv with `--system-site-packages`.
+- **Token storage.** OAuth tokens are persisted via `azure-identity`'s `TokenCachePersistenceOptions`. On macOS the OS Keychain is used; on Windows, DPAPI; on Linux with PyGObject/libsecret available, gnome-keyring. On Linux *without* libsecret (e.g. the isolated venv created by `uv tool install`), the server refuses to persist tokens unless `allow_unencrypted_token_cache` is `true`; with it, they fall back to a `0600` plaintext file at `~/.IdentityService/` and the MCP logs a one-time warning at startup. For encrypted storage on Linux, install `python3-gi gnome-keyring libsecret-1-0` and re-create the venv with `--system-site-packages`.
 - **No logging of sensitive data.** Message bodies, recipient addresses, and tokens are never logged.
 - **Config permissions.** On macOS and Linux the config directory is created `0700` and the config file `0600`, and a loose mode on the file is repaired on load. On Windows those POSIX modes cannot be enforced — `os.chmod` there sets only the read-only attribute — so access is governed by the path's Windows ACL, including whatever it inherits from the directory it was created under, which this server neither applies nor verifies. Symlinked configs are rejected on every platform.
 - **Input validation.** All user inputs (email addresses, Graph IDs, OData filters, KQL queries, datetimes) are validated and sanitized before reaching the Graph API.
@@ -699,8 +723,8 @@ When `allow_categories` is set, any tool in a non-allowed category returns a per
 ## Development
 
 ```bash
-# Install dev dependencies
-uv sync --extra dev
+# Install dev dependencies and the documents extra, as CI does (without it the PDF/XLSX tests skip)
+uv sync --all-extras
 
 # Run tests
 uv run pytest
