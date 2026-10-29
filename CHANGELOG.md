@@ -15,6 +15,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   read on each sub-request, so Graph converts the body before it is returned. A `concise`
   read asks for text whatever the `format`, so `body_preview` is text too. `html` and `full`
   are unchanged; `full`'s `body` is still the stored body.
+- **The docs no longer call `format="full"` "both".** One read returns one body type, so
+  `full` gives the stored body, usually HTML, in both `body` and `body_html`; it never
+  carried a plain-text half. The README and the tool description now say so and point a
+  plain-text reader at `text`.
 
 ### Security
 

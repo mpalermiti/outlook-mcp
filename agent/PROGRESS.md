@@ -2,6 +2,14 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-10-29 — full-format-text-half (#124 follow-up)
+
+- Addressed PR comments: IC_kwDOSA_0Lc8AAAABgqxo3g (`[construct review]` of 2345497: the `_TEXT_BODY_PREFER` comment and the wire-test docstring claimed a `text` read hides `display:none` text; the CHANGELOG says it may remain). Valid; both now say markup, comments and `<style>` go, styled-hidden text may remain. No Michael comments, no inline comments on #171.
+- full-format-text-half: #124 re-checked (open, unassigned, no comments, no PR). Doc fix, not a second GET (a second sub-request per id would exceed the 20-per-`$batch` limit in `read_messages`). README row + `outlook_read_message` description: `full` = stored body (usually HTML) in `body` and `body_html`. Red first (new `test_the_docs_do_not_promise_full_a_text_body` failed on "(both)"), then green.
+- Surface: default 71 / 11,130 → 11,142 (+12; ceiling 11,250, no raise), measured with the budget test's own dump; recorded in its header.
+- Suite: 2659 passed, 122 deselected; ruff check + format clean. Never passed `-m`.
+- Env: same as before — `gh` and `uv run` need the sandbox off; `PATH=$HOME/.local/bin:$PATH`, `uv run --offline`.
+
 ## 2026-10-28 — text-format-returns-html (#124); large-upload-checks-each-chunk skipped
 
 - Addressed PR comments: IC_kwDOSA_0Lc8AAAABgqjMWw (`[construct review]` of 416ee81: "six" releases through the lock should be five). VERIFIED via `gh api`: `environments/pypi` `created_at` 2026-10-23T23:47:39Z (the v1.26.0 run created it, no rules); ruleset 25761696 `created_at` 2026-10-24T00:05:50Z. Fixed in `agent/findings/actions-sha-pin.md` (Consistent-with-both paragraph) and the pypi-environment-settings For Michael note. The pushed commit message cannot be amended; said so in the reply. No inline comments; no other Michael comments on #171.

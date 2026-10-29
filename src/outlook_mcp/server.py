@@ -455,7 +455,7 @@ async def outlook_read_message(
 ) -> dict:
     """Get one full message by ID or Message-ID (`<abc@example.com>`).
 
-    `format` is "text", "html", or "full" (both).
+    `format` is "text", "html", or "full" (the stored body, usually HTML, as body and body_html).
     Pass include_deferred_send=True to also return the scheduled-send time (PR_DEFERRED_SEND_TIME)
     as deferred_send_datetime — useful when recreating a delayed draft.
     Pass concise=True to drop large fields (body, body_html) and return a 200-char body_preview —

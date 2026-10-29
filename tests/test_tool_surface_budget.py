@@ -211,6 +211,8 @@ CHARS_PER_TOKEN = 4
 # Measured with the same `by_alias=True` dump the tests use, on Python 3.10.
 # The rules ceiling is 12,150 (~1%), because a surface nobody loads by default should
 # not get to raise everyone's ceiling.
+# 11,142 once `outlook_read_message` says `full` is the stored body, not "both" (+12).
+# No raise.
 TOOL_SURFACE_CEILING = 12_150
 DEFAULT_SURFACE_CEILING = 11_250
 

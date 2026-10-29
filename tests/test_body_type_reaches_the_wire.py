@@ -3,8 +3,9 @@
 Graph returns a message body in the type it was stored in, which for most mail
 is HTML, unless the request carries ``Prefer: outlook.body-content-type="text"``.
 Without that header ``format="text"`` returned the same HTML as ``format="html"``:
-layout code the model paid for on every read, and text the sender hid
-(``display:none``, comments) presented as readable. A mock of the SDK chain
+layout code the model paid for on every read, and comments, ``<style>`` and
+attributes presented as body. (Graph's text rendering may still include text
+hidden only by styling, such as ``display:none``.) A mock of the SDK chain
 cannot see request headers, so this builds the client the way ``msgraph``
 does, hands it a mock transport, and reads the headers the real pipeline
 sends, as ``test_message_id_reaches_the_wire.py`` does for the URL.
@@ -99,3 +100,24 @@ async def test_concise_previews_the_text_body_whatever_the_format(fmt):
     await read_message(client, "AAMk=", format=fmt, concise=True)
 
     assert sent[0].headers.get("Prefer") == TEXT_BODY
+
+
+def test_the_docs_do_not_promise_full_a_text_body():
+    """``full`` sends no ``Prefer`` (above), so its ``body`` is the stored body.
+
+    One GET returns one body type, and for most mail the stored one is HTML, so
+    ``full`` is not "both": its ``body`` and ``body_html`` carry the same HTML.
+    The README row and the tool description an agent reads must say so, and send
+    a plain-text reader to ``text``.
+    """
+    from pathlib import Path
+
+    from outlook_mcp.server import mcp
+
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text(encoding="utf-8")
+    row = next(r for r in readme.splitlines() if r.startswith("| `outlook_read_message` |"))
+    description = mcp._tool_manager._tools["outlook_read_message"].description
+
+    for doc in (row, description):
+        assert "(both)" not in doc
+        assert "stored body" in doc
