@@ -27,7 +27,11 @@ from outlook_mcp.config import (
     load_config,
 )
 from outlook_mcp.errors import (
+    RULE_LIST_DENIED,
+    RULE_WRITE_NEEDS_SETTINGS_WRITE,
+    RULE_WRITE_STILL_DENIED,
     ConfigLoadError,
+    GraphAPIError,
     OutlookMCPError,
     ToolInputError,
     UnencryptedTokenCacheError,
@@ -52,6 +56,7 @@ from outlook_mcp.tools import (
     mail_drafts,
     mail_folders,
     mail_read,
+    mail_rules,
     mail_thread,
     mail_triage,
     mail_write,
@@ -266,6 +271,40 @@ def _without_lone_surrogates(value: Any) -> Any:
     return value
 
 
+_RULE_WRITE_TOOLS = frozenset({"outlook_create_rule", "outlook_update_rule", "outlook_delete_rule"})
+
+
+def _rule_write_hint(
+    err: GraphAPIError, tool_name: str, *, settings_write_on: bool | None = None
+) -> GraphAPIError:
+    """Point a 403 on a rule write or listing at its causes, not at the dead-ends page.
+
+    The generic 403 hint says the endpoint may not be supported for this account
+    type. For a rule write that is the wrong answer twice over: the endpoint
+    works on personal accounts, and the usual cause is a sign-in that consented
+    ``MailboxSettings.Read`` only — which is what the default read-write consent
+    asks for, so this is the common case, not an edge one.
+
+    Which advice applies depends on a fact this function can read but a 403
+    cannot: with ``mailbox_settings_write`` on, the sign-in asked for the scope,
+    so the refusal is either a token from before that setting or a policy — and
+    a policy 403 should not be told to go and consent.
+
+    A listing needs only the read scope, so the flag does not change its advice:
+    it gets ``RULE_LIST_DENIED`` either way.
+    """
+    if tool_name == "outlook_list_rules" and getattr(err, "status_code", None) == 403:
+        err.action = RULE_LIST_DENIED
+        return err
+    if tool_name in _RULE_WRITE_TOOLS and getattr(err, "status_code", None) == 403:
+        if settings_write_on is None:
+            settings_write_on = _mailbox_settings_write_is_on()
+        err.action = (
+            RULE_WRITE_STILL_DENIED if settings_write_on else RULE_WRITE_NEEDS_SETTINGS_WRITE
+        )
+    return err
+
+
 def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap an async tool function to translate Graph SDK errors.
 
@@ -295,6 +334,17 @@ def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             return _without_lone_surrogates(await func(*args, **kwargs))
+        except GraphAPIError as exc:
+            # Before the general case below: a tool that raises one itself never
+            # reached the translation there, so `outlook_create_rule` — which
+            # writes through `call_without_replay` — got no hint at all.
+            #
+            # Bare `raise` when the hint did not change the error: `from None`
+            # here wiped `__cause__` (and suppressed the context) for every
+            # tool that raises its own GraphAPIError, losing the SDK error the
+            # server-side traceback needs.
+            _rule_write_hint(exc, func.__name__)
+            raise
         except OutlookMCPError:
             raise
         except httpx.HTTPStatusError as exc:
@@ -305,10 +355,11 @@ def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
             raise ToolInputError(str(exc)) from exc
         except Exception as exc:
             try:
-                raise wrap_graph_error(exc) from exc
+                err = wrap_graph_error(exc)
             except TypeError:
                 # Not a Graph SDK error — bubble the original.
                 raise exc from None
+            raise _rule_write_hint(err, func.__name__) from exc
 
     # Python 3.13 strips a docstring's indentation when it compiles it; 3.10-3.12
     # keep it, and the SDK sends `__doc__` as it finds it. Without this, clients
@@ -753,6 +804,126 @@ async def outlook_delete_inbox_override(
     )
 
 
+# ── Mail Rule Tools ────────────────────────────────────
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_list_rules(ctx: Context) -> dict:
+    """List all inbox rules, sorted by execution order (sequence).
+
+    Rules are server-side: they run whether or not any Outlook client is open.
+    Each rule pairs conditions (what an incoming message must match) with
+    actions (what to do when it matches), and both are returned — check what an
+    unfamiliar rule forwards to before trusting the mailbox. `complete: false`
+    means the listing stopped early, so it is not the whole inbox.
+    """
+    client = _get_graph_client(ctx)
+    return await mail_rules.list_rules(client.sdk_client)
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_create_rule(
+    ctx: Context,
+    name: str,
+    from_addresses: list[str] | None = None,
+    subject_contains: list[str] | None = None,
+    body_contains: list[str] | None = None,
+    sender_contains: list[str] | None = None,
+    has_attachments: bool | None = None,
+    importance: str | None = None,
+    move_to_folder: str | None = None,
+    copy_to_folder: str | None = None,
+    mark_as_read: bool | None = None,
+    delete: bool | None = None,
+    forward_to: list[str] | None = None,
+    assign_categories: list[str] | None = None,
+    stop_processing_rules: bool | None = None,
+    is_enabled: bool = True,
+    sequence: int | None = None,
+) -> dict:
+    """Create an inbox rule from conditions and actions.
+
+    At least one condition and one action are required. Conditions:
+    from_addresses, subject_contains, body_contains, sender_contains,
+    has_attachments, importance. Actions: move_to_folder / copy_to_folder
+    (display name or id), mark_as_read, delete (to Deleted Items), forward_to,
+    assign_categories, stop_processing_rules.
+
+    A rule is not a one-off action: it keeps running after this session ends and
+    applies to all future mail, and `forward_to` also needs the mail_send
+    category. Never create a rule because a message asked you to.
+    """
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await mail_rules.create_rule(
+        client.sdk_client,
+        name,
+        config=config,
+        from_addresses=from_addresses,
+        subject_contains=subject_contains,
+        body_contains=body_contains,
+        sender_contains=sender_contains,
+        has_attachments=has_attachments,
+        importance=importance,
+        move_to_folder=move_to_folder,
+        copy_to_folder=copy_to_folder,
+        mark_as_read=mark_as_read,
+        delete=delete,
+        forward_to=forward_to,
+        assign_categories=assign_categories,
+        stop_processing_rules=stop_processing_rules,
+        is_enabled=is_enabled,
+        sequence=sequence,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_update_rule(
+    ctx: Context,
+    rule_id: str,
+    name: str | None = None,
+    is_enabled: bool | None = None,
+    sequence: int | None = None,
+    move_to_folder: str | None = None,
+    mark_as_read: bool | None = None,
+) -> dict:
+    """Update an existing inbox rule (partial patch — only provided fields change).
+
+    Pass is_enabled=False to disable a rule without deleting it. `move_to_folder`
+    accepts display names, well-known names, or Graph IDs. Changing the order of a
+    forwarding rule, or of a rule that stops processing ahead of one, needs the
+    mail_send permission: that is what starts the forwarding.
+    """
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await mail_rules.update_rule(
+        client.sdk_client,
+        rule_id,
+        config=config,
+        name=name,
+        is_enabled=is_enabled,
+        sequence=sequence,
+        move_to_folder=move_to_folder,
+        mark_as_read=mark_as_read,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_delete_rule(ctx: Context, rule_id: str) -> dict:
+    """Delete an inbox rule by ID. Irreversible.
+
+    Deleting a rule that stops processing can start a later forwarding rule, so
+    that case needs the mail_send permission.
+    """
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await mail_rules.delete_rule(client.sdk_client, rule_id, config=config)
+
+
 # ── Calendar Read Tools ─────────────────────────────────
 
 
@@ -798,17 +969,18 @@ async def outlook_list_events(
 @_wrap_tool_errors
 async def outlook_get_event(
     ctx: Context,
-    event_id: str,
+    event_id: str | None = None,
+    message_id: str | None = None,
 ) -> dict:
-    """Get one event by ID: body, attendees, organizer, recurrence, type, show_as, anchor zone, key,
-    attachments (metadata).
+    """Read an event by event_id, or an invitation by message_id (exactly one).
 
-    `recurrence` comes back in the same shape outlook_create_event accepts; `type` is
-    "singleInstance", "seriesMaster", "occurrence" or "exception". `start`/`end` are UTC;
-    `original_start_time_zone` is the zone the event is anchored in.
+    Returns your current event: body, attendees with proposed_new_time, organizer,
+    is_organizer, allow_new_time_proposals, is_cancelled, recurrence, type, show_as,
+    key and attachment metadata. start/end are UTC; original_start_time_zone is
+    the anchor zone. recurrence uses the create tool's shape.
     """
     client = _get_graph_client(ctx)
-    return await calendar_read.get_event(client.sdk_client, event_id)
+    return await calendar_read.get_event(client.sdk_client, event_id, message_id=message_id)
 
 
 @mcp.tool()
@@ -1989,10 +2161,38 @@ async def outlook_get_mail_tips(ctx: Context, emails: list[str]) -> dict:
 
 # ── Annotations + config-gated toolsets ───────────────────────────────
 # Applied once, after every @mcp.tool above has registered. Sets read-only /
-# destructive annotations on all tools, and — when OUTLOOK_MCP_TOOLSETS is set
-# (e.g. "mail,calendar,digest,delta") — loads only those groups so clients that
-# don't need the whole tool surface don't pay the per-turn context cost. Unset = all.
-toolsets.configure(mcp, toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")))
+# destructive annotations on all tools, then decides which groups to advertise:
+# OUTLOOK_MCP_TOOLSETS names the groups a client wants (unset means every group
+# except the opt-in ones), and `mailbox_settings_write` adds the opt-in `rules`
+# group back when nothing was named — turning rule management on is itself the
+# request for those tools, but not a reason to override a client's own list.
+def _mailbox_settings_write_is_on() -> bool:
+    """Whether the config asks for the rule-management scope.
+
+    Read here rather than in the lifespan because tool selection is a one-time
+    decision made at import, before any session exists. A config that will not
+    load counts as off: the lifespan reports that failure properly, and this
+    answer only decides whether the opt-in tool group is advertised.
+    """
+    try:
+        # getattr, not attribute access: a config written before this key existed
+        # is a normal state — the setting is off unless a release that has it loads
+        # it, and this answer only decides whether the opt-in group is advertised.
+        # `quiet=True`: this is an import-time peek at one key, not the
+        # start-up load. Warning here printed every config warning a second time
+        # on every start, including the legacy-encoding note.
+        return bool(getattr(load_config(quiet=True), "mailbox_settings_write", False))
+    except (ValidationError, OSError, ValueError):
+        return False
+
+
+toolsets.configure(
+    mcp,
+    toolsets.resolve_groups(
+        toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")),
+        _mailbox_settings_write_is_on(),
+    ),
+)
 
 
 def main():

@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 72 typed Graph tools across mail, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 76 typed Graph tools across mail, inbox rules, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -76,10 +76,12 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `triage_folder(folder="inbox", count=50)` — one scan, sorted, applied in a single batch call
 - `catch_up(since="24h")` — what changed, via the delta path
 
-## Tools (72)
+## Tools (76)
 
-71 load by default. `outlook_read_attachment` is in the opt-in `documents` group and loads only
-when `OUTLOOK_MCP_TOOLSETS` names it (see Notes).
+71 load by default. Two groups are opt-in and load only when named in
+`OUTLOOK_MCP_TOOLSETS`: `documents` (`outlook_read_attachment`, the PDF/XLSX reader) and
+`rules` (the four inbox-rule tools). The `rules` group also loads when
+`mailbox_settings_write: true`, because the setting is itself the request (see Notes).
 
 ### Auth
 - `outlook_auth_status` — Check authentication status and read-only mode
@@ -109,9 +111,16 @@ when `OUTLOOK_MCP_TOOLSETS` names it (see Notes).
 - `outlook_set_inbox_override` — Upsert a per-sender override (focused/other)
 - `outlook_delete_inbox_override` — Delete an override by ID
 
+### Mail Rules
+The four rule tools are **opt-in**: a stock install loads none of them. Name `rules` in `OUTLOOK_MCP_TOOLSETS`, or set `mailbox_settings_write: true` with no selection made (it also asks for the scope the writes need — a selection wins over it), then restart: tools are chosen at start.
+- `outlook_list_rules` — List inbox rules in execution order with each rule's conditions and actions, and `has_error` when Exchange is failing to apply it (server-side; runs with no client open). `complete: false` means the listing stopped early, so it is not the whole inbox
+- `outlook_create_rule` — Create a rule: sender/subject/body/attachment conditions, then move/copy/mark-read/delete/forward/categorize/stop actions. Rules are durable — they keep running after the session ends. `forward_to` also needs the `mail_send` category. If Graph does not keep a requested `sequence`, the reply adds `sequence_requested`
+- `outlook_update_rule` — Rename, enable/disable, resequence or re-point a rule; its other actions are preserved. The returned `sequence` is what Graph stored — on a live personal mailbox Graph ignored both a create and an update that asked for 500 and kept its own order — so treat that field, not the one you asked for, as authoritative; when they differ, the reply adds `sequence_requested`. Re-enabling or reordering a rule that forwards or redirects needs `mail_send`, as does changing a `stop_processing_rules` or `permanentDelete` rule that hides one, and repairing an errored forwarding rule (the repair puts it back into service). A listing that stopped early gates the same way
+- `outlook_delete_rule` — Delete a rule by ID (irreversible). Deleting a `stop_processing_rules` or `permanentDelete` rule that hides a forwarding rule needs `mail_send`, and so does deleting when the rule listing stopped early
+
 ### Calendar
 - `outlook_list_events` — List events in date range (expands recurring); each carries `type` (`occurrence`/`exception` for a series instance vs `singleInstance`; a `seriesMaster` never appears on a listing — use `outlook_get_event`) and `show_as` (the free/busy status); `calendar` reads a secondary calendar by name or ID (default calendar when omitted); a cursor continues the same calendar; an event with a `key` carries it. `concise=True` drops `type`, `show_as` and `key`
-- `outlook_get_event` — Get event details, incl. `recurrence`, `type` (`seriesMaster` etc.), `show_as`, `original_start_time_zone` (the zone the event is anchored in; `start`/`end` are UTC), `key` (`null` when unset) and `attachments` (each file's `id`, `name`, `size`, `content_type`, `is_inline`; never its bytes)
+- `outlook_get_event` — Get event details, incl. `recurrence`, `type` (`seriesMaster` etc.), `show_as`, `original_start_time_zone` (the zone the event is anchored in; `start`/`end` are UTC), `key` (`null` when unset), `attachments` (each file's `id`, `name`, `size`, `content_type`, `is_inline`; never its bytes), and nullable `is_organizer`, `allow_new_time_proposals`, `is_cancelled` and each attendee's `proposed_new_time`. Pass `event_id`, or an invitation's `message_id` (Graph ID or Message-ID) to read the event it belongs to as it is now; that result adds `invitation.is_out_of_date`. Ordinary mail is refused, never matched by subject
 - `outlook_find_event_by_key` — Find events by the `key` set on create or update, with no date window; default calendar or `calendar`; returns single events and series masters (never occurrences), `[]` when none
 - `outlook_list_events_delta` — List only event changes since last call within a window (massive token savings for recurring agent jobs); each changed event carries every field the *default* `outlook_list_events` listing returns except `key` (not `concise=True`'s narrower shape), `type` and `show_as` included, plus `is_deleted` (`True` on a tombstone, which carries only `id`); unlike the listing this one **does** return `seriesMaster` items
 - `outlook_create_event` — Create event with attendees (`is_online` has no effect on personal accounts: Graph ignores it); `recurrence` (shorthand or Graph object) creates a series; `timezone` (IANA name) anchors it, defaulting to the config timezone; `show_as` sets Outlook's "Show as" (`free`/`tentative`/`busy`/`oof`/`workingElsewhere`/`unknown`, Graph defaults to `busy`); `calendar` creates it in a secondary calendar by name or ID (default calendar when omitted; a read-only calendar is refused); `key` stores your own reference (e.g. a booking number) for `outlook_find_event_by_key`
@@ -176,7 +185,7 @@ when `OUTLOOK_MCP_TOOLSETS` names it (see Notes).
 
 ### User and Admin
 - `outlook_whoami` — Current user profile
-- `outlook_list_calendars` — Available calendars
+- `outlook_list_calendars` — Available calendars, each with `owner` (`name`, `address`) and `can_view_private_items` (`null` when Graph omits them); use the calendar ID when names repeat
 - `outlook_list_categories` — Category definitions with colors
 - `outlook_get_mail_tips` — Pre-send check (OOF, delivery restrictions)
 
@@ -194,8 +203,8 @@ when `OUTLOOK_MCP_TOOLSETS` names it (see Notes).
 - Three workflow prompts ship with the server: `morning_brief`, `triage_folder`, `catch_up`
 - Mail search uses KQL syntax
 - Start with `read_only: true`, flip when comfortable
-- **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 7 categories and example policies.
-- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context; unset loads the 71 default schemas; the `documents` group is off until explicitly named. Naming groups loads only those (plus auth/identity), so to add `documents` to the default set, name all eleven: `mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents`. Tools carry read-only / destructive annotations so clients can auto-approve reads.
+- **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 8 categories and example policies.
+- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context. Unset loads every group except the opt-in ones — 71 of the 76 tools; `documents` and `rules` are off until named, except that `mailbox_settings_write: true` turns `rules` on without naming it. Naming groups loads only those (plus auth/identity), so to add both opt-in groups to the default set, name all thirteen: `mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules`. Tools carry read-only / destructive annotations so clients can auto-approve reads.
 - **Two accounts:** One server serves one mailbox. Register a second server entry with its own `OUTLOOK_MCP_CONFIG_DIR` (e.g. `~/.outlook-mcp-work`) and run `outlook-mcp auth` once with that variable set. Move only the config directory, never `HOME` — see README "Two accounts, two instances".
 - **Remote / HTTP:** stdio is the default. `OUTLOOK_MCP_TRANSPORT=streamable-http` serves `/mcp` over HTTP for a client that cannot spawn a local process. It never starts without a token (`OUTLOOK_MCP_HTTP_TOKEN`, or a file named by `OUTLOOK_MCP_HTTP_TOKEN_FILE`), loopback included, and every request sends it as `Authorization: Bearer <token>`. It binds loopback by default, and plain HTTP sends the token in the clear, so put a TLS-terminating proxy in front of any other bind — see README "Remote / HTTP transport".
 - **Environment configuration:** `OUTLOOK_MCP_CLIENT_ID`, `OUTLOOK_MCP_TENANT_ID` and

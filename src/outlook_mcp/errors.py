@@ -436,6 +436,54 @@ UPDATE_MAY_HAVE_BEEN_SENT = (
     "Graph failed without saying whether the change was saved, so it may already have "
     "been made and any attendees sent the update. Read the event before updating it again."
 )
+# A create that is not idempotent: a second one is a second rule, and both run
+# (`create_rule`). Deleting "the" rule afterwards leaves the copy forwarding.
+RULE_MAY_HAVE_BEEN_CREATED = (
+    "Graph failed without saying whether the rule was created, so it may already exist. "
+    "List the rules before creating it again — a second create makes a second rule, and "
+    "both would keep running."
+)
+
+# A 403 on a rule write is the consent, not the endpoint. `messageRules` works on
+# personal accounts; the default read-write consent asks only for
+# MailboxSettings.Read. The generic 403 hint points at the dead-ends page, which
+# reads as "impossible" and stops one step short of the fix.
+RULE_WRITE_NEEDS_SETTINGS_WRITE = (
+    "Graph refused a rule write with 403. Either this sign-in consented the read scope "
+    "only, or a mail-flow policy on the mailbox refuses rule writes — the same 403 "
+    "covers both. If it is the consent, set `mailbox_settings_write: true` in the "
+    "config, run `outlook-mcp auth` again, and restart the server — the tools are "
+    "chosen at start, so the rule tools appear only once the setting is read. If it is "
+    "a policy, the refusal will repeat after a fresh consent. " + LEAVE_SETTINGS_TO_THE_USER
+)
+
+# A 403 with the setting already on. The consent advice would be wrong twice
+# over here: the flag is what asks for the scope, so either the token predates
+# it, or the refusal is a policy and no re-auth will help. State both
+# possibilities instead of asserting a cause.
+RULE_WRITE_STILL_DENIED = (
+    "Graph refused a write that this sign-in already asked to be allowed. Either the "
+    "token predates `mailbox_settings_write` — run `outlook-mcp auth` again to consent to "
+    "MailboxSettings.ReadWrite — or a mail-flow policy on the mailbox refused it. The "
+    "message names a policy when that is the cause. If it is one, a fresh consent will "
+    "not help: on a work or school mailbox only its administrator can change the policy, "
+    "and a personal account has no administrator — so there the rule simply cannot be "
+    "written. " + LEAVE_SETTINGS_TO_THE_USER
+)
+
+# A 403 on listing rules. Listing needs only the read scope, which the default
+# consent asks for, so the write advice above does not fit. A live personal
+# mailbox that reads its categories under that same scope still answered 403
+# here, so the account itself may refuse rules. State both causes.
+RULE_LIST_DENIED = (
+    "Graph refused to list inbox rules with 403. Either this sign-in never consented to "
+    "reading mailbox settings (MailboxSettings.Read, in the README's app registration), "
+    "or Microsoft refuses rule access on this mailbox, as it has on some personal "
+    "accounts. If it is the consent, run `outlook-mcp auth` again and restart the server. "
+    "If the refusal repeats after a fresh sign-in, rules cannot be managed on this "
+    "mailbox. " + LEAVE_SETTINGS_TO_THE_USER
+)
+
 # The same doubt for an event with no attendees, where nothing was emailed.
 EVENT_MAY_HAVE_BEEN_CREATED = (
     "Graph failed without saying whether the event was created, so it may already exist. "

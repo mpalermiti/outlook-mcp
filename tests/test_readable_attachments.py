@@ -7,6 +7,7 @@ CI's --all-extras includes it. The ordinary byte-download tests remain unchanged
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import json
 import os
@@ -576,5 +577,22 @@ async def test_worker_output_is_bounded_before_json_parsing(monkeypatch, tmp_pat
     worker.write_text('import sys\nsys.stdin.buffer.read()\nprint("x" * 2000)\n')
     monkeypatch.setattr(mail_attachment_read, "WORKER", worker)
     monkeypatch.setattr(mail_attachment_read, "MAX_OUTPUT_BYTES", 1000)
+    with pytest.raises(OutlookMCPError, match="output limit"):
+        await mail_attachment_read.extract(b"abc", "pdf")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group cleanup")
+async def test_refused_group_kill_keeps_the_parser_error(monkeypatch, tmp_path):
+    # macOS refuses killpg with EPERM, not ESRCH, when the group's only member
+    # has exited and is not yet reaped. Reaping is near-instant, so the real
+    # refusal is rare; replay it on every call.
+    def refused(_pgid, _sig):
+        raise PermissionError(errno.EPERM, os.strerror(errno.EPERM))
+
+    worker = tmp_path / "output.py"
+    worker.write_text('import sys\nsys.stdin.buffer.read()\nprint("x" * 2000)\n')
+    monkeypatch.setattr(mail_attachment_read, "WORKER", worker)
+    monkeypatch.setattr(mail_attachment_read, "MAX_OUTPUT_BYTES", 1000)
+    monkeypatch.setattr(os, "killpg", refused)
     with pytest.raises(OutlookMCPError, match="output limit"):
         await mail_attachment_read.extract(b"abc", "pdf")

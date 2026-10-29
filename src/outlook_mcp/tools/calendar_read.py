@@ -223,6 +223,25 @@ def _format_event_detail(event: Any) -> dict:
                 if hasattr(att.status.response, "value")
                 else str(att.status.response)
             )
+        proposal = att.proposed_new_time
+        entry["proposed_new_time"] = (
+            {
+                "start": {
+                    "date_time": proposal.start.date_time,
+                    "time_zone": proposal.start.time_zone,
+                }
+                if proposal.start
+                else None,
+                "end": {
+                    "date_time": proposal.end.date_time,
+                    "time_zone": proposal.end.time_zone,
+                }
+                if proposal.end
+                else None,
+            }
+            if proposal
+            else None
+        )
         attendees.append(entry)
 
     body = ""
@@ -238,6 +257,9 @@ def _format_event_detail(event: Any) -> dict:
         "organizer": organizer,
         "body": body,
         "attendees": attendees,
+        "is_organizer": event.is_organizer,
+        "allow_new_time_proposals": event.allow_new_time_proposals,
+        "is_cancelled": event.is_cancelled,
         "online_meeting_url": online_meeting_url,
         "original_start_time_zone": event.original_start_time_zone,
         "original_end_time_zone": event.original_end_time_zone,
@@ -407,7 +429,9 @@ async def _event_attachments(builder: Any) -> list[dict]:
 
 async def get_event(
     graph_client: Any,
-    event_id: str,
+    event_id: str | None = None,
+    *,
+    message_id: str | None = None,
 ) -> dict:
     """Get full details for a single event, with its ``key`` (``None`` when unset)
     and its attachments listed.
@@ -415,6 +439,35 @@ async def get_event(
     The attachments are a second request, made only when Graph reports
     ``hasAttachments``, so an event without files costs what it always did.
     """
+    if (event_id is None) == (message_id is None):
+        raise ValueError("Give exactly one of event_id or message_id.")
+    invitation = None
+    if message_id is not None:
+        from msgraph.generated.users.item.messages.item.message_item_request_builder import (
+            MessageItemRequestBuilder,
+        )
+
+        from outlook_mcp.tools.mail_read import resolve_message_id
+
+        message_id = await resolve_message_id(graph_client, message_id)
+        message = await graph_client.me.messages.by_message_id(message_id).get(
+            request_configuration=build_request_config(
+                MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters,
+                {"$expand": "microsoft.graph.eventMessage/event"},
+            )
+        )
+        associated = getattr(message, "event", None)
+        if associated is None or not associated.id:
+            raise ValueError(
+                "This message has no associated calendar event "
+                "(the meeting may have been cancelled or removed)."
+            )
+        event_id = associated.id
+        invitation = {
+            "message_id": message_id,
+            "is_out_of_date": getattr(message, "is_out_of_date", None),
+        }
+    # Fetch current details, not the possibly outdated invitation's embedded event.
     event_id = validate_graph_id(event_id)
 
     from msgraph.generated.users.item.events.item.event_item_request_builder import (
@@ -429,7 +482,10 @@ async def get_event(
     event = await builder.get(request_configuration=config)
     attachments = await _event_attachments(builder) if event.has_attachments is True else []
 
-    return {**_format_event_detail(event), "key": event_key(event), "attachments": attachments}
+    result = {**_format_event_detail(event), "key": event_key(event), "attachments": attachments}
+    if invitation is not None:
+        result["invitation"] = invitation
+    return result
 
 
 async def find_events_by_key(

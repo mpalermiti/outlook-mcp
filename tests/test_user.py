@@ -68,6 +68,8 @@ class TestListCalendars:
         mock_cal.color = MagicMock(value="auto")
         mock_cal.is_default_calendar = True
         mock_cal.can_edit = True
+        mock_cal.owner = None
+        mock_cal.can_view_private_items = None
 
         mock_client = MagicMock()
         mock_client.me.calendars.get = AsyncMock(return_value=MagicMock(value=[mock_cal]))
@@ -99,6 +101,8 @@ class TestListCalendars:
             cal.color = MagicMock(value="auto")
             cal.is_default_calendar = False
             cal.can_edit = True
+            cal.owner = None
+            cal.can_view_private_items = None
         next_link = "https://graph.microsoft.com/v1.0/me/calendars?$skip=1"
         page_one = MagicMock(value=[first], odata_next_link=next_link)
         page_two = MagicMock(value=[second], odata_next_link=None)

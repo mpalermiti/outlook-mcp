@@ -60,6 +60,12 @@ def test_the_scan_finds_every_tool_that_can_send():
         "outlook_update_event",
         "outlook_rsvp",
         "outlook_attach_to_event",
+        # The rule write tools gate on `mail_send` too: a forwarding rule emails a
+        # third party for as long as it exists, and reordering, re-enabling or
+        # deleting a masking rule starts one that was dormant.
+        "outlook_create_rule",
+        "outlook_update_rule",
+        "outlook_delete_rule",
     }
 
 
@@ -74,6 +80,11 @@ async def test_a_client_sees_them_as_destructive():
         tools = {t.name: t for t in (await client.list_tools()).tools}
 
     for name in _tools_that_can_send():
+        if name not in tools:
+            # A tool in the opt-in `rules` group, not advertised in this process.
+            # The annotation is what a client receives once it asks for the group.
+            assert toolsets.annotation_for(name).destructive_hint is True, name
+            continue
         annotations = tools[name].annotations
         assert annotations.read_only_hint is False, name
         assert annotations.destructive_hint is True, name

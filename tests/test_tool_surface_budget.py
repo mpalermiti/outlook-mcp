@@ -17,6 +17,9 @@ just has to be deliberate, with the new number written down next to the reason.
 
 import inspect
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 from mcp.client import Client
@@ -190,7 +193,26 @@ CHARS_PER_TOKEN = 4
 # 14,813 on current main with the HTTP follow-ups: transport checks and
 # operator errors add no tools or schema fields. The same measure holds on
 # Python 3.10 and 3.13; no ceiling raise.
-TOOL_SURFACE_CEILING = 14_850
+# 14,846 with `outlook_get_event`'s optional `message_id` (#196, +33); #194's
+# calendar owner fields are response data, not schema. 72 / 15,024 with every
+# group. No raise, but the default ceiling now has 4 tokens of headroom.
+#
+# 11,130 once `toolsets.lean_input_schema` drops Pydantic's filler from every
+# advertised schema (-3,716, a quarter): the `title` restating each input's name
+# and each tool's (-2,199), and an optional input's `null` branch and
+# `"default": null` (-1,517). No wording changed and nothing the server accepts
+# changed. Same on Python 3.10 and 3.13. The ceiling comes DOWN to 11,250 (~1%
+# headroom), so the freed quarter cannot be spent a sentence at a time.
+#
+# Re-measured on 1.29.0 with this branch's rules group in the tree: the default surface
+# is 71 / 11,130 — upstream's own head measures 11,130 as well, so the four opt-in tools
+# change nothing a stock install pays. With the `rules` group (every group except
+# `documents`) the surface is 75 / 11,951, documents 72 / 11,274 and all groups 76 / 12,095.
+# Measured with the same `by_alias=True` dump the tests use, on Python 3.10.
+# The rules ceiling is 12,150 (~1%), because a surface nobody loads by default should
+# not get to raise everyone's ceiling.
+TOOL_SURFACE_CEILING = 12_150
+DEFAULT_SURFACE_CEILING = 11_250
 
 # 14,776 on the 71-tool default surface before the latest rebase;
 # 14,954 with the optional documents group enabled (+178 for its one reader).
@@ -198,11 +220,11 @@ TOOL_SURFACE_CEILING = 14_850
 # surfaces from the digest and reply-draft descriptions); the reader still adds 178.
 # Re-measured 2026-10-25 after the third document review on Python 3.10 and 3.13:
 # default 71 / 14,813; every group 72 / 14,991; documents-only 3 / 302. Both
-# existing ceilings hold. INSTRUCTIONS are separate, sent once per session:
-# unchanged 3,176 characters by default; 3,379 with PDF-only chunk guidance enabled.
-# The default ceiling stays 14,850. Documents have a separate 15,150 ceiling
-# (~1.3% headroom), so an opt-in tool cannot raise every user's per-turn cost.
-DOCUMENT_SURFACE_CEILING = 15_150
+# INSTRUCTIONS are separate, sent once per session: unchanged 3,176 characters by
+# default; 3,379 with PDF-only chunk guidance enabled.
+# 72 / 11,274 with the lean schemas (documents-only 3 / 249); the documents ceiling
+# comes down to 11,400 with it, again ~1% headroom.
+DOCUMENT_SURFACE_CEILING = 11_400
 
 # `prompts/list` is the cheap half of the bargain struck in 1.20.0: workflow
 # guidance costs a name and one line here until someone invokes it. If that ever
@@ -216,18 +238,76 @@ def _proxy_tokens(payload: object) -> int:
 
 
 @pytest.mark.asyncio
-async def test_the_tool_surface_stays_within_budget():
+async def test_the_default_surface_stays_within_budget():
+    """What a stock install pays on every turn — 71 tools, rules not loaded.
+
+    Measured by dropping the opt-in group from whatever this process registered,
+    so the number is the same whether or not the machine running the suite has
+    `mailbox_settings_write` on.
+    """
     async with Client(mcp) as client:
         tools = (await client.list_tools()).tools
 
-    default = [t for t in tools if toolsets.TOOL_GROUPS.get(t.name) not in toolsets.OPTIONAL_GROUPS]
-    assert len(default) == 71
+    hidden = toolsets.OFF_BY_DEFAULT
+    default = [t for t in tools if toolsets.TOOL_GROUPS.get(t.name) not in hidden]
     cost = _proxy_tokens([t.model_dump(exclude_none=True, by_alias=True) for t in default])
 
-    assert cost <= TOOL_SURFACE_CEILING, (
-        f"The 71-tool surface now costs ~{cost} proxy tokens per turn, over the "
-        f"{TOOL_SURFACE_CEILING} ceiling. Every client pays this on every turn. "
+    assert len(default) == 71
+    assert cost <= DEFAULT_SURFACE_CEILING, (
+        f"The 71-tool default surface now costs ~{cost} proxy tokens per turn, over the "
+        f"{DEFAULT_SURFACE_CEILING} ceiling. Every user pays this on every turn. "
         f"Either trim it, or raise the ceiling deliberately and say why."
+    )
+
+
+def test_the_rules_group_fits_its_own_ceiling():
+    """The opt-in surface is bounded too, in a process that actually loads it.
+
+    A separate interpreter because tool selection happens at import: this is the
+    only way to measure both surfaces without the suite depending on its own
+    environment. `mailbox_settings_write` is unset there, so the group is loaded
+    the way an env opt-in loads it.
+    """
+    code = (
+        "import asyncio, json\n"
+        "from mcp.client import Client\n"
+        "from outlook_mcp import toolsets\n"
+        "from outlook_mcp.server import mcp\n"
+        "async def main():\n"
+        "    async with Client(mcp) as c:\n"
+        "        tools = (await c.list_tools()).tools\n"
+        "    loaded = {t.name for t in tools if toolsets.TOOL_GROUPS.get(t.name) == 'rules'}\n"
+        "    payload = [t.model_dump(exclude_none=True, by_alias=True) for t in tools]\n"
+        "    cost = len(json.dumps(payload, default=str)) // 4\n"
+        "    print(json.dumps({'cost': cost, 'rules': len(loaded), 'count': len(tools)}))\n"
+        "asyncio.run(main())\n"
+    )
+    # Every group except `documents`: this measures the rules surface an install
+    # that asks for rules actually loads, so this ceiling and the documents
+    # ceiling bound different surfaces instead of the same one twice.
+    env = {
+        **os.environ,
+        "OUTLOOK_MCP_TOOLSETS": ",".join(
+            sorted(set(toolsets.TOOL_GROUPS.values()) - {"documents"})
+        ),
+    }
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+        check=True,
+    )
+    measured = json.loads(result.stdout.strip().splitlines()[-1])
+
+    assert measured["rules"] == 4, result.stdout
+    assert measured["count"] == 75, result.stdout
+    assert measured["cost"] <= TOOL_SURFACE_CEILING, (
+        f"The rules-enabled surface costs ~{measured['cost']} proxy tokens, over the "
+        f"{TOOL_SURFACE_CEILING} ceiling. It is opt-in, so this is the budget for the "
+        f"install that asked for it — trim it or raise the ceiling deliberately."
     )
 
 
@@ -299,7 +379,14 @@ asyncio.run(main())
 """
     result = subprocess.run(
         [sys.executable, "-c", code],
-        env={**os.environ, "OUTLOOK_MCP_TOOLSETS": ",".join(sorted(set(TOOL_GROUPS.values())))},
+        env={
+            **os.environ,
+            # Every group except `rules`: this is the documents surface, 72 tools.
+            # Loading rules too made this measure the same 76-tool surface as the
+            # rules budget, so the documents reader could grow without this test
+            # noticing.
+            "OUTLOOK_MCP_TOOLSETS": ",".join(sorted(set(TOOL_GROUPS.values()) - {"rules"})),
+        },
         capture_output=True,
         text=True,
         check=True,

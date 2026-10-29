@@ -32,11 +32,33 @@ async def _newest_message_id(sdk, folder: str) -> str | None:
     return page.value[0].id if page and page.value else None
 
 
+async def _newest_draft_id(sdk) -> str | None:
+    """The newest item in Drafts that Graph calls a draft.
+
+    The Drafts folder can hold messages that are not drafts, such as an old sent
+    message moved there. When one was the newest item, this check failed on the
+    mailbox, not the guard. Look a little further, and skip when there is no
+    draft at all.
+    """
+    from msgraph.generated.users.item.mail_folders.item.messages.messages_request_builder import (  # noqa: E501
+        MessagesRequestBuilder,
+    )
+
+    query = MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters(
+        top=25, select=["id", "isDraft"]
+    )
+    page = await sdk.me.mail_folders.by_mail_folder_id("drafts").messages.get(
+        request_configuration=RequestConfiguration(query_parameters=query)
+    )
+    messages = page.value if page and page.value else []
+    return next((m.id for m in messages if m.is_draft is True), None)
+
+
 async def test_require_draft_accepts_a_real_draft(real_graph_client):
     sdk = real_graph_client.sdk_client
-    draft_id = await _newest_message_id(sdk, "drafts")
+    draft_id = await _newest_draft_id(sdk)
     if draft_id is None:
-        pytest.skip("The Drafts folder is empty, so there is no draft to check isDraft on")
+        pytest.skip("No draft among the 25 newest items in Drafts, so there is none to check")
 
     await require_draft(sdk, draft_id, "live-check")  # must not raise
 

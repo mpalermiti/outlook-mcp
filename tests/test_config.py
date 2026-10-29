@@ -11,6 +11,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from outlook_mcp.config import Config, config_repair_lines, load_config, save_config
 
@@ -681,3 +682,75 @@ def test_the_correctly_spelt_safety_keys_load(tmp_path):
     assert loaded.read_only is True
     assert loaded.read_only_consent is True
     assert loaded.allow_categories == ["calendar_write"]
+
+
+class TestMailboxSettingsWriteConfig:
+    def test_refused_when_paired_with_read_only_consent(self):
+        """A key the sign-in would silently ignore is a config error, not a no-op."""
+        with pytest.raises(ValidationError):
+            Config(
+                client_id="test",
+                read_only=True,
+                read_only_consent=True,
+                mailbox_settings_write=True,
+            )
+
+    def test_allowed_with_plain_read_only(self):
+        """read_only gates the tools; the token still asks for the write scopes."""
+        cfg = Config(client_id="test", read_only=True, mailbox_settings_write=True)
+        assert cfg.mailbox_settings_write is True
+
+    def test_allowed_on_its_own(self):
+        cfg = Config(client_id="test", mailbox_settings_write=True)
+        assert cfg.mailbox_settings_write is True
+
+
+class TestWarningsAreLoggedOnce:
+    """The import-time peek reads the config; the start-up load reports it.
+
+    Exactly one warning must reach the operator: an import-time read that warns
+    printed every notice twice on every start, and `warn_unknown=False` only
+    covered the unknown-key ones.
+    """
+
+    @staticmethod
+    def _point_server_at(monkeypatch, config_dir):
+        import outlook_mcp.server as server
+        from outlook_mcp import config as config_mod
+
+        real = config_mod.load_config
+        monkeypatch.setattr(server, "load_config", lambda **kw: real(str(config_dir), **kw))
+        return server, real
+
+    def test_an_unknown_key_is_reported_once(self, tmp_path, caplog, monkeypatch):
+        (tmp_path / "config.json").write_text(
+            json.dumps({"client_id": "00000000-0000-0000-0000-000000000001", "unknown_key_xyz": 1}),
+            encoding="utf-8",
+        )
+        server, real = self._point_server_at(monkeypatch, tmp_path)
+
+        with caplog.at_level(logging.WARNING):
+            assert server._mailbox_settings_write_is_on() is False
+            real(str(tmp_path))
+
+        hits = [r for r in caplog.records if "unknown_key_xyz" in r.getMessage()]
+        assert len(hits) == 1, [r.getMessage() for r in caplog.records]
+
+    def test_the_legacy_encoding_note_is_reported_once(self, tmp_path, caplog, monkeypatch):
+        from outlook_mcp import config as config_mod
+
+        # A cp1252 config, as Windows PowerShell 5.1 writes one: the accented
+        # value only decodes in the code page, so the loader rescues it and warns.
+        body = json.dumps(
+            {"client_id": "00000000-0000-0000-0000-000000000001", "timezone": "Eur\u00f3pe/Paris"}
+        )
+        (tmp_path / "config.json").write_bytes(body.replace("\\u00f3", "\u00f3").encode("cp1252"))
+        monkeypatch.setattr(config_mod.locale, "getpreferredencoding", lambda *a, **k: "cp1252")
+        server, real = self._point_server_at(monkeypatch, tmp_path)
+
+        with caplog.at_level(logging.WARNING):
+            server._mailbox_settings_write_is_on()
+            real(str(tmp_path))
+
+        hits = [r for r in caplog.records if "not UTF-8" in r.getMessage()]
+        assert len(hits) == 1, [r.getMessage() for r in caplog.records]

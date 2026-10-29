@@ -31,10 +31,15 @@ ROOT = Path(__file__).resolve().parent.parent
 README = (ROOT / "README.md").read_text(encoding="utf-8")
 SKILL = (ROOT / "SKILL.md").read_text(encoding="utf-8")
 
+# The tool surface the *project* ships, not the one this process registered:
+# the `rules` and `documents` groups are opt-in, so a stock import registers 71
+# of the 76 tools these files document. Docs describe what exists, so the
+# project surface is read from the classification table rather than from a
+# process whose environment decides — and `TOOL_GROUPS` is kept honest against
+# the real tools by
+# `test_server.py::test_tool_groups_names_every_real_tool_and_nothing_else`.
 LOADED = set(mcp._tool_manager._tools)
-REGISTERED = {
-    name for name in vars(server) if name.startswith("outlook_") and callable(getattr(server, name))
-}
+REGISTERED = set(toolsets.TOOL_GROUPS)
 
 
 def test_default_surface_omits_only_optional_groups():
@@ -56,13 +61,25 @@ def test_default_surface_omits_only_optional_groups():
     )
     default = set(json.loads(result.stdout.strip().splitlines()[-1]))
     assert len(default) == 71
-    assert default == toolsets.select_kept_tools(list(REGISTERED), None)
+    hidden = toolsets.OFF_BY_DEFAULT
+    assert default == toolsets.select_kept_tools(list(REGISTERED), None) - {
+        name for name in REGISTERED if toolsets.TOOL_GROUPS.get(name) in hidden
+    }
     assert "outlook_read_attachment" not in default
+    assert not (
+        default & {name for name in REGISTERED if toolsets.TOOL_GROUPS.get(name) == "rules"}
+    )
 
 
 def test_current_surface_follows_the_requested_toolsets():
-    selected = toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS"))
-    assert LOADED == toolsets.select_kept_tools(list(REGISTERED), selected)
+    # Mirror how server.py configures at import: the raw env selection goes
+    # through resolve_groups first, so an unset env yields the default group set
+    # (opt-in groups excluded) rather than None — which would keep `rules`.
+    enabled = toolsets.resolve_groups(
+        toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")),
+        server._mailbox_settings_write_is_on(),
+    )
+    assert LOADED == toolsets.select_kept_tools(list(REGISTERED), enabled)
 
 
 # The README's "Features" list names its categories in words; their counts are
@@ -173,11 +190,22 @@ def test_the_counts_no_table_carries_match_the_surface():
     assert int(prose.group(1)) == len(REGISTERED), "the README's 'this has N tools' is stale"
 
 
+def test_the_registry_description_fits_the_registry():
+    # The MCP registry refuses a description over 100 characters with a 422, and
+    # it only says so at publish time, after PyPI already has the release: 1.30.0
+    # reached PyPI and not the registry for one character.
+    server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
+    assert len(server["description"]) <= 100, (
+        f"server.json description is {len(server['description'])} characters; "
+        "the MCP registry accepts at most 100"
+    )
+
+
 def test_the_readme_category_table_is_the_accepted_set():
     table = _section(README, "Granular Write Permissions (optional)")
     rows = set(re.findall(r"^\| `(\w+)` \|", table, re.MULTILINE))
     assert rows == VALID_CATEGORIES
-    words = {7: "seven"}
+    words = {7: "seven", 8: "eight"}
     assert f"only the {words[len(VALID_CATEGORIES)]} names above" in table
     assert f"the {len(VALID_CATEGORIES)} categories" in SKILL
 

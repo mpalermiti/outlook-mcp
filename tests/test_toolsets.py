@@ -139,6 +139,88 @@ def test_configure_none_keeps_all_but_still_annotates():
     assert tools["outlook_delete_message"].annotations.destructive_hint is True
 
 
+# ── resolve_groups: env selection + the config flag ───────────────────
+
+
+def test_resolve_unset_env_leaves_off_by_default_groups_off():
+    """No selection means every group except the off-by-default ones."""
+    groups = toolsets.resolve_groups(None, mailbox_settings_write=False)
+    assert groups == set(toolsets.TOOL_GROUPS.values()) - toolsets.OFF_BY_DEFAULT
+    assert "rules" not in groups
+
+
+def test_resolve_unset_env_with_the_config_flag_adds_rules_and_only_rules():
+    """Turning rule management on is itself the request for those tools.
+
+    Not "everything": `None` here would load any opt-in group added later, and a
+    group is opt-in precisely because it must not load by default. Measured
+    against a second opt-in group, the flag loaded it too.
+    """
+    groups = toolsets.resolve_groups(None, mailbox_settings_write=True)
+
+    assert "rules" in groups
+    assert groups == (set(toolsets.TOOL_GROUPS.values()) - toolsets.OFF_BY_DEFAULT) | {"rules"}
+
+
+def test_resolve_explicit_selection_keeps_only_what_was_named():
+    assert toolsets.resolve_groups({"mail"}, mailbox_settings_write=False) == {"mail"}
+
+
+def test_resolve_explicit_selection_is_not_widened_by_the_flag():
+    """A named selection wins: the flag must not hand back groups nobody asked for.
+
+    A shared config with the flag on used to add `rules` to an agent gated down
+    to `mail`, and there was no way to ask for the narrower surface.
+    """
+    assert toolsets.resolve_groups({"mail"}, mailbox_settings_write=True) == {"mail"}
+
+
+def test_resolve_explicit_rules_selection_survives_the_flag_being_off():
+    """Opting in by env still works on an install that never sets the flag."""
+    assert toolsets.resolve_groups({"rules"}, mailbox_settings_write=False) == {"rules"}
+
+
+def test_the_flag_does_not_load_the_other_off_by_default_group():
+    """The flag is about rule writes, not about every off-by-default group."""
+    groups = toolsets.resolve_groups(None, mailbox_settings_write=True)
+
+    assert "rules" in groups
+    assert "documents" not in groups
+
+
+def test_no_selection_resolves_to_a_set_not_none():
+    """`None` means "everything" to `select_kept_tools`, so it must not escape."""
+    groups = toolsets.resolve_groups(None, mailbox_settings_write=False)
+
+    assert isinstance(groups, set)
+    assert groups == set(toolsets.TOOL_GROUPS.values()) - toolsets.OFF_BY_DEFAULT
+
+
+def test_select_kept_tools_none_matches_the_default_path():
+    """The two "off by default" paths must name the same groups.
+
+    With two sets, `select_kept_tools(None)` subtracted only `documents` and
+    kept the four rule tools for a caller that meant the stock surface.
+    """
+    names = list(toolsets.TOOL_GROUPS)
+    by_default = toolsets.select_kept_tools(names, None)
+    by_resolver = toolsets.select_kept_tools(
+        names, toolsets.resolve_groups(None, mailbox_settings_write=False)
+    )
+
+    assert by_default == by_resolver
+
+
+def test_the_rule_tools_are_opt_in_and_off_by_default():
+    """The most expensive group here must not be on the default surface."""
+    names = list(toolsets.TOOL_GROUPS)
+    kept = toolsets.select_kept_tools(names, toolsets.resolve_groups(None, False))
+    assert not {n for n in kept if toolsets.TOOL_GROUPS[n] == "rules"}
+
+    kept_with_flag = toolsets.select_kept_tools(names, toolsets.resolve_groups(None, True))
+    assert {n for n in kept_with_flag if toolsets.TOOL_GROUPS[n] == "rules"}
+
+
 # ── guardrail: every live tool is classified ──────────────────────────
 
 

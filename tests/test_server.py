@@ -5,9 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from outlook_mcp.errors import GraphAPIError
-from outlook_mcp.server import _wrap_tool_errors, mcp
-from outlook_mcp.toolsets import parse_toolsets
+from outlook_mcp.errors import GraphAPIError, ToolInputError
+from outlook_mcp.server import _rule_write_hint, _wrap_tool_errors, mcp
 
 EXPECTED_TOOLS = [
     # Auth (3)
@@ -98,25 +97,62 @@ EXPECTED_TOOLS = [
     # Admin (2)
     "outlook_list_categories",
     "outlook_get_mail_tips",
+    # Documents (1) — main's opt-in `documents` group
+    "outlook_read_attachment",
+    # Mail rules (4) — the opt-in `rules` group
+    "outlook_list_rules",
+    "outlook_create_rule",
+    "outlook_update_rule",
+    "outlook_delete_rule",
 ]
 
 
+RULE_TOOLS = {
+    "outlook_list_rules",
+    "outlook_create_rule",
+    "outlook_update_rule",
+    "outlook_delete_rule",
+}
+
+
+def _documents_are_loaded() -> bool:
+    """The `documents` group is opt-in: only when `OUTLOOK_MCP_TOOLSETS` names it."""
+    return "outlook_read_attachment" in set(mcp._tool_manager._tools)
+
+
+def _rules_are_loaded() -> bool:
+    """The `rules` group is opt-in: `OUTLOOK_MCP_TOOLSETS` or `mailbox_settings_write`.
+
+    Which surface this process registers therefore depends on the environment it
+    was imported in, and both answers are correct — 71 by default (the surface a
+    stock install pays for), 75 once rules are asked for.
+    """
+    return bool(set(mcp._tool_manager._tools) & RULE_TOOLS)
+
+
 def _expected_tool_names() -> set[str]:
-    """The explicit documents opt-in adds one tool to the 71 default names."""
+    """The default names, plus each opt-in group only when this process loaded it.
+
+    `documents` and `rules` are the two off-by-default groups.
+    Reading the loaded surface instead of the environment keeps the count honest
+    when `mailbox_settings_write` turns rules on without naming the group.
+    """
     expected = set(EXPECTED_TOOLS)
-    if "documents" in (parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")) or set()):
-        expected.add("outlook_read_attachment")
+    if not _documents_are_loaded():
+        expected.discard("outlook_read_attachment")
+    if not _rules_are_loaded():
+        expected -= RULE_TOOLS
     return expected
 
 
 def test_tool_count():
-    """71 default tools, or 72 when the documents group is explicitly enabled."""
+    """71 tools by default, 72 with documents, 75 with rules, 76 with both."""
     registered = set(mcp._tool_manager._tools.keys())
     assert len(registered) == len(_expected_tool_names())
 
 
 def test_all_tools_registered():
-    """Every expected tool name is registered on the server."""
+    """Every expected tool name is registered, minus the group that is off."""
     registered = set(mcp._tool_manager._tools.keys())
     assert registered == _expected_tool_names()
 
@@ -780,3 +816,277 @@ def test_request_urls_are_not_logged():
         check=True,
     )
     assert out.stdout.strip().splitlines()[-1] == "False"
+
+
+def test_tool_groups_names_every_real_tool_and_nothing_else():
+    """A ghost entry in `TOOL_GROUPS` registers nothing but passes every guard.
+
+    The docs test reads the group table, so an entry for a tool that does not
+    exist satisfies it, the README row check and the tool count at once.
+    """
+    from outlook_mcp import server as server_module
+    from outlook_mcp import toolsets
+
+    registered = {
+        name
+        for name in dir(server_module)
+        if name.startswith("outlook_") and callable(getattr(server_module, name))
+    }
+
+    assert set(toolsets.TOOL_GROUPS) == registered
+
+
+def test_a_403_on_a_rule_write_points_at_the_settings_consent():
+    """The generic 403 hint says "not supported for this account type", which is
+    wrong for a rule write — the endpoint works, the consent does not cover it.
+    """
+    from outlook_mcp.errors import LEAVE_SETTINGS_TO_THE_USER, RULE_WRITE_NEEDS_SETTINGS_WRITE
+
+    err = _rule_write_hint(
+        GraphAPIError(403, "ErrorAccessDenied", "Access denied"),
+        "outlook_create_rule",
+        settings_write_on=False,
+    )
+
+    # The exact constant, not just phrases: the flag-on text contains every
+    # phrase checked here, so a hint that always picked it passed this test.
+    assert err.action == RULE_WRITE_NEEDS_SETTINGS_WRITE
+    assert "mailbox_settings_write" in err.action
+    assert LEAVE_SETTINGS_TO_THE_USER in err.action
+    # The text cannot see which cause it is, so it must offer both rather than
+    # assert the consent as the cause. A hint that says "this sign-in consented
+    # the read scope only" states a fact the server cannot observe.
+    assert "Either" in err.action
+    assert "mail-flow policy" in err.action
+
+
+def test_a_403_on_a_rule_write_with_the_setting_on_is_not_told_to_set_it():
+    """With the flag on, the sign-in already asked for the scope, so the refusal
+    is either a token from before it or a policy — and the advice has to say so
+    instead of asserting a cause it cannot see."""
+    from outlook_mcp.errors import RULE_WRITE_STILL_DENIED
+
+    err = _rule_write_hint(
+        GraphAPIError(403, "ErrorAccessDenied", "Forwarding blocked by policy"),
+        "outlook_update_rule",
+        settings_write_on=True,
+    )
+
+    assert err.action == RULE_WRITE_STILL_DENIED
+    assert "policy" in err.action
+    # Not "only its administrator can change that": a personal account has no
+    # administrator, so the hint has to say that case has no fix at all.
+    assert "Either" in err.action
+    assert "personal account has no administrator" in err.action
+
+
+def test_the_real_config_reader_turns_the_rule_tools_on(tmp_path):
+    """Every other test patches `_mailbox_settings_write_is_on`, so a reader that
+    always returned False passed all of them. This runs the real one in a fresh
+    interpreter: a config that asks for the scope, and no `OUTLOOK_MCP_TOOLSETS`.
+    """
+    import json as _json
+    import subprocess
+    import sys
+
+    (tmp_path / "config.json").write_text(
+        _json.dumps({"client_id": "test-client", "mailbox_settings_write": True}),
+        encoding="utf-8",
+    )
+    code = """
+import json
+from outlook_mcp import toolsets
+from outlook_mcp.server import mcp
+names = list(mcp._tool_manager._tools)
+rules = [n for n in names if toolsets.TOOL_GROUPS.get(n) == "rules"]
+print(json.dumps({"rules": len(rules), "count": len(names)}))
+"""
+    env = {**os.environ, "OUTLOOK_MCP_CONFIG_DIR": str(tmp_path)}
+    env.pop("OUTLOOK_MCP_TOOLSETS", None)
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr
+    measured = _json.loads(result.stdout.strip().splitlines()[-1])
+    assert measured["rules"] == 4, result.stdout
+    assert measured["count"] == 75, result.stdout
+
+
+@pytest.mark.parametrize(
+    "tool_name", ["outlook_create_rule", "outlook_update_rule", "outlook_delete_rule"]
+)
+def test_every_rule_write_tool_gets_the_hint(tool_name):
+    """Dropping one from `_RULE_WRITE_TOOLS` used to be invisible."""
+    err = _rule_write_hint(
+        GraphAPIError(403, "ErrorAccessDenied", "Access denied"),
+        tool_name,
+        settings_write_on=False,
+    )
+
+    assert "mailbox_settings_write" in (err.action or "")
+
+
+def test_a_403_on_another_tool_keeps_the_dead_ends_hint():
+    from msgraph.generated.models.o_data_errors.main_error import MainError
+    from msgraph.generated.models.o_data_errors.o_data_error import ODataError
+
+    from outlook_mcp.errors import wrap_graph_error
+
+    inner = MainError()
+    inner.code = "ErrorAccessDenied"
+    inner.message = "Access is denied."
+    failed = ODataError()
+    failed.response_status_code = 403
+    failed.error = inner
+
+    kept = _rule_write_hint(wrap_graph_error(failed), "outlook_list_folders")
+
+    assert "dead-ends" in (kept.action or "")
+
+
+async def test_the_wrapper_applies_the_rule_hint_to_a_graph_api_error(monkeypatch):
+    """`call_without_replay` raises `GraphAPIError`, and the wrapper used to pass
+    that class through untouched — so create never got the hint update and delete
+    did. This is the path create actually takes."""
+    import outlook_mcp.server as server
+
+    monkeypatch.setattr(server, "_mailbox_settings_write_is_on", lambda: False)
+
+    async def outlook_create_rule():
+        raise GraphAPIError(403, "ErrorAccessDenied", "Access denied.")
+
+    wrapped = _wrap_tool_errors(outlook_create_rule)
+
+    with pytest.raises(GraphAPIError) as excinfo:
+        await wrapped()
+
+    assert "mailbox_settings_write" in (excinfo.value.action or "")
+    assert "dead-ends" not in (excinfo.value.action or "")
+    # The exact flag-off text: the flag-on constant also mentions
+    # `mailbox_settings_write`, so a hint that always picked it passed this test.
+    from outlook_mcp.errors import RULE_WRITE_NEEDS_SETTINGS_WRITE
+
+    assert excinfo.value.action == RULE_WRITE_NEEDS_SETTINGS_WRITE
+
+
+async def test_the_wrapper_keeps_the_sdk_error_as_the_cause(monkeypatch):
+    """`from None` wiped `__cause__` for every tool that raises its own error.
+
+    The server-side traceback needs the SDK error underneath; the hint must not
+    cost it.
+    """
+    import outlook_mcp.server as server
+    from outlook_mcp.errors import RULE_WRITE_NEEDS_SETTINGS_WRITE
+
+    monkeypatch.setattr(server, "_mailbox_settings_write_is_on", lambda: False)
+    sdk_error = RuntimeError("the SDK said no")
+
+    async def outlook_create_rule():
+        raise GraphAPIError(403, "ErrorAccessDenied", "Access denied.") from sdk_error
+
+    wrapped = _wrap_tool_errors(outlook_create_rule)
+
+    with pytest.raises(GraphAPIError) as excinfo:
+        await wrapped()
+
+    assert excinfo.value.__cause__ is sdk_error
+    assert excinfo.value.action == RULE_WRITE_NEEDS_SETTINGS_WRITE
+
+
+async def test_the_wrapper_still_translates_an_sdk_error_for_a_rule_write(monkeypatch):
+    """The other path, for the tools that raise straight from the SDK."""
+    from kiota_abstractions.api_error import APIError
+
+    import outlook_mcp.server as server
+
+    monkeypatch.setattr(server, "_mailbox_settings_write_is_on", lambda: False)
+
+    async def outlook_delete_rule():
+        failed = APIError()
+        failed.response_status_code = 403
+        raise failed
+
+    wrapped = _wrap_tool_errors(outlook_delete_rule)
+
+    with pytest.raises(GraphAPIError) as excinfo:
+        await wrapped()
+
+    assert "mailbox_settings_write" in (excinfo.value.action or "")
+
+
+@pytest.mark.parametrize("settings_write_on", [False, True])
+def test_a_403_on_listing_rules_names_both_causes(settings_write_on):
+    """Listing needs only the read scope the default consent asks for, so the write
+    advice does not fit, and the generic hint sends the agent to a dead-ends page
+    that still lists rules. A live personal mailbox answered this 403."""
+    from outlook_mcp.errors import RULE_LIST_DENIED
+
+    err = _rule_write_hint(
+        GraphAPIError(403, "ErrorAccessDenied", "Access is denied."),
+        "outlook_list_rules",
+        settings_write_on=settings_write_on,
+    )
+
+    assert err.action == RULE_LIST_DENIED
+    assert "dead-ends" not in err.action
+
+
+async def test_the_wrapper_gives_a_refused_rule_listing_the_listing_hint(monkeypatch):
+    """`list_rules` raises straight from the SDK, so the hint has to reach that path."""
+    from kiota_abstractions.api_error import APIError
+
+    import outlook_mcp.server as server
+    from outlook_mcp.errors import RULE_LIST_DENIED
+
+    monkeypatch.setattr(server, "_mailbox_settings_write_is_on", lambda: False)
+
+    async def outlook_list_rules():
+        failed = APIError()
+        failed.response_status_code = 403
+        raise failed
+
+    with pytest.raises(GraphAPIError) as excinfo:
+        await _wrap_tool_errors(outlook_list_rules)()
+
+    assert excinfo.value.action == RULE_LIST_DENIED
+
+
+async def test_the_wrapper_uses_the_denied_hint_when_the_setting_is_on(monkeypatch):
+    """The three wrapper tests above all patch the flag to False, so a wrapper
+    that always returned the "set the flag" text would pass all of them. With
+    the flag on, the hint must be the denied text, never the consent advice."""
+    import outlook_mcp.server as server
+    from outlook_mcp.errors import RULE_WRITE_STILL_DENIED
+
+    monkeypatch.setattr(server, "_mailbox_settings_write_is_on", lambda: True)
+
+    async def outlook_create_rule():
+        raise GraphAPIError(403, "ErrorAccessDenied", "Forwarding blocked by policy")
+
+    wrapped = _wrap_tool_errors(outlook_create_rule)
+
+    with pytest.raises(GraphAPIError) as excinfo:
+        await wrapped()
+
+    assert excinfo.value.action == RULE_WRITE_STILL_DENIED
+    assert "mailbox_settings_write: true" not in excinfo.value.action
+
+
+async def test_an_unrelated_tool_error_is_still_passed_through_untouched(monkeypatch):
+    import outlook_mcp.server as server
+
+    monkeypatch.setattr(server, "_mailbox_settings_write_is_on", lambda: False)
+
+    async def outlook_list_folders():
+        raise ToolInputError("no such folder")
+
+    wrapped = _wrap_tool_errors(outlook_list_folders)
+
+    with pytest.raises(ToolInputError, match="no such folder"):
+        await wrapped()

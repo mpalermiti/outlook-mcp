@@ -642,3 +642,35 @@ class TestSavedSignInBelongsToTheConfiguredApp:
             assert auth.try_cached_token() is True
 
         assert auth.startup_error is None
+
+
+class TestMailboxSettingsWriteScope:
+    """Consent is per requested scope: the portal permission alone grants nothing."""
+
+    def test_default_consent_asks_for_read_only_settings(self):
+        scopes = AuthManager(Config(client_id="test")).get_scopes()
+        assert "MailboxSettings.Read" in scopes
+        assert "MailboxSettings.ReadWrite" not in scopes
+
+    def test_opt_in_swaps_in_the_write_scope(self):
+        scopes = AuthManager(Config(client_id="test", mailbox_settings_write=True)).get_scopes()
+        assert "MailboxSettings.ReadWrite" in scopes
+        assert "MailboxSettings.Read" not in scopes
+
+    def test_read_only_consent_is_untouched(self):
+        """An app registration restricted to reads must not be asked for writes.
+
+        The contradictory pairing (`read_only_consent` + `mailbox_settings_write`)
+        is refused at config load, so this method never has to silently ignore the
+        flag — see TestMailboxSettingsWriteConfig in test_config.py.
+        """
+        scopes = AuthManager(
+            Config(client_id="test", read_only=True, read_only_consent=True)
+        ).get_scopes()
+        assert "MailboxSettings.ReadWrite" not in scopes
+        assert "MailboxSettings.Read" in scopes
+
+    def test_other_read_write_scopes_are_unchanged(self):
+        scopes = AuthManager(Config(client_id="test", mailbox_settings_write=True)).get_scopes()
+        assert "Mail.ReadWrite" in scopes
+        assert "Mail.Send" in scopes

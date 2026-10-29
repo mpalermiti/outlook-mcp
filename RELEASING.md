@@ -82,6 +82,7 @@ Update in lockstep:
 - `CHANGELOG.md` — new `## [X.Y.Z] — YYYY-MM-DD` entry
 - `SKILL.md` — `## Tools (N)` heading + frontmatter `description` if count changed
 - `README.md` — counts and tables if they changed
+- `README.md` — the **What's new** list: add this release's user-facing changes in plain words, and drop entries older than about four releases (the CHANGELOG keeps everything)
 - `ROADMAP.md` — move shipped items from Near-term to Done
 - `CLAUDE.md` — the Architecture list if you added/removed a module, and the docstring count under Conventions if the default tool count changed
 

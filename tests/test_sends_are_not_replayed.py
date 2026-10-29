@@ -32,7 +32,13 @@ from msgraph_core import GraphClientFactory
 
 from outlook_mcp.config import Config
 from outlook_mcp.errors import GraphAPIError
-from outlook_mcp.tools import calendar_write, mail_attachments, mail_drafts, mail_write
+from outlook_mcp.tools import (
+    calendar_write,
+    mail_attachments,
+    mail_drafts,
+    mail_rules,
+    mail_write,
+)
 from tests.test_send_tools_are_marked_destructive import _tools_that_can_send
 
 _CFG = Config(client_id="test")
@@ -138,6 +144,13 @@ NOT_EXERCISED: dict[str, str] = {
         "nothing is sent at attach time; a retried POST can leave a duplicate file "
         "that attendees receive with the next update, as for outlook_attach_to_draft"
     ),
+    # The rule tools are gated on `mail_send` for what a rule can *do* later, not
+    # because the call itself sends. Update and delete are idempotent by
+    # construction — a repeated PATCH writes the same rule, a repeated DELETE
+    # finds nothing — so a replay costs nothing worth a case here. Create is not:
+    # it lives in SENDS, because a re-sent POST is a second rule.
+    "outlook_update_rule": "a retried PATCH replaces the same rule with the same actions",
+    "outlook_delete_rule": "a retried DELETE finds the rule already gone",
 }
 
 # (tool, path the write is sent to, the call, answers it needs first, where to check)
@@ -246,6 +259,25 @@ SENDS = [
         {},
         "event",
         id="rsvp_tentative",
+    ),
+    # Not a send, and not idempotent either: a re-sent POST is a second rule, and
+    # both of them keep running. The gate is `mail_send` because a rule can
+    # forward. `where_to_check` is the listing the agent has to read before
+    # creating again.
+    pytest.param(
+        "outlook_create_rule",
+        "/messageRules",
+        lambda sdk, *_: mail_rules.create_rule(
+            sdk,
+            config=_CFG,
+            name="Rule",
+            from_addresses=["someone@contoso.com"],
+            mark_as_read=True,
+            sequence=100,
+        ),
+        {},
+        "List the rules",
+        id="create_rule",
     ),
     pytest.param(
         "outlook_update_event",

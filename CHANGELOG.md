@@ -6,7 +6,88 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.30.1] — 2026-10-28
+
+### Fixed
+
+- **The MCP registry lists the 1.30 tools.** 1.30.0 reached PyPI, but the registry refused
+  its `server.json` description at 101 characters (its limit is 100), so it kept showing
+  1.29.0. The description is shorter, and a test now holds the limit, so CI catches it before
+  a release instead of the registry after one. No code change from 1.30.0.
+
+## [1.30.0] — 2026-10-28
+
+Inbox rules, from @hrgupta, with thanks: four opt-in tools list, create, change and delete
+server-side inbox rules (#128). They are off by default, a rule that forwards mail also needs
+`mail_send`, and not every personal mailbox allows rules; a refused listing says so (#203).
+The README gains a short What's new (#202). 76 tools, up from 72: the four rule tools are
+opt-in, so 71 load by default and the default surface stays at 11,130 proxy tokens.
+
 ### Added
+
+- **Inbox rules: `outlook_list_rules`, `outlook_create_rule`, `outlook_update_rule`,
+  `outlook_delete_rule`.** Graph's `/me/mailFolders/inbox/messageRules` was previously
+  documented here as a dead end on personal accounts; it is not (see ROADMAP). Rules are
+  server-side, so they keep running with every client closed. `outlook_update_rule` reads the
+  rule before patching it, because Graph replaces a rule's `actions` object wholesale — a
+  re-point that did not send the other actions back would silently clear them. The three write
+  tools sit behind a new `mail_rules` permission category and need `MailboxSettings.ReadWrite`
+  on the token, which the new `mailbox_settings_write` config key adds to the sign-in: the
+  default consent set asks only for `MailboxSettings.Read`, and consent is per requested scope,
+  so the portal permission alone would not put it in the token. `outlook_list_rules` returns each
+  rule's conditions and actions, not only its name and status — a forwarding rule you cannot see
+  is the one that matters. Overlapping updates of one rule are serialized in-process; Graph
+  returns no `@odata.etag` on this endpoint, so there is no `If-Match` and the last write wins
+  across processes. The `mail_send` gate follows the indirect routes as well: a forwarding rule
+  behind a `stop_processing_rules` rule starts delivering mail when the forwarding rule is
+  moved up, or when that stop rule is reordered, disabled or deleted, so those changes require
+  `mail_send` too — none of them names a forwarding address. A rule that stops processing is
+  also one carrying `permanentDelete`, a null or omitted sequence is not sequence zero, and a
+  cut-short rule listing is "cannot tell" rather than "nothing hidden". Graph assigns rule order:
+  a requested `sequence` was accepted but not honoured on a live personal mailbox, so the tools
+  return the stored value as authoritative, and add `sequence_requested` when it differs from
+  the request. Reordering a *disabled*
+  forwarding rule does not demand `mail_send`, nor does repairing a rule in the same call that
+  switches it off (what lands is still disabled), and `mailbox_settings_write` is refused
+  alongside `read_only_consent` rather than being silently ignored. `outlook_list_rules` also
+  reports `has_error`, and both read and write paths walk the model's own attributes instead of
+  a hand-kept field list, so a field Graph adds later is neither hidden from the read nor
+  dropped from an update. A refused listing says it is either the read consent or a mailbox
+  that refuses rules, rather than pointing at the dead-ends page: a live personal mailbox
+  whose token reads its categories under that same scope still answered 403 there.
+
+  The four rule tools are their own **opt-in** `rules` toolset group: with
+  `OUTLOOK_MCP_TOOLSETS` unset they do not load, so the surface every user pays for stays at
+  71 tools and 11,130 proxy tokens, under the 11,250 ceiling. They load when the
+  group is named, or when `mailbox_settings_write: true` is set and no selection was made —
+  three of the four cannot work without that scope, so asking for it is treated as asking for
+  the tools, without overriding a narrower `OUTLOOK_MCP_TOOLSETS` an operator chose. Both
+  surfaces are budgeted separately: the 71-tool default under 11,250, and the rules-enabled
+  75-tool surface under 12,150 (measured 11,951).
+
+## [1.29.0] — 2026-10-27
+
+A contributor release, nearly all of it from @benjamin-di, with thanks. A meeting invitation
+now leads to its calendar event (#195), calendar listings name their owner (#193), an instance
+can be pinned to one sign-in (#179), and settings can come from `OUTLOOK_MCP_` environment
+variables that may only tighten security (#180). The tool schemas every client reads each turn
+are a quarter smaller: the default surface is 11,130 proxy tokens, down from 14,813 in 1.28.0.
+Tool count unchanged at 72, 71 by default.
+
+### Added
+
+
+- **Calendar listings include the owner and private-item visibility permission** (#193).
+  Calendars with the same name can be distinguished without another Graph request;
+  missing metadata stays null. No change to requests, scopes or the tool surface.
+
+- **Resolve an invitation with `outlook_get_event(message_id=...)`** (#195), using Graph's
+  association to the recipient's calendar event, then reading its current details.
+  Exactly one of `event_id` and `message_id` is required. Existing event-ID requests
+  are unchanged. Event details expose nullable organizer/proposal/cancellation flags
+  and attendees' proposed slots with their original time zones. An invitation with no
+  calendar event is refused with the reason it may have none (the meeting was cancelled
+  or removed), never matched by subject (#197). No write or new scope.
 
 - **Optional `expected_username` pins an instance to its sign-in username** (#179). A cached
   record for another user is refused before credential construction; interactive
@@ -20,12 +101,30 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   auth/serve/status; no automatic file writeback, new dependency, tool or scope. File-only
   loading is unchanged.
 
+### Changed
+
+- **The tool schemas every client reads each turn are a quarter smaller** (#198). The schemas no
+  longer carry the `title` Pydantic writes on every input (`"title": "Unread Only"` on
+  `unread_only`) and on every tool, or an optional input's `null` branch and
+  `"default": null`, which say nothing that leaving the input out does not. The 71-tool
+  default surface goes from 14,846 to 11,130 proxy tokens, and its budget ceiling comes down
+  with it, to 11,250. No description changed, and the server accepts exactly the same
+  arguments: the SDK checks them against each tool's own model, so an explicit `null` still
+  works. Inputs named `title` (contacts, tasks) are kept, as is a `null` allowed beside some
+  other default.
+
 ### Fixed
 
 - **HTTP startup explains a wildcard bind without allowed client hosts, and token-file
   content errors name the token format instead of file permissions.** Wildcard-port
   allow-list entries also accept the bare Host/Origin used on default HTTP/HTTPS ports;
-  the refused GET event stream advertises only POST.
+  the refused GET event stream advertises only POST (#191).
+
+- **On macOS, a PDF or spreadsheet that hits a parser limit reports that limit, not
+  "Operation not permitted".** When the parser had just exited, macOS refused the cleanup
+  kill with EPERM instead of saying no such process, and that refusal replaced the
+  limit's own error. It now means nothing is left to kill, as the no-such-process answer
+  already did; a parser still running is killed as before (#199).
 
 ## [1.28.0] — 2026-10-25
 

@@ -177,7 +177,9 @@ async def extract(data: bytes, kind: str) -> dict:
             if os.name == "posix":
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
+                except (ProcessLookupError, PermissionError):
+                    # Nothing left to kill. macOS says EPERM, not ESRCH, while
+                    # the exited worker awaits reaping; a live member is killed.
                     pass
             else:
                 try:
