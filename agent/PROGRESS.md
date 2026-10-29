@@ -2,6 +2,14 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-10-28 — pypi-environment-settings (read-only re-check; Michael chose A, both halves done 2026-10-23)
+
+- No steering on PR #171 (no conversation or inline comments).
+- Recorded in `agent/findings/actions-sha-pin.md` § Re-check. VERIFIED via `gh api`: environments = only `pypi`; `custom_branch_policies: true`, one `{name: v*, type: tag}` policy, no required reviewers; rulesets `Protect main`, `Protect release tags` (unchanged: deletion/update/non_fast_forward, no bypass), `Release tag creation` (25761696: creation only, bypass RepositoryRole 5, always), all active. PyPI side recorded as Michael-confirmed. Supporting: deployments to `pypi` for v1.26.0–v1.30.1 all `success`, each version on PyPI seconds later.
+- No code change. Suite: 2642 passed, 121 deselected; ruff check + format clean.
+- Env notes: `gh` and the suite need the sandbox off here (gh: TLS cert error; suite: local port bind + worker subprocess). A plain `uv run` after the 1.30.x merge re-synced and dropped the `documents` extra (13 failures); `uv sync --all-extras --locked` then `uv run --offline pytest` is green.
+- Pushed the local merge of `origin/main` (deadbfd) with this commit; it was committed but not pushed.
+
 ## 2026-10-23 — pr122-final-fixes (steering: Michael's maintainer review + checker review of c97ecde)
 
 - Addressed PR comments: IC_kwDOSA_0Lc8AAAABewh78g (`[construct review]`, two CHANGELOG findings), IC_kwDOSA_0Lc8AAAABewxvxQ (Michael, `[maintainer review]`, two README lines + "no further changes on this PR"). No inline comments.

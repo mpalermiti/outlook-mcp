@@ -108,3 +108,23 @@ Three things the Done section got wrong, all fixed in the same commit:
 - **PyPI cannot edit a publisher.** VERIFIED (warehouse source, `warehouse/manage/views/oidc_publishers.py`): the publisher views are add, delete and `constrain_environment`; constrain adds a publisher with the environment and then removes the blank one. VERIFIED (`warehouse/oidc/models/github.py::_get_publisher_for_environment`): an exact environment match wins, else any publisher with environment `""` is used. So adding a second publisher with `pypi` beside the blank one locks nothing, silently. RELEASING.md step 3 now says: use the constrain link PyPI emails after the first release with the environment, or delete and re-add; never leave the blank one.
 - **The tag rule checks only a tag's name.** VERIFIED (`gh api repos/mpalermiti/outlook-mcp/rulesets/24471530`): "Protect release tags" on `refs/tags/v*` has rules `deletion`, `update`, `non_fast_forward`, no `creation`, no bypass actors. Anyone with write access could create a `v*` tag on any commit, and the workflow that runs is the file at that tag. VERIFIED: today the only collaborator is the owner, so nothing is exposed yet. RELEASING.md step 2 now adds a separate tag ruleset with only "Restrict creations" and Repository admin as bypass (separate so the bypass does not also lift the delete/move protections), or a required reviewer on `pypi` instead. CHANGELOG entry says the lock is as strong as that rule. ASSUMED (GitHub docs, not exercised): a ruleset bypass applies to all of its rules; `gh release create` by a bypassing admin can still create the tag.
 - **The environment guard missed quoted values.** `test_only_the_pypi_job_runs_in_the_pypi_environment` matched only `[\w-]+`, so `environment: "pypi"` on `registry` passed. Now any `environment:` key on a job counts (`_environment`, which also reads the mapping form's `name:`), pinned by `test_the_environment_reader_sees_every_spelling`. Mutation: `"pypi"`, `'pypi'` and `${{ 'pypi' }}` on `registry` each turn the guard red.
+
+## Re-check (2026-10-28, Michael chose A; both halves done 2026-10-23)
+
+Read-only, `gh api repos/mpalermiti/outlook-mcp/...` on 2026-10-28. Nothing was changed.
+
+**GitHub side — VERIFIED:**
+
+- `environments` → `total_count: 1`, only `pypi`.
+- `environments/pypi` → `deployment_branch_policy: {custom_branch_policies: true, protected_branches: false}`; one protection rule, `type: branch_policy`; no required reviewers (A, not B).
+- `environments/pypi/deployment-branch-policies` → exactly one policy, `{name: "v*", type: "tag"}`. No branch policy, so a dispatch on `main` is refused.
+- `rulesets` → three, all `enforcement: active`: `Protect main` (24471529, branch), `Protect release tags` (24471530, tag), `Release tag creation` (25761696, tag).
+- `rulesets/25761696` → `refs/tags/v*`, rules `["creation"]` only, one bypass actor `{actor_type: RepositoryRole, actor_id: 5, bypass_mode: always}`. ASSUMED (GitHub docs, not exercised): repository role id 5 is admin.
+- `rulesets/24471530` unchanged from 2026-10-20: `deletion`, `update`, `non_fast_forward`, no bypass actors. The admin bypass lives only on the creation ruleset, so it does not lift delete/move.
+- `publish.yml`: `environment: pypi` on the `pypi` job only (guarded by `test_only_the_pypi_job_runs_in_the_pypi_environment`).
+
+**PyPI side — Michael-confirmed (2026-10-23), not checkable from here:** the blank publisher entry was replaced by one bound to environment `pypi`, and the blank one removed. PyPI's publisher settings sit behind his login.
+
+**Consistent with both, not proof of the PyPI half:** every release since has deployed through the `pypi` environment and reached PyPI. `deployments?environment=pypi` shows v1.26.0 → v1.30.1 (six), each latest status `success`; PyPI's JSON API shows each version uploaded within seconds of its deployment (1.27.0 at 2026-10-24T07:11:17Z, after Michael's change; 1.26.0 just before it). A successful upload shows the environment-bound entry accepts the job; it cannot show the blank one is gone, since a blank entry would accept it too.
+
+Closes the card. Nothing further is gated on it.
