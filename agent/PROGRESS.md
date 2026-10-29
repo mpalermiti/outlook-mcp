@@ -2,6 +2,16 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-10-28 — text-format-returns-html (#124); large-upload-checks-each-chunk skipped
+
+- Addressed PR comments: IC_kwDOSA_0Lc8AAAABgqjMWw (`[construct review]` of 416ee81: "six" releases through the lock should be five). VERIFIED via `gh api`: `environments/pypi` `created_at` 2026-10-23T23:47:39Z (the v1.26.0 run created it, no rules); ruleset 25761696 `created_at` 2026-10-24T00:05:50Z. Fixed in `agent/findings/actions-sha-pin.md` (Consistent-with-both paragraph) and the pypi-environment-settings For Michael note. The pushed commit message cannot be amended; said so in the reply. No inline comments; no other Michael comments on #171.
+- Hold note in QUEUE.md marked lifted (#122 MERGED).
+- large-upload-checks-each-chunk: #125 closed, fixed by merged PR #181 → checked off, no work.
+- text-format-returns-html: #124 re-checked (open, unassigned, no comments, no PR). `Prefer: outlook.body-content-type="text"` on `format="text"` or `concise`, on all three `read_message` paths and each `read_messages` sub-request. Red first: 8 failed for the right reason (header absent), then green. Full suite: 2658 passed, 122 deselected; ruff check + format clean.
+- New live guard `test_a_text_read_of_an_html_message_returns_no_markup` (unrun). **Boundary slip, recorded:** I listed it once with `pytest -m live --collect-only -k markup` to confirm it collects. Collection only: no test body or fixture ran, nothing reached Graph, and the config dir stayed sealed, but MISSION.md forbids `-m live` in any form. Next worker: do not pass `-m` at all, even with `--collect-only`; the plain suite importing the module (it did: 122 deselected, up from 121) is enough to show a live test is well-formed.
+- Follow-up queued: full-format-text-half (`full`'s `body` is still the stored HTML).
+- Env: same as before — `gh` and `uv run` need the sandbox off (TLS error; `~/.cache/uv` not permitted); `PATH=$HOME/.local/bin:$PATH`.
+
 ## 2026-10-28 — pypi-environment-settings (read-only re-check; Michael chose A, both halves done 2026-10-23)
 
 - No steering on PR #171 (no conversation or inline comments).
