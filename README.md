@@ -24,7 +24,7 @@ You'll like this if you're:
 - Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
 - Security-conscious: tokens in the OS keyring (Keychain on macOS, libsecret on Linux -- never cleartext unless you opt in), granular `allow_categories`, optional `read_only` mode, zero telemetry
 
-This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 76 tools — way more than you need for "read my inbox").
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 77 tools — way more than you need for "read my inbox").
 
 ### How it differs from other Outlook tools you'll find
 
@@ -44,7 +44,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 76 discrete tools (71 load by default; the four rule tools and the document reader are [opt-in](#toolset-selection-optional--outlook_mcp_toolsets)) so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 77 discrete tools (71 load by default; the four rule tools, document reader and MIME export are [opt-in](#toolset-selection-optional--outlook_mcp_toolsets)) so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -61,11 +61,11 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md).
 
-- **Inbox rules** (1.30): list, create, change and delete server-side inbox rules. Off unless you turn it on, and a rule that forwards mail also needs send permission.
+- **Export an email** (1.31): get a message's original file exactly as it arrived, attachments included, up to 10 MB. Off unless you turn it on.
+- **Inbox rules** (1.30): list, create, change and delete server-side inbox rules, and see what each rule leaves out (1.30.2). Off unless you turn it on, and a rule that forwards mail also needs send permission.
 - **Attachments as text** (1.28): PDFs, spreadsheets and text files come back as readable text, parsed in a separate process with memory and time limits. Off unless you turn it on.
 - **Calendar** (1.27–1.29): turn a meeting invitation into its calendar event, attach files to events, tag an event so you can find it again, create events in any of your calendars, and see who owns each calendar.
 - **Mail** (1.27–1.28): write in Markdown, and replies keep their formatting and the quoted original. Start a draft as a reply or forward, name folders by path (`Inbox/Travel/Flights`), and see whether Microsoft verified a sender.
-- **Contacts** (1.26–1.27): job title, phone types, birthday, notes, middle name and categories, and search by phone number however it's written.
 - **Remote clients** (1.27–1.28): an optional HTTP mode serves a client on another machine and refuses to start without a token. Downloads can come back in the reply instead of as a file on the server.
 - **Safer sends** (1.27–1.28): a send that times out is never sent twice on its own, and a large attachment that fails to upload no longer lets the mail go without it.
 - **Accounts and settings** (1.29): pin a server to one sign-in, and set options from environment variables, which can only tighten security.
@@ -75,11 +75,11 @@ The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md
 
 ## Features
 
-**76 tools** across 14 categories. 71 load by default; the four rule tools and the
-document reader are opt-in groups (see [Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets)).
+**77 tools** across 14 categories. 71 load by default; the four rule tools,
+document reader and MIME export are opt-in groups (see [Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets)).
 
 - **Auth (1)** -- auth status check (login is via CLI)
-- **Mail Read (7)** -- list inbox (with Focused Inbox and uncategorized filters), read message, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
+- **Mail Read (8)** -- list inbox (with Focused Inbox and uncategorized filters), read message, opt-in original MIME export, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
 - **Mail Write (3)** -- send, reply/reply-all, forward
 - **Mail Triage (9)** -- move, delete (soft by default), flag, categorize, mark read/unread, reclassify (Focused Inbox), list/set/delete per-sender Focused Inbox overrides
 - **Mail Rules (4)** -- list rules in execution order, create from sender/subject/body conditions, update (reads the rule first, so other actions survive a re-point), delete — opt-in toolset group
@@ -325,6 +325,15 @@ the error lists their paths. `outlook_rename_folder` and `outlook_delete_folder`
 | `outlook_list_folders` | List mail folders with counts, `parent_id`, and `child_count`. Pass `recursive=true` to walk the full folder tree (subfolders included); each folder then carries its `path`, the form every `folder` argument accepts. |
 | `outlook_list_inbox_delta` | List only inbox changes since the last call. `folder` (default `inbox`) takes a name, path or ID. First call returns a full snapshot plus a `delta_token`; subsequent calls (token passed back) return only added/updated/deleted items. Deletes come back as `{id, is_deleted: True}`. Cursor is stateless — agent persists and replays. |
 | `outlook_changes_since` | One structured "since last call" digest composing mail/events/contacts deltas. Returns counts + `urgent_flagged` mail + top-5 `by_sender` + new/cancelled events. Each resource has an independent `delta_token`; stale-token recovery (HTTP 410) auto-resyncs that resource and surfaces `_meta.resync`. The first call covers the last `fallback_window_hours` (default 24): Mail requests Graph's received-time filter and enforces it client-side when ignored (`_meta.mail_window_fallback`); contacts are kept by last-modified time, and events by the calendar view (the window plus the next 7 days). Where Graph honours the mail filter, later calls keep it: mail received before the window reports only deletes, moves out of the inbox and read/unread changes, not new flags or categories. `has_more` names any resource the per-call cap stopped mid-sync; replace the stored `delta_tokens` dictionary with the returned one and pass it back; do not merge the dictionaries. It keeps `mail_bootstrap_from` while a mail bootstrap is unfinished, so continuation keeps the original bound and reports it in `window.from`. A reply with no new cursor hands back the token passed in. Designed for recurring agent loops. |
+| `outlook_export_message` | **Opt-in** (`mime` group). Export original MIME by Graph message ID as a `message/rfc822` resource blob after JSON metadata (`size_bytes`, `sha256`); read-only, bounded to 10 MiB. |
+
+Original MIME export uses the existing sign-in and needs no additional scope or package.
+Enable it with `OUTLOOK_MCP_TOOLSETS=mail,mime` (plus any other groups you need) and restart.
+It preserves the original bytes, including attachments; it does not parse or rewrite them.
+The result contains a small JSON metadata block followed by an embedded resource with a
+base64 blob, never decoded text. Messages larger than 10 MiB are refused while streaming.
+A throttled request (HTTP 429) returns an error; bulk exporters must pace their calls and
+handle throttling rather than relying on automatic retries.
 
 ### Mail Write
 
@@ -356,7 +365,7 @@ Server-side rules: they run whether or not any Outlook client is open. A rule is
 
 | Tool | Description |
 |------|-------------|
-| `outlook_list_rules` | List inbox rules in execution order, with conditions and actions, and whether Exchange reports an error applying the rule. |
+| `outlook_list_rules` | List inbox rules in execution order, with conditions, exceptions and actions, and whether Exchange reports an error applying the rule. |
 | `outlook_create_rule` | Create a rule from sender/subject/body/attachment conditions and move, copy, mark-read, delete, forward, categorize or stop-processing actions. |
 | `outlook_update_rule` | Change a rule's name, enabled state, sequence, target folder or mark-read action. Other actions are preserved; re-enabling a rule that forwards or redirects needs `mail_send`. |
 | `outlook_delete_rule` | Delete a rule by ID. Irreversible. |
@@ -632,11 +641,11 @@ anyone who controls it can also retarget the settings file with `OUTLOOK_MCP_CON
 ### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`
 
 The 71 default tool schemas load into the client's context every turn (the chars/4 proxy `test_tool_surface_budget.py` measures with; a different yardstick than the ~8.6k o200k figure in ROADMAP for the 62-tool surface). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
-Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`, `documents`, and `rules`. Unset loads every group except the opt-in ones — `documents` and `rules` — so a stock install gets 71 of the 76 tools. Name `rules` here, or set `mailbox_settings_write: true` with `OUTLOOK_MCP_TOOLSETS` unset, to get the four rule tools; that setting is itself the request for rule management. A selection here always wins: the flag does not add `rules` to a narrower list. For example, `OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"` loads 31 tools instead of 71, cutting the per-turn schema cost to about 40% of the default.
+Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`, `documents`, `rules`, and `mime`. Unset loads every group except the opt-in ones — `documents`, `rules`, and `mime` — so a stock install gets 71 of the 77 tools. Name `rules` here, or set `mailbox_settings_write: true` with `OUTLOOK_MCP_TOOLSETS` unset, to get the four rule tools; that setting is itself the request for rule management. A selection here always wins: the flag does not add `rules` to a narrower list. For example, `OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"` loads 31 tools instead of 71, cutting the per-turn schema cost to about 40% of the default.
 
-Naming any group loads only the groups named, plus `account`, and a name that is not a group matches nothing. So to add both opt-in groups to the default set, name all thirteen: `OUTLOOK_MCP_TOOLSETS=mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules`.
+Naming any group loads only the groups named, plus `account`, and a name that is not a group matches nothing. To add all opt-in groups to the default set, name the default groups and the opt-ins: `OUTLOOK_MCP_TOOLSETS=mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime`.
 
-The groups are not the headings of the Tool Reference. `mail` holds the mail read, write and triage tools, `outlook_list_thread`, `outlook_copy_message` and `outlook_batch_triage`, but `outlook_list_folders` is in `folders`; the Focused Inbox tools (`outlook_reclassify_message` and the three override tools) are in `admin`, with categories and mail tips; the three `*_delta` tools are in `delta` and `outlook_changes_since` in `digest`; `outlook_list_calendars` is in `calendar`; the two draft-attachment tools are in `drafts`, `outlook_read_attachment` in `documents`, and the four rule tools in `rules`; and `account` is `outlook_auth_status` and `outlook_whoami`.
+The groups are not the headings of the Tool Reference. `mail` holds the mail read, write and triage tools, `outlook_list_thread`, `outlook_copy_message` and `outlook_batch_triage`, but `outlook_list_folders` is in `folders`; the Focused Inbox tools (`outlook_reclassify_message` and the three override tools) are in `admin`, with categories and mail tips; the three `*_delta` tools are in `delta` and `outlook_changes_since` in `digest`; `outlook_list_calendars` is in `calendar`; the two draft-attachment tools are in `drafts`, `outlook_read_attachment` in `documents`, and the four rule tools in `rules`, and MIME export in `mime`; and `account` is `outlook_auth_status` and `outlook_whoami`.
 
 ### Two accounts, two instances (optional) — `OUTLOOK_MCP_CONFIG_DIR`
 
@@ -847,7 +856,7 @@ uv run outlook-mcp
 
 ## Roadmap
 
-- **Advanced mail** -- raw MIME export, internet message headers
+- **Advanced mail** -- internet message headers
 - **Calendar** -- cancel event (with attendee notification)
 - **Work/school-only tools** -- free/busy, meeting times, automatic replies, shared mailboxes: not planned for now (#133). If any are taken later, they come as an opt-in group that personal accounts never load
 

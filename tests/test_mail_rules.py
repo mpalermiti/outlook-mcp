@@ -12,7 +12,7 @@ from outlook_mcp.errors import GraphAPIError, PermissionDeniedError, ReadOnlyErr
 from outlook_mcp.tools import mail_rules
 from outlook_mcp.tools.mail_rules import (
     _describe_actions,
-    _describe_conditions,
+    _describe_predicates,
     _forwards_offsite,
     _recipient,
     _stops_processing,
@@ -48,6 +48,7 @@ def _make_rule(
     is_enabled: bool = True,
     actions=None,
     conditions=None,
+    exceptions=None,
 ):
     rule = MagicMock()
     rule.id = rule_id
@@ -58,6 +59,7 @@ def _make_rule(
     rule.has_error = False
     rule.actions = actions
     rule.conditions = conditions
+    rule.exceptions = exceptions
     return rule
 
 
@@ -1548,23 +1550,59 @@ class TestUnknownFieldsInBothDirections:
         conditions = MessageRulePredicates()
         conditions.additional_data = {"somethingNew": ["wire-condition"]}
 
-        described = _describe_conditions(conditions)
+        described = _describe_predicates(conditions)
 
         assert described["unknown_conditions"] == {"somethingNew": ["wire-condition"]}
 
-    def test_exceptions_render_as_a_block_not_a_model_repr(self):
-        """`exceptions` is a nested predicate block; `str(model)` showed "None"."""
+
+class TestRuleExceptionsAreListed:
+    """`exceptions` hangs off the rule, beside `conditions`, not inside it.
+
+    `MessageRulePredicates` has no `exceptions` attribute, so a nested read
+    always found nothing and a rule that forwards everything except some mail
+    listed as if it caught everything.
+    """
+
+    async def test_the_exceptions_block_is_listed(self):
         from msgraph.generated.models.message_rule_predicates import MessageRulePredicates
 
-        conditions = MessageRulePredicates()
         exceptions = MessageRulePredicates()
         exceptions.subject_contains = ["wire-exception"]
-        conditions.exceptions = exceptions
 
-        described = _describe_conditions(conditions)
+        client = MagicMock()
+        response = MagicMock()
+        response.value = [_make_rule(exceptions=exceptions)]
+        _wire_rules(client).get = AsyncMock(return_value=response)
 
-        assert described["exceptions"]["subject_contains"] == ["wire-exception"]
-        assert "None" not in str(described)
+        result = await list_rules(client)
+
+        assert result["rules"][0]["exceptions"] == {"subject_contains": ["wire-exception"]}
+
+    async def test_a_rule_without_exceptions_omits_the_key(self):
+        """Unset is omitted, not an empty block — like every other field here."""
+        client = MagicMock()
+        response = MagicMock()
+        response.value = [_make_rule()]
+        _wire_rules(client).get = AsyncMock(return_value=response)
+
+        result = await list_rules(client)
+
+        assert "exceptions" not in result["rules"][0]
+
+    async def test_the_exceptions_block_is_scrubbed_like_every_other_string(self):
+        from msgraph.generated.models.message_rule_predicates import MessageRulePredicates
+
+        exceptions = MessageRulePredicates()
+        exceptions.subject_contains = ["wire\x00-exception"]
+
+        client = MagicMock()
+        response = MagicMock()
+        response.value = [_make_rule(exceptions=exceptions)]
+        _wire_rules(client).get = AsyncMock(return_value=response)
+
+        result = await list_rules(client)
+
+        assert result["rules"][0]["exceptions"]["subject_contains"] == ["wire-exception"]
 
 
 class TestUpdateGuards:

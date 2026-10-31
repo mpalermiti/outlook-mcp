@@ -46,7 +46,8 @@ ALWAYS_ON_GROUPS = {"account"}
 # path subtracted both while `select_kept_tools(None)` subtracted only one, so
 # the two disagreed about what a stock install gets and `rules` leaked through
 # the second path.
-OFF_BY_DEFAULT = {"documents", "rules"}
+# Original MIME export also stays off by default; it adds no write scope.
+OFF_BY_DEFAULT = {"documents", "rules", "mime"}
 
 # What `mailbox_settings_write: true` adds when nothing was named. Not every
 # off-by-default group: that key asks for rule writes, not for the document
@@ -74,6 +75,8 @@ TOOL_GROUPS: dict[str, str] = {
     "outlook_copy_message": "mail",
     "outlook_batch_triage": "mail",
     "outlook_list_thread": "mail",
+    # MIME export is separate from ordinary mail reads and off by default.
+    "outlook_export_message": "mime",
     # rules — their own group: the four schemas are the most expensive single
     # feature here (~1.2k proxy tokens, mostly `create_rule`'s argument list), and
     # a client that gated down to `mail` should not pay for them.
@@ -150,6 +153,7 @@ TOOL_GROUPS: dict[str, str] = {
 # Tools that only read — no mailbox/calendar mutation. (download_attachment is
 # deliberately excluded: it writes a local file, so it isn't read-only.)
 READ_ONLY: set[str] = {
+    "outlook_export_message",
     "outlook_auth_status",
     "outlook_whoami",
     "outlook_list_inbox",

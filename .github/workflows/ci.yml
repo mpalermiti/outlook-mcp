@@ -111,7 +111,7 @@ jobs:
           "$RUNNER_TEMP/fresh/bin/python" - <<'PY'
           import outlook_mcp.server as s
           tools = [a for a in dir(s) if a.startswith("outlook_")]
-          assert len(tools) == 76, f"expected 76 tools, got {len(tools)}"
+          assert len(tools) == 77, f"expected 77 tools, got {len(tools)}"
           print(f"OK: server imports, {len(tools)} tools registered")
           PY
       - name: Request URLs must not be logged
@@ -185,7 +185,7 @@ jobs:
         run: |
           "$RUNNER_TEMP/pypi/bin/python" tests/test_me_rewrite_reaches_the_wire.py
       - name: Published server must import and register its full tool surface
-        # 76 is what the *published* release registers — not a typo for the
+        # 77 is what the *published* release registers — not a typo for the
         # working tree's count. Update this number only when a release ships
         # with a different surface (see RELEASING.md).
         run: |
@@ -193,12 +193,12 @@ jobs:
           import outlook_mcp.server as s
           tools = [a for a in dir(s) if a.startswith("outlook_")]
           # This asserts the count in the *published* release, not this branch's.
-          # Bump at release time to whatever PyPI is serving (76 while 1.30.x is
+          # Bump at release time to whatever PyPI is serving (77 while 1.31.x is
           # latest) — this file is in
           # RELEASING.md §3's lockstep
           # list precisely so the weekly canary doesn't go permanently red the
           # moment a release publishes.
-          assert len(tools) == 76, f"expected 76 tools, got {len(tools)}"
+          assert len(tools) == 77, f"expected 77 tools, got {len(tools)}"
           print(f"OK: published package imports, {len(tools)} tools registered")
           PY
       - name: CLI entrypoint must be wired and runnable

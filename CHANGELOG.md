@@ -28,6 +28,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the body (#124). Text hidden only by styling, such as `display:none`, may still be rendered:
   a body remains untrusted content either way.
 
+## [1.31.0] — 2026-10-30
+
+Original MIME export, from @benjamin-di, with thanks (#210).
+
+### Added
+
+- Opt-in `mime` toolset adds `outlook_export_message`: original message MIME as a `message/rfc822` resource blob after JSON metadata with byte count and SHA-256, bounded to 10 MiB on the existing sign-in (#210).
+
+## [1.30.2] — 2026-10-29
+
+A fix to the 1.30 rules listing, from @hrgupta, with thanks (#206).
+
+### Fixed
+
+- **`outlook_list_rules` shows what a rule excludes.** `exceptions` is a predicates block on
+  the rule itself, beside `conditions` — `MessageRulePredicates` has no `exceptions` member,
+  so a listing that looked inside `conditions` never found one. A rule that forwards everything
+  except a set of mail therefore listed as if it caught everything, which is the question a rule
+  listing exists to answer. The block is now serialized alongside `conditions`, scrubbed like
+  every other caller-visible string, and omitted when unset.
+
 ## [1.30.1] — 2026-10-28
 
 ### Fixed

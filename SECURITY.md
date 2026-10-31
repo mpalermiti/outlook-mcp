@@ -105,6 +105,11 @@ outlook-mcp is designed with security in mind:
   An attachment over 10 MiB is refused before it is downloaded, nothing is written to disk,
   there is no OCR, and formulas are never recalculated (Excel's saved result is reported).
   Results are marked `untrusted_external_content`: the text is the sender's.
+- **MIME export is opt-in, read-only and bounded.** `outlook_export_message` is in the
+  `mime` group, which loads only when `OUTLOOK_MCP_TOOLSETS` names it. It sends the token
+  to one fixed `graph.microsoft.com` path built from a validated, percent-encoded message
+  ID, follows no redirects, refuses a compressed body, and stops reading past 10 MiB. The
+  bytes go back to the client as a resource blob and are never written to disk.
 - **Input validation:** All Graph IDs, emails, dates, KQL queries, folder names and event keys are validated before use
 - **Atomic writes:** Config files are written atomically to prevent corruption
 - **Symlink rejection:** Config loader refuses symlinked files

@@ -55,6 +55,7 @@ from outlook_mcp.tools import (
     mail_delta,
     mail_drafts,
     mail_folders,
+    mail_mime,
     mail_read,
     mail_rules,
     mail_thread,
@@ -471,6 +472,16 @@ async def outlook_read_message(
         concise=concise,
         include_sender_auth=include_sender_auth,
     )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_export_message(ctx: Context, message_id: str) -> list[ContentBlock]:
+    """Export original message MIME as a message/rfc822 blob with byte count and SHA-256.
+
+    Read-only; at most 10 MiB.
+    """
+    return await mail_mime.get_mime(_get_graph_client(ctx), message_id)
 
 
 @mcp.tool()

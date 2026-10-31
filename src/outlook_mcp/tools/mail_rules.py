@@ -190,12 +190,6 @@ def _describe_block(block: Any) -> dict:
             }
             described[attr] = {k: v for k, v in bounds.items() if v is not None}
             continue
-        if attr == "exceptions":
-            # A nested predicate block. Rendering it with `_plain` produced
-            # `str(model)` — "None" for every unset field inside it — so the one
-            # part of a rule that says what it excludes was unreadable.
-            described[attr] = _describe_block(value)
-            continue
         described[attr] = _plain(value)
     return described
 
@@ -205,17 +199,19 @@ def _unknown_condition_keys(conditions: Any) -> list[str]:
     return _unknown_keys(getattr(conditions, "additional_data", None) or {})
 
 
-def _describe_conditions(conditions: Any) -> dict:
-    """Serialize a rule's conditions, including any this build cannot name.
+def _describe_predicates(predicates: Any) -> dict:
+    """Serialize a predicates block, including any key this build cannot name.
 
-    The read surface claimed a field Graph adds later is "neither hidden from the
-    read nor dropped from an update". That held for actions only: an unknown
-    condition key was dropped from the listing.
+    Used for both a rule's ``conditions`` and its ``exceptions``: they are the
+    same ``MessageRulePredicates`` type, one hanging off the rule directly and
+    the other beside it. The read surface claimed a field Graph adds later is
+    "neither hidden from the read nor dropped from an update". That held for
+    actions only: an unknown condition key was dropped from the listing.
     """
-    described = _describe_block(conditions)
-    unknown = _unknown_condition_keys(conditions)
+    described = _describe_block(predicates)
+    unknown = _unknown_condition_keys(predicates)
     if unknown:
-        extra = conditions.additional_data
+        extra = predicates.additional_data
         described["unknown_conditions"] = {sanitize_output(k): _plain(extra[k]) for k in unknown}
     return described
 
@@ -370,14 +366,40 @@ async def _rules_in_inbox(graph_client: Any) -> tuple[list[Any], bool]:
     return await _fetch_rules(graph_client)
 
 
+def _describe_rule(rule: Any) -> dict:
+    """One rule as plain JSON, including the exceptions that narrow it.
+
+    ``exceptions`` is a predicates block on the rule itself, beside
+    ``conditions`` — ``MessageRulePredicates`` has no ``exceptions`` attribute,
+    so a nested read finds nothing. Without it a rule that forwards everything
+    except a given set of mail lists as if it caught everything, which is the
+    one question a rule listing exists to answer. Omitted rather than emitted as
+    an empty block, like every other unset field.
+    """
+    described = {
+        "id": rule.id,
+        "display_name": sanitize_output(rule.display_name or ""),
+        "is_enabled": rule.is_enabled,
+        "sequence": rule.sequence,
+        "is_read_only": rule.is_read_only,
+        "has_error": getattr(rule, "has_error", None),
+        "conditions": _describe_predicates(getattr(rule, "conditions", None)),
+        "actions": _describe_actions(getattr(rule, "actions", None)),
+    }
+    exceptions = _describe_predicates(getattr(rule, "exceptions", None))
+    if exceptions:
+        described["exceptions"] = exceptions
+    return described
+
+
 async def list_rules(graph_client: Any) -> dict:
     """List all inbox rules, sorted by execution order (sequence).
 
-    Each rule carries its conditions and actions as plain JSON, not only its
-    name and status: the reason to list rules is to find out what they *do* —
-    an unexpected forwarding rule is the thing you are looking for. Rule names
-    and every caller-visible string inside those blocks are scrubbed of control
-    characters the way every other caller-visible string is.
+    Each rule carries its conditions, its exceptions and its actions as plain
+    JSON, not only its name and status: the reason to list rules is to find out
+    what they *do* — an unexpected forwarding rule is the thing you are looking
+    for. Rule names and every caller-visible string inside those blocks are
+    scrubbed of control characters the way every other caller-visible string is.
 
     ``complete`` is false when the listing stopped early (a page cap, or a link
     pointing back at a page already read): every rule Graph showed is here, but
@@ -390,19 +412,7 @@ async def list_rules(graph_client: Any) -> dict:
         # False means the walk stopped early (page cap, or a link pointing back):
         # the list is what Graph showed, not necessarily every rule in the inbox.
         "complete": complete,
-        "rules": [
-            {
-                "id": r.id,
-                "display_name": sanitize_output(r.display_name or ""),
-                "is_enabled": r.is_enabled,
-                "sequence": r.sequence,
-                "is_read_only": r.is_read_only,
-                "has_error": getattr(r, "has_error", None),
-                "conditions": _describe_conditions(getattr(r, "conditions", None)),
-                "actions": _describe_actions(getattr(r, "actions", None)),
-            }
-            for r in rules
-        ],
+        "rules": [_describe_rule(r) for r in rules],
     }
 
 

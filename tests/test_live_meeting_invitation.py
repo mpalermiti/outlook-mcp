@@ -5,10 +5,10 @@ Both guards list ID-only messages filtered on their message class
 property. Plain mail is checked on the first 50 ``IPM.Note`` messages.
 Invitations are rarer, so their guard follows ``@odata.nextLink`` through
 ``IPM.Schedule.Meeting.Request`` messages, at most 20 pages, until it finds one
-with a surviving event. A listed invitation the SDK does not build as an
-``EventMessageRequest`` fails the run. Each guard skips when the mailbox lacks
-what it needs, and the invitation skip says how much it read. No fixture sends
-or changes anything.
+with a surviving event, expanding at most 50 invitations. A listed invitation
+the SDK does not build as an ``EventMessageRequest`` fails the run. Each guard
+skips when the mailbox lacks what it needs, and the invitation skip says how
+much it read. No fixture sends or changes anything.
 """
 
 from contextlib import aclosing
@@ -27,6 +27,7 @@ pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 
 PAGE_SIZE = 50
 MAX_PAGES = 20
+MAX_INVITATIONS = 50
 MESSAGE_CLASS_PROPERTY_ID = "String 0x001A"  # PidTagMessageClass
 PLAIN_MAIL = "IPM.Note"
 INVITATION = "IPM.Schedule.Meeting.Request"
@@ -106,6 +107,11 @@ async def test_invitation_resolves_to_the_mailbox_event(real_graph_client):
                 invitations += 1
                 if await _resolves_to_current_event(sdk, message):
                     return
+                if invitations >= MAX_INVITATIONS:
+                    pytest.skip(
+                        f"No invitation with a calendar event among {invitations} "
+                        f"{INVITATION} messages (expansion cap reached; {pages} pages read)"
+                    )
 
     pytest.skip(
         f"No invitation with a calendar event among {invitations} {INVITATION} messages "

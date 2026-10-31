@@ -122,3 +122,35 @@ async def test_invitation_guard_follows_next_link_for_at_most_20_pages():
     assert len(mailbox.listings) == 20
     assert mailbox.expanded == [f"AAMk-{n}" for n in range(20)]
     assert [mailbox.query(i).get("$skiptoken") for i in (1, 19)] == [["page1"], ["page19"]]
+
+
+async def test_invitation_guard_caps_expansions_within_a_page():
+    mailbox = _Mailbox(
+        [{"@odata.type": INVITATION_TYPE, "id": f"AAMk-{n}"} for n in range(75)],
+        next_link=True,
+    )
+
+    status, reason = await _outcome(_invitation_guard(mailbox))
+
+    assert status == "skipped"
+    assert len(mailbox.expanded) == 50
+    assert mailbox.expanded == [f"AAMk-{n}" for n in range(50)]
+    assert len(mailbox.listings) == 1
+    assert "50" in reason
+
+
+async def test_invitation_guard_caps_expansions_across_pages():
+    mailbox = _Mailbox(
+        *[
+            [{"@odata.type": INVITATION_TYPE, "id": f"AAMk-{page}-{n}"} for n in range(30)]
+            for page in range(3)
+        ],
+        next_link=True,
+    )
+
+    status, _ = await _outcome(_invitation_guard(mailbox))
+
+    assert status == "skipped"
+    assert len(mailbox.expanded) == 50
+    assert mailbox.expanded[-1] == "AAMk-1-19"
+    assert len(mailbox.listings) == 2

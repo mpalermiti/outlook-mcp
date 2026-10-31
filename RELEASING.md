@@ -64,7 +64,7 @@ Double-gated on purpose: the marker is deselected by default **and** the tier sk
 uv sync --all-extras   # the `documents` parsers; without them their tests skip
 uv run pytest --tb=no -q
 OUTLOOK_MCP_TOOLSETS="$(uv run python -c 'from outlook_mcp import toolsets; print(",".join(sorted(set(toolsets.TOOL_GROUPS.values()))))')" \
-  uv run pytest --tb=no -q   # every toolset loaded, opt-in `documents` included, as CI runs it
+  uv run pytest --tb=no -q   # every toolset loaded, the opt-in groups included, as CI runs it
 uv run ruff check src/ tests/ scripts/
 uv run ruff format --check src/ tests/ scripts/
 ```
@@ -78,7 +78,7 @@ Update in lockstep:
 - `pyproject.toml` — `version = "X.Y.Z"`
 - `server.json` — both `version` fields + `description` (tool count if it changed)
 - `uv.lock` — the `outlook-graph-mcp` package's own `version` line (`uv lock` rewrites it). CI runs `uv sync --locked`, which fails while it disagrees with `pyproject.toml`
-- `.github/workflows/ci.yml` — both tool-count asserts. Both count every registered tool, opt-in groups included — not the default surface, which leaves `documents` out. The fresh-install one pins the working tree's surface (a release that adds or removes a tool updates it in the same PR). The `published-install` one pins the count of the **PyPI-latest** release, so it is only correct until the next publish; leaving it stale turns the weekly canary permanently red the day the release lands
+- `.github/workflows/ci.yml` — both tool-count asserts. Both count every registered tool, opt-in groups included — not the default surface, which leaves the opt-in groups out. The fresh-install one pins the working tree's surface (a release that adds or removes a tool updates it in the same PR). The `published-install` one pins the count of the **PyPI-latest** release, so it is only correct until the next publish; leaving it stale turns the weekly canary permanently red the day the release lands
 - `CHANGELOG.md` — new `## [X.Y.Z] — YYYY-MM-DD` entry
 - `SKILL.md` — `## Tools (N)` heading + frontmatter `description` if count changed
 - `README.md` — counts and tables if they changed

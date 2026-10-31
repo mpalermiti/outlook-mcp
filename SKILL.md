@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 76 typed Graph tools across mail, inbox rules, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 77 typed Graph tools across mail, inbox rules, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -76,11 +76,11 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `triage_folder(folder="inbox", count=50)` — one scan, sorted, applied in a single batch call
 - `catch_up(since="24h")` — what changed, via the delta path
 
-## Tools (76)
+## Tools (77)
 
-71 load by default. Two groups are opt-in and load only when named in
-`OUTLOOK_MCP_TOOLSETS`: `documents` (`outlook_read_attachment`, the PDF/XLSX reader) and
-`rules` (the four inbox-rule tools). The `rules` group also loads when
+71 load by default. Three groups are opt-in and load only when named in
+`OUTLOOK_MCP_TOOLSETS`: `documents` (`outlook_read_attachment`, the PDF/XLSX reader),
+`rules` (the four inbox-rule tools), and `mime` (original MIME export). The `rules` group also loads when
 `mailbox_settings_write: true`, because the setting is itself the request (see Notes).
 
 ### Auth
@@ -93,6 +93,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `outlook_search_mail` — Search mail using KQL query; a `cursor` continues the search in the folder it started in. Graph has been seen to stop a search a little past 250 results (observed on Exchange Online and Outlook.com); a last page past 250 carries `incomplete`
 - `outlook_list_folders` — List top-level mail folders; `recursive=True` walks the whole tree and gives each folder's `path`
 - `outlook_list_inbox_delta` — List only inbox changes since last call (massive token savings for recurring agent jobs)
+- `outlook_export_message` — Export a message's original MIME by Graph message ID: a JSON block (`size_bytes`, `sha256`), then the bytes as a `message/rfc822` resource blob; read-only, at most 10 MiB, opt-in `mime` group
 
 ### Mail — Write
 - `outlook_send_message` — Send email with recipients, CC, BCC, HTML or Markdown (`is_markdown=True`), importance
@@ -113,7 +114,7 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 
 ### Mail Rules
 The four rule tools are **opt-in**: a stock install loads none of them. Name `rules` in `OUTLOOK_MCP_TOOLSETS`, or set `mailbox_settings_write: true` with no selection made (it also asks for the scope the writes need — a selection wins over it), then restart: tools are chosen at start.
-- `outlook_list_rules` — List inbox rules in execution order with each rule's conditions and actions, and `has_error` when Exchange is failing to apply it (server-side; runs with no client open). `complete: false` means the listing stopped early, so it is not the whole inbox
+- `outlook_list_rules` — List inbox rules in execution order with each rule's conditions, exceptions and actions, and `has_error` when Exchange is failing to apply it (server-side; runs with no client open). `complete: false` means the listing stopped early, so it is not the whole inbox
 - `outlook_create_rule` — Create a rule: sender/subject/body/attachment conditions, then move/copy/mark-read/delete/forward/categorize/stop actions. Rules are durable — they keep running after the session ends. `forward_to` also needs the `mail_send` category. If Graph does not keep a requested `sequence`, the reply adds `sequence_requested`
 - `outlook_update_rule` — Rename, enable/disable, resequence or re-point a rule; its other actions are preserved. The returned `sequence` is what Graph stored — on a live personal mailbox Graph ignored both a create and an update that asked for 500 and kept its own order — so treat that field, not the one you asked for, as authoritative; when they differ, the reply adds `sequence_requested`. Re-enabling or reordering a rule that forwards or redirects needs `mail_send`, as does changing a `stop_processing_rules` or `permanentDelete` rule that hides one, and repairing an errored forwarding rule (the repair puts it back into service). A listing that stopped early gates the same way
 - `outlook_delete_rule` — Delete a rule by ID (irreversible). Deleting a `stop_processing_rules` or `permanentDelete` rule that hides a forwarding rule needs `mail_send`, and so does deleting when the rule listing stopped early
@@ -204,7 +205,7 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
 - Mail search uses KQL syntax
 - Start with `read_only: true`, flip when comfortable
 - **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 8 categories and example policies.
-- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context. Unset loads every group except the opt-in ones — 71 of the 76 tools; `documents` and `rules` are off until named, except that `mailbox_settings_write: true` turns `rules` on without naming it. Naming groups loads only those (plus auth/identity), so to add both opt-in groups to the default set, name all thirteen: `mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules`. Tools carry read-only / destructive annotations so clients can auto-approve reads.
+- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context. Unset loads every group except the opt-in ones — 71 of the 77 tools; `documents`, `rules`, and `mime` are off until named, except that `mailbox_settings_write: true` turns `rules` on without naming it. Naming groups loads only those (plus auth/identity), so to add all opt-in groups to the default set, name the default groups and opt-ins: `mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime`. Tools carry read-only / destructive annotations so clients can auto-approve reads.
 - **Two accounts:** One server serves one mailbox. Register a second server entry with its own `OUTLOOK_MCP_CONFIG_DIR` (e.g. `~/.outlook-mcp-work`) and run `outlook-mcp auth` once with that variable set. Move only the config directory, never `HOME` — see README "Two accounts, two instances".
 - **Remote / HTTP:** stdio is the default. `OUTLOOK_MCP_TRANSPORT=streamable-http` serves `/mcp` over HTTP for a client that cannot spawn a local process. It never starts without a token (`OUTLOOK_MCP_HTTP_TOKEN`, or a file named by `OUTLOOK_MCP_HTTP_TOKEN_FILE`), loopback included, and every request sends it as `Authorization: Bearer <token>`. It binds loopback by default, and plain HTTP sends the token in the clear, so put a TLS-terminating proxy in front of any other bind — see README "Remote / HTTP transport".
 - **Environment configuration:** `OUTLOOK_MCP_CLIENT_ID`, `OUTLOOK_MCP_TENANT_ID` and

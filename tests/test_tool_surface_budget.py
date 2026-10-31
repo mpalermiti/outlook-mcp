@@ -284,13 +284,13 @@ def test_the_rules_group_fits_its_own_ceiling():
         "    print(json.dumps({'cost': cost, 'rules': len(loaded), 'count': len(tools)}))\n"
         "asyncio.run(main())\n"
     )
-    # Every group except `documents`: this measures the rules surface an install
+    # Default groups plus `rules`: this measures the rules surface an install
     # that asks for rules actually loads, so this ceiling and the documents
     # ceiling bound different surfaces instead of the same one twice.
     env = {
         **os.environ,
         "OUTLOOK_MCP_TOOLSETS": ",".join(
-            sorted(set(toolsets.TOOL_GROUPS.values()) - {"documents"})
+            sorted(set(toolsets.TOOL_GROUPS.values()) - toolsets.OFF_BY_DEFAULT | {"rules"})
         ),
     }
     env.pop("PYTHONPATH", None)
@@ -383,11 +383,13 @@ asyncio.run(main())
         [sys.executable, "-c", code],
         env={
             **os.environ,
-            # Every group except `rules`: this is the documents surface, 72 tools.
+            # Default groups plus `documents`: the documents surface, 72 tools.
             # Loading rules too made this measure the same 76-tool surface as the
             # rules budget, so the documents reader could grow without this test
             # noticing.
-            "OUTLOOK_MCP_TOOLSETS": ",".join(sorted(set(TOOL_GROUPS.values()) - {"rules"})),
+            "OUTLOOK_MCP_TOOLSETS": ",".join(
+                sorted(set(TOOL_GROUPS.values()) - toolsets.OFF_BY_DEFAULT | {"documents"})
+            ),
         },
         capture_output=True,
         text=True,
@@ -396,3 +398,47 @@ asyncio.run(main())
     measured = json.loads(result.stdout)
     assert measured["count"] == 72
     assert measured["cost"] <= DOCUMENT_SURFACE_CEILING, measured
+
+
+# MIME export: default stays 71 / 11,130; default + mime is 72 / 11,209
+# (+79 proxy tokens). All groups: 77 / 12,175. Measured on Python 3.13 with
+# the by_alias=True dump above. Its own ceiling gives about 1% headroom,
+# without raising the default, rules or document ceilings.
+MIME_SURFACE_CEILING = 11_350
+
+
+def test_mime_surface_has_its_own_budget_and_preserves_default_schemas():
+    code = """import asyncio,json
+from mcp.client import Client
+from outlook_mcp.server import mcp
+async def main():
+    async with Client(mcp) as c:
+        tools=(await c.list_tools()).tools
+    print(json.dumps([t.model_dump(exclude_none=True,by_alias=True) for t in tools]))
+asyncio.run(main())
+"""
+    default_groups = set(toolsets.TOOL_GROUPS.values()) - toolsets.OFF_BY_DEFAULT
+
+    def measure(groups):
+        env = {**os.environ, "OUTLOOK_MCP_TOOLSETS": ",".join(sorted(groups))}
+        env.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=True,
+        )
+        return json.loads(result.stdout.strip().splitlines()[-1])
+
+    default = measure(default_groups)
+    enabled = measure(default_groups | {"mime"})
+    mime = [tool for tool in enabled if tool["name"] == "outlook_export_message"]
+    assert len(default) == 71
+    assert len(enabled) == 72
+    assert len(mime) == 1
+    assert mime[0]["annotations"]["readOnlyHint"] is True
+    assert [tool for tool in enabled if tool["name"] != "outlook_export_message"] == default
+    assert _proxy_tokens(default) <= DEFAULT_SURFACE_CEILING
+    assert _proxy_tokens(enabled) <= MIME_SURFACE_CEILING

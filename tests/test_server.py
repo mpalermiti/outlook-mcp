@@ -104,6 +104,8 @@ EXPECTED_TOOLS = [
     "outlook_create_rule",
     "outlook_update_rule",
     "outlook_delete_rule",
+    # Original MIME (1) — the opt-in `mime` group
+    "outlook_export_message",
 ]
 
 
@@ -133,7 +135,7 @@ def _rules_are_loaded() -> bool:
 def _expected_tool_names() -> set[str]:
     """The default names, plus each opt-in group only when this process loaded it.
 
-    `documents` and `rules` are the two off-by-default groups.
+    `documents`, `rules` and `mime` are the off-by-default groups.
     Reading the loaded surface instead of the environment keeps the count honest
     when `mailbox_settings_write` turns rules on without naming the group.
     """
@@ -142,11 +144,13 @@ def _expected_tool_names() -> set[str]:
         expected.discard("outlook_read_attachment")
     if not _rules_are_loaded():
         expected -= RULE_TOOLS
+    if "outlook_export_message" not in mcp._tool_manager._tools:
+        expected.discard("outlook_export_message")
     return expected
 
 
 def test_tool_count():
-    """71 tools by default, 72 with documents, 75 with rules, 76 with both."""
+    """71 tools by default, up to 77 with all opt-in groups loaded."""
     registered = set(mcp._tool_manager._tools.keys())
     assert len(registered) == len(_expected_tool_names())
 
