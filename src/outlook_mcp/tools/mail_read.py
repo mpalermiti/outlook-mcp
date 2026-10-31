@@ -457,11 +457,26 @@ def _format_read_message_from_raw(
     return result
 
 
+# Graph returns a body in the type it was stored in, usually HTML, unless the
+# request says otherwise (#124). ``text`` and a concise read (whose only body
+# output is ``body_preview``) ask for text, so the model gets no markup: tags,
+# attributes, comments and ``<style>`` go. Text hidden only by styling
+# (``display:none``) may still be rendered, so the body stays untrusted.
+# ``html`` and ``full`` keep the stored body. Graph converts once, server side,
+# and nothing here parses HTML.
+_TEXT_BODY_PREFER = 'outlook.body-content-type="text"'
+
+
+def _wants_text_body(format: str, concise: bool) -> bool:
+    return format == "text" or concise
+
+
 def _make_body_preview(content: str, limit: int = 200) -> str:
     """Compact a body to a single-line ``body_preview`` of at most ``limit`` chars.
 
-    Strips HTML to plain text via the same sanitizer used elsewhere, then
-    collapses whitespace (newlines, tabs, runs of spaces) into single spaces.
+    Drops control characters via ``sanitize_output``, then collapses whitespace
+    (newlines, tabs, runs of spaces) into single spaces. It does not strip HTML:
+    the reads that preview a body ask Graph for its text (``_TEXT_BODY_PREFER``).
     """
     plain = sanitize_output(content or "", multiline=True)
     collapsed = " ".join(plain.split())
@@ -533,6 +548,7 @@ async def read_message(
     message_id = await resolve_message_id(graph_client, message_id)
 
     deferred_value: str | None = None
+    text_body = _wants_text_body(format, concise)
 
     if include_deferred_send:
         # PR_DEFERRED_SEND_TIME extended property fetch.
@@ -571,6 +587,8 @@ async def read_message(
         info.path_parameters = {RequestInformation.RAW_URL_KEY: raw_url}
         info.url_template = "{+baseurl}"
         info.headers.try_add("Accept", "application/json")
+        if text_body:
+            info.headers.try_add("Prefer", _TEXT_BODY_PREFER)
         msg = await adapter.send_async(
             info,
             Message,
@@ -597,6 +615,16 @@ async def read_message(
             MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters,
             {"$select": _SENDER_AUTH_SELECT},
         )
+        if text_body:
+            req_config.headers.add("Prefer", _TEXT_BODY_PREFER)
+        msg = await graph_client.me.messages.by_message_id(message_id).get(
+            request_configuration=req_config
+        )
+    elif text_body:
+        from kiota_abstractions.base_request_configuration import RequestConfiguration
+
+        req_config = RequestConfiguration()
+        req_config.headers.add("Prefer", _TEXT_BODY_PREFER)
         msg = await graph_client.me.messages.by_message_id(message_id).get(
             request_configuration=req_config
         )
@@ -691,13 +719,15 @@ async def read_messages(
 
     subrequests = []
     for i, mid in enumerate(message_ids):
-        subrequests.append(
-            {
-                "id": str(i),
-                "method": "GET",
-                "url": _build_read_subrequest_url(mid, include_deferred_send, include_sender_auth),
-            }
-        )
+        sub = {
+            "id": str(i),
+            "method": "GET",
+            "url": _build_read_subrequest_url(mid, include_deferred_send, include_sender_auth),
+        }
+        # A $batch sub-request carries its own headers.
+        if _wants_text_body(format, concise):
+            sub["headers"] = {"Prefer": _TEXT_BODY_PREFER}
+        subrequests.append(sub)
 
     tok = credential.get_token(GRAPH_TOKEN_SCOPE)
     headers = {

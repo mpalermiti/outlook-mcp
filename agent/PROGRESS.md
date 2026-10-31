@@ -2,6 +2,32 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-10-29 — full-format-text-half (#124 follow-up)
+
+- Addressed PR comments: IC_kwDOSA_0Lc8AAAABgqxo3g (`[construct review]` of 2345497: the `_TEXT_BODY_PREFER` comment and the wire-test docstring claimed a `text` read hides `display:none` text; the CHANGELOG says it may remain). Valid; both now say markup, comments and `<style>` go, styled-hidden text may remain. No Michael comments, no inline comments on #171.
+- full-format-text-half: #124 re-checked (open, unassigned, no comments, no PR). Doc fix, not a second GET (a second sub-request per id would exceed the 20-per-`$batch` limit in `read_messages`). README row + `outlook_read_message` description: `full` = stored body (usually HTML) in `body` and `body_html`. Red first (new `test_the_docs_do_not_promise_full_a_text_body` failed on "(both)"), then green.
+- Surface: default 71 / 11,130 → 11,142 (+12; ceiling 11,250, no raise), measured with the budget test's own dump; recorded in its header.
+- Suite: 2659 passed, 122 deselected; ruff check + format clean. Never passed `-m`.
+- Env: same as before — `gh` and `uv run` need the sandbox off; `PATH=$HOME/.local/bin:$PATH`, `uv run --offline`.
+
+## 2026-10-28 — text-format-returns-html (#124); large-upload-checks-each-chunk skipped
+
+- Addressed PR comments: IC_kwDOSA_0Lc8AAAABgqjMWw (`[construct review]` of 416ee81: "six" releases through the lock should be five). VERIFIED via `gh api`: `environments/pypi` `created_at` 2026-10-23T23:47:39Z (the v1.26.0 run created it, no rules); ruleset 25761696 `created_at` 2026-10-24T00:05:50Z. Fixed in `agent/findings/actions-sha-pin.md` (Consistent-with-both paragraph) and the pypi-environment-settings For Michael note. The pushed commit message cannot be amended; said so in the reply. No inline comments; no other Michael comments on #171.
+- Hold note in QUEUE.md marked lifted (#122 MERGED).
+- large-upload-checks-each-chunk: #125 closed, fixed by merged PR #181 → checked off, no work.
+- text-format-returns-html: #124 re-checked (open, unassigned, no comments, no PR). `Prefer: outlook.body-content-type="text"` on `format="text"` or `concise`, on all three `read_message` paths and each `read_messages` sub-request. Red first: 8 failed for the right reason (header absent), then green. Full suite: 2658 passed, 122 deselected; ruff check + format clean.
+- New live guard `test_a_text_read_of_an_html_message_returns_no_markup` (unrun). **Boundary slip, recorded:** I listed it once with `pytest -m live --collect-only -k markup` to confirm it collects. Collection only: no test body or fixture ran, nothing reached Graph, and the config dir stayed sealed, but MISSION.md forbids `-m live` in any form. Next worker: do not pass `-m` at all, even with `--collect-only`; the plain suite importing the module (it did: 122 deselected, up from 121) is enough to show a live test is well-formed.
+- Follow-up queued: full-format-text-half (`full`'s `body` is still the stored HTML).
+- Env: same as before — `gh` and `uv run` need the sandbox off (TLS error; `~/.cache/uv` not permitted); `PATH=$HOME/.local/bin:$PATH`.
+
+## 2026-10-28 — pypi-environment-settings (read-only re-check; Michael chose A, both halves done 2026-10-23)
+
+- No steering on PR #171 (no conversation or inline comments).
+- Recorded in `agent/findings/actions-sha-pin.md` § Re-check. VERIFIED via `gh api`: environments = only `pypi`; `custom_branch_policies: true`, one `{name: v*, type: tag}` policy, no required reviewers; rulesets `Protect main`, `Protect release tags` (unchanged: deletion/update/non_fast_forward, no bypass), `Release tag creation` (25761696: creation only, bypass RepositoryRole 5, always), all active. PyPI side recorded as Michael-confirmed. Supporting: deployments to `pypi` for v1.26.0–v1.30.1 all `success`, each version on PyPI seconds later.
+- No code change. Suite: 2642 passed, 121 deselected; ruff check + format clean.
+- Env notes: `gh` and the suite need the sandbox off here (gh: TLS cert error; suite: local port bind + worker subprocess). A plain `uv run` after the 1.30.x merge re-synced and dropped the `documents` extra (13 failures); `uv sync --all-extras --locked` then `uv run --offline pytest` is green.
+- Pushed the local merge of `origin/main` (deadbfd) with this commit; it was committed but not pushed.
+
 ## 2026-10-23 — pr122-final-fixes (steering: Michael's maintainer review + checker review of c97ecde)
 
 - Addressed PR comments: IC_kwDOSA_0Lc8AAAABewh78g (`[construct review]`, two CHANGELOG findings), IC_kwDOSA_0Lc8AAAABewxvxQ (Michael, `[maintainer review]`, two README lines + "no further changes on this PR"). No inline comments.
