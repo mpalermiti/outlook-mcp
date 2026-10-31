@@ -6,6 +6,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **`format="text"` returns text.** `outlook_read_message` and `outlook_read_messages`
+  returned a message's stored body for `text`, the default, and for most mail that is HTML:
+  `text` and `html` gave the same bytes, and the agent paid for the layout markup on every
+  read (#124). Both now send Graph's `Prefer: outlook.body-content-type="text"`, the batch
+  read on each sub-request, so Graph converts the body before it is returned. A `concise`
+  read asks for text whatever the `format`, so `body_preview` is text too. `html` and `full`
+  are unchanged; `full`'s `body` is still the stored body.
+
+### Security
+
+- **A `text` read no longer hands the agent a message's raw HTML.** Everything a sender put
+  in the markup — comments, `<style>` blocks, attributes — reached the model as part of the
+  body, a channel prompt injection uses. A `text` read now gets Graph's own text rendering of
+  the body (#124). Text hidden only by styling, such as `display:none`, may still be rendered:
+  a body remains untrusted content either way.
+
 ## [1.31.0] — 2026-10-30
 
 Original MIME export, from @benjamin-di, with thanks (#210).

@@ -39,6 +39,7 @@ maintainer's mailbox.
 """
 
 import os
+import re
 from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
 
@@ -1167,3 +1168,39 @@ async def test_microsofts_own_header_parses_on_real_mail(real_graph_client):
     assert UNREADABLE not in reasons, reasons
     if all(r in (NO_HEADER, NO_FROM) for r in reasons):
         pytest.skip(f"none of the newest {len(ids)} messages carries Microsoft's header")
+
+
+# ── #124: format="text" asks Graph for the text body ──
+# Graph returns a body as stored, usually HTML, unless the request carries
+# `Prefer: outlook.body-content-type="text"`. The mocks see that the header is
+# sent; only Graph shows it is honoured, on the single read and on a $batch
+# sub-request alike. Markup in a text body is the bug: it costs tokens and
+# carries whatever the sender hid.
+
+_HTML_TAG = re.compile(r"<\s*/?\s*(html|head|body|div|table|td|style|span|p|br)\b", re.I)
+
+
+async def test_a_text_read_of_an_html_message_returns_no_markup(real_graph_client):
+    client = real_graph_client.sdk_client
+    page = await list_inbox(client, count=25, concise=True)
+    html_id = None
+    for summary in page["messages"]:
+        stored = await read_message(client, summary["id"], format="html")
+        if _HTML_TAG.search(stored["body_html"] or ""):
+            html_id = summary["id"]
+            break
+    if html_id is None:
+        pytest.skip("No HTML message among the newest 25 in the inbox")
+
+    single = await read_message(client, html_id, format="text")
+    assert single["body"], "the text read of an HTML message came back empty"
+    assert not _HTML_TAG.search(single["body"]), "Graph ignored the text Prefer header"
+
+    preview = await read_message(client, html_id, format="html", concise=True)
+    assert not _HTML_TAG.search(preview["body_preview"])
+
+    batch = await read_messages(real_graph_client, [html_id])
+    assert batch["failed"] == 0, batch["failures"]
+    assert not _HTML_TAG.search(batch["messages"][0]["body"]), (
+        "the $batch sub-request's Prefer header was not honoured"
+    )

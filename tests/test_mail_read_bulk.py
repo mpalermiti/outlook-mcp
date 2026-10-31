@@ -159,7 +159,13 @@ class TestBatchReadHappyPath:
         body = json.loads(call.kwargs["content"])
         assert body == {
             "requests": [
-                {"id": "0", "method": "GET", "url": "/me/messages/AAA%3D"},
+                {
+                    "id": "0",
+                    "method": "GET",
+                    "url": "/me/messages/AAA%3D",
+                    # The default format is text (#124).
+                    "headers": {"Prefer": 'outlook.body-content-type="text"'},
+                },
             ]
         }
 
@@ -357,6 +363,44 @@ class TestFormatVariants:
         assert msg["from_email"] == "alice@example.com"
         assert "to" in msg
         assert "cc" in msg
+
+
+class TestBodyContentType:
+    """``format="text"`` must ask Graph for a text body on every sub-request (#124).
+
+    Without ``Prefer: outlook.body-content-type="text"`` Graph returns the body
+    as stored, usually HTML, so ``text`` and ``html`` returned the same bytes.
+    """
+
+    TEXT_BODY = {"Prefer": 'outlook.body-content-type="text"'}
+
+    @pytest.mark.asyncio
+    async def test_text_sub_requests_carry_the_prefer_header(self, patched_httpx):
+        post_mock, set_response = patched_httpx
+        set_response(
+            _batch_response(
+                [_ok_sub("0", _raw_message("AAA=")), _ok_sub("1", _raw_message("BBB="))]
+            )
+        )
+        await read_messages(_fake_graph_client(), ["AAA=", "BBB="], format="text")
+        subs = _captured_subrequests(post_mock)
+        assert [s.get("headers") for s in subs] == [self.TEXT_BODY, self.TEXT_BODY]
+
+    @pytest.mark.parametrize("fmt", ["html", "full"])
+    @pytest.mark.asyncio
+    async def test_html_and_full_sub_requests_do_not(self, patched_httpx, fmt):
+        post_mock, set_response = patched_httpx
+        set_response(_batch_response([_ok_sub("0", _raw_message("AAA="))]))
+        await read_messages(_fake_graph_client(), ["AAA="], format=fmt)
+        assert "headers" not in _captured_subrequests(post_mock)[0]
+
+    @pytest.mark.parametrize("fmt", ["html", "full"])
+    @pytest.mark.asyncio
+    async def test_concise_asks_for_text_whatever_the_format(self, patched_httpx, fmt):
+        post_mock, set_response = patched_httpx
+        set_response(_batch_response([_ok_sub("0", _raw_message("AAA="))]))
+        await read_messages(_fake_graph_client(), ["AAA="], format=fmt, concise=True)
+        assert _captured_subrequests(post_mock)[0].get("headers") == self.TEXT_BODY
 
 
 class TestIncludeDeferredSend:
