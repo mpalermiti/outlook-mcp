@@ -6,6 +6,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.31.1] — 2026-10-31
+
+Plain-text reads, reported by @uni5592427, with thanks (#124).
+
 ### Fixed
 
 - **`format="text"` returns text.** `outlook_read_message` and `outlook_read_messages`

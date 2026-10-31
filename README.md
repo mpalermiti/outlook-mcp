@@ -65,7 +65,7 @@ The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md
 - **Inbox rules** (1.30): list, create, change and delete server-side inbox rules, and see what each rule leaves out (1.30.2). Off unless you turn it on, and a rule that forwards mail also needs send permission.
 - **Attachments as text** (1.28): PDFs, spreadsheets and text files come back as readable text, parsed in a separate process with memory and time limits. Off unless you turn it on.
 - **Calendar** (1.27–1.29): turn a meeting invitation into its calendar event, attach files to events, tag an event so you can find it again, create events in any of your calendars, and see who owns each calendar.
-- **Mail** (1.27–1.28): write in Markdown, and replies keep their formatting and the quoted original. Start a draft as a reply or forward, name folders by path (`Inbox/Travel/Flights`), and see whether Microsoft verified a sender.
+- **Mail** (1.27–1.28): write in Markdown, and replies keep their formatting and the quoted original. Start a draft as a reply or forward, name folders by path (`Inbox/Travel/Flights`), and see whether Microsoft verified a sender. Reading a message as text returns plain text, not the HTML behind it (1.31.1).
 - **Remote clients** (1.27–1.28): an optional HTTP mode serves a client on another machine and refuses to start without a token. Downloads can come back in the reply instead of as a file on the server.
 - **Safer sends** (1.27–1.28): a send that times out is never sent twice on its own, and a large attachment that fails to upload no longer lets the mail go without it.
 - **Accounts and settings** (1.29): pin a server to one sign-in, and set options from environment variables, which can only tighten security.
