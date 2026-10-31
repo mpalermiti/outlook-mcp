@@ -121,6 +121,7 @@ For the population installing this from the MCP registry. stdio stays the defaul
 
 ## Done
 
+- **1.31.1** — Patch. `format="text"`, the default read, returned a message's stored body, usually HTML; text, single, bulk and concise reads now ask Graph for its plain-text rendering, and `full` is documented as the stored body (#124, reported by @uni5592427; #213). The release preflight also checks the MIME export, and leaves inbox rules out because a refused listing is per account (#214). Tool count unchanged at 77, 71 by default; default surface 11,142 (+12).
 - **1.31.0** — Original MIME export, from @benjamin-di: `outlook_export_message`, in an opt-in `mime` group, returns a message's original bytes as a `message/rfc822` resource after a JSON block with their size and SHA-256, up to 10 MiB (#210). The live invitation guard stops after 50 expansions (#209). Tool count 76 → 77, 71 by default; default surface unchanged at 11,130, and 72 / 11,209 with `mime` (ceiling 11,350).
 - **1.30.2** — Patch, from @hrgupta: `outlook_list_rules` shows each rule's exceptions. They sit on the rule beside `conditions`, and the listing had looked for them inside it, so a rule that forwards everything except some mail listed as if it caught everything (#206). Tool count unchanged at 76, 71 by default.
 - **1.30.1** — Patch. The MCP registry refused 1.30.0's description at 101 characters, one over its limit, after PyPI had the release; a shorter description and a test that holds the limit. No code change.

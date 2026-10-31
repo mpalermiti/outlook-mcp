@@ -81,6 +81,15 @@ class TestEndpointsList:
         paths = [p for p, _ in preflight.ENDPOINTS]
         assert any("inferenceClassification/overrides" in p for p in paths)
 
+    def test_inbox_rules_are_not_a_release_gate(self):
+        """Whether a personal mailbox allows inbox rules is per account: the
+        maintainer's answers even a listing with 403. A row here would turn
+        that known refusal into a FAIL that blocks every release, so the rules
+        tools name it at call time instead (RULE_LIST_DENIED). Re-investigate
+        before adding the path."""
+        for path, _label in preflight.ENDPOINTS:
+            assert "messageRules" not in path, path
+
 
 class _Resp:
     def __init__(self, status_code, body=None):
@@ -247,13 +256,101 @@ class TestTodoTaskFamilies:
         assert all("could not provision" in n for n in not_probed)
 
 
+class _Stream:
+    """A streamed response that fails the test if anything reads its body."""
+
+    def __init__(self, status_code):
+        self.status_code = status_code
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        raise AssertionError("the MIME probe must not download the message")
+
+    def iter_bytes(self, *args, **kwargs):
+        raise AssertionError("the MIME probe must not download the message")
+
+
+class TestMimeExportProbe:
+    """``outlook_export_message`` reads ``me/messages/{id}/$value``, which
+    exists only under a real message id, so the probe harvests one. It sends
+    the tool's own request (``message/rfc822``, no compression, no redirects)
+    and reads the status only: the message itself is never downloaded."""
+
+    LIST = "https://graph.microsoft.com/v1.0/me/messages?$top=1&$select=id"
+
+    def _wire(self, monkeypatch, listing, stream_status):
+        calls = []
+
+        def fake_get(url, headers=None, timeout=None):
+            if url != self.LIST:
+                raise AssertionError(f"unexpected GET {url}")
+            return listing
+
+        def fake_stream(method, url, headers=None, timeout=None, follow_redirects=True):
+            calls.append(
+                {
+                    "method": method,
+                    "url": url,
+                    "headers": headers,
+                    "follow_redirects": follow_redirects,
+                }
+            )
+            return _Stream(stream_status)
+
+        monkeypatch.setattr(preflight.httpx, "get", fake_get)
+        monkeypatch.setattr(preflight.httpx, "stream", fake_stream)
+        return calls
+
+    def test_probes_value_the_way_the_tool_requests_it(self, monkeypatch, capsys):
+        calls = self._wire(monkeypatch, _Resp(200, {"value": [{"id": "AA/b+c="}]}), 200)
+
+        verdict, not_probed, failures = preflight._mime_export_probe({"Authorization": "Bearer x"})
+
+        assert (verdict, not_probed, failures) == ("OK", [], [])
+        assert len(calls) == 1
+        call = calls[0]
+        assert call["method"] == "GET"
+        assert call["url"] == "https://graph.microsoft.com/v1.0/me/messages/AA%2Fb%2Bc%3D/$value"
+        assert call["headers"]["Authorization"] == "Bearer x"
+        assert call["headers"]["Accept"] == "message/rfc822"
+        assert call["headers"]["Accept-Encoding"] == "identity"
+        assert call["follow_redirects"] is False
+        assert "Original MIME export" in capsys.readouterr().out
+
+    def test_a_refused_export_blocks_the_release(self, monkeypatch):
+        self._wire(monkeypatch, _Resp(200, {"value": [{"id": "M1"}]}), 403)
+
+        verdict, not_probed, failures = preflight._mime_export_probe({"Authorization": "Bearer x"})
+
+        assert verdict == "FAIL"
+        assert failures == ["Original MIME export"]
+        assert not_probed == []
+
+    def test_no_message_to_export_is_reported_not_probed(self, monkeypatch):
+        calls = self._wire(monkeypatch, _Resp(200, {"value": []}), 200)
+
+        verdict, not_probed, failures = preflight._mime_export_probe({"Authorization": "Bearer x"})
+
+        assert verdict is None
+        assert failures == []
+        assert len(not_probed) == 1
+        assert "Original MIME export" in not_probed[0]
+        assert calls == []
+
+
 class TestRunSummary:
     """The v1.7.0 lesson applied to gaps: "All endpoints reachable. Safe to
     tag." printed over families the run never probed is how an unsupported
     endpoint ships. The summary now counts reachable vs not-probed."""
 
-    def _run_with(self, monkeypatch, responses, todo_result):
+    def _run_with(self, monkeypatch, responses, todo_result, mime_result=("OK", [], [])):
         monkeypatch.setattr(preflight, "fetch_token", lambda: "tok")
+        monkeypatch.setattr(preflight, "_mime_export_probe", lambda headers: mime_result)
 
         def fake_get(url, headers=None, timeout=None):
             return responses[url]
@@ -295,6 +392,33 @@ class TestRunSummary:
 
         assert code == 0
         assert "Safe to tag" not in out
-        assert f"{len(preflight.ENDPOINTS) + len(rows)} probed endpoints reachable" in out
+        # The MIME export probe is one more probed endpoint.
+        assert f"{len(preflight.ENDPOINTS) + len(rows) + 1} probed endpoints reachable" in out
         assert "1 NOT probed" in out
         assert "no attachment" in out
+
+    def test_a_refused_mime_export_fails_the_run(self, monkeypatch):
+        code, out = self._run_with(
+            monkeypatch,
+            {urljoin(preflight.GRAPH_BASE, p): _Resp(200, {}) for p, _ in preflight.ENDPOINTS},
+            ([], [], []),
+            mime_result=("FAIL", [], ["Original MIME export"]),
+        )
+
+        assert code == 1
+        assert "Original MIME export" in out
+        assert "Safe to tag" not in out
+
+    def test_an_unprovisioned_mime_export_is_not_counted_as_checked(self, monkeypatch):
+        code, out = self._run_with(
+            monkeypatch,
+            {urljoin(preflight.GRAPH_BASE, p): _Resp(200, {}) for p, _ in preflight.ENDPOINTS},
+            ([], [], []),
+            mime_result=(None, ["Original MIME export (no message)"], []),
+        )
+
+        assert code == 0
+        assert "Safe to tag" not in out
+        n = len(preflight.ENDPOINTS)
+        assert f"{n} of {n} probed endpoints reachable" in out
+        assert "1 NOT probed" in out

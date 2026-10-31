@@ -14,7 +14,7 @@ Read-only. No writes, no sends, no mailbox state changes.
 
 If the script reports failures, do not tag. Either fix the affected tools or remove them from the release. v1.7.0 shipped four tools backed by `/me/mailboxSettings/*` that Microsoft Graph does not support on personal accounts; v1.7.1 yanked them. This script would have caught it in 30 seconds.
 
-When adding a new tool that hits a Graph endpoint family not yet covered, add a row to `ENDPOINTS` in `scripts/preflight.py`. A family that only exists under a real resource id (`.../tasks/{id}/...`) needs a row provisioned at run time, as `_todo_task_rows` does; a made-up id 404s for the wrong reason.
+When adding a new tool that hits a Graph endpoint family not yet covered, add a row to `ENDPOINTS` in `scripts/preflight.py`. A family that only exists under a real resource id (`.../tasks/{id}/...`) needs a row provisioned at run time, as `_todo_task_rows` and `_mime_export_probe` do; a made-up id 404s for the wrong reason.
 
 ## 1b. Live query-shape tests
 
