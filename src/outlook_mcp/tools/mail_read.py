@@ -459,9 +459,11 @@ def _format_read_message_from_raw(
 
 # Graph returns a body in the type it was stored in, usually HTML, unless the
 # request says otherwise (#124). ``text`` and a concise read (whose only body
-# output is ``body_preview``) ask for text, so the model gets neither the markup
-# nor what it hides (``display:none``, comments); ``html`` and ``full`` keep the
-# stored body. Graph converts once, server side, and nothing here parses HTML.
+# output is ``body_preview``) ask for text, so the model gets no markup: tags,
+# attributes, comments and ``<style>`` go. Text hidden only by styling
+# (``display:none``) may still be rendered, so the body stays untrusted.
+# ``html`` and ``full`` keep the stored body. Graph converts once, server side,
+# and nothing here parses HTML.
 _TEXT_BODY_PREFER = 'outlook.body-content-type="text"'
 
 
