@@ -25,7 +25,7 @@ endpoint failure.
 from __future__ import annotations
 
 import sys
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import httpx
 
@@ -65,7 +65,9 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0/"
 # event with an attachment) that no static row has: mail attachments
 # (``me/messages/{id}/attachments``, the download and ``outlook_read_attachment``
 # reads) and event attachments (``me/events/{id}/attachments``). The live
-# tier reads event attachments; neither has a provisioned row yet.
+# tier reads event attachments; neither has a provisioned row yet. The
+# original-MIME export (``me/messages/{id}/$value``) does have one, in
+# ``_mime_export_probe``.
 ENDPOINTS: list[tuple[str, str]] = [
     ("me", "Auth / whoami"),
     ("me/messages?$top=1", "Mail read / search"),
@@ -86,6 +88,11 @@ ENDPOINTS: list[tuple[str, str]] = [
         "Calendar delta",
     ),
     ("me/contacts/delta", "Contacts delta"),
+    # Not ``me/mailFolders/inbox/messageRules`` (the opt-in rules group): whether
+    # a personal mailbox allows rules is per account, and the maintainer's
+    # refuses even a listing with 403 while categories read fine under the same
+    # scope. Probed here, that known refusal would block every release; the
+    # tools name it instead (``RULE_LIST_DENIED``, README "Mail Rules").
 ]
 
 
@@ -222,6 +229,45 @@ def _todo_task_rows(headers: dict[str, str]) -> tuple[list[tuple[str, str]], lis
     return rows, not_probed, failures
 
 
+def _mime_export_probe(headers: dict[str, str]) -> tuple[str | None, list[str], list[str]]:
+    """Probe the original-MIME export (``outlook_export_message``, opt-in ``mime`` group).
+
+    ``$value`` lives under a real message id, so one is harvested from the
+    newest message. The request is the tool's own: ``Accept: message/rfc822``,
+    no compression, no redirects. Only the status is read; the message is never
+    downloaded, so a large one costs nothing.
+
+    Returns ``(verdict, not_probed, failures)``; ``verdict`` is None when no
+    message could be provisioned, which the summary reports as not probed.
+    """
+    label = "Original MIME export"
+    status, body = _get_json("me/messages?$top=1&$select=id", headers)
+    messages = body.get("value") if status == 200 and isinstance(body, dict) else None
+    if not messages or not messages[0].get("id"):
+        reason = f"GET me/messages -> {status}" if status != 200 else "the mailbox has no message"
+        return None, [f"{label} (could not provision a message: {reason})"], []
+
+    path = f"me/messages/{quote(messages[0]['id'], safe='')}/$value"
+    probe_headers = {**headers, "Accept": "message/rfc822", "Accept-Encoding": "identity"}
+    try:
+        with httpx.stream(
+            "GET",
+            urljoin(GRAPH_BASE, path),
+            headers=probe_headers,
+            timeout=20,
+            follow_redirects=False,
+        ) as r:
+            status = r.status_code
+    except Exception as exc:
+        print(f"FAIL  {label:30s} {path}  exception: {exc}")
+        return "FAIL", [], [label]
+
+    verdict = classify(status)
+    suffix = " (non-blocking)" if verdict == "SKIP" else ""
+    print(f"{verdict:5s} {label:30s} {path}  {status}{suffix}")
+    return verdict, [], [label] if verdict == "FAIL" else []
+
+
 def classify(status_code: int) -> str:
     """Map an HTTP status from Graph to a preflight verdict.
 
@@ -287,6 +333,12 @@ def run() -> int:
         else:
             print(f"SKIP  {label:30s} {path}  {r.status_code} (non-blocking)")
 
+    mime_verdict, mime_not_probed, mime_failures = _mime_export_probe(headers)
+    not_probed = not_probed + mime_not_probed
+    failures.extend(mime_failures)
+    probed = len(endpoints) + (mime_verdict is not None)
+    reachable += mime_verdict == "OK"
+
     print()
     if failures:
         print(
@@ -295,7 +347,7 @@ def run() -> int:
             "Do not release until resolved."
         )
         return 1
-    summary = f"{reachable} of {len(endpoints)} probed endpoints reachable."
+    summary = f"{reachable} of {probed} probed endpoints reachable."
     if not_probed:
         # Unprobed is not verified — say so instead of printing "Safe to tag"
         # over families the run never touched.

@@ -28,6 +28,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the body (#124). Text hidden only by styling, such as `display:none`, may still be rendered:
   a body remains untrusted content either way.
 
+### Changed
+
+- **The release preflight checks the original-MIME export.** `scripts/preflight.py` reads
+  the newest message's `$value` the way `outlook_export_message` does (`message/rfc822`, no
+  compression, no redirects), status only, so a 403 or 501 there blocks a release. Inbox
+  rules stay unprobed on purpose: whether a personal mailbox allows them is per account, and a
+  known refusal would block every release.
+
 ## [1.31.0] — 2026-10-30
 
 Original MIME export, from @benjamin-di, with thanks (#210).
