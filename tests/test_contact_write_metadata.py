@@ -11,54 +11,47 @@ from outlook_mcp.config import Config
 from tests.test_write_payloads_reach_the_wire import wire
 
 
-@pytest.mark.parametrize("name", ["outlook_create_contact", "outlook_update_contact"])
-async def test_contact_field_meanings_are_in_the_advertised_schema(name):
-    async with Client(server.mcp) as client:
-        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
-
-    tool = tools[name]
-    properties = tool.input_schema["properties"]
-    for field, meaning in (
-        ("job_title", "employment title"),
-        ("company", "employer"),
-        ("title", "name prefix"),
-    ):
-        assert properties[field]["type"] == "string"
-        assert meaning in properties[field].get("description", "").lower()
-        assert field not in tool.input_schema["required"]
-    assert "job_title" in tool.description
-    assert "company" in tool.description
-    assert "name prefix" in tool.description
-    assert tool.annotations.read_only_hint is False
-    assert tool.annotations.destructive_hint is False
-
-
-async def test_update_discovery_explains_omission_and_clearing():
+async def test_contact_update_meanings_are_in_the_tool_description():
     async with Client(server.mcp) as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
 
     tool = tools["outlook_update_contact"]
+    assert "job_title is the job" in tool.description
+    assert "company the employer" in tool.description
+    assert "name prefix" in tool.description
+    assert tool.annotations.read_only_hint is False
+    assert tool.annotations.destructive_hint is False
     for field in ("job_title", "company", "title"):
-        description = tool.input_schema["properties"][field].get("description", "")
-        assert "omit" in description.lower()
-        assert '""' in description and "clear" in description.lower()
-    assert "only provided fields change" in tool.description
+        assert tool.input_schema["properties"][field] == {"type": "string"}
+        assert field not in tool.input_schema["required"]
 
 
+async def test_update_description_explains_omission_and_clearing():
+    async with Client(server.mcp) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+
+    description = tools["outlook_update_contact"].description
+    assert "only provided fields change" in description
+    assert 'A text field passed as "" is cleared' in description
+
+
+@pytest.mark.parametrize("clear", [False, True], ids=["set", "clear"])
 @pytest.mark.parametrize(
     ("field", "graph_field", "value"),
     [
+        ("first_name", "givenName", "Alex"),
+        ("last_name", "surname", "Example"),
+        ("middle_name", "middleName", "Morgan"),
+        ("personal_notes", "personalNotes", "Synthetic note"),
         ("job_title", "jobTitle", "Engineer"),
         ("company", "companyName", "Example Company"),
         ("title", "title", "Dr."),
-        ("job_title", "jobTitle", ""),
-        ("company", "companyName", ""),
-        ("title", "title", ""),
     ],
 )
 async def test_a_single_contact_field_reaches_graph_without_other_changes(
-    monkeypatch, field, graph_field, value
+    monkeypatch, field, graph_field, value, clear
 ):
+    value = "" if clear else value
     sdk = MagicMock()
     builder = sdk.me.contacts.by_contact_id.return_value
     builder.patch = AsyncMock()

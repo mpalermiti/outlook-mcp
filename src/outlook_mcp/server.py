@@ -9,14 +9,14 @@ import os
 import sys
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from typing import Annotated, Any
+from typing import Any
 
 import httpx
 from azure.core.exceptions import ClientAuthenticationError
 from mcp.server.caching import CacheHint
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.types import ContentBlock
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ValidationError
 
 from outlook_mcp import __version__, http_transport, toolsets
 from outlook_mcp.auth import AuthManager, error_for_failed_refresh
@@ -1272,13 +1272,9 @@ async def outlook_create_contact(
     last_name: str | None = None,
     email: str | None = None,
     phone: str | None = None,
-    company: Annotated[str | None, Field(description="Employer's name.")] = None,
-    title: Annotated[
-        str | None, Field(description="Name prefix (Dr., Ms.); not the employment title.")
-    ] = None,
-    job_title: Annotated[
-        str | None, Field(description="Employment title (Engineer); not the name prefix.")
-    ] = None,
+    company: str | None = None,
+    title: str | None = None,
+    job_title: str | None = None,
     phone_type: str = "mobile",
     birthday: str | None = None,
     middle_name: str | None = None,
@@ -1289,7 +1285,6 @@ async def outlook_create_contact(
     birthday (YYYY-MM-DD).
 
     title is the name prefix ("Dr.", "Ms."), shown in the display name — not the job.
-    job_title is the employment title; company is the employer.
     phone_type: "mobile", "business" or "home".
     """
     client = _get_graph_client(ctx)
@@ -1322,21 +1317,9 @@ async def outlook_update_contact(
     email: str | None = None,
     phone: str | None = None,
     phone_type: str = "mobile",
-    company: Annotated[
-        str | None, Field(description='Employer\'s name. Omit to keep; "" clears.')
-    ] = None,
-    title: Annotated[
-        str | None,
-        Field(
-            description='Name prefix (Dr., Ms.); not the employment title. Omit to keep; "" clears.'
-        ),
-    ] = None,
-    job_title: Annotated[
-        str | None,
-        Field(
-            description='Employment title (Engineer); not the name prefix. Omit to keep; "" clears.'
-        ),
-    ] = None,
+    company: str | None = None,
+    title: str | None = None,
+    job_title: str | None = None,
     home_address: dict | None = None,
     business_address: dict | None = None,
     other_address: dict | None = None,
@@ -1350,8 +1333,7 @@ async def outlook_update_contact(
 ) -> dict:
     """Update an existing contact (partial patch — only provided fields change).
 
-    job_title is the employment title; company is the employer.
-    Omit job_title, company or title to keep it; "" clears that field.
+    A text field passed as "" is cleared; job_title is the job, company the employer.
     An address takes the shape outlook_get_contact returns — any subset of
     {"street", "city", "state", "postal_code", "country_or_region"} — and REPLACES that
     whole address, so pass back every part you want to keep. Omit it to leave it untouched.
