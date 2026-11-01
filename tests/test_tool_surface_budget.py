@@ -213,8 +213,12 @@ CHARS_PER_TOKEN = 4
 # not get to raise everyone's ceiling.
 # 11,142 once `outlook_read_message` says `full` is the stored body, not "both" (+12).
 # No raise.
+# 11,295 with contact field descriptions and the update omission/clearing contract
+# (+153): job_title, name-prefix title and employer company have distinct meanings
+# that clients must not infer from their names. Default/documents/MIME surfaces
+# measure 11,295 / 11,440 / 11,375; ceilings retain about 1% headroom.
 TOOL_SURFACE_CEILING = 12_150
-DEFAULT_SURFACE_CEILING = 11_250
+DEFAULT_SURFACE_CEILING = 11_400
 
 # 14,776 on the 71-tool default surface before the latest rebase;
 # 14,954 with the optional documents group enabled (+178 for its one reader).
@@ -226,7 +230,7 @@ DEFAULT_SURFACE_CEILING = 11_250
 # default; 3,379 with PDF-only chunk guidance enabled.
 # 72 / 11,274 with the lean schemas (documents-only 3 / 249); the documents ceiling
 # comes down to 11,400 with it, again ~1% headroom.
-DOCUMENT_SURFACE_CEILING = 11_400
+DOCUMENT_SURFACE_CEILING = 11_550
 
 # `prompts/list` is the cheap half of the bargain struck in 1.20.0: workflow
 # guidance costs a name and one line here until someone invokes it. If that ever
@@ -404,7 +408,7 @@ asyncio.run(main())
 # (+79 proxy tokens). All groups: 77 / 12,175. Measured on Python 3.13 with
 # the by_alias=True dump above. Its own ceiling gives about 1% headroom,
 # without raising the default, rules or document ceilings.
-MIME_SURFACE_CEILING = 11_350
+MIME_SURFACE_CEILING = 11_490
 
 
 def test_mime_surface_has_its_own_budget_and_preserves_default_schemas():

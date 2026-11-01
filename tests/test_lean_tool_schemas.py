@@ -80,7 +80,8 @@ def test_inputs_called_title_are_still_advertised():
     task, contact = schemas["outlook_create_task"], schemas["outlook_create_contact"]
     assert task["properties"]["title"] == {"type": "string"}
     assert "title" in task["required"]
-    assert contact["properties"]["title"] == {"type": "string"}
+    assert contact["properties"]["title"]["type"] == "string"
+    assert "name prefix" in contact["properties"]["title"]["description"].lower()
     assert "title" not in contact.get("required", [])
 
 

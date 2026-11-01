@@ -6,6 +6,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- Contact creation and updates describe `job_title` (employment title), `title`
+  (name prefix) and `company` (employer) in both tool prose and input schemas.
+  Updates explain that omission keeps these fields and an empty string clears
+  them; clients no longer have to infer the fields' meaning from their names.
+
 ## [1.31.1] — 2026-10-31
 
 Plain-text reads, reported by @uni5592427, with thanks (#124).
