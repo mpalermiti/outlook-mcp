@@ -213,6 +213,8 @@ CHARS_PER_TOKEN = 4
 # not get to raise everyone's ceiling.
 # 11,142 once `outlook_read_message` says `full` is the stored body, not "both" (+12).
 # No raise.
+# 11,163 with the contact update clearing rule and job_title/company meanings (+21).
+# Default/documents/MIME: 11,163 / 11,307 / 11,243. No ceiling changes.
 TOOL_SURFACE_CEILING = 12_150
 DEFAULT_SURFACE_CEILING = 11_250
 

@@ -6,6 +6,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- Contact updates clarify that an empty text field clears it, `job_title` is the
+  job and `company` the employer, within the existing tool-surface budgets.
+
 ## [1.31.1] — 2026-10-31
 
 Plain-text reads, reported by @uni5592427, with thanks (#124).

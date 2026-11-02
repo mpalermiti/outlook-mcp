@@ -1333,6 +1333,7 @@ async def outlook_update_contact(
 ) -> dict:
     """Update an existing contact (partial patch — only provided fields change).
 
+    A text field passed as "" is cleared; job_title is the job, company the employer.
     An address takes the shape outlook_get_contact returns — any subset of
     {"street", "city", "state", "postal_code", "country_or_region"} — and REPLACES that
     whole address, so pass back every part you want to keep. Omit it to leave it untouched.
