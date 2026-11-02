@@ -6,6 +6,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.31.2] — 2026-11-01
+
+Clearer contact updates, from @benjamin-di, and a pypdf security floor for PDF attachments.
+
 ### Fixed
 
 - **Contact updates say what `""` does.** `outlook_update_contact` now tells the agent that

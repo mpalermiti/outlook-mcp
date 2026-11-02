@@ -63,7 +63,7 @@ The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md
 
 - **Export an email** (1.31): get a message's original file exactly as it arrived, attachments included, up to 10 MB. Off unless you turn it on.
 - **Inbox rules** (1.30): list, create, change and delete server-side inbox rules, and see what each rule leaves out (1.30.2). Off unless you turn it on, and a rule that forwards mail also needs send permission.
-- **Attachments as text** (1.28): PDFs, spreadsheets and text files come back as readable text, parsed in a separate process with memory and time limits. Off unless you turn it on.
+- **Attachments as text** (1.28): PDFs, spreadsheets and text files come back as readable text, parsed in a separate process with memory and time limits. Off unless you turn it on. Since 1.31.2 it requires pypdf 6.21.4, which fixes seven ways a crafted PDF could hang a read or use too much memory.
 - **Calendar** (1.27–1.29): turn a meeting invitation into its calendar event, attach files to events, tag an event so you can find it again, create events in any of your calendars, and see who owns each calendar.
 - **Mail** (1.27–1.28): write in Markdown, and replies keep their formatting and the quoted original. Start a draft as a reply or forward, name folders by path (`Inbox/Travel/Flights`), and see whether Microsoft verified a sender. Reading a message as text returns plain text, not the HTML behind it (1.31.1).
 - **Remote clients** (1.27–1.28): an optional HTTP mode serves a client on another machine and refuses to start without a token. Downloads can come back in the reply instead of as a file on the server.
