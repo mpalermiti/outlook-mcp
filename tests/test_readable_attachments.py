@@ -601,7 +601,9 @@ async def test_refused_group_kill_keeps_the_parser_error(monkeypatch, tmp_path):
 # -- Only real text charsets are decoded: the sender picks the declared charset ---------
 
 
-@pytest.mark.parametrize("charset", ["punycode", "idna", "rot13", "unicode_escape", "nope-9"])
+@pytest.mark.parametrize(
+    "charset", ["punycode", "idna", "rot13", "unicode_escape", "nope-9", "utf-8\x00", "utf-8\ud800"]
+)
 def test_non_text_or_unknown_charsets_are_not_decoded(charset):
     from outlook_mcp.tools.mail_attachments import _readable_text
 

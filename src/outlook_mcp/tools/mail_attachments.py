@@ -399,7 +399,7 @@ def _readable_text(
     else:
         try:
             codec = codecs.lookup(charset).name
-        except LookupError:
+        except (LookupError, ValueError):  # unknown, NUL-bearing or surrogate names
             return None
         if codec not in _TEXT_CHARSETS:
             return None
