@@ -215,6 +215,8 @@ CHARS_PER_TOKEN = 4
 # No raise.
 # 11,163 with the contact update clearing rule and job_title/company meanings (+21).
 # Default/documents/MIME: 11,163 / 11,307 / 11,243. No ceiling changes.
+# 11,144 once `outlook_download_task_attachment` stops claiming an atomic replace (-19).
+# Default is 71 / 11,144; no ceiling changes.
 TOOL_SURFACE_CEILING = 12_150
 DEFAULT_SURFACE_CEILING = 11_250
 

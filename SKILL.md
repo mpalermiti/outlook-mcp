@@ -144,7 +144,7 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
 - `outlook_changes_since` — One structured "since last call" digest across mail, events, and contacts. Composes the three delta tools into counts + urgent-flagged mail + top-5 senders + new/cancelled events; auto-recovers from stale tokens; `has_more` per resource when a sync stopped early (replace the stored `delta_tokens` dict with the returned one, never merge it). Mail falls back to the client-side window if Graph ignores the filter and says so in `_meta.mail_window_fallback`. The first call covers only the last `fallback_window_hours` (default 24). Designed for recurring agent loops (morning brief, hourly inbox sweep).
 
 ### To Do
-- `outlook_list_task_lists` — List To Do lists
+- `outlook_list_task_lists` — List To Do lists; `is_owner` / `is_shared` mark a list someone else owns, and writing into one needs `mail_send`
 - `outlook_list_tasks` — List tasks with status filter and pagination
 - `outlook_get_task` — Get one task's details: notes (body), checklist items (unchecked first), recurrence flag
 - `outlook_create_task` — Create with due date, importance, recurrence
@@ -155,7 +155,7 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
 - `outlook_update_checklist_item` — Check off or rename a sub-step (partial patch)
 - `outlook_delete_checklist_item` — Delete a sub-step
 - `outlook_list_task_attachments` — List a task's attachments (id, name, size, content_type)
-- `outlook_download_task_attachment` — Download task attachment content to attachments_dir, or return it with `as_content=True` (≤10 MB)
+- `outlook_download_task_attachment` — Download task attachment content to attachments_dir (never replaces a file, no hidden names; pick a new `save_path`), or return it with `as_content=True` (≤10 MB)
 - `outlook_upload_task_attachment` — Attach a local file to a task via inline base64 POST (1 byte – 20 MiB)
 - `outlook_delete_task_attachment` — Remove a task attachment
 
@@ -168,8 +168,8 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
 
 ### Attachments
 - `outlook_list_attachments` — List on a message
-- `outlook_download_attachment` — Download and save decoded bytes into `attachments_dir`, or return them with `as_content=True` (≤10 MB)
-- `outlook_read_attachment` — Read PDF pages, XLSX cells/formulas/saved results, or text in its declared charset without a server-side file; follow `next_offset` until null. Opt-in `documents` group; PDF/XLSX need the `documents` extra; no OCR or formula recalculation
+- `outlook_download_attachment` — Download and save decoded bytes into `attachments_dir` (never replaces a file, no hidden names; pick a new `save_path`), or return them with `as_content=True` (≤10 MB)
+- `outlook_read_attachment` — Read PDF pages, XLSX cells/formulas/saved results, or text in a standard text charset without a server-side file; follow `next_offset` until null. Opt-in `documents` group; PDF/XLSX need the `documents` extra; no OCR or formula recalculation
 - `outlook_send_with_attachments` — Send with files read from `attachments_dir` (auto upload session for >3MB) or passed inline in `attachments` (≤3MB each). If a large upload fails, nothing is sent and the error names the draft left in Drafts: delete it or finish it with `outlook_attach_to_draft` rather than calling the send again, which makes a second draft
 - `outlook_attach_to_draft` — Add attachments to an existing draft, from `attachments_dir` (auto upload session for >3MB) or inline in `attachments` (≤3MB each)
 - `outlook_remove_draft_attachment` — Remove a single attachment from a draft

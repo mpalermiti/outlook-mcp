@@ -425,7 +425,7 @@ Creating, updating or deleting a rule also needs `MailboxSettings.ReadWrite` on 
 
 | Tool | Description |
 |------|-------------|
-| `outlook_list_task_lists` | List To Do lists. |
+| `outlook_list_task_lists` | List To Do lists, with `is_owner` and `is_shared` so a list someone else owns is visible. |
 | `outlook_list_tasks` | List tasks with status filter and pagination. |
 | `outlook_get_task` | Get full task details: notes (`body`), checklist items (ordered unchecked-first), due, recurrence flag. |
 | `outlook_create_task` | Create task with due date, importance, recurrence. |
@@ -436,7 +436,7 @@ Creating, updating or deleting a rule also needs `MailboxSettings.ReadWrite` on 
 | `outlook_update_checklist_item` | Update a checklist item — mark done (`is_checked`) or rename (partial patch). |
 | `outlook_delete_checklist_item` | Delete a checklist item from a task. |
 | `outlook_list_task_attachments` | List attachments on a To Do task (id, name, size, content_type) with pagination. |
-| `outlook_download_task_attachment` | Download a task attachment's content to a local file (confined to `attachments_dir`), or return it with `as_content=True`. |
+| `outlook_download_task_attachment` | Download a task attachment's content to a local file (confined to `attachments_dir`), or return it with `as_content=True`. Never replaces an existing file and never creates a hidden (dot) name or writes into a hidden folder; pick a new `save_path`. |
 | `outlook_upload_task_attachment` | Attach a local file (from `attachments_dir`) to a task via inline base64 POST (1 byte – 20 MiB). |
 | `outlook_delete_task_attachment` | Remove an attachment from a To Do task. |
 
@@ -481,7 +481,7 @@ Creating, updating or deleting a rule also needs `MailboxSettings.ReadWrite` on 
 | Tool | Description |
 |------|-------------|
 | `outlook_list_attachments` | List attachments on a message. |
-| `outlook_download_attachment` | Download an attachment and save decoded bytes into `attachments_dir`, or return it with `as_content=True`. |
+| `outlook_download_attachment` | Download an attachment and save decoded bytes into `attachments_dir`, or return it with `as_content=True`. Never replaces an existing file and never creates a hidden (dot) name or writes into a hidden folder; pick a new `save_path`. |
 | `outlook_read_attachment` | **Opt-in** (`documents` group, not loaded by default; see below). Read PDF pages, XLSX cells/formulas/saved results, or text in its declared charset (UTF-8 by default); `offset` / `max_chars` page the text, no file saved. |
 | `outlook_send_with_attachments` | Send a message with attachments read from `attachments_dir` (auto upload session for >3MB) or passed inline in `attachments`. If a large upload fails, nothing is sent, and the error names the draft left in Drafts so it can be deleted or finished with `outlook_attach_to_draft` instead of sent twice. |
 | `outlook_attach_to_draft` | Add attachments from `attachments_dir` (auto upload session for >3MB) or inline in `attachments` to an existing draft. A failed large upload is an error, never a file reported as attached. Returns the new attachment IDs (none yet for an upload-session file). |
@@ -596,7 +596,7 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions on
 | `read_only` | `bool` | `false` | When `true`, all write tools (send, reply, move, delete, create, update, RSVP) return an error. Gates the tools, not the Microsoft token -- see below. |
 | `mailbox_settings_write` | `bool` | `false` | When `true`, `outlook-mcp auth` asks for `MailboxSettings.ReadWrite` instead of `MailboxSettings.Read`, which is what the inbox-rule write tools need. Consent is per requested scope, so the Azure-portal permission alone does not put it in the token. It also loads the opt-in `rules` toolset group: asking for the scope is asking to manage rules, so the four rule tools come with it. Off by default: it widens the token to every mailbox setting, not only rules. Refused in combination with `read_only_consent`, which asks for the read scopes only — that pairing would silently never request the write scope. |
 | `read_only_consent` | `bool` | `false` | When `true`, `outlook-mcp auth` asks Microsoft for the read permissions only, instead of the read-write set. For a second, read-only app registration -- see [What `read_only` does and does not do](#what-read_only-does-and-does-not-do). Requires `read_only: true`; the config is refused without it. |
-| `attachments_dir` | `string` | `"~/.outlook-mcp/attachments"` | The only directory the attachment tools may read from or write to. Every path an agent supplies is resolved and must land inside it — a symlink out or a `..` is refused. Widen it only if you understand that anything reachable can be emailed. |
+| `attachments_dir` | `string` | `"~/.outlook-mcp/attachments"` | The only directory the attachment tools may read from or write to. Every path an agent supplies is resolved and must land inside it — a symlink out or a `..` is refused. Widen it only if you understand that anything reachable can be emailed. It must be an absolute path (a leading `~` is expanded), and it cannot be your home folder, a folder that contains it, or a folder that contains the settings folder; a subfolder of any of them is fine. A config that breaks these rules fails to load: the server starts in its safe state and `outlook-mcp` prints a repair line. Fix it by choosing a folder of its own. |
 | `allow_categories` | `list[string]` | `[]` | Optional. Restrict write tools to specific categories (see below). Empty list = all writes allowed when `read_only: false`. |
 | `allow_unencrypted_token_cache` | `bool` | `false` | Permit the OAuth token cache to be written in cleartext when the platform has no encrypted store (Linux without libsecret). Off by default: authentication stops with an explanation rather than silently persisting a reusable Graph token in plaintext. macOS and Windows always encrypt and are unaffected. |
 
@@ -610,6 +610,7 @@ No override is automatically written back to the file.
 | Variable | Input | Relation to the file/default value |
 |----------|-------|-----------------------------------|
 | `OUTLOOK_MCP_CLIENT_ID` | Nonempty string | Supplies `client_id` only when the file has none; a different app registration is refused |
+| `OUTLOOK_MCP_EXPECTED_USERNAME` | Nonempty string | Supplies `expected_username` only when the file has none; a different username is refused, as for `client_id` |
 | `OUTLOOK_MCP_TENANT_ID` | Nonempty string | Overrides `tenant_id` |
 | `OUTLOOK_MCP_TIMEZONE` | IANA timezone | Overrides `timezone` |
 | `OUTLOOK_MCP_READ_ONLY` | `true` or `false` | May enable a restriction; cannot disable one |
@@ -622,6 +623,8 @@ Unset variables do nothing. A supported variable set to an empty value refuses s
 including an empty Compose `${VAR}` pass-through. Booleans accept only `true`/`false`
 (case-insensitive, surrounding whitespace allowed); list input must be JSON, for example
 `["mail_drafts","contacts_write"]`.
+
+A `config.json` that repeats a key inside one object is refused, because the file would not say which value is meant.
 An empty category list means **all categories**, so it cannot replace a restricted file list.
 Each security setting is checked independently: enabling read-only mode does not excuse widening
 another setting. Security permissions that require explicit consent in the file still require it.
@@ -771,14 +774,14 @@ By default, `read_only: false` unlocks **all** write tools. For finer control, s
 
 | Category | Tools | Risk |
 |---|---|---|
-| `mail_drafts` | create/update/delete draft, attach to/remove from a draft | Safe — drafts only, no send |
+| `mail_drafts` | create/update/delete draft, attach to/remove from a draft | Low — stages mail that you send yourself, so check the recipients before sending; draft results list every recipient (to, cc, bcc, reply-to) |
 | `mail_triage` | move, delete (soft), flag, categorize, mark read, copy, batch, reclassify and set/delete Focused Inbox overrides | Moderate — reversible except hard delete |
 | `mail_folders` | create/rename/delete folder | Moderate |
 | `mail_rules` | create/update/delete inbox rule | **Dangerous** — rules run server-side, so one keeps moving, forwarding or deleting mail with every client closed |
 | `mail_send` | send, reply, forward, send_draft, send_with_attachments | **Dangerous** — sends email on your behalf |
-| `calendar_write` | create/update/delete event, RSVP, attach/remove event files | Moderate — your own calendar, but `outlook_attach_to_event` reads local files from `attachments_dir` and pushes their bytes to Graph. The parts that email other people text the agent wrote need `mail_send` as well: inviting attendees, rewording (subject, body, location) any event that already has them, attaching a file to such an event (they get it with its next update), and adding a message to an RSVP. A bare RSVP, a time change and a cancellation still notify the people involved, but carry nothing the agent wrote |
+| `calendar_write` | create/update/delete event, RSVP, attach/remove event files | Moderate — your own calendar, but `outlook_attach_to_event` reads local files from `attachments_dir` and pushes their bytes to Graph. The parts that email other people text the agent wrote need `mail_send` as well: writing into a calendar someone else owns (events there are shown to its owner), inviting attendees, rewording (subject, body, location) any event that already has them, attaching a file to such an event (they get it with its next update), and adding a message to an RSVP. A bare RSVP, a time change and a cancellation still notify the people involved, but carry nothing the agent wrote |
 | `contacts_write` | create/update/delete contact | Moderate |
-| `todo_write` | create/update/complete/delete task, checklist items; upload/delete task attachments | Moderate — your own task list, but `outlook_upload_task_attachment` reads local files from `attachments_dir` and pushes their bytes to Graph, and task/checklist/attachment deletes are irreversible. Listing and downloading attachments are plain reads, gated like every other read (not at all) and fenced to `attachments_dir` |
+| `todo_write` | create/update/complete/delete task, checklist items; upload/delete task attachments | Moderate — your own task list (writing into a list someone else owns also needs `mail_send`, like an invitation; `outlook_list_task_lists` shows `is_owner` and `is_shared`), but `outlook_upload_task_attachment` reads local files from `attachments_dir` and pushes their bytes to Graph, and task/checklist/attachment deletes are irreversible. Listing and downloading attachments are plain reads, gated like every other read (not at all) and fenced to `attachments_dir` |
 
 **Example policies:**
 
@@ -793,14 +796,14 @@ from `attachments_dir`, uploads to Graph, and irreversible deletes. Listing and
 downloading task attachments are reads and are not write-gated, like the mail
 attachment reads — see the table above.)
 
-**Calendar-only** (agent can manage your schedule, nothing else):
+**Calendar-only** (agent can manage your own calendar):
 
 ```json
 { "read_only": false, "allow_categories": ["calendar_write"] }
 ```
 
-(It cannot invite anyone. An invitation is an email, so attendees need `mail_send` too — add it
-if the agent should set up meetings with other people, not just block out your own time.)
+(It cannot invite anyone, and it cannot write into a calendar someone else owns. An invitation is an email, and so is a change to a shared calendar, so both need `mail_send` too — add it
+if the agent should set up meetings with other people or use a shared calendar, not just block out your own time.)
 
 **Full write access** (agent can do everything):
 

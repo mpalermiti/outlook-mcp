@@ -65,9 +65,17 @@ outlook-mcp is designed with security in mind:
   display name; `false` means unverified, not spoofed. Only the topmost
   `Authentication-Results` header counts: a sender can write that header into a
   message, and Microsoft adds its own above everything the sender wrote. It is
-  parsed as RFC 8601, a pass must be aligned with the From domain, and a header
+  parsed as RFC 8601, a pass must be aligned with the From domain (DKIM alignment uses
+  `header.d` only), and a header
   that names another service, fails DMARC or composite authentication, states
-  either twice, or cannot be parsed authenticates nothing.
+  either twice, or cannot be parsed authenticates nothing. The verdict is Microsoft's stamp
+  on mail it received, so a message placed in the mailbox without passing through Microsoft's
+  filtering (imported, or uploaded by another client) carries no trustworthy verdict.
+- **Shared calendars and To Do lists need `mail_send`.** Writing into a calendar or list
+  someone else owns (events and event files, tasks, checklist text, task attachments) is shown
+  to its owner like an invitation, so it needs `mail_send` as well as the write category.
+  `outlook_list_task_lists` shows `is_owner` and `is_shared`. Drafts stage mail that the user
+  sends, so `mail_drafts` is not "safe": check the recipients, which draft results list in full.
 - **HTTP transport is opt-in, and never runs without a token.** With
   `OUTLOOK_MCP_TRANSPORT=streamable-http`, one request to the port reaches the mailbox, so the
   server refuses to start without a token on any bind, loopback included, and answers `401` to
@@ -84,13 +92,21 @@ outlook-mcp is designed with security in mind:
   outside it. Paths come from the model, which reads email, so confinement is by resolving
   (absolute paths, `..` and symlinks collapse first), never by comparing strings. On Windows a
   network or device path is refused before it is resolved, since resolving it would connect to
-  the host. A download lands through an owner-only temp file moved into place, so a symlink
-  planted at the target cannot redirect the bytes.
+  the host. A download never replaces an existing file (a symlink at the name counts as
+  taken) and never creates a hidden (dot) name or writes into a hidden folder below
+  `attachments_dir`; the file is created exclusively and owner-only, so a symlink planted at
+  the target cannot redirect the bytes.
+- **`attachments_dir` is a folder of its own.** It must be an absolute path and cannot be the
+  home folder, a folder that contains it, or a folder that contains the settings folder, since
+  the attachment tools read and write everything under it. A config that breaks the rule fails
+  to load, so the server starts in its safe state; choose a subfolder. A `config.json` that
+  repeats a key is refused for the same reason: it does not say which value is meant.
 - **Attachments as content touch no disk.** `as_content=True` on the downloads returns the
   file in the tool result, 10 MiB at most, and inline uploads (`attachments`) are sent straight
   from the arguments. The name and type are the sender's, so the bytes decide how a file comes
   back: as an image only when it is a complete PNG, JPEG, GIF or WEBP of at most 5 MiB, as text
-  only when it is a text type that decodes in its declared charset with no control characters,
+  only when it is a text type that decodes in a standard text charset with no control
+  characters (a sender picks the declared charset, so others come back as raw bytes),
   and otherwise as an embedded resource holding the original bytes.
 - **Upload URLs stay out of errors.** A file over 3 MB goes up through a Graph upload session,
   whose URL carries its own authorization. Every chunk's reply is checked, nothing is sent after

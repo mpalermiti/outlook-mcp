@@ -6,6 +6,43 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security
+
+- **Attachment text is decoded only from standard text charsets.** A sender chooses the
+  charset a file declares, so `outlook_read_attachment` and `as_content` downloads now decode
+  text only from real text charsets; anything else comes back as raw bytes (or, for
+  `outlook_read_attachment`, a message that it cannot decode the file).
+- **Downloads never replace a file or create hidden names.** `outlook_download_attachment`
+  and `outlook_download_task_attachment` refuse a name that is already taken (a symlink there
+  counts), a name starting with a dot, and any folder starting with a dot below
+  `attachments_dir`. Pick a new `save_path`.
+- **`attachments_dir` must be a folder of its own.** It must be absolute, and cannot be the
+  home folder, a folder that contains it, or a folder that contains the settings folder;
+  subfolders are fine and the default is unchanged. A config that breaks the rule fails to
+  load at startup: the server starts in its safe state and the CLI prints a repair line.
+  A `config.json` that repeats a key is refused, and `OUTLOOK_MCP_EXPECTED_USERNAME` now
+  follows the `client_id` rule (it supplies the value only when the file has none).
+- **Writing into someone else's calendar or To Do list needs `mail_send`.** Creating or
+  updating an event, attaching a file to an event, creating or updating a task, checklist
+  text and task attachment uploads in a calendar or list another person owns are shown to
+  them like an invitation, so they need `mail_send` as well.
+- **Inbox rules with no reported enabled state count as on.** The forwarding-rule safety
+  checks no longer treat a rule as off when Graph does not say.
+- **Sender verification uses `header.d` only** to decide DKIM alignment.
+
+### Changed
+
+- **`outlook_list_task_lists` shows `is_owner` and `is_shared`** for each list.
+- **Draft results list every recipient** (to, cc, bcc, reply_to), so the user can check them
+  before sending. The README no longer calls `mail_drafts` "safe".
+- **Refusals about settings name the setting** without spelling out the edit.
+
+### Fixed
+
+- **Event attachments and reply/forward drafts are not re-sent after a Graph server error.**
+  A 5xx mid-request is reported rather than repeated, so one attachment or draft cannot be
+  created twice.
+
 ## [1.31.2] — 2026-11-01
 
 Clearer contact updates, from @benjamin-di, and a pypdf security floor for PDF attachments.

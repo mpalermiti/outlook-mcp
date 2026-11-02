@@ -1678,9 +1678,8 @@ async def outlook_download_task_attachment(
 ) -> dict | list[ContentBlock]:
     """Download a To Do task attachment to a local file, or return it with `as_content=True`.
 
-    `save_path` resolves inside the configured attachments directory; the
-    write is atomic (temp file + replace), so a failed download never
-    truncates a file already staged there. `as_content` writes nothing; 10 MB at most.
+    `save_path` resolves inside the configured attachments directory; it never
+    replaces an existing file. `as_content` writes nothing; 10 MB at most.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
