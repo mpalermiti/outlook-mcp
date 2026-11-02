@@ -60,7 +60,7 @@ Issues = "https://github.com/mpalermiti/outlook-mcp/issues"
 [project.optional-dependencies]
 documents = [
     "psutil>=7,<8",
-    "pypdf>=6.21.2,<7",
+    "pypdf>=6.21.4,<7",
     "openpyxl>=3.1.5,<4",
     "defusedxml>=0.7.1,<1",
 ]

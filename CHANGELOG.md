@@ -13,6 +13,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   employer, for +21 proxy tokens on the default surface and no ceiling raised. From
   @benjamin-di, with thanks (#216).
 
+### Security
+
+- **The `documents` extra requires pypdf 6.21.4.** `outlook_read_attachment` parses PDFs with
+  pypdf, and versions before 6.21.4 can loop or use large amounts of memory on a crafted PDF
+  (GHSA-x3rh-gjgm-fmqc, GHSA-62m5-6wh8-28x7, GHSA-4vqv-7265-gm2w, GHSA-42gh-23hr-vphw,
+  GHSA-mfr5-77xh-9j7h, GHSA-cggf-277g-3q54, GHSA-5849-834g-hvw5). The parse already runs in a
+  worker that is killed past 256 MiB or 30 seconds, so such a PDF failed that one read rather
+  than the server. The floor was 6.21.2, so upgrading this package kept an older pypdf; it
+  now moves it to 6.21.4 or later.
+
 ## [1.31.1] — 2026-10-31
 
 Plain-text reads, reported by @uni5592427, with thanks (#124).
