@@ -173,8 +173,8 @@ async def download_task_attachment(
     against the entity's own `size` — a response whose bytes contradict its
     declared size errors out rather than writing half an attachment. All
     bytes are fetched *before* the destination is touched, and the write lands
-    via a temp file + atomic replace — an empty or failed download never
-    truncates a staged file under its trusted name. A 0-byte attachment
+    as a new file (see ``write_download``): a download never replaces a file,
+    so a staged file under that name is never touched. A 0-byte attachment
     (size 0, no contentBytes) writes an honest 0-byte file. With ``as_content`` the
     verified bytes go back as MCP content instead (see ``attachment_content``) and nothing
     is written.
@@ -203,7 +203,7 @@ async def download_task_attachment(
     if save_path is None:
         return attachment_content(name, content_type, content)
 
-    write_download(save_path, content)
+    write_download(save_path, content, attachments_dir=config.attachments_dir)
 
     return {
         "saved_to": save_path,

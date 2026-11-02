@@ -637,9 +637,10 @@ def _file_attachment(content: bytes | None, name: str = "report.pdf"):
 
 
 class TestDownloadWritesSafely:
-    async def test_an_attachment_with_no_content_leaves_the_existing_file_alone(self, tmp_path):
-        existing = tmp_path / "report.pdf"
-        existing.write_bytes(b"the copy already here")
+    async def test_an_attachment_with_no_content_writes_nothing(self, tmp_path):
+        """A file already at the name is refused before Graph is asked (see
+        test_downloads_never_replace.py), so this is the fresh-name case."""
+        target = tmp_path / "report.pdf"
         client, _ = _client_returning(_file_attachment(None))
 
         with pytest.raises(ValueError, match="no file content to read or download") as error:
@@ -647,12 +648,12 @@ class TestDownloadWritesSafely:
                 client,
                 message_id="AAMkAG123=",
                 attachment_id="att1",
-                save_path=str(existing),
+                save_path=str(target),
                 config=Config(attachments_dir=str(tmp_path)),
             )
 
         assert "Nothing was written." in str(error.value)
-        assert existing.read_bytes() == b"the copy already here"
+        assert list(tmp_path.iterdir()) == []
 
     async def test_an_attached_email_or_link_is_refused_with_a_reason(self, tmp_path):
         """An item or reference attachment has no `content_bytes` at all."""
@@ -690,14 +691,12 @@ class TestDownloadWritesSafely:
         assert oct(os.stat(result["saved_to"]).st_mode)[-3:] == "600"
 
     @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
-    async def test_a_symlink_planted_after_the_check_is_replaced_not_written_through(
-        self, tmp_path
-    ):
+    async def test_a_symlink_planted_after_the_check_is_refused_not_written_through(self, tmp_path):
         """The path is checked, then Graph is asked, then the file is written.
 
-        A symlink put at the target in between must not redirect the write:
-        the bytes land in a new file at that name, and what the link pointed
-        at is untouched.
+        A symlink put at the target in between must not redirect the write. A
+        download never replaces a file, so the name is now taken and the write
+        is refused: the link stays as it was, and what it points at is untouched.
         """
         attachments = tmp_path / "attachments"
         attachments.mkdir()
@@ -710,17 +709,18 @@ class TestDownloadWritesSafely:
 
         client, _ = _client_returning(_file_attachment(b"attacker bytes"), on_get=plant_symlink)
 
-        await download_attachment(
-            client,
-            message_id="AAMkAG123=",
-            attachment_id="att1",
-            save_path="report.pdf",
-            config=Config(attachments_dir=str(attachments)),
-        )
+        with pytest.raises(ValueError, match="'report.pdf' already exists"):
+            await download_attachment(
+                client,
+                message_id="AAMkAG123=",
+                attachment_id="att1",
+                save_path="report.pdf",
+                config=Config(attachments_dir=str(attachments)),
+            )
 
         assert outside.read_text() == "export PATH=/usr/bin\n"
-        assert not target.is_symlink()
-        assert target.read_bytes() == b"attacker bytes"
+        assert target.is_symlink()
+        assert [p.name for p in attachments.iterdir()] == ["report.pdf"]
 
     @pytest.mark.parametrize("save_path", [".", "missing-subfolder/report.pdf"])
     async def test_a_target_that_cannot_land_is_refused_before_graph_is_asked(

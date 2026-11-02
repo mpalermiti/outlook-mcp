@@ -220,20 +220,20 @@ class TestDownloadTaskAttachment:
         assert saved.read_bytes() == b""
         assert result["size"] == 0
 
-    async def test_download_does_not_truncate_destination_before_bytes(self, tmp_path):
+    async def test_download_never_touches_a_staged_file(self, tmp_path):
         """The old bug: open(wb) truncated the target first, so a failed fetch
-        zeroed a staged file. Now the existing file survives a fetch failure."""
+        zeroed a staged file. Now a download never replaces a file: the name is
+        refused before Graph is asked, and the staged file is untouched."""
         client = _build_mock_client()
-        _attachments_of(client).by_attachment_base_id.return_value.get = AsyncMock(
-            side_effect=RuntimeError("graph blew up")
-        )
+        get = AsyncMock(side_effect=RuntimeError("graph blew up"))
+        _attachments_of(client).by_attachment_base_id.return_value.get = get
         config = _cfg(tmp_path)
         base = tmp_path / "att"
         base.mkdir(parents=True)
         staged = base / "staged.pdf"
         staged.write_bytes(b"precious staged bytes")
 
-        with pytest.raises(RuntimeError, match="graph blew up"):
+        with pytest.raises(ValueError, match="'staged.pdf' already exists"):
             await download_task_attachment(
                 client,
                 task_id="task1",
@@ -243,16 +243,16 @@ class TestDownloadTaskAttachment:
             )
 
         assert staged.read_bytes() == b"precious staged bytes"
+        get.assert_not_awaited()
 
-    async def test_download_replaces_atomically(self, tmp_path):
-        """Success replaces the destination in one step and leaves no temp
-        files behind."""
+    async def test_download_lands_whole_and_leaves_no_temp_files(self, tmp_path):
+        """Success lands the bytes under the new name in one step and leaves no
+        temp files behind."""
         client = _build_mock_client()
         config = _cfg(tmp_path)
         base = tmp_path / "att"
         base.mkdir(parents=True)
         dst = base / "handbook.pdf"
-        dst.write_bytes(b"previous contents")
 
         await download_task_attachment(
             client,
@@ -300,7 +300,7 @@ class TestDownloadTaskAttachment:
         """The old bug: contentBytes absent -> `or b""` wrote a 0-byte file
         under the trusted name and reported success. The entity's own size is
         the witness — bytes and declared size must not contradict each other,
-        and a staged destination file must survive the refusal."""
+        and nothing lands under the name."""
         client = _build_mock_client(
             attachment_entity=_entity(
                 id="att1",
@@ -313,8 +313,6 @@ class TestDownloadTaskAttachment:
         config = _cfg(tmp_path)
         base = tmp_path / "att"
         base.mkdir(parents=True)
-        staged = base / "handbook.pdf"
-        staged.write_bytes(b"precious staged bytes")
 
         with pytest.raises(ValueError, match="declares 1234 bytes"):
             await download_task_attachment(
@@ -325,7 +323,7 @@ class TestDownloadTaskAttachment:
                 config=config,
             )
 
-        assert staged.read_bytes() == b"precious staged bytes"
+        assert list(base.iterdir()) == []
 
     async def test_download_entity_without_content_bytes_property_is_a_clear_error(self, tmp_path):
         """A response without @odata.type deserializes as AttachmentBase,

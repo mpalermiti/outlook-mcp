@@ -316,8 +316,8 @@ def download_destination(
             "Pass save_path to save the attachment inside attachments_dir, or "
             "as_content=True to receive it in the result."
         )
-    save_path = resolve_attachment_path(save_path, attachments_dir, file_root=file_root)
-    return _validated_download_target(save_path, attachments_dir)
+    target = resolve_attachment_path(save_path, attachments_dir, file_root=file_root)
+    return _validated_download_target(target, attachments_dir, requested=save_path)
 
 
 def _media_type(content_type: str, name: str) -> tuple[str, str | None]:
@@ -516,41 +516,129 @@ def attachment_content(name: str, content_type: str, content: bytes) -> list[Con
     return blocks
 
 
-def _validated_download_target(save_path: str, attachments_dir: str) -> str:
-    """Refuse a download target that cannot land, before any Graph call.
+def _name_in(path: Path, base: Path) -> str:
+    """``path`` as a name inside ``base``, for error text; its last component otherwise."""
+    try:
+        return str(path.relative_to(base))
+    except ValueError:
+        return path.name
 
-    Two shapes used to slip past the confinement check and blow up late:
-    ``save_path`` resolving to the attachments directory itself (``"."`` is
-    relative to it, and ``is_relative_to`` is satisfied) sent ``dirname()`` one
-    level *above* the fence, so the temp file landed next to ``config.json``;
-    and a path whose parent does not exist made it all the way through the
-    fetch before ``mkstemp`` raised FileNotFoundError — an OS error whose text
-    never reaches the model. Both are caller-input problems, so both are
-    ValueError, checked before a single byte is requested.
+
+def _already_exists(name: str) -> ValueError:
+    return ValueError(
+        f"A file named '{name}' already exists in attachments_dir, and downloads never "
+        "replace a file. Pass a different save_path."
+    )
+
+
+def _attachments_root(attachments_dir: str) -> Path:
+    return Path(os.path.expanduser(attachments_dir)).resolve()
+
+
+def _validated_download_target(save_path: str, attachments_dir: str, *, requested: str) -> str:
+    """Refuse a download target that cannot land, or must not, before any Graph call.
+
+    ``save_path`` is the resolved, confined path; ``requested`` is what the caller
+    passed. All of these are caller-input problems, so all are ValueError, checked
+    before a single byte is requested:
+
+    - ``save_path`` resolving to the attachments directory itself (``"."`` is
+      relative to it, and ``is_relative_to`` is satisfied) used to send
+      ``dirname()`` one level *above* the fence, so the temp file landed next to
+      ``config.json``.
+    - A name or folder below the attachments directory that starts with a dot.
+      Downloads count as reads, so ``read_only`` does not stop them, and dot
+      names are where shells and tools keep their settings. Only the
+      part below the root counts: the default root is itself inside
+      ``~/.outlook-mcp``. The resolved path is checked, because that is what
+      gets written.
+    - A parent that does not exist, which used to get all the way through the
+      fetch before ``mkstemp`` raised FileNotFoundError, an OS error whose text
+      never reaches the model.
+    - A name already taken. A download never replaces a file: the one there may
+      be a file the user staged to send. The name the caller gave is checked
+      without following its last component, so a symlink there counts as taken
+      whether or not it points anywhere; the resolved path is checked too.
     """
-    resolved = Path(save_path)
-    if resolved.is_dir():
+    target = Path(save_path)
+    if target.is_dir():
         raise ValueError(
             f"Attachment download target is a directory, not a file: "
-            f"{resolved}. Pass a file path inside {attachments_dir}."
+            f"{target}. Pass a file path inside {attachments_dir}."
         )
-    if not resolved.parent.is_dir():
+    base = _attachments_root(attachments_dir)
+    try:
+        below_root = target.relative_to(base)
+    except ValueError:
+        # resolve_attachment_path has just confined it, so this means the root moved.
         raise ValueError(
-            f"Attachment download directory does not exist: {resolved.parent}. "
+            f"Attachment path is outside the permitted directory: {requested}."
+        ) from None
+    hidden = next((part for part in below_root.parts if part.startswith(".")), None)
+    if hidden is not None:
+        raise ValueError(
+            "Downloads cannot create hidden files or write inside hidden folders "
+            f"('{hidden}'). Pass a save_path without a leading dot."
+        )
+    if not target.parent.is_dir():
+        raise ValueError(
+            f"Attachment download directory does not exist: {target.parent}. "
             "Create it first — downloads do not create directories on demand."
         )
+    named = Path(os.path.expanduser(requested))
+    if not named.is_absolute():
+        named = base / named
+    as_named = named.parent.resolve() / named.name
+    for path in (as_named, target):
+        if os.path.lexists(path):
+            raise _already_exists(_name_in(path, base))
     return save_path
 
 
-def write_download(save_path: str, content: bytes) -> None:
-    """Land downloaded bytes at ``save_path`` atomically, readable by the owner only.
+def _create_exclusively(save_path: str, content: bytes) -> bool:
+    """Write ``content`` to a new file at ``save_path``, owner-only; False if the name is taken.
 
-    All bytes are in hand before this is called, and they go to a temp file in
-    the target's own directory (``mkstemp``: created 0600, exclusively) that
-    ``os.replace`` then moves into place. So a failed write never truncates a
-    file already under that name, and a symlink planted at the target after the
-    path check is replaced rather than written through — the bytes cannot be
-    redirected to whatever it pointed at. Shared by the mail and To Do downloads.
+    For filesystems without hard links. ``O_EXCL`` refuses an existing name,
+    symlinks included, and the file exists only if this call created it, so a
+    write that fails part-way removes it.
+    """
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
+    try:
+        fd = os.open(save_path, flags, 0o600)
+    except FileExistsError:
+        return False
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+    except BaseException:
+        try:
+            os.unlink(save_path)
+        except OSError:
+            pass
+        raise
+    return True
+
+
+def write_download(save_path: str, content: bytes, *, attachments_dir: str) -> None:
+    """Land downloaded bytes at ``save_path`` as a new file, readable by the owner only.
+
+    It never replaces an existing file. The path check refuses a name already
+    taken, and the write refuses one that appears after the check, while Graph
+    answers. All bytes are in hand before this is called, and they go to a temp
+    file in the target's own directory (``mkstemp``: created 0600, exclusively)
+    that ``os.link`` then gives the target's name. A link never replaces
+    anything: a name taken in the meantime, by a file or a symlink, raises
+    FileExistsError, so the file there is untouched and the bytes cannot be
+    redirected to whatever a symlink points at. A failed write leaves no file
+    under the target's name. Where hard links are unsupported, an exclusive
+    create (``O_EXCL``) gives the same guarantee. The temp file is always
+    removed. Shared by the mail and To Do downloads.
     """
     fd, tmp_path = tempfile.mkstemp(
         dir=os.path.dirname(save_path), prefix=".download-", suffix=".tmp"
@@ -558,13 +646,21 @@ def write_download(save_path: str, content: bytes) -> None:
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(content)
-        os.replace(tmp_path, save_path)
-    except BaseException:
+        try:
+            os.link(tmp_path, save_path)
+            created = True
+        except FileExistsError:
+            created = False
+        except (OSError, AttributeError):
+            # No hard links here (EPERM, ENOTSUP, EXDEV, or no os.link at all).
+            created = _create_exclusively(save_path, content)
+        if not created:
+            raise _already_exists(_name_in(Path(save_path), _attachments_root(attachments_dir)))
+    finally:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
-        raise
 
 
 async def download_attachment(
@@ -594,7 +690,7 @@ async def download_attachment(
     if save_path is None:
         return attachment_content(name, content_type, content)
 
-    write_download(save_path, content)
+    write_download(save_path, content, attachments_dir=config.attachments_dir)
     return {
         "saved_to": save_path,
         "name": name,

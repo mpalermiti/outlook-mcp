@@ -33,8 +33,8 @@ EXPECTED_IDEMPOTENT = {
     "outlook_set_inbox_override",
     "outlook_download_attachment",
     # Same audit as their mail twins: an absolute-value PATCH
-    # (checklist check-off/rename) and a download that overwrites a fixed
-    # path with the same bytes.
+    # (checklist check-off/rename) and a download, which never replaces a
+    # file: a repeat to the same path is refused and changes nothing.
     "outlook_download_task_attachment",
     "outlook_update_checklist_item",
 }
