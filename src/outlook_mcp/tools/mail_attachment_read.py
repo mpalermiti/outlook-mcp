@@ -236,7 +236,7 @@ async def read_attachment(
         kind = "text"
     else:
         raise ValueError(
-            "Readable extraction supports PDF, XLSX and text with its declared charset. "
+            "Readable extraction supports PDF, XLSX and text in a standard text charset. "
             "Download other formats."
         )
     try:
@@ -249,7 +249,8 @@ async def read_attachment(
             )
             if text is None:
                 raise _failure(
-                    "This text could not be decoded with its declared charset (UTF-8 by default)."
+                    "This text could not be decoded: its charset is not a standard text "
+                    "charset, or the text is not valid in it (UTF-8 when none is declared)."
                 )
             if len(text) > 1_000_000:
                 raise _failure("The document exceeds one million extracted characters.")

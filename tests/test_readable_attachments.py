@@ -206,8 +206,12 @@ async def test_ranges_are_validated_before_graph(arguments):
 
 async def test_missing_file_content_and_unsupported_types():
     sdk, get = graph(b"abc", "document.docx", "application/msword")
-    with pytest.raises(ValueError, match="other formats"):
+    with pytest.raises(ValueError) as error:
         await mail_attachment_read.read_attachment(sdk, **ARGS)
+    assert str(error.value) == (
+        "Readable extraction supports PDF, XLSX and text in a standard text charset. "
+        "Download other formats."
+    )
     get.return_value = SimpleNamespace(
         size=0, content_bytes=None, odata_type="#microsoft.graph.itemAttachment"
     )
@@ -658,5 +662,11 @@ def test_real_text_charsets_still_decode(charset, raw, expected):
 
 async def test_read_attachment_does_not_decode_a_non_text_charset(monkeypatch):
     sdk, _ = graph(b"bcher-kva", "note.txt", "text/plain; charset=punycode")
-    with pytest.raises(OutlookMCPError, match="could not be decoded"):
+    with pytest.raises(OutlookMCPError) as error:
         await mail_attachment_read.read_attachment(sdk, **ARGS)
+    # A refused charset and a failed decode get the same answer, and it names both.
+    assert str(error.value) == (
+        "This text could not be decoded: its charset is not a standard text charset, "
+        "or the text is not valid in it (UTF-8 when none is declared). "
+        "Download the original for local extraction."
+    )
