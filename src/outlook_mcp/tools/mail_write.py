@@ -6,7 +6,12 @@ import contextlib
 from typing import Any
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import DRAFT_MAY_HAVE_BEEN_SENT, MESSAGE_MAY_HAVE_BEEN_SENT, GraphAPIError
+from outlook_mcp.errors import (
+    DRAFT_MAY_HAVE_BEEN_CREATED,
+    DRAFT_MAY_HAVE_BEEN_SENT,
+    MESSAGE_MAY_HAVE_BEEN_SENT,
+    GraphAPIError,
+)
 from outlook_mcp.permissions import CATEGORY_MAIL_SEND, check_permission
 from outlook_mcp.throttle import call_without_replay
 from outlook_mcp.tools._mail_body import above_quote, check_body_format, message_body
@@ -142,7 +147,10 @@ async def _send_in_thread(
     else:
         request_body = rep.CreateReplyPostRequestBody()
         create = source.create_reply
-    draft = await create.post(request_body)
+    draft = await call_without_replay(
+        lambda once: create.post(request_body, request_configuration=once),
+        outcome_unknown=DRAFT_MAY_HAVE_BEEN_CREATED,
+    )
 
     new_draft = graph_client.me.messages.by_message_id(draft.id)
     try:

@@ -6,7 +6,7 @@ import contextlib
 from typing import Any
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import MESSAGE_MAY_HAVE_BEEN_SENT
+from outlook_mcp.errors import DRAFT_MAY_HAVE_BEEN_CREATED, MESSAGE_MAY_HAVE_BEEN_SENT
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.permissions import CATEGORY_MAIL_DRAFTS, CATEGORY_MAIL_SEND, check_permission
 from outlook_mcp.throttle import call_without_replay
@@ -142,7 +142,10 @@ async def _create_in_thread(
         request_body = rep.CreateReplyPostRequestBody()
         builder = source.create_reply
     request_body.message = fields
-    return await builder.post(request_body)
+    return await call_without_replay(
+        lambda once: builder.post(request_body, request_configuration=once),
+        outcome_unknown=DRAFT_MAY_HAVE_BEEN_CREATED,
+    )
 
 
 async def create_draft(

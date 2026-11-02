@@ -442,6 +442,17 @@ UPDATE_MAY_HAVE_BEEN_SENT = (
     "Graph failed without saying whether the change was saved, so it may already have "
     "been made and any attendees sent the update. Read the event before updating it again."
 )
+# Writes that email no one but are not safe to repeat: a second attach leaves a
+# second copy of the file, a second createReply / createForward a second draft.
+# They run without kiota's replay too (`throttle.call_without_replay`).
+ATTACHMENT_MAY_HAVE_BEEN_ADDED = (
+    "Graph failed without saying whether the file was attached, so it may already be on "
+    "the event. Read the event's attachments before attaching it again."
+)
+DRAFT_MAY_HAVE_BEEN_CREATED = (
+    "Graph failed without saying whether the draft was created, so it may already be in "
+    "Drafts. Check Drafts before creating it again."
+)
 # A create that is not idempotent: a second one is a second rule, and both run
 # (`create_rule`). Deleting "the" rule afterwards leaves the copy forwarding.
 RULE_MAY_HAVE_BEEN_CREATED = (

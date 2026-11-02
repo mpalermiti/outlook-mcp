@@ -33,6 +33,7 @@ from msgraph_core import GraphClientFactory
 from outlook_mcp.config import Config
 from outlook_mcp.errors import GraphAPIError
 from outlook_mcp.tools import (
+    calendar_attachments,
     calendar_write,
     mail_attachments,
     mail_drafts,
@@ -141,8 +142,8 @@ _LARGE_SEND_SETUP = {
 # tool that can send is exercised.
 NOT_EXERCISED: dict[str, str] = {
     "outlook_attach_to_event": (
-        "nothing is sent at attach time; a retried POST can leave a duplicate file "
-        "that attendees receive with the next update, as for outlook_attach_to_draft"
+        "nothing is sent at attach time; the POST itself is covered below, in "
+        "test_a_duplicable_write_answered_5xx_is_not_sent_again"
     ),
     # The rule tools are gated on `mail_send` for what a rule can *do* later, not
     # because the call itself sends. Update and delete are idempotent by
@@ -355,3 +356,80 @@ async def test_reads_keep_kiotas_retries():
     await graph.client().me.get()
 
     assert graph.count("/me") == 2
+
+
+# ── Writes that email no one but are not safe to repeat ───────────────────
+#
+# An attachment POST can leave a duplicate file on the event, and createReply /
+# createReplyAll / createForward can leave a second draft. Neither sends mail, so
+# they are not in SENDS, but a 503 or 504 that kiota answers with another POST
+# is just as much a duplicate.
+
+
+async def _attach_inline(sdk, tmp_path, monkeypatch):
+    (tmp_path / "ticket.txt").write_bytes(b"synthetic")
+    return await calendar_attachments.attach_to_event(
+        sdk,
+        "E1",
+        ["ticket.txt"],
+        config=Config(client_id="test", attachments_dir=str(tmp_path)),
+    )
+
+
+async def _draft_reply(sdk, tmp_path, monkeypatch):
+    return await mail_drafts.create_draft(
+        sdk, None, None, "b", reply_to_message_id="M1", config=_CFG
+    )
+
+
+async def _draft_reply_all(sdk, tmp_path, monkeypatch):
+    return await mail_drafts.create_draft(
+        sdk, None, None, "b", reply_to_message_id="M1", reply_all=True, config=_CFG
+    )
+
+
+async def _draft_forward(sdk, tmp_path, monkeypatch):
+    return await mail_drafts.create_draft(sdk, _TO, None, "b", forward_message_id="M1", config=_CFG)
+
+
+async def _reply_with_text(sdk, tmp_path, monkeypatch):
+    return await mail_write.reply(sdk, "M1", "b", config=_CFG)
+
+
+async def _forward_with_comment(sdk, tmp_path, monkeypatch):
+    return await mail_write.forward(sdk, "M1", _TO, comment="c", config=_CFG)
+
+
+@pytest.mark.parametrize("status", [503, 504])
+@pytest.mark.parametrize(
+    ("path", "write", "where_to_check"),
+    [
+        pytest.param("/me/events/E1/attachments", _attach_inline, "attachments", id="attach_event"),
+        pytest.param("/createReply", _draft_reply, "Drafts", id="draft_reply"),
+        pytest.param("/createReplyAll", _draft_reply_all, "Drafts", id="draft_reply_all"),
+        pytest.param("/createForward", _draft_forward, "Drafts", id="draft_forward"),
+        pytest.param("/createReply", _reply_with_text, "Drafts", id="reply_text"),
+        pytest.param("/createForward", _forward_with_comment, "Drafts", id="forward_text"),
+    ],
+)
+async def test_a_duplicable_write_answered_5xx_is_not_sent_again(
+    status, path, write, where_to_check, tmp_path, monkeypatch
+):
+    graph = _Graph(
+        {
+            # The event is the user's own, and has no attendees.
+            "/me/events/E1": [(200, {}, {"id": "E1"})],
+            path: [_server_error(status)],
+        }
+    )
+
+    with pytest.raises(GraphAPIError) as caught:
+        await write(graph.client(), tmp_path, monkeypatch)
+
+    assert graph.count(path) == 1, (
+        f"{path} reached Graph {graph.count(path)} times after a {status}"
+    )
+    text = str(caught.value)
+    assert "may already" in text, text
+    assert where_to_check in text, text
+    assert "Retry after a short delay" not in text, text

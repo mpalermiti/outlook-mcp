@@ -16,12 +16,14 @@ import os
 from typing import Any
 
 from outlook_mcp.config import Config
+from outlook_mcp.errors import ATTACHMENT_MAY_HAVE_BEEN_ADDED
 from outlook_mcp.permissions import (
     CATEGORY_CALENDAR_WRITE,
     check_permission,
     check_sends_mail,
     mail_send_withheld,
 )
+from outlook_mcp.throttle import call_without_replay
 from outlook_mcp.tools.calendar_write import _has_attendees, refuse_someone_elses_calendar
 from outlook_mcp.tools.mail_attachments import (
     _LARGE_FILE_THRESHOLD,
@@ -103,7 +105,13 @@ async def attach_to_event(
     attachment_ids: list[str] = []
     for path, size in files:
         if size <= _LARGE_FILE_THRESHOLD:
-            created = await builder.attachments.post(_make_inline_attachment(path))
+            attachment = _make_inline_attachment(path)
+            created = await call_without_replay(
+                lambda once, attachment=attachment: builder.attachments.post(
+                    attachment, request_configuration=once
+                ),
+                outcome_unknown=ATTACHMENT_MAY_HAVE_BEEN_ADDED,
+            )
             if created is not None and getattr(created, "id", None):
                 attachment_ids.append(created.id)
             continue
