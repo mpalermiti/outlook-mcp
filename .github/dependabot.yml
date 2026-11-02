@@ -1,10 +1,26 @@
-# Keeps the SHA pins in .github/workflows current: each PR moves a pin and its
-# `# vX.Y.Z` comment together. GitHub Actions only — Python dependencies are
-# bounded by hand in pyproject.toml, each cap with a comment naming the
-# upstream fix that lifts it, and a bot bump would bypass that.
+# GitHub Actions: each PR moves a SHA pin and its `# vX.Y.Z` comment together.
+#
+# uv: each PR moves uv.lock — what CI, developers and the documents worker run —
+# and never pyproject.toml. Python dependencies are bounded there by hand, each
+# cap with a comment naming the upstream fix that lifts it, and a floor moves in
+# a PR of its own with a CHANGELOG line (pypdf 6.21.4, #218). `lockfile-only` is
+# what keeps a bot bump inside those bounds; tests/test_workflows_are_pinned.py
+# holds it. Minor and patch moves arrive as one weekly PR; a release under a week
+# old waits (cooldown applies to version updates, not security fixes).
 version: 2
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    versioning-strategy: "lockfile-only"
+    cooldown:
+      default-days: 7
+    groups:
+      uv-lock:
+        update-types: ["minor", "patch"]

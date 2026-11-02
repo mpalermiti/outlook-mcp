@@ -85,13 +85,21 @@ def test_every_action_is_pinned_to_a_commit_sha_with_its_version():
     )
 
 
-def test_dependabot_keeps_the_action_pins_current_and_nothing_else():
+def test_dependabot_moves_action_pins_and_the_lock_but_never_a_bound():
     config = WORKFLOWS.parent / "dependabot.yml"
     text = config.read_text()
-    ecosystems = re.findall(r"package-ecosystem:\s*\"?([\w-]+)\"?", text)
-    # Python dependencies are bounded by hand, with a comment naming the
-    # upstream fix behind each cap — a bot bump would bypass that.
-    assert ecosystems == ["github-actions"], ecosystems
+    blocks = {
+        match.group(1): match.group(0)
+        for match in re.finditer(
+            r"- package-ecosystem:\s*\"?([\w-]+)\"?.*?(?=\n\s*- package-ecosystem:|\Z)", text, re.S
+        )
+    }
+    assert list(blocks) == ["github-actions", "uv"], list(blocks)
+    # Python dependencies are bounded by hand in pyproject.toml, with a comment
+    # naming the upstream fix behind each cap. `lockfile-only` lets Dependabot move
+    # uv.lock inside those bounds; any other strategy edits the bounds themselves.
+    strategy = re.search(r"^\s+versioning-strategy:\s*\"?([\w-]+)\"?\s*$", blocks["uv"], re.M)
+    assert strategy and strategy.group(1) == "lockfile-only", blocks["uv"]
 
 
 def test_only_the_pypi_job_uploads_and_only_publishing_jobs_get_a_token():

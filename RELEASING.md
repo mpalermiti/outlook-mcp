@@ -103,7 +103,7 @@ gh release create vX.Y.Z --target main --title "vX.Y.Z" --notes "<changelog body
 
 Publishing the release triggers `.github/workflows/publish.yml`, which re-checks the version lockstep, runs tests and lint, builds, publishes to **PyPI**, waits for PyPI's index to catch up, then publishes to the **MCP registry**. Both authenticate through GitHub OIDC — no stored tokens, and no five-minute registry login to race by hand.
 
-It runs as three jobs — `build` (checks, tests, build; no token), `pypi` (uploads the built files and nothing else) and `registry` — so the publishing token exists only in the two jobs that publish. `pypi` runs in the `pypi` GitHub environment, which accepts release tags only, so a run from a branch cannot upload (setup in the appendix). Every action in both workflows is pinned to a commit SHA; Dependabot (`.github/dependabot.yml`, GitHub Actions only) opens PRs to move the pins.
+It runs as three jobs — `build` (checks, tests, build; no token), `pypi` (uploads the built files and nothing else) and `registry` — so the publishing token exists only in the two jobs that publish. `pypi` runs in the `pypi` GitHub environment, which accepts release tags only, so a run from a branch cannot upload (setup in the appendix). Every action in both workflows is pinned to a commit SHA; Dependabot (`.github/dependabot.yml`) opens PRs to move the pins, and a weekly one that moves `uv.lock` inside `pyproject.toml`'s bounds without editing them.
 
 Watch it:
 
