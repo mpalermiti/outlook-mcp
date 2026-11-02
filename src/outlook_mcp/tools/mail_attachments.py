@@ -10,6 +10,7 @@ import ntpath
 import os
 import re
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -338,45 +339,61 @@ def _media_type(content_type: str, name: str) -> tuple[str, str | None]:
 # Python codecs (punycode, idna, escape sequences and the like) are not text encodings and
 # some are quadratic, so a large attachment could stall the server. Names are normalized
 # through codecs.lookup so aliases such as windows-1252 and latin1 match.
-_TEXT_CHARSETS = frozenset(
-    codecs.lookup(name).name
-    for name in (
-        "utf-8",
-        "utf-8-sig",
-        "utf-16",
-        "utf-16-le",
-        "utf-16-be",
-        "utf-32",
-        "utf-32-le",
-        "utf-32-be",
-        "utf-7",
-        "ascii",
-        "latin-1",
-        *(f"iso8859-{n}" for n in range(2, 17) if n != 12),
-        *(f"cp{n}" for n in range(1250, 1259)),
-        "cp437",
-        "cp850",
-        "cp852",
-        "cp866",
-        "cp874",
-        "cp932",
-        "cp949",
-        "cp950",
-        "mac-roman",
-        "koi8-r",
-        "koi8-u",
-        "gb2312",
-        "gbk",
-        "gb18030",
-        "big5",
-        "big5hkscs",
-        "shift_jis",
-        "euc-jp",
-        "euc-kr",
-        "iso2022-jp",
-        "iso2022-kr",
-    )
+_TEXT_CHARSET_NAMES = (
+    "utf-8",
+    "utf-8-sig",
+    "utf-16",
+    "utf-16-le",
+    "utf-16-be",
+    "utf-32",
+    "utf-32-le",
+    "utf-32-be",
+    "utf-7",
+    "ascii",
+    "latin-1",
+    *(f"iso8859-{n}" for n in range(2, 17) if n != 12),
+    *(f"cp{n}" for n in range(1250, 1259)),
+    "cp437",
+    "cp850",
+    "cp852",
+    "cp866",
+    "cp874",
+    "cp932",
+    "cp949",
+    "cp950",
+    "mac-roman",
+    "koi8-r",
+    "koi8-u",
+    "gb2312",
+    "gbk",
+    "gb18030",
+    "big5",
+    "big5hkscs",
+    "shift_jis",
+    "euc-jp",
+    "euc-kr",
+    "iso2022-jp",
+    "iso2022-kr",
 )
+
+
+def _text_charsets(names: Iterable[str]) -> frozenset[str]:
+    """The codec names ``names`` normalize to, leaving out any this Python lacks.
+
+    Some codecs live in optional modules a Python build can leave out. A missing
+    one is skipped, so text in it is not decoded, rather than stopping the import
+    and with it the server.
+    """
+    charsets = set()
+    for name in names:
+        try:
+            charsets.add(codecs.lookup(name).name)
+        except LookupError:
+            continue
+    return frozenset(charsets)
+
+
+_TEXT_CHARSETS = _text_charsets(_TEXT_CHARSET_NAMES)
 
 
 def _readable_text(

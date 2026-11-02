@@ -611,6 +611,24 @@ def test_non_text_or_unknown_charsets_are_not_decoded(charset):
     assert _readable_text("text/plain", charset, b"bcher-kva", for_extraction=True) is None
 
 
+def test_a_charset_this_python_lacks_is_skipped_rather_than_stopping_the_import(monkeypatch):
+    """A Python built without an optional codec module still builds the set, and starts."""
+    import codecs
+
+    from outlook_mcp.tools.mail_attachments import _text_charsets
+
+    real_lookup = codecs.lookup
+
+    def lookup(name):
+        if name == "cp932":
+            raise LookupError(f"unknown encoding: {name}")
+        return real_lookup(name)
+
+    monkeypatch.setattr(codecs, "lookup", lookup)
+
+    assert _text_charsets(["utf-8", "cp932", "latin-1"]) == {"utf-8", "iso8859-1"}
+
+
 def test_a_non_text_charset_is_refused_before_any_decode():
     from outlook_mcp.tools.mail_attachments import _readable_text
 
