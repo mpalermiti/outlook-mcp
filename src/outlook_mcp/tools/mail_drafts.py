@@ -297,6 +297,10 @@ async def create_draft(
             action = "reply"
         created = await _create_in_thread(graph_client, source_id, msg, action)
 
+        from msgraph.generated.users.item.messages.item.message_item_request_builder import (
+            MessageItemRequestBuilder,
+        )
+
         # What the create call does not carry: the body, above the quote Graph
         # wrote, and the deferred-send property, set the way update_draft sets it.
         patch = Message()
@@ -304,21 +308,31 @@ async def create_draft(
             patch.body = above_quote(created.body, body, is_html, is_markdown=is_markdown)
         if deferred_prop is not None:
             patch.single_value_extended_properties = [deferred_prop]
-        if body or deferred_prop is not None:
-            new_draft = graph_client.me.messages.by_message_id(created.id)
-            try:
+        new_draft = graph_client.me.messages.by_message_id(created.id)
+        try:
+            if body or deferred_prop is not None:
                 await new_draft.patch(patch)
-            except Exception:
-                # Leave no half-made reply behind (one without its body, or that
-                # would send at once): the PATCH's error is the one to report.
-                with contextlib.suppress(Exception):
-                    await new_draft.delete()
-                raise
+            # The recipients are read back rather than taken from the create
+            # call's answer, which need not echo the cc, bcc and Reply-To sent
+            # with it: the result says who the draft goes to as stored.
+            stored = await new_draft.get(
+                request_configuration=build_request_config(
+                    MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters,
+                    {"$select": _RECIPIENT_FIELDS},
+                )
+            )
+        except Exception:
+            # Leave no half-made reply behind (one without its body, that would
+            # send at once, or whose recipients could not be reported): the
+            # PATCH's or the read's error is the one to report.
+            with contextlib.suppress(Exception):
+                await new_draft.delete()
+            raise
 
         result = {
             "status": "created",
             "draft_id": created.id,
-            **_audience(created),
+            **_audience(stored),
         }
 
     if deferred_normalized is not None:

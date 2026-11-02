@@ -632,13 +632,16 @@ def _thread_draft(*, content=_QUOTED_DRAFT_HTML, html=True, to=("sender@example.
 
 def _thread_client(draft=None):
     """A client whose source message offers the three actions, and whose new
-    draft can be patched and deleted. Returns (client, source, new_draft)."""
+    draft can be patched, read back and deleted. Returns (client, source, new_draft).
+
+    The read-back returns the created draft unless a test sets ``new_draft.get``."""
     draft = draft or _thread_draft()
     source = MagicMock()
     for action in ("create_reply", "create_reply_all", "create_forward"):
         getattr(source, action).post = AsyncMock(return_value=draft)
     new_draft = MagicMock()
     new_draft.patch = AsyncMock()
+    new_draft.get = AsyncMock(return_value=draft)
     new_draft.delete = AsyncMock()
     builders = {"AAMkOriginal=": source, draft.id: new_draft}
     client = MagicMock()
@@ -1240,7 +1243,9 @@ class TestDraftResultsShowEveryRecipient:
         client = MagicMock()
         client.me.messages.post = AsyncMock(return_value=stored)
 
-        result = await create_draft(client, to=["a@example.com"], subject="s", body="b", config=_CFG)
+        result = await create_draft(
+            client, to=["a@example.com"], subject="s", body="b", config=_CFG
+        )
 
         assert result["to"] == ["a@example.com"]
         assert result["cc"] == []
@@ -1257,3 +1262,73 @@ class TestDraftResultsShowEveryRecipient:
 
         assert result["bcc"] == ["hidden@example.com"]
         assert result["reply_to"] == ["r@example.com"]
+
+    async def test_a_thread_draft_reports_the_lists_read_back_not_the_create_reply(self):
+        """createReply's answer is not taken as the stored audience: the lists are read back.
+
+        Graph may or may not echo the cc, bcc and Reply-To sent on the action's
+        message, so the result comes from a read of the draft as stored.
+        """
+        draft = _thread_draft(to=(), cc=())
+        draft.bcc_recipients = None
+        draft.reply_to = None
+        client, _, new_draft = _thread_client(draft)
+        new_draft.get = AsyncMock(
+            return_value=_stored_message(
+                to=["sender@example.com"],
+                cc=["c@example.com"],
+                bcc=["hidden@example.com"],
+                reply_to=["r@example.com"],
+            )
+        )
+
+        result = await create_draft(
+            client,
+            None,
+            None,
+            "Thanks",
+            cc=["c@example.com"],
+            bcc=["hidden@example.com"],
+            reply_to=["r@example.com"],
+            reply_to_message_id="AAMkOriginal=",
+            config=_CFG,
+        )
+
+        assert result == {
+            "status": "created",
+            "draft_id": "AAMkThreadDraft=",
+            "to": ["sender@example.com"],
+            "cc": ["c@example.com"],
+            "bcc": ["hidden@example.com"],
+            "reply_to": ["r@example.com"],
+        }
+        new_draft.get.assert_awaited_once()
+        select = new_draft.get.call_args.kwargs["request_configuration"].query_parameters.select
+        assert set(select) == {"toRecipients", "ccRecipients", "bccRecipients", "replyTo"}
+
+    async def test_the_lists_are_read_back_after_the_body_is_patched(self):
+        client, _, new_draft = _thread_client()
+        order = []
+        new_draft.patch = AsyncMock(side_effect=lambda *a, **k: order.append("patch"))
+        new_draft.get = AsyncMock(
+            side_effect=lambda *a, **k: order.append("get") or _stored_message(to=["s@x.com"])
+        )
+
+        await create_draft(
+            client, None, None, "Thanks", reply_to_message_id="AAMkOriginal=", config=_CFG
+        )
+
+        assert order == ["patch", "get"]
+
+    async def test_a_failed_read_back_deletes_the_new_draft_and_raises(self):
+        """A draft whose recipients cannot be reported is not left behind."""
+        client, _, new_draft = _thread_client()
+        new_draft.get = AsyncMock(side_effect=RuntimeError("read refused"))
+
+        with pytest.raises(RuntimeError, match="read refused"):
+            await create_draft(
+                client, None, None, "", reply_to_message_id="AAMkOriginal=", config=_CFG
+            )
+
+        new_draft.patch.assert_not_called()
+        new_draft.delete.assert_called_once()

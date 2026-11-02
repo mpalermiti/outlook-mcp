@@ -33,6 +33,7 @@ def _thread_client(content=_QUOTE, html=True):
         getattr(source, action).post = AsyncMock(return_value=created)
     draft = MagicMock()
     draft.patch = AsyncMock()
+    draft.get = AsyncMock(return_value=created)  # a draft's recipients read back
     draft.delete = AsyncMock()
     draft.send.post = AsyncMock()
     builders = {"AAMkAG123=": source, "R1": draft}

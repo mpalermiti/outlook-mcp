@@ -741,6 +741,7 @@ class TestMailDrafts:
             getattr(source, action).post = AsyncMock(return_value=draft)
         new_draft = MagicMock()
         new_draft.patch = AsyncMock()
+        new_draft.get = AsyncMock(return_value=draft)  # the recipients read back
         builders = {"AAMkOriginal=": source, "AAMkThreadDraft=": new_draft}
         client = MagicMock()
         client.me.messages.by_message_id = MagicMock(side_effect=lambda i: builders[i])
