@@ -25,13 +25,13 @@ Open-ended upkeep mission: done is an empty queue. Michael adds issues to the qu
 - read, copy or list `~/.outlook-mcp`, or touch the Keychain (`security`, keyring, msal cache files).
 If a task can only be verified against a real mailbox, write the live test, leave it unrun, and park a `[?]` asking Michael to run it.
 
-**Nothing ships.** Never bump a version (`pyproject.toml`, `server.json`, CHANGELOG version headings, ROADMAP release lines), tag, create a GitHub release, or run `uv publish`, `mcp-publisher` or `clawhub`. Changelog entries go under `## [Unreleased]`. Never push `main`; all work is on `agent/work`.
+**Nothing ships.** Never bump a version (`pyproject.toml`, `server.json`, CHANGELOG version headings, ROADMAP release lines), tag, create a GitHub release, or run `uv publish`, `mcp-publisher` or `clawhub`. Changelog entries go under `## [Unreleased]`. Never push `main`; the construct checks out the branch each session works on, and workers never switch branches or push.
 
-**Other people work in this repo.** Before starting any card that names an issue, run `gh issue view <n> --json assignees,comments,closed` and `gh pr list --state all --search "<n>"`. If the issue is closed or assigned, has a PR, or has any comment newer than the date on the card (someone may have said they are taking it), do not start it: check the card off with a note saying why, and take the next one. Never comment on issues, never comment on, review or approve contributor PRs. The rolling PR is the only place you write on GitHub.
+**Other people work in this repo.** A card that names an issue starts only once the issue is confirmed still free. If the issue is closed or assigned, has a PR, or has any comment newer than the date on the card (someone may have said they are taking it), it is not free. That check reads GitHub, so it is not the worker's to run: the construct or Michael confirms it, and a worker whose task names an issue parks it for Michael, as `agent/PROMPT.md` says. An issue that turns out not to be free gets its card checked off with a note saying why. Never comment on issues, never comment on, review or approve contributor PRs. Workers write nothing on GitHub; the construct opens and writes the task PRs.
 
 **The repo's guards are not yours to loosen.** Never weaken `test_no_dead_parameters.py`, `test_no_dead_modules.py`, `test_sdk_fields_exist.py`, `test_write_payloads_reach_the_wire.py`, `test_error_text_reaches_client.py` or `test_tool_surface_budget.py`. A new parameter that needs a higher `TOOL_SURFACE_CEILING` is a deliberate raise: measure it, record the measured value in the test header the way earlier raises are recorded, and say so in the For Michael note. No dependency bumps, no new dependencies, no cap changes in `pyproject.toml`.
 
-**This repo is public.** Everything under `agent/` and on the rolling PR is visible to anyone. Write nothing private: no local paths outside the repo, no account details, no unreleased security findings.
+**This repo is public.** Everything under `agent/` and on the task PRs is visible to anyone. Write nothing private: no local paths outside the repo, no account details, no unreleased security findings.
 
 The live checkout at `~/ClaudeCode/outlook-mcp` is off-limits; work only in this checkout.
 
