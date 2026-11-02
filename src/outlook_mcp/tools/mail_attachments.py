@@ -655,10 +655,11 @@ def write_download(save_path: str, content: bytes, *, attachments_dir: str) -> N
     redirected to whatever a symlink points at. A failed write leaves no file
     under the target's name. Where hard links are unsupported, an exclusive
     create (``O_EXCL``) gives the same guarantee. The temp file is always
-    removed. Shared by the mail and To Do downloads.
+    removed, and its name has no leading dot: downloads never create a hidden
+    file. Shared by the mail and To Do downloads.
     """
     fd, tmp_path = tempfile.mkstemp(
-        dir=os.path.dirname(save_path), prefix=".download-", suffix=".tmp"
+        dir=os.path.dirname(save_path), prefix="download-", suffix=".part"
     )
     try:
         with os.fdopen(fd, "wb") as f:

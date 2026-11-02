@@ -263,7 +263,7 @@ class TestDownloadTaskAttachment:
         )
 
         assert dst.read_bytes() == b"%PDF-fake-bytes"
-        leftovers = [p.name for p in base.iterdir() if p.name.startswith(".download-")]
+        leftovers = [p.name for p in base.iterdir() if p.name != "handbook.pdf"]
         assert leftovers == []
 
     async def test_download_rejects_escape_path(self, tmp_path):

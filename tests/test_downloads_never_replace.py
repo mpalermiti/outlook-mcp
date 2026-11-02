@@ -13,6 +13,7 @@ The mail and To Do downloads share the landing code, so every check runs through
 import errno
 import os
 import sys
+import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -123,7 +124,8 @@ def _hidden(component: str) -> str:
 
 
 def _leftover_temp_files(directory: Path) -> list[str]:
-    return [p.name for p in directory.iterdir() if p.name.startswith(".download-")]
+    """Anything in ``directory`` besides the download's own name: a temp file left behind."""
+    return [p.name for p in directory.iterdir() if p.name != "report.pdf"]
 
 
 # ── An existing name is refused before Graph is asked ─────────────────────────
@@ -257,6 +259,27 @@ async def test_a_download_lands_readable_by_its_owner_only(tool, base):
     saved = Path(result["saved_to"])
     assert saved.read_bytes() == CONTENT
     assert oct(os.stat(saved).st_mode)[-3:] == "600"
+    assert _leftover_temp_files(base) == []
+
+
+async def test_the_temp_file_is_not_a_hidden_one(tool, base, monkeypatch):
+    """Downloads never create a hidden file below attachments_dir, their temp file included."""
+    real_mkstemp = tempfile.mkstemp
+    made = []
+
+    def mkstemp(*args, **kwargs):
+        fd, path = real_mkstemp(*args, **kwargs)
+        made.append(Path(path))
+        return fd, path
+
+    monkeypatch.setattr(tempfile, "mkstemp", mkstemp)
+    download, _ = tool(base)
+
+    await download("report.pdf")
+
+    assert len(made) == 1
+    assert made[0].parent.resolve() == base.resolve()
+    assert not made[0].name.startswith("."), made[0].name
     assert _leftover_temp_files(base) == []
 
 
