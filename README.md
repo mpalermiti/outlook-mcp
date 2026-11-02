@@ -61,6 +61,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md).
 
+- **Safer by default** (1.31.3): downloads never overwrite a file, writing into a calendar or task list someone else owns needs send permission like an invitation, attachment text is read only in standard character sets, and a config that points the attachments folder at your home folder is refused.
 - **Export an email** (1.31): get a message's original file exactly as it arrived, attachments included, up to 10 MB. Off unless you turn it on.
 - **Inbox rules** (1.30): list, create, change and delete server-side inbox rules, and see what each rule leaves out (1.30.2). Off unless you turn it on, and a rule that forwards mail also needs send permission.
 - **Attachments as text** (1.28): PDFs, spreadsheets and text files come back as readable text, parsed in a separate process with memory and time limits. Off unless you turn it on. Since 1.31.2 it requires pypdf 6.21.4, which fixes seven ways a crafted PDF could hang a read or use too much memory.
@@ -596,9 +597,11 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions on
 | `read_only` | `bool` | `false` | When `true`, all write tools (send, reply, move, delete, create, update, RSVP) return an error. Gates the tools, not the Microsoft token -- see below. |
 | `mailbox_settings_write` | `bool` | `false` | When `true`, `outlook-mcp auth` asks for `MailboxSettings.ReadWrite` instead of `MailboxSettings.Read`, which is what the inbox-rule write tools need. Consent is per requested scope, so the Azure-portal permission alone does not put it in the token. It also loads the opt-in `rules` toolset group: asking for the scope is asking to manage rules, so the four rule tools come with it. Off by default: it widens the token to every mailbox setting, not only rules. Refused in combination with `read_only_consent`, which asks for the read scopes only — that pairing would silently never request the write scope. |
 | `read_only_consent` | `bool` | `false` | When `true`, `outlook-mcp auth` asks Microsoft for the read permissions only, instead of the read-write set. For a second, read-only app registration -- see [What `read_only` does and does not do](#what-read_only-does-and-does-not-do). Requires `read_only: true`; the config is refused without it. |
-| `attachments_dir` | `string` | `"~/.outlook-mcp/attachments"` | The only directory the attachment tools may read from or write to. Every path an agent supplies is resolved and must land inside it — a symlink out or a `..` is refused. Widen it only if you understand that anything reachable can be emailed. It must be an absolute path (a leading `~` is expanded), and it cannot be your home folder, a folder that contains it, or a folder that contains the settings folder; a subfolder of any of them is fine. A config that breaks these rules fails to load: the server starts in its safe state and `outlook-mcp` prints a repair line. Fix it by choosing a folder of its own. |
+| `attachments_dir` | `string` | `"~/.outlook-mcp/attachments"` | The only directory the attachment tools may read from or write to. Every path an agent supplies is resolved and must land inside it — a symlink out or a `..` is refused. Widen it only if you understand that anything reachable can be emailed, and that downloads can add new files there. It must be an absolute path (a leading `~` is expanded), and it cannot be your home folder, a folder that contains it, or a folder that contains the settings folder; a subfolder of any of them is fine. A config that breaks these rules fails to load: the server starts in its safe state and `outlook-mcp` prints a repair line. Fix it by choosing a folder of its own. |
 | `allow_categories` | `list[string]` | `[]` | Optional. Restrict write tools to specific categories (see below). Empty list = all writes allowed when `read_only: false`. |
 | `allow_unencrypted_token_cache` | `bool` | `false` | Permit the OAuth token cache to be written in cleartext when the platform has no encrypted store (Linux without libsecret). Off by default: authentication stops with an explanation rather than silently persisting a reusable Graph token in plaintext. macOS and Windows always encrypt and are unaffected. |
+
+A `config.json` that repeats a key inside one object is refused, because the file would not say which value is meant.
 
 ### Environment configuration (optional)
 
@@ -624,7 +627,6 @@ including an empty Compose `${VAR}` pass-through. Booleans accept only `true`/`f
 (case-insensitive, surrounding whitespace allowed); list input must be JSON, for example
 `["mail_drafts","contacts_write"]`.
 
-A `config.json` that repeats a key inside one object is refused, because the file would not say which value is meant.
 An empty category list means **all categories**, so it cannot replace a restricted file list.
 Each security setting is checked independently: enabling read-only mode does not excuse widening
 another setting. Security permissions that require explicit consent in the file still require it.

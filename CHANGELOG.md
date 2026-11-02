@@ -6,6 +6,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.31.3] — 2026-11-02
+
+Hardening: what an email can steer the agent into, and what a config can point it at.
+
 ### Security
 
 - **Attachment text is decoded only from standard text charsets.** A sender chooses the
