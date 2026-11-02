@@ -220,13 +220,19 @@ async def _list_belongs_to_someone_else(graph_client: Any, list_id: str) -> bool
 
     A plain ``GET /me/todo/lists/{id}``: verified live, it returns ``isOwner``
     and ``isShared``, while the same request with a ``$select`` is a 400 on a
-    consumer account. Fails closed: only an explicit ``isOwner: true`` is the
-    user's own; a missing one, an empty answer or a lookup that raises counts
-    as someone else's.
+    consumer account. Only an explicit ``isOwner: true`` is the user's own; a
+    missing one, an empty answer or a 403 (Graph declining to say) counts as
+    someone else's. Any other failure — a 404 for a stale id, a lapsed sign-in,
+    the network — is raised as it is, so the call reports the real cause; no
+    write happens either way.
     """
+    from kiota_abstractions.api_error import APIError
+
     try:
         task_list = await graph_client.me.todo.lists.by_todo_task_list_id(list_id).get()
-    except Exception:
+    except APIError as exc:
+        if getattr(exc, "response_status_code", None) != 403:
+            raise
         return True
     return getattr(task_list, "is_owner", None) is not True
 

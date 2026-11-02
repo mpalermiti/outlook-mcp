@@ -147,7 +147,7 @@ async def refuse_someone_elses_calendar(
 
     Looked up only under a policy that withholds ``mail_send``; otherwise no
     request is made. See ``event_calendar_belongs_to_someone_else`` for the
-    lookup, which fails closed.
+    lookup and for what counts as unconfirmed.
     """
     if not mail_send_withheld(config):
         return

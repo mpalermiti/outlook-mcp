@@ -177,10 +177,14 @@ async def event_calendar_belongs_to_someone_else(graph_client: Any, event_id: st
     with ``GET /me/calendar?$select=owner``. Both verified live on a consumer
     account to answer 200 with exactly those fields.
 
-    Fails closed: a lookup that raises counts as someone else's, the same as an
-    owner Graph does not report, because the write it guards then needs
-    ``mail_send`` rather than going ahead unchecked.
+    A calendar Graph does not report an owner for counts as someone else's, and
+    so does a 403 on either lookup: Graph declining to say whose a calendar is
+    leaves it unconfirmed, and the write it guards then needs ``mail_send``.
+    Any other failure — a 404 for a stale id, a lapsed sign-in, the network —
+    is raised as it is, so the call reports the real cause; no write happens
+    either way.
     """
+    from kiota_abstractions.api_error import APIError
     from kiota_abstractions.base_request_configuration import RequestConfiguration
     from msgraph.generated.users.item.calendar.calendar_request_builder import (
         CalendarRequestBuilder as DefaultCalendarRequestBuilder,
@@ -206,7 +210,9 @@ async def event_calendar_belongs_to_someone_else(graph_client: Any, event_id: st
         default = await graph_client.me.calendar.get(
             request_configuration=RequestConfiguration(query_parameters=default_calendar)
         )
-    except Exception:
+    except APIError as exc:
+        if getattr(exc, "response_status_code", None) != 403:
+            raise
         return True
     return _belongs_to_someone_else(calendar, default)
 

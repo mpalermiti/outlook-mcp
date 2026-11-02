@@ -8,7 +8,9 @@ someone else's calendar or list does too.
 
 Ownership is looked up only under a policy that withholds `mail_send`; with
 `mail_send` allowed (or no policy at all) the write costs no extra request.
-What cannot be shown to be the user's own counts as someone else's.
+What cannot be shown to be the user's own counts as someone else's, including
+a lookup Graph answers with a 403. Any other failed lookup (a 404, a lapsed
+sign-in, the network) is reported as it is, and nothing is written.
 
 Deleting, completing, ticking a step and RSVPs add no content and are left
 alone.
@@ -20,6 +22,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from kiota_abstractions.api_error import APIError
 from msgraph.generated.models.calendar import Calendar
 from msgraph.generated.models.email_address import EmailAddress
 from msgraph.generated.models.todo_task_list import TodoTaskList
@@ -52,6 +55,23 @@ def _cfg(tmp_path, *categories, **kwargs):
         attachments_dir=str(tmp_path),
         **kwargs,
     )
+
+
+def _api_error(status):
+    """What the SDK raises for a Graph error status (``ODataError`` is a subclass)."""
+    return APIError(f"Graph answered {status}", response_status_code=status)
+
+
+# A lookup failure Graph did not answer with a 403: reported as it is, never as
+# a `mail_send` refusal. Factories, so each test raises its own exception.
+_OTHER_FAILURES = [
+    pytest.param(lambda: _api_error(404), id="404"),
+    pytest.param(lambda: _api_error(401), id="401"),
+    pytest.param(lambda: RuntimeError("connection reset"), id="not-a-graph-error"),
+]
+
+_ACCESS_DENIED = {"error": {"code": "ErrorAccessDenied", "message": "Access is denied."}}
+_NOT_FOUND = {"error": {"code": "ErrorItemNotFound", "message": "Not found."}}
 
 
 def _wire_client(answers):
@@ -390,12 +410,12 @@ class TestWritesToAnEventOnSomeoneElsesCalendar:
         [
             pytest.param({"event_calendar": _on(None)}, id="no-owner"),
             pytest.param(
-                {"event_calendar": _on_default(), "lookup_error": RuntimeError("boom")},
-                id="calendar-lookup-fails",
+                {"event_calendar": _on_default(), "lookup_error": _api_error(403)},
+                id="calendar-lookup-403",
             ),
             pytest.param(
-                {"event_calendar": _on(_ME), "default_error": RuntimeError("boom")},
-                id="default-lookup-fails",
+                {"event_calendar": _on(_ME), "default_error": _api_error(403)},
+                id="default-lookup-403",
             ),
             pytest.param({"event_calendar": _on(_ME), "default_owner": None}, id="default-unowned"),
         ],
@@ -406,6 +426,25 @@ class TestWritesToAnEventOnSomeoneElsesCalendar:
         with pytest.raises(PermissionDeniedError, match="mail_send"):
             await write(client, _cfg(tmp_path, "calendar_write"))
 
+        assert _sent(builder) == 0
+
+    @pytest.mark.parametrize("write", _EVENT_WRITES)
+    @pytest.mark.parametrize("failure", _OTHER_FAILURES)
+    @pytest.mark.parametrize("which", ["event-calendar", "default-calendar"])
+    async def test_any_other_failed_lookup_is_reported_as_it_is(
+        self, tmp_path, write, failure, which
+    ):
+        """A stale id or a lapsed sign-in is not a reason to ask for `mail_send`."""
+        error = failure()
+        if which == "event-calendar":
+            client, builder = _event_client(_on(_ME), lookup_error=error)
+        else:
+            client, builder = _event_client(_on(_ME), default_error=error)
+
+        with pytest.raises(type(error)) as exc:
+            await write(client, _cfg(tmp_path, "calendar_write"))
+
+        assert exc.value is error
         assert _sent(builder) == 0
 
     @pytest.mark.parametrize("write", _EVENT_WRITES)
@@ -488,6 +527,35 @@ class TestEventCalendarLookupOnTheWire:
             ("PATCH", "/v1.0/me/events/AAMkEVT="),
         ]
         assert json.loads(sent[-1].content)["showAs"] == "busy"
+
+    async def test_a_403_on_the_lookup_is_refused_as_unconfirmed(self, tmp_path):
+        client, sent = _wire_client(
+            {("GET", "/v1.0/me/events/AAMkEVT=/calendar"): (403, _ACCESS_DENIED)}
+        )
+
+        with pytest.raises(PermissionDeniedError, match="mail_send"):
+            await update_event(
+                client, event_id="AAMkEVT=", show_as="busy", config=_cfg(tmp_path, "calendar_write")
+            )
+
+        assert [(r.method, r.url.path) for r in sent] == [
+            ("GET", "/v1.0/me/events/AAMkEVT=/calendar")
+        ]
+
+    async def test_a_404_on_the_lookup_is_graphs_own_error(self, tmp_path):
+        client, sent = _wire_client(
+            {("GET", "/v1.0/me/events/AAMkEVT=/calendar"): (404, _NOT_FOUND)}
+        )
+
+        with pytest.raises(APIError) as exc:
+            await update_event(
+                client, event_id="AAMkEVT=", show_as="busy", config=_cfg(tmp_path, "calendar_write")
+            )
+
+        assert exc.value.response_status_code == 404
+        assert [(r.method, r.url.path) for r in sent] == [
+            ("GET", "/v1.0/me/events/AAMkEVT=/calendar")
+        ]
 
 
 # ── To Do lists ──────────────────────────────────────────────────────────────
@@ -627,8 +695,8 @@ class TestWritesToSomeoneElsesList:
             pytest.param({"task_list": _shared(is_owner=None)}, id="no-isOwner"),
             pytest.param({"task_list": None}, id="empty-answer"),
             pytest.param(
-                {"task_list": _shared(is_owner=True), "lookup_error": RuntimeError("boom")},
-                id="lookup-fails",
+                {"task_list": _shared(is_owner=True), "lookup_error": _api_error(403)},
+                id="lookup-403",
             ),
         ],
     )
@@ -638,6 +706,19 @@ class TestWritesToSomeoneElsesList:
         with pytest.raises(PermissionDeniedError, match="mail_send"):
             await write(client, _cfg(tmp_path, "todo_write"), "SHARED=")
 
+        assert _todo_writes_sent(list_item, task_item) == 0
+
+    @pytest.mark.parametrize("write", _TODO_WRITES)
+    @pytest.mark.parametrize("failure", _OTHER_FAILURES)
+    async def test_any_other_failed_lookup_is_reported_as_it_is(self, tmp_path, write, failure):
+        """A mistyped list id or a lapsed sign-in is not a reason to ask for `mail_send`."""
+        error = failure()
+        client, list_item, task_item = _todo_client(_shared(is_owner=True), lookup_error=error)
+
+        with pytest.raises(type(error)) as exc:
+            await write(client, _cfg(tmp_path, "todo_write"), "SHARED=")
+
+        assert exc.value is error
         assert _todo_writes_sent(list_item, task_item) == 0
 
     @pytest.mark.parametrize("write", _TODO_WRITES)
@@ -727,6 +808,27 @@ class TestListLookupOnTheWire:
             ("GET", "/v1.0/me/todo/lists/OWN="),
             ("POST", "/v1.0/me/todo/lists/OWN=/tasks"),
         ]
+
+    async def test_a_403_on_the_lookup_is_refused_as_unconfirmed(self, tmp_path):
+        client, sent = _wire_client({("GET", "/v1.0/me/todo/lists/SHARED="): (403, _ACCESS_DENIED)})
+
+        with pytest.raises(PermissionDeniedError, match="mail_send"):
+            await create_task(
+                client, "Buy milk", list_id="SHARED=", config=_cfg(tmp_path, "todo_write")
+            )
+
+        assert [(r.method, r.url.path) for r in sent] == [("GET", "/v1.0/me/todo/lists/SHARED=")]
+
+    async def test_a_404_on_the_lookup_is_graphs_own_error(self, tmp_path):
+        client, sent = _wire_client({("GET", "/v1.0/me/todo/lists/GONE="): (404, _NOT_FOUND)})
+
+        with pytest.raises(APIError) as exc:
+            await create_task(
+                client, "Buy milk", list_id="GONE=", config=_cfg(tmp_path, "todo_write")
+            )
+
+        assert exc.value.response_status_code == 404
+        assert [(r.method, r.url.path) for r in sent] == [("GET", "/v1.0/me/todo/lists/GONE=")]
 
 
 class TestTaskListsSayWhoOwnsThem:
