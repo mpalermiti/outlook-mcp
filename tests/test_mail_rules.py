@@ -862,6 +862,69 @@ class TestDisabledStopRuleDoesNotGate:
             await delete_rule(client, "rule-1", config=_CFG_ALLOW_RULES)
 
 
+class TestUnknownEnabledStateCountsAsOn:
+    """A rule whose ``is_enabled`` Graph did not return is assumed to be running.
+
+    The same worse-case reading the file gives a missing ``sequence``: an
+    unknown state must not let a rule that hides a forwarder be cleaned up
+    without ``mail_send``, nor a forwarder be moved as if it were switched off.
+    """
+
+    @staticmethod
+    def _forwarder(enabled=True):
+        return _make_rule(
+            rule_id="rule-2",
+            sequence=4,
+            is_enabled=enabled,
+            actions=_make_actions(forward_to=[_recipient("wire-out-4c7@example.com")]),
+        )
+
+    async def test_deleting_a_stop_rule_of_unknown_state_in_front_of_a_forwarder_is_refused(self):
+        client = MagicMock()
+        stop = _make_rule(
+            rule_id="rule-1",
+            sequence=3,
+            is_enabled=None,
+            actions=_make_actions(stop_processing_rules=True),
+        )
+        builder = _wire_single_rule(client, current=stop, patched=stop)
+        _wire_rules(client).get = AsyncMock(return_value=MagicMock(value=[stop, self._forwarder()]))
+
+        with pytest.raises(PermissionDeniedError):
+            await delete_rule(client, "rule-1", config=_CFG_ALLOW_RULES)
+
+        builder.delete.assert_not_awaited()
+
+    async def test_a_forwarder_of_unknown_state_behind_a_stop_rule_still_counts(self):
+        client = MagicMock()
+        stop = _make_rule(
+            rule_id="rule-1", sequence=3, actions=_make_actions(stop_processing_rules=True)
+        )
+        builder = _wire_single_rule(client, current=stop, patched=stop)
+        _wire_rules(client).get = AsyncMock(
+            return_value=MagicMock(value=[stop, self._forwarder(enabled=None)])
+        )
+
+        with pytest.raises(PermissionDeniedError):
+            await delete_rule(client, "rule-1", config=_CFG_ALLOW_RULES)
+
+        builder.delete.assert_not_awaited()
+
+    async def test_reordering_a_forwarder_of_unknown_state_is_refused(self):
+        client = MagicMock()
+        current = _make_rule(
+            sequence=9,
+            is_enabled=None,
+            actions=_make_actions(forward_to=[_recipient("a@example.com")]),
+        )
+        builder = _wire_single_rule(client, current=current, patched=current)
+
+        with pytest.raises(PermissionDeniedError):
+            await update_rule(client, "rule-1", config=_CFG_ALLOW_RULES, sequence=1)
+
+        builder.patch.assert_not_awaited()
+
+
 class TestAuditSweepRegressions:
     """The same classes of defect Greptile found, checked across the feature."""
 

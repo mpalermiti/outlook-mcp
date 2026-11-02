@@ -245,8 +245,11 @@ def _is_on(rule: Any) -> bool:
     the worse case for its own direction: the masking scan counts an errored
     rule as possibly running, and the repair gate counts an errored forwarder
     as possibly not — see the two callers.
+
+    A rule whose state Graph did not return counts as on, the same worse-case
+    reading as a missing ``sequence``: only an explicit ``False`` is off.
     """
-    return rule is not None and bool(getattr(rule, "is_enabled", False))
+    return rule is not None and getattr(rule, "is_enabled", None) is not False
 
 
 def _is_broken(rule: Any) -> bool:
