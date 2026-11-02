@@ -1192,6 +1192,11 @@ class TestDraftResultsShowEveryRecipient:
         assert result["bcc"] == ["b@example.com"]
         assert result["reply_to"] == ["r@example.com"]
         assert msg_builder.patch.call_args.args[0].cc_recipients is None
+        # The PATCH answered with the stored message, so nothing is read back:
+        # the one GET is the draft check that runs before the PATCH.
+        msg_builder.get.assert_awaited_once()
+        select = msg_builder.get.call_args.kwargs["request_configuration"].query_parameters.select
+        assert select == ["isDraft"]
 
     async def test_an_update_answered_with_no_message_reads_the_lists_back(self):
         stored = _stored_message(cc=["c@example.com"], reply_to=["r@example.com"])
