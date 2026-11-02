@@ -664,6 +664,7 @@ def write_download(save_path: str, content: bytes, *, attachments_dir: str) -> N
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(content)
+        no_hard_links = False
         try:
             os.link(tmp_path, save_path)
             created = True
@@ -671,6 +672,10 @@ def write_download(save_path: str, content: bytes, *, attachments_dir: str) -> N
             created = False
         except (OSError, AttributeError):
             # No hard links here (EPERM, ENOTSUP, EXDEV, or no os.link at all).
+            no_hard_links = True
+        if no_hard_links:
+            # Outside the handler, so an error here is reported on its own rather
+            # than as raised while handling the link's.
             created = _create_exclusively(save_path, content)
         if not created:
             raise _already_exists(_name_in(Path(save_path), _attachments_root(attachments_dir)))

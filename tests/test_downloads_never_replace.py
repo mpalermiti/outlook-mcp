@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from outlook_mcp.config import Config
+from outlook_mcp.tools import mail_attachments
 from outlook_mcp.tools.mail_attachments import (
     _validated_download_target,
     download_attachment,
@@ -321,6 +322,27 @@ async def test_without_hard_links_a_file_created_meanwhile_is_not_replaced(tool,
 
     assert str(error.value) == _already_exists("report.pdf")
     assert target.read_bytes() == STAGED
+    assert _leftover_temp_files(base) == []
+
+
+@pytest.mark.parametrize("how", ["refused", "missing"])
+def test_without_hard_links_the_fallbacks_error_is_not_chained_to_the_links(base, monkeypatch, how):
+    """The exclusive create runs once the link's failure is dealt with, not inside it.
+
+    Run from the handler, its own error was reported as raised "during handling" of
+    the link's OSError (or AttributeError), which reads as two failures.
+    """
+    _no_hard_links(monkeypatch, how)
+
+    def disk_full(save_path, content):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(mail_attachments, "_create_exclusively", disk_full)
+
+    with pytest.raises(OSError, match="No space left") as error:
+        write_download(str(base / "report.pdf"), CONTENT, attachments_dir=str(base))
+
+    assert error.value.__context__ is None
     assert _leftover_temp_files(base) == []
 
 
