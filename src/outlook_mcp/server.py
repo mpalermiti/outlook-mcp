@@ -1907,7 +1907,7 @@ async def outlook_read_attachment(
     offset: int = 0,
     max_chars: int = 20_000,
 ) -> dict:
-    """Read PDF/XLSX or text in its declared charset; no file is saved.
+    """Read PDF/XLSX or text in a standard text charset; saves no file.
 
     Up to 10 MiB; next_offset continues the text. max_chars: 1-50000. PDF/XLSX
     need the documents extra. Scans need OCR; formulas are never recalculated.
