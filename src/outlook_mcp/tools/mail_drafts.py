@@ -12,7 +12,12 @@ from outlook_mcp.permissions import CATEGORY_MAIL_DRAFTS, CATEGORY_MAIL_SEND, ch
 from outlook_mcp.throttle import call_without_replay
 from outlook_mcp.tools._mail_body import above_quote, check_body_format, message_body
 from outlook_mcp.tools.mail_read import SUMMARY_SELECT, _format_message_summary
-from outlook_mcp.validation import validate_datetime, validate_email, validate_graph_id
+from outlook_mcp.validation import (
+    sanitize_output,
+    validate_datetime,
+    validate_email,
+    validate_graph_id,
+)
 
 # MAPI tag PR_DEFERRED_SEND_TIME (0x3FEF, PtypTime) — the legacy extended
 # property the Outlook transport reads to schedule deferred sending. Setting
@@ -39,6 +44,29 @@ def _build_deferred_send_property(deferred_send_datetime: str, tz: str = "UTC"):
     prop.id = _PR_DEFERRED_SEND_TIME_ID
     prop.value = normalized
     return prop, normalized
+
+
+# `$select` for reading a draft's audience back after a write.
+_RECIPIENT_FIELDS = "toRecipients,ccRecipients,bccRecipients,replyTo"
+
+
+def _addresses(recipients: Any) -> list[str]:
+    """The addresses out of a list of Graph ``Recipient`` objects, scrubbed for display."""
+    return [
+        sanitize_output(r.email_address.address or "")
+        for r in recipients or []
+        if getattr(r, "email_address", None)
+    ]
+
+
+def _audience(message: Any) -> dict:
+    """The draft's full recipient lists, as stored: to, cc, bcc and reply_to."""
+    return {
+        "to": _addresses(getattr(message, "to_recipients", None)),
+        "cc": _addresses(getattr(message, "cc_recipients", None)),
+        "bcc": _addresses(getattr(message, "bcc_recipients", None)),
+        "reply_to": _addresses(getattr(message, "reply_to", None)),
+    }
 
 
 async def require_draft(graph_client: Any, message_id: str, tool_name: str) -> None:
@@ -257,10 +285,7 @@ async def create_draft(
             msg.single_value_extended_properties = [deferred_prop]
         # POST /me/messages creates a draft
         created = await graph_client.me.messages.post(msg)
-        result = {
-            "status": "created",
-            "draft_id": created.id,
-        }
+        result = {"status": "created", "draft_id": created.id, **_audience(created)}
     else:
         if forward_message_id:
             action = "forward"
@@ -291,8 +316,7 @@ async def create_draft(
         result = {
             "status": "created",
             "draft_id": created.id,
-            "to": [r.email_address.address for r in created.to_recipients or [] if r.email_address],
-            "cc": [r.email_address.address for r in created.cc_recipients or [] if r.email_address],
+            **_audience(created),
         }
 
     if deferred_normalized is not None:
@@ -334,6 +358,9 @@ async def update_draft(
     draft_id = validate_graph_id(draft_id)
 
     from msgraph.generated.models.message import Message
+    from msgraph.generated.users.item.messages.item.message_item_request_builder import (
+        MessageItemRequestBuilder,
+    )
 
     msg = Message()
 
@@ -407,12 +434,19 @@ async def update_draft(
             msg.single_value_extended_properties = [prop]
 
     await require_draft(graph_client, draft_id, "outlook_update_draft")
-    await graph_client.me.messages.by_message_id(draft_id).patch(msg)
+    builder = graph_client.me.messages.by_message_id(draft_id)
+    stored = await builder.patch(msg)
+    if not isinstance(stored, Message):
+        # Graph normally answers a PATCH with the stored message. If it did not,
+        # read the audience back: what the draft holds now, not what was sent.
+        stored = await builder.get(
+            request_configuration=build_request_config(
+                MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters,
+                {"$select": _RECIPIENT_FIELDS},
+            )
+        )
 
-    result = {
-        "status": "updated",
-        "draft_id": draft_id,
-    }
+    result = {"status": "updated", "draft_id": draft_id, **_audience(stored)}
     if deferred_normalized is not None:
         result["deferred_send_datetime"] = deferred_normalized
     return result

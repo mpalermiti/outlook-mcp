@@ -683,6 +683,8 @@ class TestCreateDraftInThread:
             "draft_id": "AAMkThreadDraft=",
             "to": ["sender@example.com"],
             "cc": [],
+            "bcc": [],
+            "reply_to": [],
         }
 
     async def test_reply_all_uses_create_reply_all(self):
@@ -850,7 +852,14 @@ class TestCreateDraftInThread:
 
         result = await create_draft(client, to=[], subject="s", body="x", config=_CFG)
 
-        assert result == {"status": "created", "draft_id": "AAMkNew="}
+        assert result == {
+            "status": "created",
+            "draft_id": "AAMkNew=",
+            "to": [],
+            "cc": [],
+            "bcc": [],
+            "reply_to": [],
+        }
 
     async def test_the_message_id_is_validated_before_any_call(self):
         client, source, _ = _thread_client()
@@ -1137,3 +1146,94 @@ class TestDeferredReplyDraft:
             )
 
         new_draft.delete.assert_called_once()
+
+
+def _stored_message(**lists):
+    """A real Message as Graph stores a draft: addresses per recipient field."""
+    from msgraph.generated.models.email_address import EmailAddress
+    from msgraph.generated.models.message import Message
+    from msgraph.generated.models.recipient import Recipient
+
+    def _recipients(addresses):
+        return [Recipient(email_address=EmailAddress(address=a)) for a in addresses]
+
+    message = Message(id="AAMkAG123=")
+    message.to_recipients = _recipients(lists.get("to", ()))
+    message.cc_recipients = _recipients(lists.get("cc", ()))
+    message.bcc_recipients = _recipients(lists.get("bcc", ()))
+    message.reply_to = _recipients(lists.get("reply_to", ()))
+    return message
+
+
+class TestDraftResultsShowEveryRecipient:
+    """A draft's result lists who it would go to as stored, not just what was passed.
+
+    A change to one field must not hide the others: the agent (and the user
+    reading its summary) sees the draft's whole audience before it is sent.
+    """
+
+    async def test_a_subject_only_update_still_shows_cc_bcc_and_reply_to(self):
+        stored = _stored_message(
+            to=["a@example.com"],
+            cc=["c@example.com"],
+            bcc=["b@example.com"],
+            reply_to=["r@example.com"],
+        )
+        msg_builder = MagicMock()
+        msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
+        msg_builder.patch = AsyncMock(return_value=stored)
+        client = MagicMock()
+        client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
+
+        result = await update_draft(client, "AAMkAG123=", subject="New", config=_CFG)
+
+        assert result["to"] == ["a@example.com"]
+        assert result["cc"] == ["c@example.com"]
+        assert result["bcc"] == ["b@example.com"]
+        assert result["reply_to"] == ["r@example.com"]
+        assert msg_builder.patch.call_args.args[0].cc_recipients is None
+
+    async def test_an_update_answered_with_no_message_reads_the_lists_back(self):
+        stored = _stored_message(cc=["c@example.com"], reply_to=["r@example.com"])
+        msg_builder = MagicMock()
+        msg_builder.get = AsyncMock(side_effect=[MagicMock(is_draft=True), stored])
+        msg_builder.patch = AsyncMock(return_value=None)
+        client = MagicMock()
+        client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
+
+        result = await update_draft(client, "AAMkAG123=", subject="New", config=_CFG)
+
+        assert result["cc"] == ["c@example.com"]
+        assert result["reply_to"] == ["r@example.com"]
+        select = msg_builder.get.call_args.kwargs["request_configuration"].query_parameters.select
+        assert set(select) == {"toRecipients", "ccRecipients", "bccRecipients", "replyTo"}
+
+    async def test_a_new_draft_shows_the_lists_it_was_stored_with(self):
+        stored = _stored_message(
+            to=["a@example.com"], cc=["c@example.com"], bcc=["b@example.com"], reply_to=["r@x.com"]
+        )
+        client = MagicMock()
+        client.me.messages.post = AsyncMock(return_value=stored)
+
+        result = await create_draft(
+            client, to=["a@example.com"], subject="s", body="b", cc=["c@example.com"], config=_CFG
+        )
+
+        assert result["draft_id"] == "AAMkAG123="
+        assert result["to"] == ["a@example.com"]
+        assert result["cc"] == ["c@example.com"]
+        assert result["bcc"] == ["b@example.com"]
+        assert result["reply_to"] == ["r@x.com"]
+
+    async def test_a_thread_draft_shows_bcc_and_reply_to_too(self):
+        draft = _thread_draft()
+        draft.bcc_recipients = [_recipient("hidden@example.com")]
+        draft.reply_to = [_recipient("r@example.com")]
+        client, _, _ = _thread_client(draft)
+
+        result = await create_draft(
+            client, None, None, "Thanks", reply_to_message_id="AAMkOriginal=", config=_CFG
+        )
+
+        assert result["bcc"] == ["hidden@example.com"]
+        assert result["reply_to"] == ["r@example.com"]
