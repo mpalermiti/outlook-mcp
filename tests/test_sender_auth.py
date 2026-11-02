@@ -158,13 +158,29 @@ def test_an_unaligned_signature_is_not_reported_as_the_senders():
 @pytest.mark.parametrize(
     "value",
     [
+        "dkim=pass header.d=contoso.com",
         "dkim=pass header.d=mail.contoso.com",
-        "dkim=pass header.i=@contoso.com",
-        "dkim=pass header.i=alice@mail.contoso.com",
+        "dkim=pass header.d=mail.contoso.com header.i=@mail.contoso.com",
     ],
 )
 def test_the_from_domain_or_a_subdomain_may_sign(value):
     assert auth(value)["authenticated"] is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "dkim=pass header.d=example.net header.i=@contoso.com",
+        "dkim=pass header.d=example.net header.i=alice@mail.contoso.com",
+        "dkim=pass header.i=@contoso.com",
+    ],
+)
+def test_the_signing_identity_alone_does_not_align(value):
+    # The signing domain is `header.d`. The identity (`header.i`) is a separate,
+    # signer-chosen value and is not what alignment is decided from.
+    result = auth(value)
+    assert result["authenticated"] is False
+    assert result["dkim"] is None
 
 
 @pytest.mark.parametrize(

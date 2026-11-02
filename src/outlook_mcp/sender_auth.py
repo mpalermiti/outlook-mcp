@@ -130,11 +130,11 @@ def _stated(results: list[_Result], method: str) -> str | None:
 
 
 def _signer_aligned(value: str, domain: str) -> bool:
-    # `header.d` is a domain, `header.i` an identity (`[local]@domain`). The
-    # signer must be the From domain or a true subdomain of it: `xcontoso.com`
-    # and `contoso.com.example.net` are registrable by anyone.
-    signer = value.rpartition("@")[2]
-    return signer == domain or signer.endswith("." + domain)
+    # `header.d` is the signing domain. It must be the From domain or a true
+    # subdomain of it: `xcontoso.com` and `contoso.com.example.net` are
+    # registrable by anyone. The signature's identity (`header.i`) is chosen by
+    # the signer separately and is not read.
+    return value == domain or value.endswith("." + domain)
 
 
 def _dkim(results: list[_Result], domain: str) -> str | None:
@@ -147,11 +147,7 @@ def _dkim(results: list[_Result], domain: str) -> str | None:
         r.result
         for r in results
         if r.method == "dkim"
-        and any(
-            _signer_aligned(v, domain)
-            for key in ("header.d", "header.i")
-            for v in r.props.get(key, ())
-        )
+        and any(_signer_aligned(v, domain) for v in r.props.get("header.d", ()))
     ]
     return "pass" if "pass" in own else next(iter(own), None)
 
