@@ -8,8 +8,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- Contact updates clarify that an empty text field clears it, `job_title` is the
-  job and `company` the employer, within the existing tool-surface budgets.
+- **Contact updates say what `""` does.** `outlook_update_contact` now tells the agent that
+  a text field passed as `""` is cleared, and that `job_title` is the job and `company` the
+  employer, for +21 proxy tokens on the default surface and no ceiling raised. From
+  @benjamin-di, with thanks (#216).
 
 ## [1.31.1] — 2026-10-31
 
