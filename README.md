@@ -482,7 +482,7 @@ Creating, updating or deleting a rule also needs `MailboxSettings.ReadWrite` on 
 |------|-------------|
 | `outlook_list_attachments` | List attachments on a message. |
 | `outlook_download_attachment` | Download an attachment and save decoded bytes into `attachments_dir`, or return it with `as_content=True`. Never replaces an existing file and never creates a hidden (dot) name or writes into a hidden folder; pick a new `save_path`. |
-| `outlook_read_attachment` | **Opt-in** (`documents` group, not loaded by default; see below). Read PDF pages, XLSX cells/formulas/saved results, or text in its declared charset (UTF-8 by default); `offset` / `max_chars` page the text, no file saved. |
+| `outlook_read_attachment` | **Opt-in** (`documents` group, not loaded by default; see below). Read PDF pages, XLSX cells/formulas/saved results, or text in a standard text charset (UTF-8 when none is declared); `offset` / `max_chars` page the text, no file saved. |
 | `outlook_send_with_attachments` | Send a message with attachments read from `attachments_dir` (auto upload session for >3MB) or passed inline in `attachments`. If a large upload fails, nothing is sent, and the error names the draft left in Drafts so it can be deleted or finished with `outlook_attach_to_draft` instead of sent twice. |
 | `outlook_attach_to_draft` | Add attachments from `attachments_dir` (auto upload session for >3MB) or inline in `attachments` to an existing draft. A failed large upload is an error, never a file reported as attached. Returns the new attachment IDs (none yet for an upload-session file). |
 | `outlook_remove_draft_attachment` | Remove a single attachment from a draft. |
@@ -500,7 +500,7 @@ checkout). Enable the opt-in `documents` group with
 `OUTLOOK_MCP_TOOLSETS=mail,attachments,documents` (plus any other groups you need) and restart.
 Naming groups loads only those, so list every group you want; see
 [Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets).
-When enabled, a base install can read text in its declared charset (UTF-8 by default),
+When enabled, a base install can read text in a standard text charset (UTF-8 when none is declared),
 and returns an installation hint for PDF/XLSX. Parser dependencies have bounded versions
 and are imported only in a short-lived worker; they add no requirement to the base install.
 
