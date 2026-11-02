@@ -209,10 +209,7 @@ async def _resolve_list_id(graph_client: Any, list_id: str | None) -> str:
 # What a refusal says when the list is not the user's own. A list someone
 # shared is theirs to read, so what is written to it is shown to them, as an
 # invitation would be, and needs `mail_send` under a policy that withholds it.
-SOMEONE_ELSES_LIST = (
-    "write to a To Do list not confirmed as the user's own, where the content is "
-    "visible to the list's owner"
-)
+SOMEONE_ELSES_LIST = "write to a To Do list not confirmed as the user's own"
 
 
 async def _list_belongs_to_someone_else(graph_client: Any, list_id: str) -> bool:
@@ -252,7 +249,7 @@ async def refuse_someone_elses_list(
     if list_id == _DEFAULT_LIST_BY_CLIENT.get(graph_client):
         return
     if await _list_belongs_to_someone_else(graph_client, list_id):
-        check_sends_mail(config, tool_name, SOMEONE_ELSES_LIST)
+        check_sends_mail(config, tool_name, SOMEONE_ELSES_LIST, emails=False)
 
 
 def _format_task(task: Any) -> dict:

@@ -93,13 +93,18 @@ class PermissionDeniedError(OutlookMCPError):
     ``doing`` names the part of a call that needs ``category`` when the tool
     as a whole does not — inviting attendees from a calendar tool needs
     ``mail_send`` — so the refusal says which argument to drop, not just that
-    the tool was refused.
+    the tool was refused. ``emails=False`` is for a part of a call that emails
+    no one but shows what it writes to someone else, such as a calendar or list
+    they own: the refusal then says the owner will see it, not that it sends.
     """
 
-    def __init__(self, tool_name: str, category: str, doing: str | None = None):
+    def __init__(
+        self, tool_name: str, category: str, doing: str | None = None, *, emails: bool = True
+    ):
         if doing:
+            effect = "that sends email" if emails else "the owner will see what it writes"
             message = (
-                f"Cannot use {tool_name} to {doing} — that sends email, and category "
+                f"Cannot use {tool_name} to {doing} — {effect}, and category "
                 f"'{category}' is not in allow_categories."
             )
         else:
@@ -178,9 +183,10 @@ class UnencryptedTokenCacheError(OutlookMCPError):
             "cache would be written to disk in cleartext.",
             "This is for the user to decide, on the host: install the system "
             "packages (apt: `gnome-keyring libsecret-1-0 python3-gi`) and re-create "
-            "the venv with `--system-site-packages`, or opt in to plaintext storage "
-            "with allow_unencrypted_token_cache in the server's config.json. See "
-            "https://github.com/mpalermiti/outlook-mcp/issues/7. "
+            "the venv with `--system-site-packages`, or accept plaintext storage "
+            "(the allow_unencrypted_token_cache setting). The README section "
+            "'Token cache stored unencrypted (Linux)' explains how tokens are stored. "
+            "See https://github.com/mpalermiti/outlook-mcp/issues/7. "
             f"{LEAVE_SETTINGS_TO_THE_USER}",
         )
 
@@ -221,7 +227,7 @@ class AccountMismatchError(OutlookMCPError):
     def __init__(self):
         super().__init__(
             "account_mismatch",
-            "The sign-in does not match expected_username in config.json, so it was not used.",
+            "The sign-in does not match the expected_username setting, so it was not used.",
             "Run `outlook-mcp auth` on the host and sign in as this instance's expected user, "
             "or correct expected_username if it is wrong. " + LEAVE_SETTINGS_TO_THE_USER,
         )
@@ -451,10 +457,10 @@ RULE_MAY_HAVE_BEEN_CREATED = (
 RULE_WRITE_NEEDS_SETTINGS_WRITE = (
     "Graph refused a rule write with 403. Either this sign-in consented the read scope "
     "only, or a mail-flow policy on the mailbox refuses rule writes — the same 403 "
-    "covers both. If it is the consent, set `mailbox_settings_write: true` in the "
-    "config, run `outlook-mcp auth` again, and restart the server — the tools are "
-    "chosen at start, so the rule tools appear only once the setting is read. If it is "
-    "a policy, the refusal will repeat after a fresh consent. " + LEAVE_SETTINGS_TO_THE_USER
+    "covers both. If it is the consent, the user's `mailbox_settings_write` setting "
+    "controls it, and a fresh `outlook-mcp auth` and a restart follow from the user's "
+    "decision. If it is a policy, the refusal will repeat after a fresh consent. "
+    + LEAVE_SETTINGS_TO_THE_USER
 )
 
 # A 403 with the setting already on. The consent advice would be wrong twice

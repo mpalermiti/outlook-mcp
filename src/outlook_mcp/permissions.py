@@ -73,7 +73,7 @@ def mail_send_withheld(config: Config) -> bool:
     return bool(config.allow_categories) and CATEGORY_MAIL_SEND not in config.allow_categories
 
 
-def check_sends_mail(config: Config, tool_name: str, doing: str) -> None:
+def check_sends_mail(config: Config, tool_name: str, doing: str, *, emails: bool = True) -> None:
     """Enforce ``mail_send`` on a write that emails other people as a side effect.
 
     A tool's own category covers what it is named for. A meeting invitation or
@@ -81,6 +81,10 @@ def check_sends_mail(config: Config, tool_name: str, doing: str) -> None:
     Exchange to an address the call names — and that is the thing ``mail_send``
     exists to gate. Called *after* the tool's own ``check_permission``, for the
     part of the call that sends; ``doing`` names that part for the refusal.
+
+    ``emails=False`` is for a write that sends nothing but shows its content to
+    someone else, such as one into a calendar or list another person owns: the
+    same gate, with a refusal that says the owner will see it.
 
     Raises:
         ReadOnlyError: if the server is in read-only mode.
@@ -90,5 +94,5 @@ def check_sends_mail(config: Config, tool_name: str, doing: str) -> None:
     if config.read_only:
         raise ReadOnlyError(tool_name)
     if mail_send_withheld(config):
-        raise PermissionDeniedError(tool_name, CATEGORY_MAIL_SEND, doing=doing)
+        raise PermissionDeniedError(tool_name, CATEGORY_MAIL_SEND, doing=doing, emails=emails)
     return None

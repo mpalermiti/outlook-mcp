@@ -134,10 +134,7 @@ def _has_attendees(event: Any) -> bool:
 # What a refusal says when the calendar is not the user's own. Content written
 # to a calendar someone shared is shown to them, as an invitation would be, so
 # it needs `mail_send` under a policy that withholds it.
-SOMEONE_ELSES_CALENDAR = (
-    "write to a calendar not confirmed as the user's own, where the content is "
-    "visible to the calendar's owner"
-)
+SOMEONE_ELSES_CALENDAR = "write to a calendar not confirmed as the user's own"
 
 
 async def refuse_someone_elses_calendar(
@@ -152,7 +149,7 @@ async def refuse_someone_elses_calendar(
     if not mail_send_withheld(config):
         return
     if await event_calendar_belongs_to_someone_else(graph_client, event_id):
-        check_sends_mail(config, tool_name, SOMEONE_ELSES_CALENDAR)
+        check_sends_mail(config, tool_name, SOMEONE_ELSES_CALENDAR, emails=False)
 
 
 def _is_series_master(event: Any) -> bool:
@@ -616,7 +613,7 @@ async def create_event(
     # that is going to be sent. Whose calendar it is comes off the same listing.
     calendar_id, someone_elses = await resolve_calendar_for_write(graph_client, calendar)
     if someone_elses:
-        check_sends_mail(config, "outlook_create_event", SOMEONE_ELSES_CALENDAR)
+        check_sends_mail(config, "outlook_create_event", SOMEONE_ELSES_CALENDAR, emails=False)
     events = (
         graph_client.me.events
         if calendar_id is None

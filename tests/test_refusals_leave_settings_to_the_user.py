@@ -9,10 +9,14 @@ each refusal names the setting so the agent can tell the user, and says in so
 many words that changing it is not the agent's job.
 """
 
+import re
+
 import pytest
 
 from outlook_mcp.config import DEFAULT_CONFIG_DIR
 from outlook_mcp.errors import (
+    RULE_WRITE_NEEDS_SETTINGS_WRITE,
+    AccountMismatchError,
     ConfigLoadError,
     PermissionDeniedError,
     ReadOnlyError,
@@ -97,3 +101,44 @@ def test_a_refused_download_target_says_how_to_retry(tmp_path):
     text = str(exc.value)
     assert "bare filename" in text
     assert "To send a file" in text
+
+
+# Each text names its setting so the agent can tell the user, and never spells
+# out the value or the edit that would widen what the server may do.
+SETTING_REFUSALS = [
+    pytest.param(
+        str(RULE_WRITE_NEEDS_SETTINGS_WRITE), "mailbox_settings_write", id="rule-write-403"
+    ),
+    pytest.param(
+        str(UnencryptedTokenCacheError()), "allow_unencrypted_token_cache", id="plaintext-cache"
+    ),
+]
+
+
+@pytest.mark.parametrize(("text", "setting"), SETTING_REFUSALS)
+def test_a_text_that_names_a_setting_does_not_give_its_value_or_the_edit(text, setting):
+    assert setting in text
+    assert LEAVE_IT in text
+    assert ": true" not in text
+    assert "= true" not in text
+    assert not re.search(rf"\bset\s+`?{setting}", text), text
+
+
+def test_the_token_cache_refusal_points_at_the_readme_section():
+    assert "Token cache stored unencrypted" in str(UnencryptedTokenCacheError())
+
+
+def test_the_account_mismatch_does_not_claim_where_the_setting_came_from():
+    """`expected_username` can come from config.json or the environment."""
+    text = str(AccountMismatchError())
+    assert "expected_username" in text
+    assert "config.json" not in text
+    assert LEAVE_IT in text
+
+
+def test_a_real_send_refusal_keeps_its_wording():
+    text = str(PermissionDeniedError("outlook_create_event", "mail_send", doing="invite attendees"))
+    assert text.startswith(
+        "Cannot use outlook_create_event to invite attendees — that sends email, and category "
+        "'mail_send' is not in allow_categories."
+    )

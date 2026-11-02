@@ -29,7 +29,7 @@ from msgraph.generated.models.todo_task_list import TodoTaskList
 from msgraph.generated.models.wellknown_list_name import WellknownListName
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import PermissionDeniedError, ReadOnlyError
+from outlook_mcp.errors import LEAVE_SETTINGS_TO_THE_USER, PermissionDeniedError, ReadOnlyError
 from outlook_mcp.tools.calendar_attachments import attach_to_event, remove_event_attachment
 from outlook_mcp.tools.calendar_write import create_event, delete_event, rsvp, update_event
 from outlook_mcp.tools.todo import (
@@ -185,7 +185,9 @@ class TestCreatingInAChosenCalendar:
 
         message = str(exc.value)
         assert "mail_send" in message
-        assert "owner" in message
+        assert "owner will see" in message
+        assert "sends email" not in message
+        assert LEAVE_SETTINGS_TO_THE_USER in message
         secondary.events.post.assert_not_called()
         client.me.events.post.assert_not_called()
 
@@ -381,7 +383,9 @@ class TestWritesToAnEventOnSomeoneElsesCalendar:
             await write(client, _cfg(tmp_path, "calendar_write"))
 
         assert "mail_send" in str(exc.value)
-        assert "owner" in str(exc.value)
+        assert "owner will see" in str(exc.value)
+        assert "sends email" not in str(exc.value)
+        assert LEAVE_SETTINGS_TO_THE_USER in str(exc.value)
         assert _sent(builder) == 0
 
     @pytest.mark.parametrize("write", _EVENT_WRITES)
@@ -658,7 +662,9 @@ class TestWritesToSomeoneElsesList:
             await write(client, _cfg(tmp_path, "todo_write"), "SHARED=")
 
         assert "mail_send" in str(exc.value)
-        assert "owner" in str(exc.value)
+        assert "owner will see" in str(exc.value)
+        assert "sends email" not in str(exc.value)
+        assert LEAVE_SETTINGS_TO_THE_USER in str(exc.value)
         assert _todo_writes_sent(list_item, task_item) == 0
         list_item.get.assert_awaited_once_with()
 
