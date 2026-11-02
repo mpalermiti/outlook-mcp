@@ -108,7 +108,7 @@ def graph(data: bytes, name: str = "note.txt", mime: str = "text/plain"):
 
 
 @pytest.mark.parametrize("suffix", ["txt", "csv"])
-@pytest.mark.parametrize("charset", ["utf-7", "unicode_escape", "raw_unicode_escape"])
+@pytest.mark.parametrize("charset", ["utf-7"])
 @pytest.mark.parametrize("surrogate", ["\ud800", "\udc00"])
 async def test_declared_text_codec_surrogates_reach_mcp_as_replacements(
     suffix, charset, surrogate, monkeypatch
@@ -596,3 +596,47 @@ async def test_refused_group_kill_keeps_the_parser_error(monkeypatch, tmp_path):
     monkeypatch.setattr(os, "killpg", refused)
     with pytest.raises(OutlookMCPError, match="output limit"):
         await mail_attachment_read.extract(b"abc", "pdf")
+
+
+# -- Only real text charsets are decoded: the sender picks the declared charset ---------
+
+
+@pytest.mark.parametrize("charset", ["punycode", "idna", "rot13", "unicode_escape", "nope-9"])
+def test_non_text_or_unknown_charsets_are_not_decoded(charset):
+    from outlook_mcp.tools.mail_attachments import _readable_text
+
+    assert _readable_text("text/plain", charset, b"bcher-kva") is None
+    assert _readable_text("text/plain", charset, b"bcher-kva", for_extraction=True) is None
+
+
+def test_a_non_text_charset_is_refused_before_any_decode():
+    from outlook_mcp.tools.mail_attachments import _readable_text
+
+    class Bytes(bytes):
+        def decode(self, *args, **kwargs):
+            raise AssertionError("decode must not run for a non-text charset")
+
+    assert _readable_text("text/plain", "punycode", Bytes(b"bcher-kva")) is None
+
+
+@pytest.mark.parametrize(
+    ("charset", "raw", "expected"),
+    [
+        ("windows-1252", b"caf\xe9 \x80", "café €"),
+        ("latin1", b"caf\xe9", "café"),
+        ("utf-16", "hé".encode("utf-16"), "hé"),
+        ("shift_jis", "日本".encode("shift_jis"), "日本"),
+        ("utf-7", "hé".encode("utf-7"), "hé"),
+        ("UTF-8", "hé".encode(), "hé"),
+    ],
+)
+def test_real_text_charsets_still_decode(charset, raw, expected):
+    from outlook_mcp.tools.mail_attachments import _readable_text
+
+    assert _readable_text("text/plain", charset, raw) == expected
+
+
+async def test_read_attachment_does_not_decode_a_non_text_charset(monkeypatch):
+    sdk, _ = graph(b"bcher-kva", "note.txt", "text/plain; charset=punycode")
+    with pytest.raises(OutlookMCPError, match="could not be decoded"):
+        await mail_attachment_read.read_attachment(sdk, **ARGS)

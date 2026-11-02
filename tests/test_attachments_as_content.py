@@ -273,6 +273,15 @@ class TestContentByType:
         assert base64.b64decode(blocks[1].resource.blob) == content
         assert blocks[1].resource.mime_type == "text/plain"
 
+    async def test_a_non_text_declared_charset_comes_back_whole_as_a_resource(self, tmp_path):
+        """The sender picks the charset, so only real text charsets are decoded."""
+        content = b"bcher-kva"
+
+        blocks = await _blocks(content, "note.txt", "text/plain; charset=punycode", tmp_path)
+
+        assert [b.type for b in blocks] == ["text", "resource"]
+        assert base64.b64decode(blocks[1].resource.blob) == content
+
     async def test_text_with_control_characters_comes_back_as_a_resource(self, tmp_path):
         """Text is never shown altered, and never with a sender's terminal escapes in it."""
         content = b"ok \x1b[2J\x1b[31mcleared\n"

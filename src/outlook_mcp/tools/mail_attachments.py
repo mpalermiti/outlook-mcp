@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import codecs
 import json
 import mimetypes
 import ntpath
@@ -333,6 +334,51 @@ def _media_type(content_type: str, name: str) -> tuple[str, str | None]:
     return media, charset
 
 
+# A sender chooses the declared charset, so only real text charsets are decoded. Other
+# Python codecs (punycode, idna, escape sequences and the like) are not text encodings and
+# some are quadratic, so a large attachment could stall the server. Names are normalized
+# through codecs.lookup so aliases such as windows-1252 and latin1 match.
+_TEXT_CHARSETS = frozenset(
+    codecs.lookup(name).name
+    for name in (
+        "utf-8",
+        "utf-8-sig",
+        "utf-16",
+        "utf-16-le",
+        "utf-16-be",
+        "utf-32",
+        "utf-32-le",
+        "utf-32-be",
+        "utf-7",
+        "ascii",
+        "latin-1",
+        *(f"iso8859-{n}" for n in range(2, 17) if n != 12),
+        *(f"cp{n}" for n in range(1250, 1259)),
+        "cp437",
+        "cp850",
+        "cp852",
+        "cp866",
+        "cp874",
+        "cp932",
+        "cp949",
+        "cp950",
+        "mac-roman",
+        "koi8-r",
+        "koi8-u",
+        "gb2312",
+        "gbk",
+        "gb18030",
+        "big5",
+        "big5hkscs",
+        "shift_jis",
+        "euc-jp",
+        "euc-kr",
+        "iso2022-jp",
+        "iso2022-kr",
+    )
+)
+
+
 def _readable_text(
     media: str, charset: str | None, content: bytes, *, for_extraction: bool = False
 ) -> str | None:
@@ -348,8 +394,17 @@ def _readable_text(
         or media.endswith(("+json", "+xml"))
     ):
         return None
+    if charset is None:
+        codec = "utf-8-sig"
+    else:
+        try:
+            codec = codecs.lookup(charset).name
+        except LookupError:
+            return None
+        if codec not in _TEXT_CHARSETS:
+            return None
     try:
-        text = content.decode(charset or "utf-8-sig")
+        text = content.decode(codec)
     except (LookupError, ValueError):
         return None
     if for_extraction:
