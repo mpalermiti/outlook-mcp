@@ -1230,6 +1230,21 @@ class TestDraftResultsShowEveryRecipient:
         assert result["bcc"] == ["b@example.com"]
         assert result["reply_to"] == ["r@x.com"]
 
+    async def test_a_recipient_with_no_address_is_left_out_not_shown_as_blank(self):
+        from msgraph.generated.models.email_address import EmailAddress
+        from msgraph.generated.models.recipient import Recipient
+
+        stored = _stored_message(to=["a@example.com"])
+        stored.to_recipients.append(Recipient(email_address=EmailAddress(name="No address")))
+        stored.cc_recipients = [Recipient(email_address=EmailAddress(address=""))]
+        client = MagicMock()
+        client.me.messages.post = AsyncMock(return_value=stored)
+
+        result = await create_draft(client, to=["a@example.com"], subject="s", body="b", config=_CFG)
+
+        assert result["to"] == ["a@example.com"]
+        assert result["cc"] == []
+
     async def test_a_thread_draft_shows_bcc_and_reply_to_too(self):
         draft = _thread_draft()
         draft.bcc_recipients = [_recipient("hidden@example.com")]

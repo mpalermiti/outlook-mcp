@@ -51,12 +51,14 @@ _RECIPIENT_FIELDS = "toRecipients,ccRecipients,bccRecipients,replyTo"
 
 
 def _addresses(recipients: Any) -> list[str]:
-    """The addresses out of a list of Graph ``Recipient`` objects, scrubbed for display."""
-    return [
-        sanitize_output(r.email_address.address or "")
-        for r in recipients or []
-        if getattr(r, "email_address", None)
-    ]
+    """The addresses out of a list of Graph ``Recipient`` objects, scrubbed for display.
+
+    A recipient without an address is left out rather than shown as a blank entry.
+    """
+    addresses = (
+        getattr(getattr(r, "email_address", None), "address", None) for r in recipients or []
+    )
+    return [sanitize_output(address) for address in addresses if address]
 
 
 def _audience(message: Any) -> dict:
