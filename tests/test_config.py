@@ -349,7 +349,10 @@ def test_the_repair_still_runs_where_the_mode_bits_apply(tmp_path, monkeypatch):
 # monkeypatch the locale, and the EncodingWarning subprocess guard does not depend on it at all;
 # those are the ones that can fail on a UTF-8 CI runner.
 
-_NON_ASCII_DIR = "C:/Users/Zoë/中文/att"
+# attachments_dir must be absolute, so these encoding tests start their values at a drive
+# on Windows and at the root elsewhere; what they test is the encoding, not the place.
+_ABS = "C:/" if sys.platform == "win32" else "/"
+_NON_ASCII_DIR = _ABS + "Users/Zoë/中文/att"
 
 
 def _write_config_bytes(config_dir, raw: bytes) -> None:
@@ -412,12 +415,14 @@ def test_a_legacy_ansi_config_still_loads_and_asks_for_a_resave(tmp_path, monkey
     """
     _pretend_the_locale_is(monkeypatch, "cp1252")
     config_dir = tmp_path / ".outlook-mcp"
-    _write_config_bytes(config_dir, '{"attachments_dir": "C:/Users/Zoë/att"}'.encode("cp1252"))
+    _write_config_bytes(
+        config_dir, f'{{"attachments_dir": "{_ABS}Users/Zoë/att"}}'.encode("cp1252")
+    )
 
     with caplog.at_level(logging.WARNING, logger="outlook_mcp.config"):
         loaded = load_config(config_dir=str(config_dir))
 
-    assert loaded.attachments_dir == "C:/Users/Zoë/att"
+    assert loaded.attachments_dir == _ABS + "Users/Zoë/att"
     warnings = [r.getMessage() for r in caplog.records]
     assert len(warnings) == 1
     assert "cp1252" in warnings[0]
@@ -428,7 +433,9 @@ def test_no_legacy_fallback_where_the_locale_is_already_utf8(tmp_path, monkeypat
     """Where the old code read UTF-8 too, the same bytes failed before and fail now."""
     _pretend_the_locale_is(monkeypatch, "UTF-8")
     config_dir = tmp_path / ".outlook-mcp"
-    _write_config_bytes(config_dir, '{"attachments_dir": "C:/Users/Zoë/att"}'.encode("cp1252"))
+    _write_config_bytes(
+        config_dir, f'{{"attachments_dir": "{_ABS}Users/Zoë/att"}}'.encode("cp1252")
+    )
 
     with pytest.raises(UnicodeDecodeError):
         load_config(config_dir=str(config_dir))
@@ -455,7 +462,8 @@ def test_the_fallback_only_accepts_a_valid_config(tmp_path, monkeypatch):
     validation error about text the operator never wrote in that encoding."""
     _pretend_the_locale_is(monkeypatch, "cp1252")
     config_dir = tmp_path / ".outlook-mcp"
-    raw = '{"attachments_dir": "Zoë", "allow_categories": ["not-a-category"]}'.encode("cp1252")
+    raw = f'{{"attachments_dir": "{_ABS}Zoë", "allow_categories": ["not-a-category"]}}'
+    raw = raw.encode("cp1252")
     _write_config_bytes(config_dir, raw)
 
     with pytest.raises(UnicodeDecodeError):
@@ -465,7 +473,7 @@ def test_the_fallback_only_accepts_a_valid_config(tmp_path, monkeypatch):
 def test_an_unknown_locale_codec_means_no_fallback(tmp_path, monkeypatch):
     _pretend_the_locale_is(monkeypatch, "no-such-codec")
     config_dir = tmp_path / ".outlook-mcp"
-    _write_config_bytes(config_dir, '{"attachments_dir": "Zoë"}'.encode("cp1252"))
+    _write_config_bytes(config_dir, f'{{"attachments_dir": "{_ABS}Zoë"}}'.encode("cp1252"))
 
     with pytest.raises(UnicodeDecodeError):
         load_config(config_dir=str(config_dir))
@@ -481,14 +489,15 @@ def test_a_legacy_file_that_is_also_valid_utf8_is_read_as_utf8(tmp_path, monkeyp
     """
     _pretend_the_locale_is(monkeypatch, "cp1252")
     config_dir = tmp_path / ".outlook-mcp"
-    raw = '{"attachments_dir": "ZoÃ«"}'.encode("cp1252")
-    assert raw.decode("utf-8") == '{"attachments_dir": "Zoë"}'  # premise: the bytes are ambiguous
+    raw = f'{{"attachments_dir": "{_ABS}ZoÃ«"}}'.encode("cp1252")
+    # premise: the bytes are ambiguous
+    assert raw.decode("utf-8") == f'{{"attachments_dir": "{_ABS}Zoë"}}'
     _write_config_bytes(config_dir, raw)
 
     with caplog.at_level(logging.WARNING, logger="outlook_mcp.config"):
         loaded = load_config(config_dir=str(config_dir))
 
-    assert loaded.attachments_dir == "Zoë"
+    assert loaded.attachments_dir == _ABS + "Zoë"
     assert caplog.records == []
 
 
@@ -510,6 +519,7 @@ def test_an_undecodable_config_gets_the_utf8_remedy_not_the_permissions_one():
 
 _ENCODING_GUARD = textwrap.dedent(
     """
+    import sys
     import warnings
     warnings.filterwarnings("error", category=EncodingWarning, module=r"outlook_mcp(\\.|$)")
 
@@ -517,7 +527,7 @@ _ENCODING_GUARD = textwrap.dedent(
     from outlook_mcp import auth
     from outlook_mcp.config import Config, load_config, save_config
 
-    value = "C:/Users/Zoë/中文/att"
+    value = ("C:/" if sys.platform == "win32" else "/") + "Users/Zoë/中文/att"
     save_config(Config(client_id="x", attachments_dir=value))
     assert load_config().attachments_dir == value, "config did not round-trip"
 
@@ -754,3 +764,258 @@ class TestWarningsAreLoggedOnce:
 
         hits = [r for r in caplog.records if "not UTF-8" in r.getMessage()]
         assert len(hits) == 1, [r.getMessage() for r in caplog.records]
+
+
+# ── attachments_dir: an absolute folder of its own ───────────────────────
+#
+# The attachment tools read and write every file under attachments_dir, so it
+# must not be the home directory, a folder that contains it, or the settings
+# directory (which holds config.json and the sign-in record). A subfolder of
+# either is fine; the default is the `attachments` folder in the settings
+# directory. A relative value would name a different folder in every working
+# directory the server is started from.
+
+
+@pytest.fixture
+def home_and_settings(tmp_path, monkeypatch):
+    """A home and a settings directory of the test's own, in separate trees."""
+    from outlook_mcp import config as config_mod
+
+    home = tmp_path / "users" / "me"
+    settings = tmp_path / "apps" / "outlook-mcp"
+    home.mkdir(parents=True)
+    settings.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # what expanduser reads on Windows
+    monkeypatch.setattr(config_mod, "DEFAULT_CONFIG_DIR", str(settings))
+    return home, settings
+
+
+def _attachments_value(which: str, home: Path, settings: Path, tmp_path: Path) -> str:
+    return {
+        "empty": "",
+        "relative": "relative/dir",
+        "tilde": "~",
+        "home realpath": os.path.realpath(home),
+        "filesystem root": "/",
+        "folder above home": str(home.parent),
+        "settings dir": str(settings),
+        "folder above settings": str(settings.parent),
+        "home subfolder": "~/Downloads/x",
+        "settings subfolder": str(settings / "attachments"),
+        "elsewhere": str(tmp_path / "elsewhere"),
+    }[which]
+
+
+def _load_with_attachments_dir(tmp_path: Path, value: str):
+    config_dir = tmp_path / "config-file"
+    _write_config(config_dir, {"client_id": "private-client-sentinel", "attachments_dir": value})
+    return load_config(config_dir=str(config_dir))
+
+
+@pytest.mark.parametrize(
+    "which",
+    [
+        "empty",
+        "relative",
+        "tilde",
+        "home realpath",
+        "filesystem root",
+        "folder above home",
+        "settings dir",
+        "folder above settings",
+    ],
+)
+def test_attachments_dir_that_is_not_a_folder_of_its_own_is_refused(
+    tmp_path, home_and_settings, which
+):
+    value = _attachments_value(which, *home_and_settings, tmp_path)
+
+    with pytest.raises(ValidationError) as exc:
+        _load_with_attachments_dir(tmp_path, value)
+
+    repair = config_repair_lines(exc.value)
+    assert repair[0] == "The config file is invalid — the server cannot start:"
+    assert any(line.startswith("  attachments_dir: ") for line in repair)
+    assert "private-client-sentinel" not in "\n".join(repair)
+    assert "private-client-sentinel" not in str(exc.value)
+
+
+@pytest.mark.parametrize("which", ["home subfolder", "settings subfolder", "elsewhere"])
+def test_attachments_dir_inside_home_settings_or_elsewhere_loads_unchanged(
+    tmp_path, home_and_settings, which
+):
+    value = _attachments_value(which, *home_and_settings, tmp_path)
+
+    loaded = _load_with_attachments_dir(tmp_path, value)
+
+    assert loaded.attachments_dir == value
+    # Checked without creating anything.
+    home, settings = home_and_settings
+    assert list(home.iterdir()) == [] and list(settings.iterdir()) == []
+    assert not (tmp_path / "elsewhere").exists()
+
+
+@pytest.mark.parametrize("target", ["home", "settings"])
+def test_attachments_dir_symlinked_to_home_or_settings_is_refused(
+    tmp_path, home_and_settings, target
+):
+    home, settings = home_and_settings
+    link = tmp_path / "innocent-looking"
+    try:
+        link.symlink_to(home if target == "home" else settings, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink privilege unavailable")
+
+    with pytest.raises(ValidationError, match="attachments_dir"):
+        _load_with_attachments_dir(tmp_path, str(link))
+
+
+def test_attachments_dir_spelt_in_another_case_is_still_home(tmp_path, home_and_settings):
+    """On a case-insensitive filesystem, two spellings can name one directory."""
+    home, _ = home_and_settings
+    respelt = os.path.realpath(home).swapcase()
+    if not (os.path.isdir(respelt) and os.path.samefile(respelt, home)):
+        pytest.skip("this filesystem is case-sensitive")
+
+    with pytest.raises(ValidationError, match="attachments_dir"):
+        _load_with_attachments_dir(tmp_path, respelt)
+
+
+def test_the_default_attachments_dir_is_checked_too(tmp_path, home_and_settings):
+    home, settings = home_and_settings
+    no_file = str(tmp_path / "no-config-file")
+    assert load_config(config_dir=no_file).attachments_dir == str(settings / "attachments")
+
+    try:
+        (settings / "attachments").symlink_to(home, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink privilege unavailable")
+    with pytest.raises(ValidationError, match="attachments_dir"):
+        load_config(config_dir=no_file)
+
+
+@pytest.mark.parametrize("value", ["/attachments", "\\attachments", "C:attachments"])
+def test_on_windows_attachments_dir_needs_a_drive_or_share(monkeypatch, value):
+    """A path rooted without a drive, or a drive without a root, depends on the current
+    drive or directory; Python before 3.13 calls the first one absolute."""
+    from outlook_mcp import config as config_mod
+
+    monkeypatch.setattr(config_mod, "_WINDOWS", True)
+    with pytest.raises(ValidationError, match="absolute"):
+        Config(attachments_dir=value)
+
+
+def test_on_windows_a_network_attachments_dir_is_judged_by_its_text(monkeypatch):
+    """Resolving a share path connects to its host, so loading the config never does."""
+    from outlook_mcp import config as config_mod
+
+    share = "\\\\files.example\\share\\attachments"
+    touched = []
+    real_realpath, real_stat = os.path.realpath, os.stat
+
+    def recording_realpath(path, *args, **kwargs):
+        touched.append(("realpath", str(path)))
+        return real_realpath(path, *args, **kwargs)
+
+    def recording_stat(path, *args, **kwargs):
+        touched.append(("stat", str(path)))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(config_mod, "_WINDOWS", True)
+    with monkeypatch.context() as during:
+        during.setattr(os.path, "realpath", recording_realpath)
+        during.setattr(os, "stat", recording_stat)
+        loaded = Config(attachments_dir=share)
+
+    assert loaded.attachments_dir == share
+    assert not [call for call in touched if call[1].startswith(("\\\\", "//"))]
+
+
+async def test_a_refused_attachments_dir_boots_the_server_read_only_with_the_repair(
+    tmp_path, home_and_settings, monkeypatch
+):
+    """The refusal takes the existing failure path: read-only, the repair on every call.
+
+    The default folder is the hard case: the server's fail-safe substitute is built
+    from defaults, so it must not be refused all over again.
+    """
+    from mcp.client import Client
+
+    from outlook_mcp import server
+
+    home, settings = home_and_settings
+    try:
+        (settings / "attachments").symlink_to(home, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink privilege unavailable")
+    no_file = str(tmp_path / "no-config-file")
+    monkeypatch.setattr(server, "load_config", lambda: load_config(config_dir=no_file))
+    monkeypatch.setattr(
+        server.AuthManager,
+        "try_cached_token",
+        lambda _: pytest.fail("a refused configuration must not try credentials"),
+    )
+
+    async with Client(server.mcp) as client:
+        status = await client.call_tool("outlook_auth_status", {})
+        whoami = await client.call_tool("outlook_whoami", {})
+
+    payload = json.loads("".join(part.text for part in status.content if hasattr(part, "text")))
+    assert payload["read_only"] is True and payload["authenticated"] is False
+    assert "attachments_dir" in payload["action_required"]
+    assert whoami.is_error is True
+    assert "attachments_dir" in " ".join(p.text for p in whoami.content if hasattr(p, "text"))
+
+
+# ── A key written twice in config.json is refused ────────────────────────
+#
+# JSON parsers keep one of the two values without a word, so the file does not
+# say which one the operator meant — and the one that silently loses may be the
+# restriction. The refusal names the key, never either value.
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"client_id": "x", "read_only": true, "read_only": false}',
+        '{"client_id": "x", "read_only": true, "read\\u005fonly": false}',
+        '{"client_id": "x", "theme": {"read_only": "private-first", '
+        '"read_only": "private-second"}}',
+        '{"client_id": "x", "theme": [{"a": 1}, {"read_only": "private-first", '
+        '"read_only": "private-second"}]}',
+    ],
+    ids=["top-level", "escaped-spelling", "nested", "inside-a-list"],
+)
+def test_a_repeated_key_refuses_to_load_and_names_only_the_key(tmp_path, text):
+    (tmp_path / "config.json").write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValidationError) as exc:
+        load_config(config_dir=str(tmp_path))
+
+    repair = "\n".join(config_repair_lines(exc.value))
+    assert repair.startswith("The config file is invalid — the server cannot start:")
+    assert "'read_only'" in repair and "config.json" in repair
+    for value in ("private-first", "private-second", "true", "false", "True", "False"):
+        assert value not in repair
+        assert value not in str(exc.value)
+
+
+def test_invalid_json_is_still_reported_by_validation(tmp_path):
+    """The repeated-key check reads JSON first; malformed JSON keeps its old error."""
+    (tmp_path / "config.json").write_text('{"client_id": "x",', encoding="utf-8")
+
+    with pytest.raises(ValidationError) as exc:
+        load_config(config_dir=str(tmp_path))
+
+    assert exc.value.errors()[0]["type"] == "json_invalid"
+
+
+def test_a_legacy_code_page_config_with_a_repeated_key_is_not_rescued(tmp_path, monkeypatch):
+    _pretend_the_locale_is(monkeypatch, "cp1252")
+    config_dir = tmp_path / ".outlook-mcp"
+    raw = '{"timezone": "Zoë", "read_only": true, "read_only": false}'.encode("cp1252")
+    _write_config_bytes(config_dir, raw)
+
+    with pytest.raises(UnicodeDecodeError):
+        load_config(config_dir=str(config_dir))

@@ -92,10 +92,77 @@ def test_environment_can_repeat_the_same_app_registration(tmp_path, monkeypatch,
     assert load_config(str(tmp_path)).client_id.casefold() == "file-client"
 
 
+# OUTLOOK_MCP_EXPECTED_USERNAME follows the client_id rule: it supplies the
+# guard when the file has none, and can only repeat the file's username.
+
+
+@pytest.mark.parametrize("settings", [{}, {"expected_username": None}])
+def test_environment_can_supply_the_expected_username_when_file_has_none(
+    tmp_path, monkeypatch, settings
+):
+    file = stored(tmp_path, **settings)
+    before = file.read_bytes()
+    monkeypatch.setenv("OUTLOOK_MCP_EXPECTED_USERNAME", " owner@example.com ")
+    assert load_config(str(tmp_path)).expected_username == "owner@example.com"
+    assert file.read_bytes() == before
+
+
+@pytest.mark.parametrize("username", ["a@x.com", "A@X.COM"])
+def test_environment_can_repeat_the_file_expected_username(tmp_path, monkeypatch, username):
+    stored(tmp_path, expected_username="a@x.com")
+    monkeypatch.setenv("OUTLOOK_MCP_EXPECTED_USERNAME", username)
+    assert load_config(str(tmp_path)).expected_username.casefold() == "a@x.com"
+
+
+@pytest.mark.parametrize("security", [{}, {"read_only": True}])
+def test_environment_cannot_change_the_file_expected_username(tmp_path, monkeypatch, security):
+    file = stored(tmp_path, expected_username="private-file-user@x.com", **security)
+    before = file.read_bytes()
+    monkeypatch.setenv("OUTLOOK_MCP_EXPECTED_USERNAME", "private-env-user@x.com")
+    with pytest.raises(EnvironmentConfigError, match="OUTLOOK_MCP_EXPECTED_USERNAME") as exc:
+        load_config(str(tmp_path))
+    lines = "\n".join(config_repair_lines(exc.value))
+    assert "launch environment" in lines
+    for value in ("private-file-user", "private-env-user"):
+        assert value not in str(exc.value) and value not in lines
+    assert file.read_bytes() == before
+
+
+def test_environment_expected_username_refuses_a_saved_sign_in_for_another_user(
+    tmp_path, monkeypatch
+):
+    from azure.identity import AuthenticationRecord
+
+    from outlook_mcp.auth import AuthManager
+    from outlook_mcp.errors import AccountMismatchError
+
+    stored(tmp_path, client_id="file-client")
+    monkeypatch.setenv("OUTLOOK_MCP_EXPECTED_USERNAME", "owner@example.com")
+    auth = AuthManager(load_config(str(tmp_path)))
+    record = AuthenticationRecord(
+        tenant_id="consumers",
+        client_id="file-client",
+        authority="https://login.microsoftonline.com/consumers",
+        home_account_id="synthetic-home",
+        username="someone-else@example.com",
+    )
+    with (
+        patch("outlook_mcp.auth._load_auth_record", return_value=record),
+        patch("outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=False),
+        patch("outlook_mcp.auth.DeviceCodeCredential") as credential,
+    ):
+        assert auth.try_cached_token() is False
+    credential.assert_not_called()
+    assert isinstance(auth.startup_error, AccountMismatchError)
+
+
 def test_no_new_variables_preserve_file_configuration(tmp_path):
     # A stored timezone keeps existing validation/compatibility behavior.
     file = stored(
-        tmp_path, client_id="file-client", timezone="legacy-zone", attachments_dir="relative-root"
+        tmp_path,
+        client_id="file-client",
+        timezone="legacy-zone",
+        attachments_dir=str(tmp_path / "file-root"),
     )
     actual = load_config(str(tmp_path))
     assert actual.model_dump() == Config.model_validate_json(file.read_text()).model_dump()
@@ -423,6 +490,9 @@ def test_windows_network_escape_is_refused_before_any_resolution(monkeypatch, ta
         ("TENANT_ID", " "),
         ("TIMEZONE", "not-a-real-zone"),
         ("ATTACHMENTS_DIR", "bad\npath"),
+        ("EXPECTED_USERNAME", ""),
+        ("EXPECTED_USERNAME", " "),
+        ("EXPECTED_USERNAME", "owner@example.com\nother@example.com"),
     ],
 )
 def test_invalid_inputs_name_the_variable_without_echoing_values(
@@ -469,6 +539,8 @@ def test_unknown_categories_name_valid_choices_without_echoing_the_input(tmp_pat
         "OUTLOOK_MCP_READ_ONLY_CONSNET",
         "OUTLOOK_MCP_ATTACHMENTS_DI",
         "OUTLOOK_MCP_ALLOW_UNENCRYPTED_TOKEN_CACH",
+        "OUTLOOK_MCP_EXPECTED_USENAME",
+        "OUTLOOK_MCP_EXPECTEDUSERNAME",
     ],
 )
 def test_misspelt_environment_security_key_stops_startup(tmp_path, monkeypatch, variable):

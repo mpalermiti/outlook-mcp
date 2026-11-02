@@ -21,6 +21,7 @@ SECURITY_FIELDS = (
     "allow_categories",
     "attachments_dir",
     "allow_unencrypted_token_cache",
+    "expected_username",
 )
 ENV_FIELDS = {PREFIX + field.upper(): field for field in (*PLAIN_FIELDS, *SECURITY_FIELDS)}
 BOOL_FIELDS = {"read_only", "read_only_consent", "allow_unencrypted_token_cache"}
@@ -118,6 +119,25 @@ def apply_environment(baseline: Config, environ: Mapping[str, str]) -> Config:
         raise _refuse(
             PREFIX + "CLIENT_ID", "cannot change the app registration set by config.json."
         )
+    # The same rule as client_id: supply the guard when the file has none, or
+    # repeat the file's username; never name another sign-in.
+    if (
+        "expected_username" in updates
+        and baseline.expected_username
+        and updates["expected_username"].casefold() != baseline.expected_username.casefold()
+    ):
+        raise _refuse(
+            PREFIX + "EXPECTED_USERNAME",
+            "cannot change the expected sign-in username set by config.json.",
+        )
+    file_root = baseline._attachments_file_root
+    if "attachments_dir" in updates:
+        # Narrowed before validation, so a relative override is checked as the
+        # absolute directory it resolved to inside the file's root.
+        updates["attachments_dir"], root = _narrow_attachment_root(
+            updates["attachments_dir"], baseline.attachments_dir
+        )
+        file_root = file_root or root
     # Config remains the only settings model and validator for field values and
     # relationships. Environment values cannot rescue an invalid config file.
     try:
@@ -133,7 +153,7 @@ def apply_environment(baseline: Config, environ: Mapping[str, str]) -> Config:
         elif "allow_categories" in fields:
             reason = "use valid permission categories: " + ", ".join(sorted(VALID_CATEGORIES)) + "."
         raise _refuse(", ".join(variables), reason) from None
-    effective._attachments_file_root = baseline._attachments_file_root
+    effective._attachments_file_root = file_root
     for field in ("read_only", "read_only_consent"):
         if field in updates and getattr(baseline, field) and not getattr(effective, field):
             raise _refuse(PREFIX + field.upper(), "cannot disable a restriction from config.json.")
@@ -154,11 +174,6 @@ def apply_environment(baseline: Config, environ: Mapping[str, str]) -> Config:
                 PREFIX + "ALLOW_CATEGORIES",
                 "cannot widen the file's allowed categories; an empty list means all categories.",
             )
-    if "attachments_dir" in updates:
-        effective.attachments_dir, root = _narrow_attachment_root(
-            effective.attachments_dir, baseline.attachments_dir
-        )
-        effective._attachments_file_root = baseline._attachments_file_root or root
     if "timezone" in updates:
         # Reuse the existing timezone resolver, without changing file-only loading.
         from outlook_mcp.validation import resolve_timezone

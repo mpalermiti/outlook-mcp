@@ -1,8 +1,10 @@
 """Config file management for outlook-mcp."""
 
 import difflib
+import json
 import locale
 import logging
+import ntpath
 import os
 import stat
 import sys
@@ -17,6 +19,7 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from pydantic_core import InitErrorDetails, PydanticCustomError
 
 from outlook_mcp.permissions import VALID_CATEGORIES
 
@@ -60,6 +63,59 @@ def _default_attachments_dir() -> str:
     the settings directory from the attachments directory.
     """
     return os.path.join(DEFAULT_CONFIG_DIR, "attachments")
+
+
+_WINDOWS = os.name == "nt"
+
+
+def _is_network_path(path: str) -> bool:
+    r"""On Windows, a path that begins with two separators: ``\\host\share``, ``\\?\``, ``\\.\``.
+
+    Resolving or opening one connects to its host, so such a path is only ever
+    compared by its text here.
+    """
+    return _WINDOWS and len(path) >= 2 and path[0] in "\\/" and path[1] in "\\/"
+
+
+def _comparable(path: str) -> str:
+    """``path`` resolved (symlinks included) and case-normalised, without creating anything."""
+    if _is_network_path(path):
+        return ntpath.normcase(ntpath.normpath(path))
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _is_same_or_inside(path: str, folder: str) -> bool:
+    """Whether ``path`` is ``folder`` or lies inside it; both come from ``_comparable``.
+
+    Compared by text first, then by identity: on a case-insensitive filesystem
+    (the macOS default) two spellings can name one directory, and ``normcase``
+    folds case only on Windows. So each existing directory on the way up from
+    ``path`` is also compared with ``folder`` itself.
+    """
+    try:
+        if os.path.commonpath((path, folder)) == folder:
+            return True
+    except ValueError:  # different drives, or a share beside a local path
+        return False
+    if _is_network_path(path) or _is_network_path(folder):
+        return False
+    try:
+        folder_stat = os.stat(folder)
+    except OSError:
+        return False  # a folder that does not exist contains nothing that does
+    if not folder_stat.st_ino:
+        return False  # this filesystem gives no identity to compare (some Windows ones)
+    current = path
+    while True:
+        try:
+            if os.path.samestat(os.stat(current), folder_stat):
+                return True
+        except OSError:
+            pass  # not created yet; its parent may still be the folder
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
 
 
 # Top-level keys an older release accepted. One process serves one account
@@ -270,6 +326,50 @@ class Config(BaseModel):
             )
         return self
 
+    @field_validator("attachments_dir")
+    @classmethod
+    def _validate_attachments_dir(cls, value: str) -> str:
+        """Refuse a folder that would hand the attachment tools more than attachments.
+
+        Those tools read and write every file under ``attachments_dir``. So it
+        must not be the home directory or a folder that contains it, nor the
+        settings directory (config.json and the sign-in record) or a folder that
+        contains it; a subfolder of either is fine. It must be absolute after
+        ``~`` is expanded: a relative path names a different folder in every
+        working directory the server starts in. Checked on the resolved path, so
+        a symlink to a refused folder is refused too. The stored value is kept as
+        written. ``load_config`` checks the default folder the same way.
+        """
+        expanded = os.path.expanduser(value)
+        if _WINDOWS:
+            # A drive or a share, and a root: `\x` (which Python before 3.13 calls
+            # absolute) and `C:x` both still depend on the current drive or directory.
+            absolute = ntpath.isabs(expanded) and bool(ntpath.splitdrive(expanded)[0])
+        else:
+            absolute = os.path.isabs(expanded)
+        if not absolute or "\x00" in expanded:
+            raise ValueError(
+                "attachments_dir must be an absolute folder path (a leading ~ is "
+                "expanded). A relative path names a different folder depending on "
+                "where the server starts."
+            )
+        folder = _comparable(expanded)
+        if _is_same_or_inside(_comparable(os.path.expanduser("~")), folder):
+            raise ValueError(
+                "attachments_dir must not be the home directory or a folder that "
+                "contains it: the attachment tools can read and write every file "
+                "under it. Use a folder of its own; one inside the home directory "
+                "is fine."
+            )
+        if _is_same_or_inside(_comparable(DEFAULT_CONFIG_DIR), folder):
+            raise ValueError(
+                "attachments_dir must not be the settings directory or a folder that "
+                "contains it: the attachment tools could then read and replace the "
+                "settings and the sign-in record. Use a folder of its own; the default "
+                "attachments folder inside the settings directory is fine."
+            )
+        return value
+
     @field_validator("allow_categories")
     @classmethod
     def _validate_allow_categories(cls, value: list[str]) -> list[str]:
@@ -390,6 +490,57 @@ def _refuse_non_directory(config_dir: str) -> None:
         )
 
 
+class _RepeatedKeyError(Exception):
+    """One JSON object in config.json names the same key twice."""
+
+    def __init__(self, key: str):
+        super().__init__(key)
+        self.key = key
+
+
+def _refuse_repeated_key(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    seen: set[str] = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise _RepeatedKeyError(key)
+        seen.add(key)
+    return dict(pairs)
+
+
+def _validate_config_json(text: str) -> Config:
+    """Validate config.json's text, after refusing any object that repeats a key.
+
+    A JSON parser keeps one of the two values without a word, so such a file does
+    not say which one was meant, and the one that silently loses may be the
+    restriction. Repeats are found by parsing, at any depth, so a key spelt with
+    an escape counts as the same key. Text this parser cannot read is left to
+    ``model_validate_json``, which reports it exactly as before. The refusal is a
+    ``ValidationError``, like any other invalid config, and names the key but
+    neither value.
+    """
+    try:
+        json.loads(text, object_pairs_hook=_refuse_repeated_key)
+    except _RepeatedKeyError as repeated:
+        raise ValidationError.from_exception_data(
+            Config.__name__,
+            [
+                InitErrorDetails(
+                    type=PydanticCustomError(
+                        "repeated_key",
+                        "the key {key} appears more than once in one JSON object, so the "
+                        "file does not say which value is meant. Keep it once.",
+                        {"key": repr(repeated.key)},
+                    ),
+                    loc=(),
+                    input=repeated.key,
+                )
+            ],
+        ) from None
+    except (ValueError, RecursionError):
+        pass  # not JSON this parser reads; model_validate_json reports it below
+    return Config.model_validate_json(text)
+
+
 # Silences the accept-and-warn pass while a caller reads one field for an
 # internal decision (toolset selection at import). Those warnings belong to the
 # start-up load; repeating them for an import-time peek printed every one of
@@ -420,6 +571,11 @@ def load_config(
     _quiet_config_load = quiet
     try:
         baseline = _load_file_config(config_dir)
+        if "attachments_dir" not in baseline.model_fields_set:
+            # The default folder is checked as if the file had set it: it can be a
+            # symlink to somewhere refused. Here rather than on every Config(), so
+            # the server's fail-safe substitute after a refused load still builds.
+            Config.model_validate({"attachments_dir": baseline.attachments_dir})
         from outlook_mcp._config_env import apply_environment
 
         return apply_environment(baseline, os.environ)
@@ -461,7 +617,7 @@ def _load_file_config(config_dir: str) -> Config:
         if legacy is None:
             raise
         return legacy
-    return Config.model_validate_json(data)
+    return _validate_config_json(data)
 
 
 def _load_legacy_locale_config(raw: bytes, file_path: Path) -> Config | None:
@@ -486,7 +642,8 @@ def _load_legacy_locale_config(raw: bytes, file_path: Path) -> Config | None:
     # UTF-8 inside it.
     encoding = locale.getpreferredencoding(False)
     try:
-        config = Config.model_validate_json(raw.decode(encoding))
+        # A repeated key is refused here too, as a ValidationError: no rescue.
+        config = _validate_config_json(raw.decode(encoding))
     except (LookupError, UnicodeDecodeError, ValidationError):  # LookupError: unknown codec
         return None
     if not _quiet_config_load:
