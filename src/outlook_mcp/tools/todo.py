@@ -8,7 +8,12 @@ from weakref import WeakKeyDictionary
 
 from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
-from outlook_mcp.permissions import CATEGORY_TODO_WRITE, check_permission
+from outlook_mcp.permissions import (
+    CATEGORY_TODO_WRITE,
+    check_permission,
+    check_sends_mail,
+    mail_send_withheld,
+)
 from outlook_mcp.tools._recurrence import build_patterned_recurrence as _build_recurrence
 from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
 
@@ -201,6 +206,49 @@ async def _resolve_list_id(graph_client: Any, list_id: str | None) -> str:
     return first_list_id
 
 
+# What a refusal says when the list is not the user's own. A list someone
+# shared is theirs to read, so what is written to it is shown to them, as an
+# invitation would be, and needs `mail_send` under a policy that withholds it.
+SOMEONE_ELSES_LIST = (
+    "write to a To Do list not confirmed as the user's own, where the content is "
+    "visible to the list's owner"
+)
+
+
+async def _list_belongs_to_someone_else(graph_client: Any, list_id: str) -> bool:
+    """Whether To Do list ``list_id`` is someone else's, by Graph's ``isOwner``.
+
+    A plain ``GET /me/todo/lists/{id}``: verified live, it returns ``isOwner``
+    and ``isShared``, while the same request with a ``$select`` is a 400 on a
+    consumer account. Fails closed: only an explicit ``isOwner: true`` is the
+    user's own; a missing one, an empty answer or a lookup that raises counts
+    as someone else's.
+    """
+    try:
+        task_list = await graph_client.me.todo.lists.by_todo_task_list_id(list_id).get()
+    except Exception:
+        return True
+    return getattr(task_list, "is_owner", None) is not True
+
+
+async def refuse_someone_elses_list(
+    graph_client: Any, list_id: str, config: Config, tool_name: str
+) -> None:
+    """Refuse adding content to someone else's To Do list without ``mail_send``.
+
+    ``list_id`` is the resolved one. Looked up only under a policy that
+    withholds ``mail_send``, and never for the default list ``_resolve_list_id``
+    found, which is the user's own by how it was found (``isOwner`` and
+    ``defaultList``). Its first-list fallback is not cached, so it is looked up.
+    """
+    if not mail_send_withheld(config):
+        return
+    if list_id == _DEFAULT_LIST_BY_CLIENT.get(graph_client):
+        return
+    if await _list_belongs_to_someone_else(graph_client, list_id):
+        check_sends_mail(config, tool_name, SOMEONE_ELSES_LIST)
+
+
 def _format_task(task: Any) -> dict:
     """Convert a Graph SDK TodoTask to a clean dict."""
     status = "notStarted"
@@ -275,16 +323,25 @@ def _checked_last(items: list[dict]) -> list[dict]:
     return sorted(items, key=lambda i: (i["is_checked"], i["created"]))
 
 
+def _flag(value: Any) -> bool | None:
+    """A boolean Graph reported, or ``None`` rather than a guess when it did not."""
+    return value if isinstance(value, bool) else None
+
+
 async def list_task_lists(graph_client: Any) -> dict:
     """List all To Do task lists.
 
     GET /me/todo/lists
-    Returns {task_lists: [{id, display_name, is_default}], count, has_more,
-    next_cursor}. The walk follows every ``@odata.nextLink`` server-side (see
-    ``fetch_all_task_lists``), so the listing is always complete: ``has_more``
-    is False and ``next_cursor`` is None on every return — the pair is emitted
-    anyway so the shape matches the other list tools, and a caller that polls
-    on it simply stops.
+    Returns {task_lists: [{id, display_name, is_default, is_owner, is_shared}],
+    count, has_more, next_cursor}. The walk follows every ``@odata.nextLink``
+    server-side (see ``fetch_all_task_lists``), so the listing is always
+    complete: ``has_more`` is False and ``next_cursor`` is None on every
+    return — the pair is emitted anyway so the shape matches the other list
+    tools, and a caller that polls on it simply stops.
+
+    ``is_owner`` and ``is_shared`` are Graph's ``isOwner`` and ``isShared``,
+    ``None`` when Graph does not report one. The writes here treat a list whose
+    ``isOwner`` is not ``true`` as someone else's (``refuse_someone_elses_list``).
     """
     lists = await fetch_all_task_lists(graph_client)
 
@@ -304,6 +361,8 @@ async def list_task_lists(graph_client: Any) -> dict:
                 "id": lst.id,
                 "display_name": sanitize_output(lst.display_name or ""),
                 "is_default": is_default,
+                "is_owner": _flag(getattr(lst, "is_owner", None)),
+                "is_shared": _flag(getattr(lst, "is_shared", None)),
             }
         )
 
@@ -486,6 +545,7 @@ async def create_task(
     if recurrence:
         task_body.recurrence = _build_recurrence(recurrence)
 
+    await refuse_someone_elses_list(graph_client, resolved_id, config, "outlook_create_task")
     response = await graph_client.me.todo.lists.by_todo_task_list_id(resolved_id).tasks.post(
         task_body
     )
@@ -545,6 +605,7 @@ async def update_task(
     if importance is not None:
         patch_body.importance = _importance_enum(importance)
 
+    await refuse_someone_elses_list(graph_client, resolved_id, config, "outlook_update_task")
     await (
         graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
         .tasks.by_todo_task_id(task_id)
@@ -652,6 +713,7 @@ async def add_checklist_item(
     item = ChecklistItem()
     item.display_name = name
 
+    await refuse_someone_elses_list(graph_client, resolved_id, config, "outlook_add_checklist_item")
     response = await (
         graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
         .tasks.by_todo_task_id(task_id)
@@ -715,6 +777,11 @@ async def update_checklist_item(
     if is_checked is not None:
         patch_body.is_checked = is_checked
 
+    # A new name is content; ticking a step alone is not, as completing a task is not.
+    if checked_name is not None:
+        await refuse_someone_elses_list(
+            graph_client, resolved_id, config, "outlook_update_checklist_item"
+        )
     await (
         graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
         .tasks.by_todo_task_id(task_id)

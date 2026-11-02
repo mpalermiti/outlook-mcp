@@ -7,6 +7,10 @@ every non-default reference costs one ``/me/calendars`` listing. That listing
 is what the ID check runs against too: an ID that is not one of the user's
 calendars is refused here, with the real list in the message, instead of
 going to Graph and coming back as a bare 400 or 404.
+
+It also says whose a calendar is, for the writes that need ``mail_send`` when
+it is not the user's own: whatever is written to a calendar someone shared is
+shown to them, as an invitation would be.
 """
 
 from __future__ import annotations
@@ -57,9 +61,17 @@ async def fetch_all_calendars(graph_client: Any, top: int = 100) -> list[Any]:
     return collected
 
 
-async def resolve_calendar_id(
-    graph_client: Any, calendar_ref: str | None, *, writable: bool = False
-) -> str | None:
+def _named(calendar_ref: str | None) -> str | None:
+    """The reference to look up, or ``None`` when it means the default calendar."""
+    if calendar_ref is None:
+        return None
+    trimmed = calendar_ref.strip()
+    if not trimmed or trimmed.casefold() == _PRIMARY:
+        return None
+    return trimmed
+
+
+async def resolve_calendar_id(graph_client: Any, calendar_ref: str | None) -> str | None:
     """Resolve a caller-supplied calendar reference to a Graph calendar ID.
 
     Returns ``None`` for the default calendar — ``None``, blank, or "primary"
@@ -71,25 +83,41 @@ async def resolve_calendar_id(
     trips on ("Kids + School", "Calendar - Jane Smith (jane@…)").
 
     Raises ValueError, naming the calendars that do exist, when nothing matches
-    or more than one name does.
-
-    ``writable=True`` is for a write. A calendar Graph lists with
-    ``canEdit: false`` (a birthdays or holiday calendar, a view-only share) is
-    then refused here, naming the calendars that can be written, because Graph's
-    own answer is a 403 whose hint blames the account type. Only an explicit
-    ``false`` refuses: a calendar listed without ``canEdit`` goes through, and
-    Graph has the last word. The default calendar needs no listing for this —
-    it is the user's own.
+    or more than one name does. A write resolves through
+    ``resolve_calendar_for_write`` instead.
     """
-    if calendar_ref is None:
+    trimmed = _named(calendar_ref)
+    if trimmed is None:
         return None
-    trimmed = calendar_ref.strip()
-    if not trimmed or trimmed.casefold() == _PRIMARY:
-        return None
+    return _match(await fetch_all_calendars(graph_client), trimmed).id
+
+
+async def resolve_calendar_for_write(
+    graph_client: Any, calendar_ref: str | None
+) -> tuple[str | None, bool]:
+    """The calendar a new event goes to, and whether it belongs to someone else.
+
+    Resolved as ``resolve_calendar_id`` does, with two things more, both read
+    off the same ``/me/calendars`` listing, so neither costs a request:
+
+    - A calendar Graph lists with ``canEdit: false`` (a birthdays or holiday
+      calendar, a view-only share) is refused here, naming the calendars that
+      can be written, because Graph's own answer is a 403 whose hint blames the
+      account type. Only an explicit ``false`` refuses: a calendar listed
+      without ``canEdit`` goes through, and Graph has the last word.
+    - Whose it is, by ``_belongs_to_someone_else``. The listing carries
+      ``owner`` and ``isDefaultCalendar`` because it asks for no ``$select``.
+
+    Returns ``(None, False)`` for the default calendar, with no listing: it is
+    the user's own.
+    """
+    trimmed = _named(calendar_ref)
+    if trimmed is None:
+        return None, False
 
     calendars = await fetch_all_calendars(graph_client)
     found = _match(calendars, trimmed)
-    if writable and getattr(found, "can_edit", None) is False:
+    if getattr(found, "can_edit", None) is False:
         name = sanitize_output((found.name or trimmed)[:50])
         others = ", ".join(
             sanitize_output(cal.name or "(unnamed)")
@@ -101,7 +129,86 @@ async def resolve_calendar_id(
             f"canEdit: false), so nothing can be written to it. Calendars you can "
             f"write to: {others or '(none listed)'}."
         )
-    return found.id
+    default = next((cal for cal in calendars if _is_default(cal)), None)
+    return found.id, _belongs_to_someone_else(found, default)
+
+
+def _is_default(calendar: Any) -> bool:
+    """Only an explicit ``isDefaultCalendar: true`` counts."""
+    return getattr(calendar, "is_default_calendar", None) is True
+
+
+def _owner_address(calendar: Any) -> str | None:
+    """The calendar owner's address, lower-cased, or ``None`` when Graph gave none.
+
+    ``lower`` rather than ``casefold``: the comparison only has to ignore case,
+    and casefold also maps distinct characters ("ß" and "ss") onto each other,
+    which would let two different addresses compare equal.
+    """
+    address = getattr(getattr(calendar, "owner", None), "address", None)
+    if not isinstance(address, str) or not address:
+        return None
+    return address.lower()
+
+
+def _belongs_to_someone_else(calendar: Any, default_calendar: Any | None) -> bool:
+    """Whether ``calendar`` is someone else's, judged against the default calendar.
+
+    The default calendar is always the user's own. Any other calendar is the
+    user's when its ``owner.address`` matches the default calendar's, ignoring
+    case: verified live, a consumer account's own calendars all carry the same
+    owner address as its default one. Anything that cannot be compared — no
+    default calendar, or an owner without an address on either side — counts as
+    someone else's, so the write needs ``mail_send`` rather than going through
+    on a guess.
+    """
+    if _is_default(calendar):
+        return False
+    theirs = _owner_address(calendar)
+    mine = _owner_address(default_calendar) if default_calendar is not None else None
+    return theirs is None or mine is None or theirs != mine
+
+
+async def event_calendar_belongs_to_someone_else(graph_client: Any, event_id: str) -> bool:
+    """Whether the calendar holding event ``event_id`` is someone else's.
+
+    ``GET /me/events/{id}/calendar?$select=id,isDefaultCalendar,owner`` — the
+    default calendar ends it there. Any other is compared, by owner address,
+    with ``GET /me/calendar?$select=owner``. Both verified live on a consumer
+    account to answer 200 with exactly those fields.
+
+    Fails closed: a lookup that raises counts as someone else's, the same as an
+    owner Graph does not report, because the write it guards then needs
+    ``mail_send`` rather than going ahead unchecked.
+    """
+    from kiota_abstractions.base_request_configuration import RequestConfiguration
+    from msgraph.generated.users.item.calendar.calendar_request_builder import (
+        CalendarRequestBuilder as DefaultCalendarRequestBuilder,
+    )
+    from msgraph.generated.users.item.events.item.calendar.calendar_request_builder import (
+        CalendarRequestBuilder as EventCalendarRequestBuilder,
+    )
+
+    event_calendar = EventCalendarRequestBuilder.CalendarRequestBuilderGetQueryParameters(
+        select=["id", "isDefaultCalendar", "owner"]
+    )
+    default_calendar = DefaultCalendarRequestBuilder.CalendarRequestBuilderGetQueryParameters(
+        select=["owner"]
+    )
+    try:
+        calendar = await graph_client.me.events.by_event_id(event_id).calendar.get(
+            request_configuration=RequestConfiguration(query_parameters=event_calendar)
+        )
+        if _is_default(calendar):
+            return False
+        if _owner_address(calendar) is None:
+            return True
+        default = await graph_client.me.calendar.get(
+            request_configuration=RequestConfiguration(query_parameters=default_calendar)
+        )
+    except Exception:
+        return True
+    return _belongs_to_someone_else(calendar, default)
 
 
 def _match(calendars: list[Any], trimmed: str) -> Any:

@@ -45,7 +45,7 @@ from outlook_mcp.tools.mail_attachments import (
     resolve_attachment_path,
     write_download,
 )
-from outlook_mcp.tools.todo import _iso_datetime, _resolve_list_id
+from outlook_mcp.tools.todo import _iso_datetime, _resolve_list_id, refuse_someone_elses_list
 from outlook_mcp.validation import sanitize_output, validate_graph_id
 
 # 20 MiB, not Graph's nominal 25 MB per taskFileAttachment: the inline POST is
@@ -259,6 +259,9 @@ async def upload_task_attachment(
         )
 
     resolved_id = await _resolve_list_id(graph_client, list_id)
+    await refuse_someone_elses_list(
+        graph_client, resolved_id, config, "outlook_upload_task_attachment"
+    )
 
     from msgraph.generated.models.task_file_attachment import TaskFileAttachment
 

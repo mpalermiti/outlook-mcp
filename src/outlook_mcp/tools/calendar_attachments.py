@@ -22,7 +22,7 @@ from outlook_mcp.permissions import (
     check_sends_mail,
     mail_send_withheld,
 )
-from outlook_mcp.tools.calendar_write import _has_attendees
+from outlook_mcp.tools.calendar_write import _has_attendees, refuse_someone_elses_calendar
 from outlook_mcp.tools.mail_attachments import (
     _LARGE_FILE_THRESHOLD,
     _make_inline_attachment,
@@ -74,7 +74,9 @@ async def attach_to_event(
     event that changes something. So a file on an event with other people on it
     leaves the mailbox later, which is the same reason rewording such an event
     needs ``mail_send`` under a restricted policy, and attaching does too. Only
-    that policy pays for the read that finds out.
+    that policy pays for the read that finds out. For the same reason a file
+    on an event in a calendar that is not the user's own needs ``mail_send``
+    there too: the calendar's owner sees it.
 
     Returns the IDs of the attachments Graph reports, for
     ``outlook_remove_event_attachment``. A file over 3 MB has none yet:
@@ -86,6 +88,9 @@ async def attach_to_event(
     files = _confined_files(
         attachment_paths, config.attachments_dir, file_root=config._attachments_file_root
     )
+
+    # Whose calendar the event is on, settled before anything is uploaded.
+    await refuse_someone_elses_calendar(graph_client, event_id, config, "outlook_attach_to_event")
 
     builder = graph_client.me.events.by_event_id(event_id)
     if mail_send_withheld(config) and _has_attendees(await builder.get()):

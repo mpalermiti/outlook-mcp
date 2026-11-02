@@ -5,6 +5,8 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from msgraph.generated.models.calendar import Calendar
+from msgraph.generated.models.email_address import EmailAddress
 
 from outlook_mcp.config import Config
 from outlook_mcp.errors import PermissionDeniedError, ReadOnlyError
@@ -23,6 +25,14 @@ def _client(event=None):
     client = MagicMock()
     builder = client.me.events.by_event_id.return_value
     builder.get = AsyncMock(return_value=event if event is not None else MagicMock(attendees=[]))
+    # Under a policy without `mail_send` the tool asks which calendar the event
+    # is on: here the default one, the user's own. Someone else's calendar is
+    # covered in `test_writes_into_shared_calendars_and_lists`.
+    builder.calendar.get = AsyncMock(
+        return_value=Calendar(
+            id="AAMkDEF=", is_default_calendar=True, owner=EmailAddress(address="me@outlook.com")
+        )
+    )
     builder.attachments.post = AsyncMock(return_value=MagicMock(id="ATT1="))
     builder.attachments.create_upload_session.post = AsyncMock(
         return_value=MagicMock(upload_url="https://outlook.office.com/upload/session")
@@ -244,6 +254,7 @@ class TestAttachingToAMeetingNeedsMailSend:
         )
 
         builder.get.assert_not_called()
+        builder.calendar.get.assert_not_called()
         builder.attachments.post.assert_called_once()
 
     async def test_an_unrestricted_server_pays_no_extra_read(self, tmp_path):
@@ -253,6 +264,7 @@ class TestAttachingToAMeetingNeedsMailSend:
         await attach_to_event(client, "AAMkEVT=", ["x.txt"], config=_cfg(tmp_path))
 
         builder.get.assert_not_called()
+        builder.calendar.get.assert_not_called()
 
     async def test_the_paths_are_checked_before_the_read(self, tmp_path):
         client, builder = _client(_meeting())
@@ -266,6 +278,7 @@ class TestAttachingToAMeetingNeedsMailSend:
             )
 
         builder.get.assert_not_called()
+        builder.calendar.get.assert_not_called()
 
 
 class TestRemoveEventAttachment:

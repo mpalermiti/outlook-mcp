@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
-from outlook_mcp.calendar_resolver import resolve_calendar_id
+from outlook_mcp.calendar_resolver import (
+    event_calendar_belongs_to_someone_else,
+    resolve_calendar_for_write,
+)
 from outlook_mcp.config import Config
 from outlook_mcp.errors import (
     EVENT_MAY_HAVE_BEEN_CREATED,
@@ -126,6 +129,30 @@ def _has_attendees(event: Any) -> bool:
     the organizer all the same. Neither side is exempt.
     """
     return bool(getattr(event, "attendees", None))
+
+
+# What a refusal says when the calendar is not the user's own. Content written
+# to a calendar someone shared is shown to them, as an invitation would be, so
+# it needs `mail_send` under a policy that withholds it.
+SOMEONE_ELSES_CALENDAR = (
+    "write to a calendar not confirmed as the user's own, where the content is "
+    "visible to the calendar's owner"
+)
+
+
+async def refuse_someone_elses_calendar(
+    graph_client: Any, event_id: str, config: Config, tool_name: str
+) -> None:
+    """Refuse adding content to an event on someone else's calendar without ``mail_send``.
+
+    Looked up only under a policy that withholds ``mail_send``; otherwise no
+    request is made. See ``event_calendar_belongs_to_someone_else`` for the
+    lookup, which fails closed.
+    """
+    if not mail_send_withheld(config):
+        return
+    if await event_calendar_belongs_to_someone_else(graph_client, event_id):
+        check_sends_mail(config, tool_name, SOMEONE_ELSES_CALENDAR)
 
 
 def _is_series_master(event: Any) -> bool:
@@ -486,6 +513,10 @@ async def create_event(
     take an event ID are unchanged. A calendar someone else shared is not
     claimed: Graph documents its events under ``/me/calendars/{id}/events``.
 
+    A calendar that is not the user's own — judged from the same listing, so
+    at no extra cost — needs ``mail_send`` under a policy that withholds it:
+    its owner sees the event (``SOMEONE_ELSES_CALENDAR``).
+
     ``key`` is the caller's own reference for the event — a booking number,
     say — stored in a hidden extended property (``EVENT_KEY_PROPERTY_ID``) so
     ``find_events_by_key`` can find the event again when a change to the same
@@ -582,8 +613,10 @@ async def create_event(
 
     # Last, because it is the only check that asks Graph: every argument above
     # is refused for free, and the calendar listing is paid for only by a call
-    # that is going to be sent.
-    calendar_id = await resolve_calendar_id(graph_client, calendar, writable=True)
+    # that is going to be sent. Whose calendar it is comes off the same listing.
+    calendar_id, someone_elses = await resolve_calendar_for_write(graph_client, calendar)
+    if someone_elses:
+        check_sends_mail(config, "outlook_create_event", SOMEONE_ELSES_CALENDAR)
     events = (
         graph_client.me.events
         if calendar_id is None
@@ -793,6 +826,9 @@ async def update_event(
         if _current is None:
             _current = await graph_client.me.events.by_event_id(event_id).get()
         return _current
+
+    # Any change to an event on someone else's calendar is shown to its owner.
+    await refuse_someone_elses_calendar(graph_client, event_id, config, "outlook_update_event")
 
     # A reworded meeting reaches the other people on it — as the organizer's
     # update, or in an attendee's next response — so rewording one needs

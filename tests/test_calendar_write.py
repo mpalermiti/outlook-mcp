@@ -131,6 +131,16 @@ def _series_master_builder(recurrence, current=None):
     return builder, mock_client
 
 
+def _on_the_default_calendar():
+    """`GET /me/events/{id}/calendar` for an event on the default calendar."""
+    from msgraph.generated.models.calendar import Calendar
+    from msgraph.generated.models.email_address import EmailAddress
+
+    return Calendar(
+        id="AAMkDEF=", is_default_calendar=True, owner=EmailAddress(address="me@outlook.com")
+    )
+
+
 def _make_event_builder():
     """Create a MagicMock event builder with async endpoints.
 
@@ -145,6 +155,10 @@ def _make_event_builder():
     # or reading a field it should not — sails through looking correct. A
     # test that wants a different event replaces this wholesale.
     builder.get = AsyncMock(return_value=_current_event())
+    # Under a policy without `mail_send`, `update_event` asks which calendar the
+    # event is on; this one is on the default calendar, the user's own. Events
+    # on someone else's calendar: `test_writes_into_shared_calendars_and_lists`.
+    builder.calendar.get = AsyncMock(return_value=_on_the_default_calendar())
     builder.patch = AsyncMock()
     builder.delete = AsyncMock()
     builder.accept.post = AsyncMock()
