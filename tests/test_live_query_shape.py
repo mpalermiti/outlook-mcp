@@ -644,6 +644,124 @@ async def test_the_calendar_listing_says_which_calendars_can_be_written(real_gra
     assert defaults and all(cal.can_edit for cal in defaults)
 
 
+async def test_the_calendar_listing_says_whose_each_calendar_is(real_graph_client):
+    """Whose a calendar is decides whether writing to it needs `mail_send`.
+
+    `_belongs_to_someone_else` reads it off this listing: the default calendar is
+    the user's, and any other is the user's when its `owner.address` matches the
+    default's. Event writes compare with the address `/me/calendar?$select=owner`
+    gives. A listing that stopped carrying `owner.address`, or own calendars that
+    stopped sharing the default's, would make the user's own calendars count as
+    someone else's without failing anything offline. Graph lets only a calendar's
+    creator share it (`canShare`), which marks the user's own calendars apart from
+    the owner field. Read-only: one listing and one read of the default calendar.
+    """
+    from kiota_abstractions.base_request_configuration import RequestConfiguration
+    from msgraph.generated.users.item.calendar.calendar_request_builder import (
+        CalendarRequestBuilder,
+    )
+
+    from outlook_mcp.calendar_resolver import (
+        DEFAULT_CALENDAR_SELECT,
+        _belongs_to_someone_else,
+        _is_default,
+        _owner_address,
+        fetch_all_calendars,
+    )
+
+    sdk = real_graph_client.sdk_client
+    calendars = await fetch_all_calendars(sdk)
+
+    assert calendars, "the account lists no calendars at all"
+    assert all(_owner_address(cal) for cal in calendars), [
+        (cal.name, getattr(cal.owner, "address", None)) for cal in calendars
+    ]
+    # The default the resolver compares with: the first one listed as default.
+    default = next((cal for cal in calendars if _is_default(cal)), None)
+    assert default is not None, "no calendar is listed as the default"
+    own = [cal for cal in calendars if _is_default(cal) or cal.can_share is True]
+    assert not any(_belongs_to_someone_else(cal, default) for cal in own), [
+        (cal.name, _owner_address(cal), _owner_address(default)) for cal in own
+    ]
+
+    queried = await sdk.me.calendar.get(
+        request_configuration=RequestConfiguration(
+            query_parameters=CalendarRequestBuilder.CalendarRequestBuilderGetQueryParameters(
+                select=list(DEFAULT_CALENDAR_SELECT)
+            )
+        )
+    )
+    assert _owner_address(queried) == _owner_address(default)
+
+
+async def test_an_events_calendar_says_if_it_is_the_default_and_whose_it_is(real_graph_client):
+    """Before an event write, the owner check asks the event's calendar for
+    `id,isDefaultCalendar,owner` (`/me/events/{id}/calendar`).
+
+    Without `isDefaultCalendar` the default calendar would go on to the owner
+    comparison, and without `owner` it would count as someone else's, so every
+    write to the user's own events would need `mail_send` while the offline suite
+    stayed green. Read-only: one listing of the default calendar and one read of
+    the first event's calendar; skips when there is no event in the window.
+    """
+    from kiota_abstractions.base_request_configuration import RequestConfiguration
+    from msgraph.generated.users.item.events.item.calendar.calendar_request_builder import (
+        CalendarRequestBuilder,
+    )
+
+    from outlook_mcp.calendar_resolver import (
+        EVENT_CALENDAR_SELECT,
+        _owner_address,
+        event_calendar_belongs_to_someone_else,
+    )
+
+    sdk = real_graph_client.sdk_client
+    after, before = _wide_window()
+    page = await list_events(sdk, after=after, before=before, count=1)
+    if not page["events"]:
+        pytest.skip("No events in a ±180-day window — no event calendar to read")
+    event_id = page["events"][0]["id"]
+
+    calendar = await sdk.me.events.by_event_id(event_id).calendar.get(
+        request_configuration=RequestConfiguration(
+            query_parameters=CalendarRequestBuilder.CalendarRequestBuilderGetQueryParameters(
+                select=list(EVENT_CALENDAR_SELECT)
+            )
+        )
+    )
+
+    assert calendar.id
+    # list_events reads the default calendar, so its event's calendar is the default.
+    assert calendar.is_default_calendar is True
+    assert _owner_address(calendar), calendar.owner
+    assert await event_calendar_belongs_to_someone_else(sdk, event_id) is False
+
+
+async def test_a_task_list_read_says_whether_the_user_owns_it(real_graph_client):
+    """Before adding to a To Do list other than the default, the owner check reads
+    `isOwner` from a plain `GET /me/todo/lists/{id}`: with a `$select`, the same
+    request is a 400 on a consumer account.
+
+    Only an explicit `isOwner: true` is the user's, so a read that stopped carrying
+    it would make every list count as someone else's while the offline suite stayed
+    green. The read's answer is checked against the listing's for the same list.
+    Read-only: one listing, and two reads for each of at most ten lists.
+    """
+    from outlook_mcp.tools.todo import _list_belongs_to_someone_else, fetch_all_task_lists
+
+    sdk = real_graph_client.sdk_client
+    lists = (await fetch_all_task_lists(sdk))[:10]
+    if not any(listed.is_owner is True for listed in lists):
+        pytest.skip("No To Do list this account owns among the first ten listed")
+
+    for listed in lists:
+        task_list = await sdk.me.todo.lists.by_todo_task_list_id(listed.id).get()
+        assert isinstance(task_list.is_owner, bool), (listed.display_name, task_list.is_owner)
+        assert task_list.is_owner == listed.is_owner, listed.display_name
+        if listed.is_owner is True:
+            assert await _list_belongs_to_someone_else(sdk, listed.id) is False
+
+
 async def test_the_event_key_lookup_is_accepted(real_graph_client):
     """`find_events_by_key` sends an `Any()` lambda over extended properties.
 

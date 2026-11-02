@@ -169,6 +169,12 @@ def _belongs_to_someone_else(calendar: Any, default_calendar: Any | None) -> boo
     return theirs is None or mine is None or theirs != mine
 
 
+# The fields asked for on an event's calendar and on the default calendar when
+# deciding whose an event's calendar is. The live guards send the same requests.
+EVENT_CALENDAR_SELECT = ("id", "isDefaultCalendar", "owner")
+DEFAULT_CALENDAR_SELECT = ("owner",)
+
+
 async def event_calendar_belongs_to_someone_else(graph_client: Any, event_id: str) -> bool:
     """Whether the calendar holding event ``event_id`` is someone else's.
 
@@ -194,10 +200,10 @@ async def event_calendar_belongs_to_someone_else(graph_client: Any, event_id: st
     )
 
     event_calendar = EventCalendarRequestBuilder.CalendarRequestBuilderGetQueryParameters(
-        select=["id", "isDefaultCalendar", "owner"]
+        select=list(EVENT_CALENDAR_SELECT)
     )
     default_calendar = DefaultCalendarRequestBuilder.CalendarRequestBuilderGetQueryParameters(
-        select=["owner"]
+        select=list(DEFAULT_CALENDAR_SELECT)
     )
     try:
         calendar = await graph_client.me.events.by_event_id(event_id).calendar.get(
