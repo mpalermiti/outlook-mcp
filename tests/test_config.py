@@ -904,15 +904,97 @@ def test_attachments_dir_that_reaches_home_or_settings_by_another_route_is_refus
         _load_with_attachments_dir(tmp_path, str(volume))
 
 
-def test_the_macos_data_volume_is_refused_because_home_is_on_it(tmp_path, home_and_settings):
+@pytest.mark.parametrize("folder", ["/System", "/System/Volumes", "/System/Volumes/Data"])
+def test_the_macos_data_volume_and_the_folders_above_it_are_refused(
+    tmp_path, home_and_settings, folder
+):
+    """Home is on the Data volume, which macOS also shows under /System/Volumes/Data."""
     home, _ = home_and_settings
-    data_volume = "/System/Volumes/Data"
-    home_again = data_volume + os.path.realpath(home)
+    home_again = "/System/Volumes/Data" + os.path.realpath(home)
     if not (os.path.isdir(home_again) and os.path.samefile(home_again, home)):
         pytest.skip("no macOS Data volume holding home here")
 
     with pytest.raises(ValidationError, match=_HOLDS_HOME):
-        _load_with_attachments_dir(tmp_path, data_volume)
+        _load_with_attachments_dir(tmp_path, folder)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="the Data volume is a macOS layout")
+@pytest.mark.parametrize("target", ["home", "settings"])
+@pytest.mark.parametrize("above", ["System", "System/Volumes"])
+def test_a_folder_above_the_data_volume_spelling_is_refused(
+    tmp_path, home_and_settings, monkeypatch, target, above
+):
+    """Home (or the settings directory) spelt through the Data volume is a second
+    spelling of it, so a folder above that spelling holds it too. Built in a scratch
+    tree, the Data volume's place taken by a folder of the test's own."""
+    from outlook_mcp import config as config_mod
+
+    home, settings = home_and_settings
+    reached = home if target == "home" else settings
+    data_volume = tmp_path / "System" / "Volumes" / "Data"
+    again = Path(str(data_volume) + os.path.realpath(reached))
+    again.parent.mkdir(parents=True)
+    try:
+        again.symlink_to(reached, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink privilege unavailable")
+    monkeypatch.setattr(config_mod, "_MACOS_DATA_VOLUME", str(data_volume))
+
+    with pytest.raises(ValidationError, match=_RULE[target]):
+        _load_with_attachments_dir(tmp_path, str(tmp_path / above))
+
+
+def _recording_stat(touched: list[str], another_device: str | None = None):
+    """``os.stat`` that records each path; ``another_device`` reports a different device."""
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        touched.append(str(path))  # before the call: a path that is not there counts too
+        result = real_stat(path, *args, **kwargs)
+        if str(path) == another_device:
+            fields = list(result[:10])
+            fields[2] += 1  # st_dev
+            return os.stat_result(fields)
+        return result
+
+    return stat
+
+
+def test_home_is_not_looked_for_under_a_folder_on_another_filesystem(
+    tmp_path, home_and_settings, monkeypatch
+):
+    """On an automounter's root (/net, or /home on macOS) a lookup under the folder is a
+    directory-service or network request, and loading the config must not make one."""
+    folder = tmp_path / "automounted"
+    folder.mkdir()
+    folder_text = os.path.normcase(os.path.realpath(folder))
+    touched: list[str] = []
+
+    with monkeypatch.context() as during:
+        during.setattr(os, "stat", _recording_stat(touched, another_device=folder_text))
+        loaded = Config(attachments_dir=str(folder))
+
+    assert loaded.attachments_dir == str(folder)
+    assert not [path for path in touched if path.startswith(folder_text + os.sep)]
+
+
+def test_home_is_looked_for_under_the_folder_only_below_it(
+    tmp_path, home_and_settings, monkeypatch
+):
+    """Each lookup under the folder is a part of home's path below one of its parents;
+    the folder itself was already compared, so it is not looked up again as `folder/.`."""
+    folder = tmp_path / "elsewhere"
+    folder.mkdir()
+    folder_text = os.path.normcase(os.path.realpath(folder))
+    touched: list[str] = []
+
+    with monkeypatch.context() as during:
+        during.setattr(os, "stat", _recording_stat(touched))
+        Config(attachments_dir=str(folder))
+
+    under = [path for path in touched if path.startswith(folder_text + os.sep)]
+    assert under, "the lookup under the folder did not run"
+    assert os.path.join(folder_text, os.curdir) not in under
 
 
 def test_attachments_dir_spelt_in_another_case_is_still_home(tmp_path, home_and_settings):

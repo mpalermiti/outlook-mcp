@@ -104,19 +104,26 @@ def _comparable(path: str) -> str:
     return os.path.normcase(os.path.realpath(path))
 
 
+# macOS shows the whole Data volume, home included, a second time here.
+_MACOS_DATA_VOLUME = "/System/Volumes/Data"
+
+
 def _is_same_or_inside(path: str, folder: str) -> bool:
     """Whether ``path`` is ``folder`` or lies inside it; both come from ``_comparable``.
 
     Compared by text first, then by identity: on a case-insensitive filesystem
     (the macOS default) two spellings can name one directory, and ``normcase``
     folds case only on Windows. So each existing directory on the way up from
-    ``path`` is also compared with ``folder`` itself.
+    ``path`` is also compared with ``folder`` itself, and on macOS so is each
+    one on the way up from ``path`` spelt through the Data volume
+    (``/System/Volumes/Data`` and the folders above it hold home too).
 
-    A folder can also hold ``path`` without being one of its parents: macOS
-    shows the whole Data volume, home included, a second time under
-    ``/System/Volumes/Data``. So for each directory on the way up, the rest of
-    ``path`` below it is looked up under ``folder`` too, and counts if it is
-    ``path`` itself.
+    A folder can also hold ``path`` without being above either spelling: a
+    second view of a volume, or a link inside it. So the rest of ``path`` below
+    each of its parents is looked up under ``folder`` too, and counts if it is
+    ``path`` itself. Only on ``path``'s own filesystem: on an automounter's
+    root (``/net``, or ``/home`` on macOS) a lookup under the folder is a
+    directory-service or network request, and loading the config makes none.
     """
     try:
         if os.path.commonpath((path, folder)) == folder:
@@ -131,10 +138,24 @@ def _is_same_or_inside(path: str, folder: str) -> bool:
         return False  # a folder that does not exist contains nothing that does
     if not folder_stat.st_ino:
         return False  # this filesystem gives no identity to compare (some Windows ones)
+    if _walks_up_to(path, folder_stat):
+        return True
     try:
         path_stat = os.stat(path)
     except OSError:
-        path_stat = None  # not created yet: only the way up from it can be compared
+        return False  # not created yet: there is nothing more to find
+    if not path_stat.st_ino:
+        return False
+    again = _spelt_through_the_data_volume(path, path_stat)
+    if again is not None and _walks_up_to(again, folder_stat):
+        return True
+    if folder_stat.st_dev != path_stat.st_dev:
+        return False
+    return _found_under(folder, path, path_stat)
+
+
+def _walks_up_to(path: str, folder_stat: os.stat_result) -> bool:
+    """Whether ``path``, or a directory on the way up from it, is the folder ``folder_stat``."""
     current = path
     while True:
         try:
@@ -142,17 +163,40 @@ def _is_same_or_inside(path: str, folder: str) -> bool:
                 return True
         except OSError:
             pass  # not created yet; its parent may still be the folder
-        if path_stat is not None and path_stat.st_ino:
-            again = os.path.join(folder, os.path.relpath(path, current))
-            try:
-                if os.path.samestat(os.stat(again), path_stat):
-                    return True
-            except OSError:
-                pass  # not under the folder by this route
         parent = os.path.dirname(current)
         if parent == current:
             return False
         current = parent
+
+
+def _spelt_through_the_data_volume(path: str, path_stat: os.stat_result) -> str | None:
+    """On macOS, ``path`` spelt through the Data volume, when that names ``path`` itself.
+
+    Anywhere else that spelling does not exist, and ``None`` is returned.
+    """
+    if not path.startswith("/") or (path + "/").startswith(_MACOS_DATA_VOLUME + "/"):
+        return None
+    again = _MACOS_DATA_VOLUME + path
+    try:
+        return again if os.path.samestat(os.stat(again), path_stat) else None
+    except OSError:
+        return None
+
+
+def _found_under(folder: str, path: str, path_stat: os.stat_result) -> bool:
+    """Whether the rest of ``path`` below one of its parents, under ``folder``, is ``path``."""
+    current = path
+    while True:
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
+        again = os.path.join(folder, os.path.relpath(path, current))
+        try:
+            if os.path.samestat(os.stat(again), path_stat):
+                return True
+        except OSError:
+            pass  # not under the folder by this route
 
 
 # Top-level keys an older release accepted. One process serves one account
