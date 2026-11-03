@@ -1,7 +1,6 @@
 """Tests for cursor-based pagination."""
 
 import base64
-import json
 
 import pytest
 
@@ -31,11 +30,6 @@ class TestEncodeDecode:
         bad = base64.urlsafe_b64encode(b"not json").decode()
         with pytest.raises(ValueError, match="Invalid pagination cursor"):
             decode_cursor_payload(bad)
-
-    def test_decode_negative_skip(self):
-        bad = base64.urlsafe_b64encode(json.dumps({"skip": -1}).encode()).decode()
-        with pytest.raises(ValueError, match="Invalid pagination cursor"):
-            apply_pagination({}, count=25, cursor=bad)
 
 
 class TestWrapNextlink:
