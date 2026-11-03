@@ -881,6 +881,40 @@ def test_attachments_dir_symlinked_to_home_or_settings_is_refused(
         _load_with_attachments_dir(tmp_path, str(link))
 
 
+@pytest.mark.parametrize("target", ["home", "settings"])
+def test_attachments_dir_that_reaches_home_or_settings_by_another_route_is_refused(
+    tmp_path, home_and_settings, target
+):
+    """A folder can hold home without being above it in the path.
+
+    macOS shows the whole Data volume a second time under /System/Volumes/Data,
+    so home is there too, though no parent of home is that folder. A folder
+    with a link to home's parent inside it stands in for that here.
+    """
+    home, settings = home_and_settings
+    parent = (home if target == "home" else settings).parent
+    volume = tmp_path / "volume"
+    volume.mkdir()
+    try:
+        (volume / parent.name).symlink_to(parent, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink privilege unavailable")
+
+    with pytest.raises(ValidationError, match=_RULE[target]):
+        _load_with_attachments_dir(tmp_path, str(volume))
+
+
+def test_the_macos_data_volume_is_refused_because_home_is_on_it(tmp_path, home_and_settings):
+    home, _ = home_and_settings
+    data_volume = "/System/Volumes/Data"
+    home_again = data_volume + os.path.realpath(home)
+    if not (os.path.isdir(home_again) and os.path.samefile(home_again, home)):
+        pytest.skip("no macOS Data volume holding home here")
+
+    with pytest.raises(ValidationError, match=_HOLDS_HOME):
+        _load_with_attachments_dir(tmp_path, data_volume)
+
+
 def test_attachments_dir_spelt_in_another_case_is_still_home(tmp_path, home_and_settings):
     """On a case-insensitive filesystem, two spellings can name one directory."""
     home, _ = home_and_settings

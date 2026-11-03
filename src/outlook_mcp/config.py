@@ -91,6 +91,12 @@ def _is_same_or_inside(path: str, folder: str) -> bool:
     (the macOS default) two spellings can name one directory, and ``normcase``
     folds case only on Windows. So each existing directory on the way up from
     ``path`` is also compared with ``folder`` itself.
+
+    A folder can also hold ``path`` without being one of its parents: macOS
+    shows the whole Data volume, home included, a second time under
+    ``/System/Volumes/Data``. So for each directory on the way up, the rest of
+    ``path`` below it is looked up under ``folder`` too, and counts if it is
+    ``path`` itself.
     """
     try:
         if os.path.commonpath((path, folder)) == folder:
@@ -105,6 +111,10 @@ def _is_same_or_inside(path: str, folder: str) -> bool:
         return False  # a folder that does not exist contains nothing that does
     if not folder_stat.st_ino:
         return False  # this filesystem gives no identity to compare (some Windows ones)
+    try:
+        path_stat = os.stat(path)
+    except OSError:
+        path_stat = None  # not created yet: only the way up from it can be compared
     current = path
     while True:
         try:
@@ -112,6 +122,13 @@ def _is_same_or_inside(path: str, folder: str) -> bool:
                 return True
         except OSError:
             pass  # not created yet; its parent may still be the folder
+        if path_stat is not None and path_stat.st_ino:
+            again = os.path.join(folder, os.path.relpath(path, current))
+            try:
+                if os.path.samestat(os.stat(again), path_stat):
+                    return True
+            except OSError:
+                pass  # not under the folder by this route
         parent = os.path.dirname(current)
         if parent == current:
             return False
