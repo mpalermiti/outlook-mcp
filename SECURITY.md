@@ -100,9 +100,10 @@ outlook-mcp is designed with security in mind:
   home folder, a folder that contains it, or a folder that contains the settings folder, since
   the attachment tools read and write everything under it. Other spellings of those folders
   count too (on macOS the Data volume and the folders above it; on Windows `\\?\C:\`-style
-  device paths), and the check looks nothing up on another filesystem. A config that breaks the rule fails
-  to load, so the server starts in its safe state; choose a subfolder. A `config.json` that
-  repeats a key is refused for the same reason: it does not say which value is meant.
+  device paths), and the check looks nothing up on another filesystem. A config that breaks
+  the rule fails to load, so the server starts in its safe state; choose a subfolder. A
+  `config.json` that repeats a key is refused for the same reason: it does not say which value
+  is meant.
 - **Attachments as content touch no disk.** `as_content=True` on the downloads returns the
   file in the tool result, 10 MiB at most, and inline uploads (`attachments`) are sent straight
   from the arguments. The name and type are the sender's, so the bytes decide how a file comes
