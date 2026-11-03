@@ -87,6 +87,11 @@ def _without_device_prefix(path: str) -> str:
 
     Any other path that begins with two separators, ``\\host\share`` or
     ``\\?\UNC\host\share``, keeps its prefix and stays a network path.
+
+    So a volume spelling, ``\\?\Volume{GUID}\...``, and an admin share on this
+    machine, ``\\localhost\C$\...``, are judged by their text only, by design: they
+    come from the operator's own config, and resolving them to the folder they name
+    is the lookup this rule avoids.
     """
     if _WINDOWS and _DRIVE_DEVICE_PREFIX.match(path):
         return path[4:]
