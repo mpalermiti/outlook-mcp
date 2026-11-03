@@ -922,3 +922,50 @@ async def test_a_resync_window_reports_its_new_bound_instead_of_the_stale_bootst
         "%Y-%m-%dT%H:%M:%SZ"
     )
     assert result["_meta"]["resync"] == ["mail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["mail", "events", "contacts"])
+@pytest.mark.parametrize(
+    "token",
+    [
+        pytest.param(["https://graph.microsoft.com/v1.0/me/contacts/delta"], id="list"),
+        pytest.param({"url": "https://graph.microsoft.com/"}, id="dict"),
+        pytest.param(7, id="number"),
+        pytest.param(True, id="bool"),
+        pytest.param("", id="empty"),
+    ],
+)
+async def test_a_token_that_is_not_a_cursor_string_is_refused_before_graph(key, token):
+    """Each token goes into a request URL; the refusal names the one that is wrong."""
+    mail, events, contacts = AsyncMock(), AsyncMock(), AsyncMock()
+    with (
+        patch.object(digest, "list_inbox_delta", new=mail),
+        patch.object(digest, "list_events_delta", new=events),
+        patch.object(digest, "list_contacts_delta", new=contacts),
+    ):
+        with pytest.raises(ValueError, match=rf"delta_tokens\.{key}\b"):
+            await changes_since(_mock_graph_client(), delta_tokens={key: token})
+    mail.assert_not_called()
+    events.assert_not_called()
+    contacts.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_list_token_is_a_caller_error_not_a_crash():
+    """Through the real contacts delta tool: refused as input, and nothing is sent."""
+    http = MagicMock()
+    http.get = AsyncMock()
+    http.__aenter__ = AsyncMock(return_value=http)
+    http.__aexit__ = AsyncMock(return_value=False)
+    with (
+        patch("outlook_mcp.tools._delta.httpx.AsyncClient", return_value=http),
+        patch.object(digest, "list_inbox_delta", new=AsyncMock(return_value=_mail_response([]))),
+        patch.object(digest, "list_events_delta", new=AsyncMock(return_value=_events_response([]))),
+    ):
+        with pytest.raises(ValueError, match=r"delta_tokens\.contacts"):
+            await changes_since(
+                _mock_graph_client(),
+                delta_tokens={"contacts": ["https://graph.microsoft.com/v1.0/me/contacts/delta"]},
+            )
+    http.get.assert_not_called()

@@ -104,6 +104,11 @@ class TestRequireGraphURL:
             with pytest.raises(OutlookMCPError):
                 require_graph_url(junk, source="delta_token")
 
+    @pytest.mark.parametrize("value", [[GRAPH_DELTA], {"url": GRAPH_DELTA}, 7])
+    def test_a_cursor_that_is_not_a_string_is_refused_not_a_crash(self, value):
+        with pytest.raises(OutlookMCPError):
+            require_graph_url(value, source="delta_token", resource="mail")
+
     def test_error_names_where_the_bad_url_came_from(self):
         with pytest.raises(OutlookMCPError) as exc:
             require_graph_url("https://evil.example/x", source="@odata.nextLink")

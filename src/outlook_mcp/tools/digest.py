@@ -459,6 +459,18 @@ async def changes_since(
     bootstrap_end_iso = bootstrap_end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     tokens = delta_tokens or {}
+    # Each token becomes a request URL, so anything but the cursor string a
+    # previous call returned is refused here, naming the key, before Graph is
+    # asked. A list or a number would otherwise fail deep in the URL check as an
+    # unexplained crash; an empty string would skip that check and bootstrap
+    # without the window.
+    for key in ("mail", "events", "contacts"):
+        token = tokens.get(key)
+        if token is not None and (not isinstance(token, str) or not token):
+            raise ValueError(
+                f"delta_tokens.{key} must be the cursor string a previous call returned "
+                "in delta_tokens, or null to start that resource afresh."
+            )
     mail_token = tokens.get("mail")
     events_token = tokens.get("events")
     contacts_token = tokens.get("contacts")

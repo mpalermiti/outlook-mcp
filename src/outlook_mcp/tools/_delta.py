@@ -172,6 +172,10 @@ def require_graph_url(url: str, *, source: str, resource: str | None = None) -> 
     ``source`` names where the URL came from so the refusal says which cursor to
     throw away.
     """
+    if url is not None and not isinstance(url, str):
+        # A cursor is a URL string. Anything else is refused here rather than
+        # failing in the string handling below as an unexplained crash.
+        raise UntrustedURLError(source, str(url))
     candidate = (url or "").strip()
     if not candidate:
         raise UntrustedURLError(source, url)
