@@ -142,3 +142,13 @@ def test_a_real_send_refusal_keeps_its_wording():
         "Cannot use outlook_create_event to invite attendees — that sends email, and category "
         "'mail_send' is not in allow_categories."
     )
+
+
+def test_the_rule_write_refusal_says_a_changed_setting_waits_for_a_restart():
+    """The server reads its settings and chooses its tools when it starts, so the rule
+    tools appear only after a restart. That widens nothing, and without it a user who
+    changed the setting finds the tools missing and no reason given."""
+    text = str(RULE_WRITE_NEEDS_SETTINGS_WRITE)
+
+    assert "the rule tools appear only after a restart" in text, text
+    assert "`outlook-mcp auth`" in text, text

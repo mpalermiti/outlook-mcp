@@ -476,8 +476,9 @@ RULE_WRITE_NEEDS_SETTINGS_WRITE = (
     "Graph refused a rule write with 403. Either this sign-in consented the read scope "
     "only, or a mail-flow policy on the mailbox refuses rule writes — the same 403 "
     "covers both. If it is the consent, the user's `mailbox_settings_write` setting "
-    "controls it, and a fresh `outlook-mcp auth` and a restart follow from the user's "
-    "decision. If it is a policy, the refusal will repeat after a fresh consent. "
+    "decides it. A change to that setting needs a fresh `outlook-mcp auth`, and the "
+    "server reads it only at start, so the rule tools appear only after a restart. If "
+    "it is a policy, the refusal will repeat after a fresh consent. "
     + LEAVE_SETTINGS_TO_THE_USER
 )
 
