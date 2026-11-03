@@ -568,11 +568,21 @@ def replace_lone_surrogates(text: str) -> str:
     return text.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
 
 
-def sanitize_output(text: str, multiline: bool = False) -> str:
-    """Strip control characters and ANSI escapes, and replace lone surrogates, in output text."""
+def strip_control_characters(text: str) -> str:
+    """Strip ANSI escapes and C0/C1 control characters, and replace lone surrogates.
+
+    Tab, CR and LF are kept, and so is every other character: this is the
+    control-character rule of :func:`sanitize_output` without its whitespace
+    handling, for text whose layout is part of it, such as an HTML body.
+    """
     text = replace_lone_surrogates(text)
     text = _ANSI_ESCAPE.sub("", text)
-    text = _CONTROL_CHARS.sub("", text)
+    return _CONTROL_CHARS.sub("", text)
+
+
+def sanitize_output(text: str, multiline: bool = False) -> str:
+    """Strip control characters and ANSI escapes, and replace lone surrogates, in output text."""
+    text = strip_control_characters(text)
     if not multiline:
         # CR as well as LF: a lone CR returns a terminal's cursor to the line
         # start, so a sender-chosen name could overwrite what is printed before it.

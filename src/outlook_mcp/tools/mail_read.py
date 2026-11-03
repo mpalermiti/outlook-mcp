@@ -27,6 +27,7 @@ from outlook_mcp.throttle import retry_throttled_subrequests, send_with_retry
 from outlook_mcp.validation import (
     sanitize_kql,
     sanitize_output,
+    strip_control_characters,
     validate_datetime,
     validate_email,
     validate_graph_id,
@@ -286,7 +287,7 @@ def _format_read_message_from_sdk(
     if msg.body:
         content = msg.body.content or ""
         if format in ("html", "full"):
-            body_html = content
+            body_html = strip_control_characters(content)
         if format in ("text", "full"):
             body_text = sanitize_output(content, multiline=True)
 
@@ -391,7 +392,7 @@ def _format_read_message_from_raw(
     body_text = ""
     body_html = None
     if format in ("html", "full"):
-        body_html = content
+        body_html = strip_control_characters(content)
     if format in ("text", "full"):
         body_text = sanitize_output(content, multiline=True)
 
@@ -462,8 +463,9 @@ def _format_read_message_from_raw(
 # output is ``body_preview``) ask for text, so the model gets no markup: tags,
 # attributes, comments and ``<style>`` go. Text hidden only by styling
 # (``display:none``) may still be rendered, so the body stays untrusted.
-# ``html`` and ``full`` keep the stored body. Graph converts once, server side,
-# and nothing here parses HTML.
+# ``html`` and ``full`` keep the stored body, less the ANSI escapes and C0/C1
+# controls the text form also loses. Graph converts once, server side, and
+# nothing here parses HTML.
 _TEXT_BODY_PREFER = 'outlook.body-content-type="text"'
 
 

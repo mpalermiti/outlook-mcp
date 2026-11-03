@@ -347,6 +347,28 @@ class TestFormatVariants:
         assert msg["body_html"] == "<p>Hello</p>"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fmt", ["html", "full"])
+    async def test_control_characters_are_stripped_from_the_html_body(self, patched_httpx, fmt):
+        """Same rule as the single read: no ANSI escape or C0/C1 control reaches the client."""
+        _, set_response = patched_httpx
+        raw = "<p>Hi\x1b[31mred\x1b[0m\x07 \x9b\x85there\x00</p>"
+        set_response(_batch_response([_ok_sub("0", _raw_message("AAA=", body_html=raw))]))
+        result = await read_messages(_fake_graph_client(), ["AAA="], format=fmt)
+        assert result["messages"][0]["body_html"] == "<p>Hired there</p>"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("fmt", ["html", "full"])
+    async def test_ordinary_html_is_returned_unchanged(self, patched_httpx, fmt):
+        _, set_response = patched_httpx
+        ordinary = (
+            '<div style="color:red">\r\n\t<p>Tab\there &amp; <b>bold</b> caf\u00e9'
+            "\u200b\u202e</p>\n</div>"
+        )
+        set_response(_batch_response([_ok_sub("0", _raw_message("AAA=", body_html=ordinary))]))
+        result = await read_messages(_fake_graph_client(), ["AAA="], format=fmt)
+        assert result["messages"][0]["body_html"] == ordinary
+
+    @pytest.mark.asyncio
     async def test_concise_drops_body(self, patched_httpx):
         _, set_response = patched_httpx
         long_body = "<p>" + ("xy" * 500) + "</p>"

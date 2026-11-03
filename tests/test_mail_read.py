@@ -14,6 +14,14 @@ from outlook_mcp.tools.mail_read import (
     search_mail,
 )
 
+# A body that needs no cleaning: markup with attributes, an entity, CR LF and
+# tab, non-ASCII text, and zero-width and bidi characters, which real languages
+# use and the cleanup leaves alone.
+ORDINARY_HTML = (
+    '<div style="color:red">\r\n\t<p>Tab\there &amp; <b>bold</b> caf\u00e9 \u65e5\u672c'
+    "\u200b\u200d\u202e\u2066</p>\n</div>"
+)
+
 
 def _make_mock_message(**overrides):
     """Factory for mock Graph SDK message objects."""
@@ -333,6 +341,23 @@ class TestReadMessage:
         result = await read_message(mock_client, "AAMkAG123=", format="html")
         assert result["body_html"] == "<p>Hello</p>"
         assert result["body"] == ""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("fmt", ["html", "full"])
+    async def test_control_characters_are_stripped_from_the_html_body(self, fmt):
+        """The text form has always been cleaned; the HTML form gets the same rule."""
+        raw = "<p>Hi\x1b[31mred\x1b[0m\x07 \x9b\x85there\x00</p>"
+        mock_client = _make_message_mock(_make_mock_message(body_content=raw))
+        result = await read_message(mock_client, "AAMkAG123=", format=fmt)
+        assert result["body_html"] == "<p>Hired there</p>"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("fmt", ["html", "full"])
+    async def test_ordinary_html_is_returned_unchanged(self, fmt):
+        """Markup, entities, tabs, line breaks, non-ASCII, zero-width and bidi stay as sent."""
+        mock_client = _make_message_mock(_make_mock_message(body_content=ORDINARY_HTML))
+        result = await read_message(mock_client, "AAMkAG123=", format=fmt)
+        assert result["body_html"] == ORDINARY_HTML
 
     @pytest.mark.asyncio
     async def test_read_message_validates_id(self):
