@@ -280,7 +280,7 @@ class TestUpdateDraft:
         """update_draft sends PATCH with only provided fields."""
         msg_builder = MagicMock()
         msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
-        msg_builder.patch = AsyncMock()
+        msg_builder.patch = AsyncMock(return_value=_stored_message())
 
         client = MagicMock()
         client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
@@ -295,12 +295,14 @@ class TestUpdateDraft:
         assert result["status"] == "updated"
         assert result["draft_id"] == "AAMkAG123="
         msg_builder.patch.assert_called_once()
+        # The PATCH answered with the stored draft: the one GET is the draft check.
+        msg_builder.get.assert_awaited_once()
 
     async def test_update_draft_body_defaults_to_text(self):
         """update_draft sends body as Text by default."""
         msg_builder = MagicMock()
         msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
-        msg_builder.patch = AsyncMock()
+        msg_builder.patch = AsyncMock(return_value=_stored_message())
 
         client = MagicMock()
         client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
@@ -317,6 +319,8 @@ class TestUpdateDraft:
 
         assert sent_msg.body.content == "plain text"
         assert sent_msg.body.content_type == BodyType.Text
+        # The PATCH answered with the stored draft: the one GET is the draft check.
+        msg_builder.get.assert_awaited_once()
 
     async def test_update_draft_body_html_when_is_html(self):
         """update_draft sends body as Html when is_html=True (required for
@@ -324,7 +328,7 @@ class TestUpdateDraft:
         an HTML draft triggers MapiSetProperties / ErrorAccessDenied)."""
         msg_builder = MagicMock()
         msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
-        msg_builder.patch = AsyncMock()
+        msg_builder.patch = AsyncMock(return_value=_stored_message())
 
         client = MagicMock()
         client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
@@ -342,6 +346,8 @@ class TestUpdateDraft:
 
         assert sent_msg.body.content == "<p>hello</p>"
         assert sent_msg.body.content_type == BodyType.Html
+        # The PATCH answered with the stored draft: the one GET is the draft check.
+        msg_builder.get.assert_awaited_once()
 
     async def test_update_draft_validates_graph_id(self):
         """update_draft rejects invalid draft IDs."""
@@ -369,7 +375,7 @@ class TestUpdateDraft:
         """update_draft sets reply_to on the PATCH payload when provided."""
         msg_builder = MagicMock()
         msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
-        msg_builder.patch = AsyncMock()
+        msg_builder.patch = AsyncMock(return_value=_stored_message())
 
         client = MagicMock()
         client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
@@ -387,12 +393,14 @@ class TestUpdateDraft:
             "alias@test.com",
             "team@test.com",
         ]
+        # The PATCH answered with the stored draft: the one GET is the draft check.
+        msg_builder.get.assert_awaited_once()
 
     async def test_update_draft_clears_reply_to_with_empty_list(self):
         """update_draft with reply_to=[] clears the field on the draft."""
         msg_builder = MagicMock()
         msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
-        msg_builder.patch = AsyncMock()
+        msg_builder.patch = AsyncMock(return_value=_stored_message())
 
         client = MagicMock()
         client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
@@ -406,6 +414,8 @@ class TestUpdateDraft:
 
         patched_msg = msg_builder.patch.call_args.args[0]
         assert patched_msg.reply_to == []
+        # The PATCH answered with the stored draft: the one GET is the draft check.
+        msg_builder.get.assert_awaited_once()
 
     async def test_update_draft_rejects_invalid_reply_to(self):
         """update_draft rejects malformed reply_to addresses."""
@@ -422,7 +432,7 @@ class TestUpdateDraft:
         """update_draft attaches PR_DEFERRED_SEND_TIME on the PATCH payload."""
         msg_builder = MagicMock()
         msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
-        msg_builder.patch = AsyncMock()
+        msg_builder.patch = AsyncMock(return_value=_stored_message())
 
         client = MagicMock()
         client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
@@ -440,12 +450,14 @@ class TestUpdateDraft:
         assert props[0].id == "SystemTime 0x3FEF"
         assert props[0].value == "2026-05-06T08:00:00Z"
         assert result["deferred_send_datetime"] == "2026-05-06T08:00:00Z"
+        # The PATCH answered with the stored draft: the one GET is the draft check.
+        msg_builder.get.assert_awaited_once()
 
     async def test_update_draft_clears_deferred_send_with_empty_string(self):
         """update_draft with deferred_send_datetime='' clears the property."""
         msg_builder = MagicMock()
         msg_builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
-        msg_builder.patch = AsyncMock()
+        msg_builder.patch = AsyncMock(return_value=_stored_message())
 
         client = MagicMock()
         client.me.messages.by_message_id = MagicMock(return_value=msg_builder)
@@ -463,6 +475,8 @@ class TestUpdateDraft:
         assert props[0].id == "SystemTime 0x3FEF"
         assert props[0].value == ""
         assert result["deferred_send_datetime"] == ""
+        # The PATCH answered with the stored draft: the one GET is the draft check.
+        msg_builder.get.assert_awaited_once()
 
     async def test_update_draft_rejects_malformed_deferred_send(self):
         """update_draft rejects non-ISO deferred_send_datetime values."""

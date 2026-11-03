@@ -44,6 +44,7 @@ from kiota_abstractions.store import BackingStoreSerializationWriterProxyFactory
 from kiota_serialization_json.json_serialization_writer_factory import (
     JsonSerializationWriterFactory,
 )
+from msgraph.generated.models.message import Message
 
 from outlook_mcp.config import Config
 from outlook_mcp.tools import (
@@ -699,7 +700,7 @@ class TestMailDrafts:
     async def test_update_draft_every_argument_reaches_the_wire(self):
         builder = MagicMock()
         builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
-        builder.patch = AsyncMock()
+        builder.patch = AsyncMock(return_value=Message())
         client = MagicMock()
         client.me.messages.by_message_id.return_value = builder
 
@@ -724,6 +725,8 @@ class TestMailDrafts:
             "sentinel.rt2@example.com",
             "2026-12-02T09:00:00",
         )
+        # The PATCH answered with the stored draft: the one GET is the draft check.
+        builder.get.assert_awaited_once()
 
     # Drafts in a thread (#143). The create call and the PATCH are separate
     # payloads, so each is serialized on its own.
@@ -918,7 +921,7 @@ class TestMarkdownBodies:
     async def test_update_draft(self):
         builder = MagicMock()
         builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
-        builder.patch = AsyncMock()
+        builder.patch = AsyncMock(return_value=Message())
         client = MagicMock()
         client.me.messages.by_message_id.return_value = builder
 
@@ -927,6 +930,7 @@ class TestMarkdownBodies:
         )
 
         assert_on_wire(builder.patch.call_args[0][0], self._HTML, '"contentType": "html"')
+        builder.get.assert_awaited_once()  # the draft check only: nothing read back
 
     async def test_reply_and_forward(self):
         for call in (

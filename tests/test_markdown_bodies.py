@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from msgraph.generated.models.body_type import BodyType
+from msgraph.generated.models.message import Message
 
 from outlook_mcp import server as server_mod
 from outlook_mcp.config import Config
@@ -68,7 +69,7 @@ class TestNewMessages:
     async def test_update_draft(self):
         builder = MagicMock()
         builder.get = AsyncMock(return_value=MagicMock(is_draft=True))
-        builder.patch = AsyncMock()
+        builder.patch = AsyncMock(return_value=Message())
         client = MagicMock()
         client.me.messages.by_message_id.return_value = builder
 
@@ -78,6 +79,7 @@ class TestNewMessages:
 
         body = builder.patch.call_args[0][0].body
         assert (body.content, body.content_type) == (_HTML, BodyType.Html)
+        builder.get.assert_awaited_once()  # the draft check only: nothing read back
 
     async def test_without_it_a_body_is_as_before(self):
         client = MagicMock()
