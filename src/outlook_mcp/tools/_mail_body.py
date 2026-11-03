@@ -26,6 +26,9 @@ from typing import Any
 
 # The opening tag of a draft's HTML body, whatever its case and attributes.
 _BODY_OPEN_TAG = re.compile(r"<body\b[^>]*>", re.IGNORECASE)
+# The rule Outlook opens a reply's or forward's quote with: from here down is the
+# quoted original, which its sender wrote.
+_QUOTE_RULE = re.compile(r"<hr\b", re.IGNORECASE)
 # A list item: "- " or "* " at the start of a line, after any indentation.
 _BULLET = re.compile(r"^\s*[-*]\s+(\S.*)$")
 # A blank line, which may hold spaces or tabs.
@@ -175,7 +178,8 @@ def above_quote(draft_body: Any, body: str, is_html: bool, *, is_markdown: bool 
     - An HTML draft: ``body`` goes right after its ``<body ...>`` tag, plain text
       converted by :func:`text_to_html` first. That is where Outlook puts a reply, above
       the ``<hr>`` and header block that open the quote, and the original's markup stays
-      as Graph wrote it.
+      as Graph wrote it. Only a tag above that ``<hr>`` counts: a ``<body`` below it is
+      in the quoted message, so without one above, ``body`` goes in front of the draft.
     - A plain-text draft, which Graph makes for a plain-text original: plain text stays
       plain text, above the quote, with the draft's line endings. HTML turns the draft
       into HTML, its quote escaped, line breaks kept.
@@ -208,6 +212,10 @@ def above_quote(draft_body: Any, body: str, is_html: bool, *, is_markdown: bool 
     else:
         html = text_to_html(body)
     match = _BODY_OPEN_TAG.search(content)
+    rule = _QUOTE_RULE.search(content)
+    if match is not None and rule is not None and match.end() > rule.start():
+        # The first `<body` is not above the quote, so it is not the draft's own tag.
+        match = None
     if match is None:
         result.content = html + content
     else:

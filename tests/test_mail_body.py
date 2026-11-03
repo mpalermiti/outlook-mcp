@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from msgraph.generated.models.body_type import BodyType
 
 from outlook_mcp.tools._mail_body import (
@@ -103,6 +104,30 @@ class TestAboveQuote:
     def test_a_draft_with_no_body_tag_gets_the_text_in_front(self):
         assert above_quote(_draft("<div>quoted</div>"), "n", False).content == (
             "<p>n</p><div>quoted</div>"
+        )
+
+    @pytest.mark.parametrize(
+        "quoted",
+        [
+            pytest.param('<div title="<body>">quoted</div>', id="in-an-attribute"),
+            pytest.param("<!-- <BODY class=x> --><div>quoted</div>", id="in-a-comment"),
+            pytest.param("<body><div>quoted</div></body>", id="a-whole-tag"),
+        ],
+    )
+    def test_a_body_tag_below_the_quote_rule_is_not_where_the_text_goes(self, quoted):
+        """A draft that comes back without its own ``<body>`` still opens its quote with
+        Outlook's ``<hr>``. A ``<body`` below that rule is part of the quoted message,
+        which the sender wrote, so the text goes in front, as with no tag at all, and
+        never inside what is quoted."""
+        fragment = '<hr style="display:inline-block;width:98%"><div>From: Sender</div>' + quoted
+
+        assert above_quote(_draft(fragment), "n", False).content == "<p>n</p>" + fragment
+
+    def test_the_body_tag_still_counts_when_the_quote_rule_follows_it(self):
+        draft = '<html><body dir="ltr"><div></div><HR><div>quoted <body></div></body></html>'
+
+        assert above_quote(_draft(draft), "n", False).content == draft.replace(
+            '<body dir="ltr">', '<body dir="ltr"><p>n</p>'
         )
 
     def test_plain_text_stays_plain_text_on_a_plain_text_draft(self):
