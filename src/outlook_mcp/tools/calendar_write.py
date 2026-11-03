@@ -41,6 +41,7 @@ from outlook_mcp.validation import (
     validate_event_key,
     validate_event_timezone,
     validate_graph_id,
+    validate_header_zone,
 )
 
 
@@ -191,6 +192,14 @@ async def _start_in_its_own_zone(graph_client: Any, event_id: str, zone: str) ->
     """
     from kiota_abstractions.base_request_configuration import RequestConfiguration
 
+    # `zone` is written into the header as is, so it is checked first: Graph
+    # supplied it, but a name that ends the quoted value or the line, or that a
+    # header cannot encode, must not become part of a request.
+    validate_header_zone(
+        zone,
+        remedy="It is the zone Graph reports for this event. Nothing was modified. Pass "
+        "`start` alongside `recurrence` to anchor the series explicitly.",
+    )
     request_config = RequestConfiguration()
     request_config.headers.add("Prefer", f'outlook.timezone="{zone}"')
     localized = await graph_client.me.events.by_event_id(event_id).get(

@@ -22,6 +22,7 @@ from outlook_mcp.validation import (
     validate_event_key,
     validate_event_timezone,
     validate_graph_id,
+    validate_header_zone,
     validate_internet_message_id,
     validate_phone,
 )
@@ -304,6 +305,51 @@ class TestKqlSanitization:
             assert result.count('"') == 2, result
             assert "\\" not in result, result
             assert result.startswith('"') and result.endswith('"'), result
+
+
+class TestHeaderZone:
+    """A zone name written into `Prefer: outlook.timezone="…"` as is.
+
+    The name is Graph's own spelling of an event's zone, usually a Windows
+    name the IANA check refuses, so the check is on what the header can carry.
+    """
+
+    @pytest.mark.parametrize(
+        "zone",
+        [
+            "Pacific Standard Time",
+            "W. Europe Standard Time",
+            "UTC-11",
+            "UTC+12",
+            "(UTC-05:00) Eastern Time (US & Canada)",
+            "America/Los_Angeles",
+        ],
+    )
+    def test_names_graph_uses_are_accepted(self, zone):
+        assert validate_header_zone(zone) == zone
+
+    @pytest.mark.parametrize(
+        "zone",
+        [
+            pytest.param('Pacific"', id="quote"),
+            pytest.param("Pacific\\", id="backslash"),
+            pytest.param("Pacific\r", id="cr"),
+            pytest.param("Pacific\n", id="lf"),
+            pytest.param("Pacific\t", id="tab"),
+            pytest.param("Pacific\x00", id="nul"),
+            pytest.param("Pacific\x85", id="c1-next-line"),
+            pytest.param("Pacific\x7f", id="del"),
+            pytest.param("Hora est\u00e1ndar", id="non-ascii"),
+            pytest.param("", id="empty"),
+            pytest.param(None, id="none"),
+        ],
+    )
+    def test_anything_a_quoted_header_value_cannot_carry_is_refused(self, zone):
+        with pytest.raises(ValueError) as exc:
+            validate_header_zone(zone, remedy="Do the other thing.")
+        message = str(exc.value)
+        assert message.endswith("Do the other thing.")
+        assert "\r" not in message and "\n" not in message
 
 
 class TestPhoneValidation:

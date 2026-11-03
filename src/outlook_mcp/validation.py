@@ -67,6 +67,13 @@ _PHONE_RE = re.compile(r"^[0-9 ()+.\-]{1,30}$")
 # plenty to spare.
 _EVENT_KEY_RE = re.compile(r"^[A-Za-z0-9._:@\-]{1,128}$")
 
+# What a header's quoted string carries as written: printable ASCII except `"`,
+# which would end it, and `\`, which escapes the next character (RFC 9110
+# qdtext, less tab and the obsolete non-ASCII bytes). CR and LF, which would end
+# the header line, are outside it, and so is anything the HTTP client cannot
+# encode in a header at all.
+_HEADER_QUOTED_TEXT_RE = re.compile(r"[ !#-\[\]-~]+")
+
 # KQL characters to strip. The value is embedded as `$search="<value>"`, so the
 # only real boundary is the string literal itself. Verified live against Graph:
 #   "  MUST strip — an embedded quote makes Graph SILENTLY DISCARD $search and
@@ -483,6 +490,28 @@ def sanitize_kql(query: str) -> str:
             "use KQL syntax like subject:budget or from:sarah@acme.com."
         )
     return f'"{sanitized}"'
+
+
+def validate_header_zone(name: str, remedy: str | None = None) -> str:
+    """Return ``name`` if it can be written inside ``Prefer: outlook.timezone="…"`` as is.
+
+    The zone that header names is Graph's own spelling of an event's stored
+    zone, which is usually a Windows name ("Pacific Standard Time") that
+    :func:`resolve_timezone` refuses — that is why the header is sent at all. So
+    the check here is on what the header can carry rather than on the zone
+    database: a name that would end the quoted value or the header line, or that
+    the HTTP client cannot encode, is refused before any request is built.
+
+    ``remedy`` is appended to the refusal, as in :func:`resolve_timezone`, since
+    only the caller knows what to do instead.
+    """
+    if not isinstance(name, str) or not _HEADER_QUOTED_TEXT_RE.fullmatch(name):
+        shown = sanitize_output(str(name)[:50])
+        raise ValueError(
+            f"Time zone {shown!r} cannot be sent to Graph in a request header, which "
+            'takes printable ASCII without " or \\.' + (f" {remedy}" if remedy else "")
+        )
+    return name
 
 
 def validate_event_key(value: str) -> str:

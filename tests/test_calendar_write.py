@@ -1990,6 +1990,48 @@ class TestEventTimezone:
         assert patched.recurrence.pattern.days_of_week == [DayOfWeek.Wednesday]
         assert patched.recurrence.range.start_date == date(2026, 11, 4)
 
+    @pytest.mark.parametrize(
+        "zone",
+        [
+            pytest.param('Pacific Standard Time"; odata.maxpagesize=1', id="quote"),
+            pytest.param("Pacific Standard Time\r\nX-Extra: 1", id="crlf"),
+            pytest.param("Pacific Standard Time\n", id="lf"),
+            pytest.param("Pacific\\Standard Time", id="backslash"),
+            pytest.param("Pacific\x00Standard Time", id="nul"),
+            pytest.param("Hora estándar del Pacífico", id="non-ascii"),
+        ],
+    )
+    async def test_a_zone_a_header_cannot_carry_never_reaches_one(self, zone):
+        """The second read names the event's stored zone inside `outlook.timezone="…"`.
+
+        That name is Graph's, not the caller's, but it is written into a header
+        as is, so one that would end the quoted value or the header line, or
+        that a header cannot encode, is refused before the read is made.
+        """
+        current = _current_event(date_time="2026-11-05T02:00:00.0000000", start_zone=zone)
+        prefers = []
+
+        def _get(request_configuration=None):
+            prefers.append(
+                None
+                if request_configuration is None
+                else request_configuration.headers.get("Prefer")
+            )
+            return current
+
+        builder = _make_event_builder()
+        builder.get = AsyncMock(side_effect=_get)
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError, match="Nothing was modified"):
+            await update_event(
+                mock_client, event_id="AAMkAG123=", recurrence="weekly", config=_CFG_LA
+            )
+        assert prefers == [None], f"a Prefer header was built from {zone!r}: {prefers}"
+        builder.patch.assert_not_called()
+
     async def test_a_resolvable_zone_needs_no_second_read(self):
         """The Prefer read is the fallback, not the default.
 
