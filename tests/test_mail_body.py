@@ -123,6 +123,19 @@ class TestAboveQuote:
 
         assert above_quote(_draft(fragment), "n", False).content == "<p>n</p>" + fragment
 
+    def test_a_body_string_in_the_head_is_not_where_the_text_goes(self):
+        """A reply draft's ``<head>`` can carry the original's styles, and a ``<body``
+        there would put the text where it is never shown. The tag that counts is the
+        last one above the quote rule: the draft's own."""
+        draft = (
+            "<html><head><style>/* <body> */</style></head>"
+            "<body><hr><div>From: Sender</div><div>quoted</div></body></html>"
+        )
+
+        assert above_quote(_draft(draft), "n", False).content == draft.replace(
+            "</head><body>", "</head><body><p>n</p>"
+        )
+
     def test_the_body_tag_still_counts_when_the_quote_rule_follows_it(self):
         draft = '<html><body dir="ltr"><div></div><HR><div>quoted <body></div></body></html>'
 
