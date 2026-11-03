@@ -1,11 +1,14 @@
 """Tests for error hierarchy."""
 
+import httpx
+
 from outlook_mcp.errors import (
     AuthRequiredError,
     GraphAPIError,
     NotFoundError,
     OutlookMCPError,
     ReadOnlyError,
+    left_in_drafts,
 )
 
 
@@ -85,3 +88,51 @@ def test_all_errors_are_exceptions():
             err = err_class(400, "BadRequest", "Bad request")
         assert isinstance(err, Exception)
         assert isinstance(err, OutlookMCPError)
+
+
+class TestLeftInDrafts:
+    """The error for a reply or forward whose draft failed and could not be deleted."""
+
+    def test_a_graph_error_keeps_its_status_message_and_hint_and_says_where_the_draft_is(self):
+        original = GraphAPIError(400, "ErrorInvalidRequest", "Refused.", action="Fix it.")
+
+        error = left_in_drafts(original, "AAMkDraft=")
+
+        assert (error.status_code, error.error_code, error.message) == (
+            400,
+            "ErrorInvalidRequest",
+            "Refused.",
+        )
+        assert error.action.startswith("Fix it. ")
+        assert "may remain in Drafts" in error.action
+        assert "The draft's id is AAMkDraft=." in error.action
+        # A copy: the error passed in stays as it was, to be the cause.
+        assert error is not original and original.action == "Fix it."
+
+    def test_a_graph_error_with_no_hint_gets_only_the_drafts_note(self):
+        error = left_in_drafts(GraphAPIError(400, "X", "Refused.", action=None), "D1")
+
+        assert error.action.startswith("The new draft could not be deleted either")
+
+    def test_an_sdk_error_is_converted_with_its_hint(self):
+        from msgraph.generated.models.o_data_errors.main_error import MainError
+        from msgraph.generated.models.o_data_errors.o_data_error import ODataError
+
+        sdk_error = ODataError()
+        sdk_error.response_status_code = 429
+        sdk_error.error = MainError(code="TooManyRequests", message="Slow down.")
+
+        error = left_in_drafts(sdk_error, "D1")
+
+        assert (error.status_code, error.message) == (429, "Slow down.")
+        assert "may remain in Drafts" in error.action
+
+    def test_any_other_failure_is_named_by_its_type_only(self):
+        """Its text can carry the request URL."""
+        url = "https://graph.microsoft.com/v1.0/me/messages/D1"
+
+        error = left_in_drafts(httpx.ConnectError(url), "D1")
+
+        assert (error.status_code, error.error_code) == (0, "DraftNotFinished")
+        assert "ConnectError" in str(error) and "may remain in Drafts" in str(error)
+        assert "graph.microsoft.com" not in str(error)

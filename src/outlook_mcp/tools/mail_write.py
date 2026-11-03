@@ -10,11 +10,11 @@ from outlook_mcp.errors import (
     MESSAGE_MAY_HAVE_BEEN_SENT,
     REPLY_NOT_SENT_DRAFT_MAY_REMAIN,
     GraphAPIError,
+    left_in_drafts,
 )
 from outlook_mcp.permissions import CATEGORY_MAIL_SEND, check_permission
 from outlook_mcp.throttle import call_without_replay
 from outlook_mcp.tools._mail_body import above_quote, check_body_format, message_body
-from outlook_mcp.tools.mail_drafts import _left_in_drafts
 from outlook_mcp.validation import validate_email, validate_graph_id
 
 
@@ -165,7 +165,7 @@ async def _send_in_thread(
         try:
             await new_draft.delete()
         except Exception:
-            raise _left_in_drafts(exc, draft.id) from exc
+            raise left_in_drafts(exc, draft.id) from exc
         raise
 
     in_doubt = f"{DRAFT_MAY_HAVE_BEEN_SENT} The draft's id is {draft.id}."
@@ -180,7 +180,7 @@ async def _send_in_thread(
             try:
                 await new_draft.delete()
             except Exception:
-                raise _left_in_drafts(exc, draft.id) from exc
+                raise left_in_drafts(exc, draft.id) from exc
         raise
     except Exception as exc:
         # No answer from Graph at all, which leaves the send as much in doubt as a

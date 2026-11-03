@@ -615,6 +615,37 @@ def wrap_http_status_error(exc: Exception) -> GraphAPIError:
     )
 
 
+def left_in_drafts(exc: Exception, draft_id: str) -> GraphAPIError:
+    """``exc`` as the agent should read it when a draft made on the way could not be deleted.
+
+    For a reply or forward whose draft was to be deleted after a failure: its PATCH or
+    read-back in ``mail_drafts._create_in_thread``, its PATCH or a refused send in
+    ``mail_write._send_in_thread``. The draft may then still be in Drafts, and the error
+    says so and gives its id. A Graph error keeps its status, message and hint. Anything
+    else, a dropped connection say, is named by its type only: its text can carry the
+    request URL.
+    """
+    if isinstance(exc, GraphAPIError):
+        # Already converted (`call_without_replay`); a copy, so `exc` stays the cause.
+        error = GraphAPIError(exc.status_code, exc.error_code, exc.message, action=exc.action)
+    else:
+        try:
+            error = wrap_graph_error(exc)
+        except TypeError:
+            error = GraphAPIError(
+                0,
+                "DraftNotFinished",
+                f"Finishing the new draft failed ({type(exc).__name__}).",
+                action=None,
+            )
+    left = (
+        "The new draft could not be deleted either, so it may remain in Drafts. "
+        f"The draft's id is {draft_id}."
+    )
+    error.action = f"{error.action} {left}" if error.action else left
+    return error
+
+
 def graph_json(response: httpx.Response) -> dict[str, Any]:
     """Read a raw-httpx Graph reply: the JSON object it carries, or ``GraphAPIError``.
 
