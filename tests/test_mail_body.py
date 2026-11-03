@@ -136,6 +136,26 @@ class TestAboveQuote:
             "</head><body>", "</head><body><p>n</p>"
         )
 
+    @pytest.mark.parametrize(
+        "head",
+        [
+            pytest.param("<style>/* <hr> */</style>", id="in-a-style"),
+            pytest.param("<!-- <HR class=x> -->", id="in-a-comment"),
+        ],
+    )
+    def test_an_hr_string_in_the_head_is_not_the_quote_rule(self, head):
+        """The quote rule is looked for after the ``<body`` tag: an ``<hr`` in the
+        ``<head>`` comes before every tag, and taken as the rule it would leave no tag
+        above it, putting the text in front of ``<html>``."""
+        draft = (
+            f"<html><head>{head}</head>"
+            "<body><hr><div>From: Sender</div><div>quoted</div></body></html>"
+        )
+
+        assert above_quote(_draft(draft), "n", False).content == draft.replace(
+            "</head><body>", "</head><body><p>n</p>"
+        )
+
     def test_the_body_tag_still_counts_when_the_quote_rule_follows_it(self):
         draft = '<html><body dir="ltr"><div></div><HR><div>quoted <body></div></body></html>'
 
