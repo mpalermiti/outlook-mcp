@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from outlook_mcp.pagination import encode_cursor
+from outlook_mcp.pagination import encode_cursor, encode_cursor_payload
 from outlook_mcp.tools.calendar_read import list_events
 from outlook_mcp.tools.mail_read import list_folders, list_inbox, search_mail
 
@@ -69,6 +69,15 @@ class TestListInboxPagination:
         mock_client = MagicMock()
         with pytest.raises(ValueError):
             await list_inbox(mock_client, cursor="garbage")
+
+    @pytest.mark.asyncio
+    async def test_a_cursor_whose_skip_is_not_a_count_sends_no_request(self):
+        """A string `skip` would reach `$skip`; it is refused before Graph is asked."""
+        cursor = encode_cursor_payload({"skip": "0&$select=body"})
+        mock_client = _make_folder_mock([])
+        with pytest.raises(ValueError, match="Invalid pagination cursor"):
+            await list_inbox(mock_client, cursor=cursor)
+        mock_client.me.mail_folders.by_mail_folder_id.return_value.messages.get.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cursor_overrides_skip(self):

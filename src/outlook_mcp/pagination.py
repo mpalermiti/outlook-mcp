@@ -42,22 +42,6 @@ def encode_cursor(skip: int) -> str:
     return encode_cursor_payload({"skip": skip})
 
 
-def decode_cursor(cursor: str) -> int:
-    """Decode a cursor back to a skip value.
-
-    Raises ValueError if cursor is invalid or tampered.
-    """
-    try:
-        payload = base64.urlsafe_b64decode(cursor.encode()).decode()
-        data = json.loads(payload)
-        skip = data["skip"]
-        if not isinstance(skip, int) or skip < 0:
-            raise ValueError("Invalid skip value in cursor")
-        return skip
-    except (KeyError, json.JSONDecodeError, UnicodeDecodeError) as e:
-        raise ValueError(f"Invalid pagination cursor: {cursor}") from e
-
-
 def wrap_nextlink(odata_next_link: str | None) -> str | None:
     """Extract skip from an @odata.nextLink URL and encode as cursor.
 
@@ -108,7 +92,13 @@ def apply_pagination(
     if cursor:
         data = decode_cursor_payload(cursor)
         if "skip" in data:
-            query_params["$skip"] = data["skip"]
+            skip = data["skip"]
+            # Caller-held state that goes into a URL: only the non-negative
+            # count this server wrote is accepted. `bool` is excluded because
+            # it is an `int` subclass, and `true` is not a count.
+            if not isinstance(skip, int) or isinstance(skip, bool) or skip < 0:
+                raise ValueError("Invalid pagination cursor")
+            query_params["$skip"] = skip
         elif "skiptoken" in data:
             token = data["skiptoken"]
             # Caller-held state that goes into a URL: anything but the

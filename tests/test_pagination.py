@@ -7,7 +7,6 @@ import pytest
 
 from outlook_mcp.pagination import (
     apply_pagination,
-    decode_cursor,
     decode_cursor_payload,
     encode_cursor,
     encode_cursor_payload,
@@ -18,25 +17,25 @@ from outlook_mcp.pagination import (
 class TestEncodeDecode:
     def test_roundtrip(self):
         cursor = encode_cursor(25)
-        assert decode_cursor(cursor) == 25
+        assert decode_cursor_payload(cursor) == {"skip": 25}
 
     def test_roundtrip_zero(self):
         cursor = encode_cursor(0)
-        assert decode_cursor(cursor) == 0
+        assert decode_cursor_payload(cursor) == {"skip": 0}
 
     def test_decode_invalid_base64(self):
         with pytest.raises(ValueError, match="Invalid pagination cursor"):
-            decode_cursor("not-valid-base64!!!")
+            decode_cursor_payload("not-valid-base64!!!")
 
     def test_decode_invalid_json(self):
         bad = base64.urlsafe_b64encode(b"not json").decode()
         with pytest.raises(ValueError, match="Invalid pagination cursor"):
-            decode_cursor(bad)
+            decode_cursor_payload(bad)
 
     def test_decode_negative_skip(self):
         bad = base64.urlsafe_b64encode(json.dumps({"skip": -1}).encode()).decode()
-        with pytest.raises(ValueError, match="Invalid skip value"):
-            decode_cursor(bad)
+        with pytest.raises(ValueError, match="Invalid pagination cursor"):
+            apply_pagination({}, count=25, cursor=bad)
 
 
 class TestWrapNextlink:
@@ -50,7 +49,7 @@ class TestWrapNextlink:
         url = "https://graph.microsoft.com/v1.0/me/messages?$skip=50&$top=25"
         cursor = wrap_nextlink(url)
         assert cursor is not None
-        assert decode_cursor(cursor) == 50
+        assert decode_cursor_payload(cursor) == {"skip": 50}
 
 
 class TestApplyPagination:
@@ -101,6 +100,29 @@ class TestApplyPagination:
     def test_reads_a_skiptoken(self):
         cursor = encode_cursor_payload({"skiptoken": "abc", "folder": "inbox"})
         assert apply_pagination({}, count=25, cursor=cursor)["$skiptoken"] == "abc"
+
+    @pytest.mark.parametrize(
+        "skip",
+        [
+            pytest.param("0&$select=body", id="string-with-a-query"),
+            pytest.param("5", id="numeric-string"),
+            pytest.param(-1, id="negative"),
+            pytest.param(True, id="bool"),
+            pytest.param(1.5, id="float"),
+            pytest.param([1, 2], id="list"),
+            pytest.param({"a": 1}, id="dict"),
+            pytest.param(None, id="null"),
+        ],
+    )
+    def test_a_skip_that_is_not_a_non_negative_int_is_refused(self, skip):
+        """`skip` goes into `$skip`; anything but the count this server wrote is refused."""
+        cursor = encode_cursor_payload({"skip": skip})
+        with pytest.raises(ValueError, match="Invalid pagination cursor"):
+            apply_pagination({}, count=25, cursor=cursor)
+
+    def test_a_skip_of_zero_is_accepted(self):
+        cursor = encode_cursor_payload({"skip": 0})
+        assert apply_pagination({}, count=25, cursor=cursor)["$skip"] == 0
 
 
 class TestCursorPayload:

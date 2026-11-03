@@ -21,7 +21,6 @@ from outlook_mcp.validation import (
     validate_email,
     validate_event_key,
     validate_event_timezone,
-    validate_folder_name,
     validate_graph_id,
     validate_internet_message_id,
     validate_phone,
@@ -305,28 +304,6 @@ class TestKqlSanitization:
             assert result.count('"') == 2, result
             assert "\\" not in result, result
             assert result.startswith('"') and result.endswith('"'), result
-
-
-class TestFolderNameValidation:
-    def test_wellknown_folders(self):
-        assert validate_folder_name("inbox") == "inbox"
-        assert validate_folder_name("drafts") == "drafts"
-        assert validate_folder_name("sentitems") == "sentitems"
-        assert validate_folder_name("deleteditems") == "deleteditems"
-        assert validate_folder_name("junkemail") == "junkemail"
-        assert validate_folder_name("archive") == "archive"
-
-    def test_case_insensitive_wellknown(self):
-        assert validate_folder_name("Inbox") == "inbox"
-        assert validate_folder_name("DRAFTS") == "drafts"
-
-    def test_custom_folder_id(self):
-        """Custom folder IDs pass through graph ID validation."""
-        assert validate_folder_name("AAMkAGFolderId=") == "AAMkAGFolderId="
-
-    def test_rejects_invalid(self):
-        with pytest.raises(ValueError):
-            validate_folder_name("../../evil")
 
 
 class TestPhoneValidation:

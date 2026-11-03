@@ -485,14 +485,6 @@ def sanitize_kql(query: str) -> str:
     return f'"{sanitized}"'
 
 
-def validate_folder_name(name: str) -> str:
-    """Validate a folder name — well-known names or Graph IDs."""
-    lower = name.lower()
-    if lower in WELL_KNOWN_FOLDERS:
-        return lower
-    return validate_graph_id(name)
-
-
 def validate_event_key(value: str) -> str:
     """Validate an event key: 1-128 letters, digits and ``. _ : @ -``, checked whole."""
     if not isinstance(value, str) or not _EVENT_KEY_RE.fullmatch(value):
