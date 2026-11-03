@@ -701,8 +701,9 @@ async def test_an_events_calendar_says_if_it_is_the_default_and_whose_it_is(real
     Without `isDefaultCalendar` the default calendar would go on to the owner
     comparison, and without `owner` it would count as someone else's, so every
     write to the user's own events would need `mail_send` while the offline suite
-    stayed green. Read-only: one listing of the default calendar and one read of
-    the first event's calendar; skips when there is no event in the window.
+    stayed green. Read-only: one listing of the default calendar and two reads of
+    the first event's calendar, one here and one inside the owner check; skips when
+    there is no event in the window.
     """
     from kiota_abstractions.base_request_configuration import RequestConfiguration
     from msgraph.generated.users.item.events.item.calendar.calendar_request_builder import (
