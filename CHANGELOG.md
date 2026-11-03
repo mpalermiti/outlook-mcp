@@ -6,6 +6,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.31.4] — 2026-11-03
+
+Follow-ups to the 1.31.3 hardening: more ways of naming the home folder are recognised, cursors
+and headers are checked more strictly, and failures say more plainly what happened.
+
 ### Security
 
 - **`attachments_dir` checks recognise more spellings of the home or settings folder.** A
@@ -23,10 +28,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Malformed cursors are refused cleanly.** A pagination cursor's `skip` must be a
   non-negative count; a delta link may carry only the query options its endpoint uses; a
   digest token that is not a non-empty string is refused by name.
-- **A reply's text is placed above the quote** even when the quoted message or its header
-  content contains the text `<body`.
+- **A reply's text is placed above the quote** even when the quoted message contains the
+  text `<body`, or the draft's `<head>`, which can carry the original's styles, contains
+  `<body` or `<hr`.
 - **`format="html"` and `format="full"` message bodies drop control characters,** as text
-  bodies already did.
+  bodies already did. A form feed becomes a space instead: HTML treats it as whitespace, and
+  deleting it could join a tag to its attribute.
 - **A download that finds `attachments_dir` changed mid-download** now gives the same refusal
   as the other attachments-folder refusals.
 

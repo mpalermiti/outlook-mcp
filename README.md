@@ -61,7 +61,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md).
 
-- **Safer by default** (1.31.3): downloads never overwrite a file, writing into a calendar or task list someone else owns needs send permission like an invitation, attachment text is read only in standard character sets, and a config that points the attachments folder at your home folder is refused.
+- **Safer by default** (1.31.3–1.31.4): downloads never overwrite a file, writing into a calendar or task list someone else owns needs send permission like an invitation, attachment text is read only in standard character sets, and a config that points the attachments folder at your home folder, under any of its names, is refused. A reply or forward that fails says whether anything was sent (1.31.4).
 - **Export an email** (1.31): get a message's original file exactly as it arrived, attachments included, up to 10 MB. Off unless you turn it on.
 - **Inbox rules** (1.30): list, create, change and delete server-side inbox rules, and see what each rule leaves out (1.30.2). Off unless you turn it on, and a rule that forwards mail also needs send permission.
 - **Attachments as text** (1.28): PDFs, spreadsheets and text files come back as readable text, parsed in a separate process with memory and time limits. Off unless you turn it on. Since 1.31.2 it requires pypdf 6.21.4, which fixes seven ways a crafted PDF could hang a read or use too much memory.
