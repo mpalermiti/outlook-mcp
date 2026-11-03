@@ -31,7 +31,7 @@ from msgraph import graph_request_adapter as _gra
 from msgraph_core import GraphClientFactory
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import GraphAPIError
+from outlook_mcp.errors import DRAFT_MAY_HAVE_BEEN_CREATED, GraphAPIError
 from outlook_mcp.tools import (
     calendar_attachments,
     calendar_write,
@@ -396,6 +396,10 @@ async def _reply_with_text(sdk, tmp_path, monkeypatch):
     return await mail_write.reply(sdk, "M1", "b", config=_CFG)
 
 
+async def _reply_all_with_text(sdk, tmp_path, monkeypatch):
+    return await mail_write.reply(sdk, "M1", "b", reply_all=True, config=_CFG)
+
+
 async def _forward_with_comment(sdk, tmp_path, monkeypatch):
     return await mail_write.forward(sdk, "M1", _TO, comment="c", config=_CFG)
 
@@ -415,13 +419,7 @@ async def _forward_with_comment(sdk, tmp_path, monkeypatch):
 async def test_a_duplicable_write_answered_5xx_is_not_sent_again(
     status, path, write, where_to_check, tmp_path, monkeypatch
 ):
-    graph = _Graph(
-        {
-            # The event is the user's own, and has no attendees.
-            "/me/events/E1": [(200, {}, {"id": "E1"})],
-            path: [_server_error(status)],
-        }
-    )
+    graph = _Graph({path: [_server_error(status)]})
 
     with pytest.raises(GraphAPIError) as caught:
         await write(graph.client(), tmp_path, monkeypatch)
@@ -433,3 +431,91 @@ async def test_a_duplicable_write_answered_5xx_is_not_sent_again(
     assert "may already" in text, text
     assert where_to_check in text, text
     assert "Retry after a short delay" not in text, text
+
+
+@pytest.mark.parametrize(
+    ("path", "send"),
+    [
+        pytest.param("/createReply", _reply_with_text, id="reply"),
+        pytest.param("/createReplyAll", _reply_all_with_text, id="reply_all"),
+        pytest.param("/createForward", _forward_with_comment, id="forward"),
+    ],
+)
+async def test_a_reply_that_failed_at_its_draft_says_it_was_not_sent(
+    path, send, tmp_path, monkeypatch
+):
+    """`outlook_reply` and `outlook_forward` write into a draft and send that. A 5xx on
+    the draft's creation comes before any send, so the text says plainly that nothing
+    went out, and that the draft may be left over in Drafts."""
+    graph = _Graph({path: [_server_error(503)]})
+
+    with pytest.raises(GraphAPIError) as caught:
+        await send(graph.client(), tmp_path, monkeypatch)
+
+    assert graph.count("/send") == 0
+    text = str(caught.value)
+    assert "The reply or forward was not sent" in text, text
+    assert "leftover draft" in text and "Drafts" in text, text
+    assert caught.value.action != DRAFT_MAY_HAVE_BEEN_CREATED
+
+
+@pytest.mark.parametrize(
+    ("path", "write"),
+    [
+        pytest.param("/createReply", _draft_reply, id="draft_reply"),
+        pytest.param("/createReplyAll", _draft_reply_all, id="draft_reply_all"),
+        pytest.param("/createForward", _draft_forward, id="draft_forward"),
+    ],
+)
+async def test_a_draft_tool_keeps_its_check_drafts_hint(path, write, tmp_path, monkeypatch):
+    """`outlook_create_draft` sends nothing at all, so its hint is only about the draft."""
+    graph = _Graph({path: [_server_error(503)]})
+
+    with pytest.raises(GraphAPIError) as caught:
+        await write(graph.client(), tmp_path, monkeypatch)
+
+    assert caught.value.action == DRAFT_MAY_HAVE_BEEN_CREATED
+    assert "Check Drafts before creating it again" in str(caught.value)
+    assert "not sent" not in str(caught.value)
+
+
+async def test_an_event_attachment_goes_up_once_and_only_after_the_ownership_lookups(tmp_path):
+    """Under a policy that withholds `mail_send`, whose calendar the event is on and
+    whether it has attendees are settled before the file is sent: both ownership
+    lookups and the attendee read reach Graph first, then the one POST, not repeated
+    after its 503."""
+    (tmp_path / "ticket.txt").write_bytes(b"synthetic")
+    me = {"address": "me@contoso.com"}
+    graph = _Graph(
+        {
+            # Not the default calendar, so its owner is compared with the default's:
+            # the same address, so the calendar is the user's own.
+            "/me/events/E1/calendar": [
+                (200, {}, {"id": "C2", "isDefaultCalendar": False, "owner": me})
+            ],
+            "/me/calendar": [(200, {}, {"owner": me})],
+            # The event has no attendees, so the policy lets the file through.
+            "/me/events/E1": [(200, {}, {"id": "E1"})],
+            "/me/events/E1/attachments": [_server_error(503)],
+        }
+    )
+    policy = Config(
+        client_id="test", attachments_dir=str(tmp_path), allow_categories=["calendar_write"]
+    )
+
+    with pytest.raises(GraphAPIError) as caught:
+        await calendar_attachments.attach_to_event(
+            graph.client(), "E1", ["ticket.txt"], config=policy
+        )
+
+    on_the_wire = [
+        (r.method, r.url.path.removeprefix("/v1.0"), r.url.params.get("$select"))
+        for r in graph.sent
+    ]
+    assert on_the_wire == [
+        ("GET", "/me/events/E1/calendar", "id,isDefaultCalendar,owner"),
+        ("GET", "/me/calendar", "owner"),
+        ("GET", "/me/events/E1", None),
+        ("POST", "/me/events/E1/attachments", None),
+    ]
+    assert "Read the event's attachments" in str(caught.value)

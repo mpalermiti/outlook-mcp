@@ -7,9 +7,9 @@ from typing import Any
 
 from outlook_mcp.config import Config
 from outlook_mcp.errors import (
-    DRAFT_MAY_HAVE_BEEN_CREATED,
     DRAFT_MAY_HAVE_BEEN_SENT,
     MESSAGE_MAY_HAVE_BEEN_SENT,
+    REPLY_NOT_SENT_DRAFT_MAY_REMAIN,
     GraphAPIError,
 )
 from outlook_mcp.permissions import CATEGORY_MAIL_SEND, check_permission
@@ -149,7 +149,7 @@ async def _send_in_thread(
         create = source.create_reply
     draft = await call_without_replay(
         lambda once: create.post(request_body, request_configuration=once),
-        outcome_unknown=DRAFT_MAY_HAVE_BEEN_CREATED,
+        outcome_unknown=REPLY_NOT_SENT_DRAFT_MAY_REMAIN,
     )
 
     new_draft = graph_client.me.messages.by_message_id(draft.id)

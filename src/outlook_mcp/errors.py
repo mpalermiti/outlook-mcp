@@ -453,6 +453,13 @@ DRAFT_MAY_HAVE_BEEN_CREATED = (
     "Graph failed without saying whether the draft was created, so it may already be in "
     "Drafts. Check Drafts before creating it again."
 )
+# The same failure under `outlook_reply` / `outlook_forward`, which write into that
+# draft and then send it (`mail_write._send_in_thread`): nothing was sent yet, and that
+# comes first, because the agent was asked to send, not to make a draft.
+REPLY_NOT_SENT_DRAFT_MAY_REMAIN = (
+    "The reply or forward was not sent: Graph failed while creating the draft it is sent "
+    "from. A leftover draft, without the new text, may already be in Drafts."
+)
 # A create that is not idempotent: a second one is a second rule, and both run
 # (`create_rule`). Deleting "the" rule afterwards leaves the copy forwarding.
 RULE_MAY_HAVE_BEEN_CREATED = (

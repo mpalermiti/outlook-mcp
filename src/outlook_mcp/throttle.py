@@ -159,7 +159,10 @@ async def call_without_replay(
     default_backoff: float = _DEFAULT_BACKOFF,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> Any:
-    """Make an SDK write that emails someone: re-sent after a 429, never after a 5xx.
+    """Make an SDK write that must not be repeated: re-sent after a 429, never after a 5xx.
+
+    One that emails someone, or one that emails no one but leaves another copy each
+    time it runs: an event attachment, a createReply / createForward draft, a rule.
 
     kiota's ``RetryHandler`` re-sends a request answered 429, 503 or 504, POST
     included. A 503 or 504 does not say the write failed, only that its answer did
