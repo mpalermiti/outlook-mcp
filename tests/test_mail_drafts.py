@@ -2,7 +2,9 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from msgraph.generated.models.o_data_errors.o_data_error import ODataError
 from msgraph.generated.users.item.messages.item.create_forward import (
     create_forward_post_request_body as fwd,
 )
@@ -14,7 +16,7 @@ from msgraph.generated.users.item.messages.item.create_reply_all import (
 )
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.errors import GraphAPIError, ReadOnlyError, wrap_graph_error
 from outlook_mcp.tools.mail_drafts import (
     create_draft,
     delete_draft,
@@ -1146,23 +1148,77 @@ class TestDeferredReplyDraft:
 
         new_draft.delete.assert_called_once()
 
-    async def test_the_patch_error_is_reported_even_if_the_delete_fails(self):
+
+def _graph_refusal(status, code="ErrorInvalidRequest", message="Refused."):
+    """What the SDK raises when Graph answers with an error."""
+    from msgraph.generated.models.o_data_errors.main_error import MainError
+
+    error = ODataError()
+    error.response_status_code = status
+    error.error = MainError(code=code, message=message)
+    return error
+
+
+async def _reply_draft(client):
+    return await create_draft(
+        client, None, None, "x", reply_to_message_id="AAMkOriginal=", config=_CFG
+    )
+
+
+class TestAThreadDraftThatCouldNotBeRemoved:
+    """A reply or forward draft whose body PATCH or recipient read failed is deleted.
+
+    When that delete fails too, the draft is still there: the error the agent reads
+    says so and gives its id. When the delete worked, the error says nothing of it.
+    """
+
+    @pytest.mark.parametrize("failing", ["patch", "get"])
+    async def test_the_error_says_the_draft_may_remain_in_drafts(self, failing):
         client, _, new_draft = _thread_client()
-        new_draft.patch = AsyncMock(side_effect=RuntimeError("patch refused"))
-        new_draft.delete = AsyncMock(side_effect=RuntimeError("delete refused"))
+        setattr(new_draft, failing, AsyncMock(side_effect=_graph_refusal(400)))
+        new_draft.delete = AsyncMock(side_effect=_graph_refusal(503, "ServiceUnavailable"))
 
-        with pytest.raises(RuntimeError, match="patch refused"):
-            await create_draft(
-                client,
-                to=None,
-                subject=None,
-                body="<p>x</p>",
-                is_html=True,
-                reply_to_message_id="AAMkOriginal=",
-                config=_CFG,
-            )
+        with pytest.raises(GraphAPIError) as caught:
+            await _reply_draft(client)
 
-        new_draft.delete.assert_called_once()
+        new_draft.delete.assert_awaited_once()
+        # The PATCH's or the read's error is the one reported, not the delete's.
+        assert (caught.value.status_code, caught.value.message) == (400, "Refused.")
+        assert isinstance(caught.value.__cause__, ODataError)
+        text = str(caught.value)
+        assert "may remain in Drafts" in text, text
+        assert "AAMkThreadDraft=" in text, text
+
+    async def test_a_failure_that_is_not_a_graph_answer_says_so_too(self):
+        """A dropped connection leaves the draft behind just the same. Only the
+        failure's type is named: its text can carry the request URL."""
+        client, _, new_draft = _thread_client()
+        url = "https://graph.microsoft.com/v1.0/me/messages/AAMkThreadDraft="
+        new_draft.patch = AsyncMock(side_effect=httpx.ConnectError(url))
+        new_draft.delete = AsyncMock(side_effect=httpx.ConnectError(url))
+
+        with pytest.raises(GraphAPIError) as caught:
+            await _reply_draft(client)
+
+        text = str(caught.value)
+        assert "ConnectError" in text, text
+        assert "may remain in Drafts" in text, text
+        assert "graph.microsoft.com" not in text, text
+        assert isinstance(caught.value.__cause__, httpx.ConnectError)
+
+    @pytest.mark.parametrize("failing", ["patch", "get"])
+    async def test_a_draft_that_was_deleted_is_not_said_to_remain(self, failing):
+        client, _, new_draft = _thread_client()
+        refusal = _graph_refusal(400)
+        setattr(new_draft, failing, AsyncMock(side_effect=refusal))
+
+        with pytest.raises(ODataError) as caught:
+            await _reply_draft(client)
+
+        new_draft.delete.assert_awaited_once()
+        assert caught.value is refusal
+        # As the agent reads it, once the tool wrapper has converted it.
+        assert "Drafts" not in str(wrap_graph_error(caught.value))
 
 
 def _stored_message(**lists):

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import DRAFT_MAY_HAVE_BEEN_CREATED, MESSAGE_MAY_HAVE_BEEN_SENT
+from outlook_mcp.errors import (
+    DRAFT_MAY_HAVE_BEEN_CREATED,
+    MESSAGE_MAY_HAVE_BEEN_SENT,
+    GraphAPIError,
+    wrap_graph_error,
+)
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.permissions import CATEGORY_MAIL_DRAFTS, CATEGORY_MAIL_SEND, check_permission
 from outlook_mcp.throttle import call_without_replay
@@ -136,6 +140,31 @@ async def list_drafts(
         "count": len(messages),
         "next_cursor": next_cursor,
     }
+
+
+def _left_in_drafts(exc: Exception, draft_id: str) -> GraphAPIError:
+    """``exc`` as the agent should read it when the unfinished draft could not be deleted.
+
+    The draft may then still be in Drafts, without its text or with recipients nobody
+    reported, and the error says so and gives its id. A Graph error keeps its status,
+    message and hint. Anything else, a dropped connection say, is named by its type
+    only: its text can carry the request URL.
+    """
+    try:
+        error = wrap_graph_error(exc)
+    except TypeError:
+        error = GraphAPIError(
+            0,
+            "DraftNotFinished",
+            f"Finishing the new draft failed ({type(exc).__name__}).",
+            action=None,
+        )
+    left = (
+        "The unfinished draft could not be deleted either, so it may remain in Drafts. "
+        f"The draft's id is {draft_id}."
+    )
+    error.action = f"{error.action} {left}" if error.action else left
+    return error
 
 
 async def _create_in_thread(
@@ -321,12 +350,14 @@ async def create_draft(
                     {"$select": _RECIPIENT_FIELDS},
                 )
             )
-        except Exception:
+        except Exception as exc:
             # Leave no half-made reply behind (one without its body, that would
             # send at once, or whose recipients could not be reported): the
             # PATCH's or the read's error is the one to report.
-            with contextlib.suppress(Exception):
+            try:
                 await new_draft.delete()
+            except Exception:
+                raise _left_in_drafts(exc, created.id) from exc
             raise
 
         result = {
