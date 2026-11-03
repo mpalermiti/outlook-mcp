@@ -580,6 +580,16 @@ def strip_control_characters(text: str) -> str:
     return _CONTROL_CHARS.sub("", text)
 
 
+def strip_html_control_characters(html: str) -> str:
+    """:func:`strip_control_characters` for an HTML body, with form feed made a space.
+
+    Form feed is whitespace in HTML, the only control character that is: it can
+    stand between a tag name and an attribute, and deleting it would join the two,
+    so ``<a\\x0chref=...>`` would no longer be a link.
+    """
+    return strip_control_characters(html.replace("\x0c", " "))
+
+
 def sanitize_output(text: str, multiline: bool = False) -> str:
     """Strip control characters and ANSI escapes, and replace lone surrogates, in output text."""
     text = strip_control_characters(text)

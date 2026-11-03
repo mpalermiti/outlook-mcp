@@ -27,7 +27,7 @@ from outlook_mcp.throttle import retry_throttled_subrequests, send_with_retry
 from outlook_mcp.validation import (
     sanitize_kql,
     sanitize_output,
-    strip_control_characters,
+    strip_html_control_characters,
     validate_datetime,
     validate_email,
     validate_graph_id,
@@ -287,7 +287,7 @@ def _format_read_message_from_sdk(
     if msg.body:
         content = msg.body.content or ""
         if format in ("html", "full"):
-            body_html = strip_control_characters(content)
+            body_html = strip_html_control_characters(content)
         if format in ("text", "full"):
             body_text = sanitize_output(content, multiline=True)
 
@@ -392,7 +392,7 @@ def _format_read_message_from_raw(
     body_text = ""
     body_html = None
     if format in ("html", "full"):
-        body_html = strip_control_characters(content)
+        body_html = strip_html_control_characters(content)
     if format in ("text", "full"):
         body_text = sanitize_output(content, multiline=True)
 

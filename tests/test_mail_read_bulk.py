@@ -369,6 +369,19 @@ class TestFormatVariants:
         assert result["messages"][0]["body_html"] == ordinary
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fmt", ["html", "full"])
+    async def test_a_form_feed_in_the_html_body_becomes_a_space(self, patched_httpx, fmt):
+        """Same rule as the single read: form feed is HTML whitespace, so it still
+        separates a tag name from its attribute."""
+        _, set_response = patched_httpx
+        raw = "<p><a\x0chref='https://example.com/'>link</a>\x0cnext</p>"
+        set_response(_batch_response([_ok_sub("0", _raw_message("AAA=", body_html=raw))]))
+        result = await read_messages(_fake_graph_client(), ["AAA="], format=fmt)
+        assert result["messages"][0]["body_html"] == (
+            "<p><a href='https://example.com/'>link</a> next</p>"
+        )
+
+    @pytest.mark.asyncio
     async def test_concise_drops_body(self, patched_httpx):
         _, set_response = patched_httpx
         long_body = "<p>" + ("xy" * 500) + "</p>"

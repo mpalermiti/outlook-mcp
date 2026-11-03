@@ -360,6 +360,16 @@ class TestReadMessage:
         assert result["body_html"] == ORDINARY_HTML
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fmt", ["html", "full"])
+    async def test_a_form_feed_in_the_html_body_still_separates_what_it_stood_between(self, fmt):
+        """Form feed is whitespace in HTML: deleted, it would join a tag name to its
+        attribute, and `<a\\x0chref>` would no longer be a link. It becomes a space."""
+        raw = "<p><a\x0chref='https://example.com/'>link</a>\x0cnext</p>"
+        mock_client = _make_message_mock(_make_mock_message(body_content=raw))
+        result = await read_message(mock_client, "AAMkAG123=", format=fmt)
+        assert result["body_html"] == "<p><a href='https://example.com/'>link</a> next</p>"
+
+    @pytest.mark.asyncio
     async def test_read_message_validates_id(self):
         """read_message rejects invalid message IDs."""
         mock_client = MagicMock()
