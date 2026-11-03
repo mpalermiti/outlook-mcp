@@ -8,6 +8,31 @@ kept fixed.
 Re-checked 2026-10-14 before starting: #98 open, unassigned, no comments. PR search hits
 #103, #83 and #63 do not touch it (#103's body says "#98 is not folded in"; #83 filed it).
 
+## Result — run once, the test catches the bug (2026-11-02)
+
+Run by Michael on his own mailbox on 2026-11-02, during the 1.31.3 release checks, at
+outlook-mcp `main` 0f9b469 (reported 2026-11-03 as a steering line on the queue card;
+recorded here as he reported it, not re-run). Both tests:
+
+| Test | Outcome | Reason |
+|---|---|---|
+| `test_a_timed_weekly_series_moved_a_day_lands_on_the_new_day` | XFAIL | `#98: a same-zone date move of a series master leaves its occurrences` |
+| `test_an_all_day_weekly_series_moved_a_day_lands_on_the_new_day` | XFAIL | same |
+
+What that settles:
+
+- The two ASSUMED lines below are now confirmed live: Graph answers this patch `updated`
+  and leaves the occurrences on the original Mondays, for a timed and an all-day series. An
+  XFAIL can only come from `_SeriesDidNotMoveError`, which is raised only when the
+  occurrences are the original three Mondays at the original time of day (all-day: midnight).
+- Timed and all-day behave the same, so one fix path is plausible.
+- The test is proven, so a #98 fix can be checked against it: a fix shows as
+  `XPASS(strict)` (red); delete the `xfail` marker in that same change.
+- Code since the run: the only later commit touching `calendar_write.py` is b714b3b (header
+  zone validation on the recurrence-only path); it does not touch the same-zone date move, so
+  the result still holds at this checkout. The live test file is unchanged since 0f9b469.
+- The planned live-gap cards for #97/#70/#72 can reuse this pattern.
+
 ## Where
 
 `tests/test_live_calendar_write.py::TestMovingAMastersDateMovesItsOccurrences`, two tests:
@@ -97,4 +122,4 @@ shows only the marker's reason. A plain failure's message does list the start ti
 - ASSUMED: Graph returns an all-day occurrence's start as midnight when asked for UTC. If not,
   the all-day test fails red on the time-of-day check with the start times in the message,
   rather than reporting a wrong XFAIL.
-- NOT RUN: either live test. Workers never touch a mailbox.
+- NOT RUN by a worker: workers never touch a mailbox. Run by Michael 2026-11-02; see Result.

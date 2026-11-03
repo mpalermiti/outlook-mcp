@@ -2,6 +2,14 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-03 — live-gap-98-run (done: Michael's run recorded)
+
+- Smoke: 3083 passed, 4 skipped, 126 deselected; ruff check + format clean. Never passed `-m`.
+- Michael's steering on the card (2026-11-03 14:19): he ran the test on 2026-11-02 during the 1.31.3 release checks (main 0f9b469); both XFAIL with reason `#98: a same-zone date move of a series master leaves its occurrences`.
+- Recorded in `agent/findings/live-gap-98.md` § Result (above § Where), and the NOT RUN line updated. Checked offline that nothing since 0f9b469 changes the result: only b714b3b touched `calendar_write.py` (header zone validation on the recurrence-only path); `tests/test_live_calendar_write.py` unchanged.
+- Card checked off. No code change, no task file (notes only). Live test NOT run by me.
+- Next: a #98 fix can now be checked against this test (expect `XPASS(strict)`, remove the marker in the fix); live-gap cards for #97/#70/#72 can reuse the pattern.
+
 ## 2026-11-03 — live-gap-98-run (second session today; parked as `[?]`)
 
 - Smoke: 3083 passed, 4 skipped, 126 deselected; ruff check + format clean. Never passed `-m`. No source or test change since the earlier session today (HEAD d6897c1 is notes only), so its offline re-verification still stands.
