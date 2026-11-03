@@ -6,6 +6,7 @@ import locale
 import logging
 import ntpath
 import os
+import re
 import stat
 import sys
 import tempfile
@@ -77,8 +78,27 @@ def _is_network_path(path: str) -> bool:
     return _WINDOWS and len(path) >= 2 and path[0] in "\\/" and path[1] in "\\/"
 
 
+# `\\?\` or `\\.\` (either separator) in front of a drive letter and its colon.
+_DRIVE_DEVICE_PREFIX = re.compile(r"[\\/]{2}[?.][\\/](?=[A-Za-z]:)")
+
+
+def _without_device_prefix(path: str) -> str:
+    r"""On Windows, ``C:\x`` for ``\\?\C:\x`` or ``\\.\C:\x``: all three name one folder.
+
+    Any other path that begins with two separators, ``\\host\share`` or
+    ``\\?\UNC\host\share``, keeps its prefix and stays a network path.
+    """
+    if _WINDOWS and _DRIVE_DEVICE_PREFIX.match(path):
+        return path[4:]
+    return path
+
+
 def _comparable(path: str) -> str:
-    """``path`` resolved (symlinks included) and case-normalised, without creating anything."""
+    """``path`` resolved (symlinks included) and case-normalised, without creating anything.
+
+    A device spelling of a drive path is resolved as that drive path.
+    """
+    path = _without_device_prefix(path)
     if _is_network_path(path):
         return ntpath.normcase(ntpath.normpath(path))
     return os.path.normcase(os.path.realpath(path))
@@ -357,7 +377,8 @@ class Config(BaseModel):
         a symlink to a refused folder is refused too. The stored value is kept as
         written. ``load_config`` checks the default folder the same way.
         """
-        expanded = os.path.expanduser(value)
+        # A device spelling of a drive path is judged as that drive path.
+        expanded = _without_device_prefix(os.path.expanduser(value))
         if _WINDOWS:
             # A drive or a share, and a root: `\x` (which Python before 3.13 calls
             # absolute) and `C:x` both still depend on the current drive or directory.

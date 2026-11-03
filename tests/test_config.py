@@ -939,22 +939,63 @@ def test_the_default_attachments_dir_is_checked_too(tmp_path, home_and_settings)
         load_config(config_dir=no_file)
 
 
-@pytest.mark.parametrize("value", ["/attachments", "\\attachments", "C:attachments"])
+@pytest.mark.parametrize(
+    "value", ["/attachments", "\\attachments", "C:attachments", "\\\\?\\C:attachments"]
+)
 def test_on_windows_attachments_dir_needs_a_drive_or_share(monkeypatch, value):
     """A path rooted without a drive, or a drive without a root, depends on the current
     drive or directory; Python before 3.13 calls the first one absolute."""
     from outlook_mcp import config as config_mod
 
     monkeypatch.setattr(config_mod, "_WINDOWS", True)
-    with pytest.raises(ValidationError, match="absolute"):
+    with pytest.raises(ValidationError, match=_NOT_ABSOLUTE):
         Config(attachments_dir=value)
 
 
-def test_on_windows_a_network_attachments_dir_is_judged_by_its_text(monkeypatch):
+@pytest.mark.parametrize(
+    "home,spelling",
+    [
+        ("C:\\Users\\me", "\\\\?\\C:\\Users\\me"),
+        ("C:\\Users\\me", "\\\\.\\C:\\Users\\me"),
+        ("C:/Users/me", "//?/C:/Users/me"),
+    ],
+)
+def test_on_windows_a_device_spelling_of_home_is_still_home(tmp_path, monkeypatch, home, spelling):
+    r"""`\\?\C:\…` and `\\.\C:\…` name a folder on drive C:, not a network share."""
+    from outlook_mcp import config as config_mod
+
+    monkeypatch.setattr(config_mod, "_WINDOWS", True)
+    monkeypatch.setenv("HOME", home)
+    monkeypatch.setenv("USERPROFILE", home)  # what expanduser reads on Windows
+    monkeypatch.setattr(config_mod, "DEFAULT_CONFIG_DIR", str(tmp_path / "settings"))
+    with pytest.raises(ValidationError, match=_HOLDS_HOME):
+        Config(attachments_dir=spelling)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="a folder above home needs Windows path rules")
+@pytest.mark.parametrize("prefix", ["\\\\?\\", "\\\\.\\"])
+@pytest.mark.parametrize("above", ["parent", "drive root"])
+def test_on_windows_a_device_spelling_of_a_folder_above_home_is_refused(
+    tmp_path, home_and_settings, prefix, above
+):
+    home, _ = home_and_settings
+    folder = str(home.parent) if above == "parent" else home.anchor
+
+    with pytest.raises(ValidationError, match=_HOLDS_HOME):
+        _load_with_attachments_dir(tmp_path, prefix + folder)
+
+
+@pytest.mark.parametrize(
+    "share",
+    [
+        "\\\\files.example\\share\\attachments",
+        "\\\\?\\UNC\\files.example\\share\\attachments",
+    ],
+)
+def test_on_windows_a_network_attachments_dir_is_judged_by_its_text(monkeypatch, share):
     """Resolving a share path connects to its host, so loading the config never does."""
     from outlook_mcp import config as config_mod
 
-    share = "\\\\files.example\\share\\attachments"
     touched = []
     real_realpath, real_stat = os.path.realpath, os.stat
 
