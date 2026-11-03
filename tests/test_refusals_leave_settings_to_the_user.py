@@ -145,10 +145,12 @@ def test_a_real_send_refusal_keeps_its_wording():
 
 
 def test_the_rule_write_refusal_says_a_changed_setting_waits_for_a_restart():
-    """The server reads its settings and chooses its tools when it starts, so the rule
-    tools appear only after a restart. That widens nothing, and without it a user who
-    changed the setting finds the tools missing and no reason given."""
+    """The server reads the setting, and asks for the scope it adds, when it starts,
+    so a change takes effect only after a fresh sign-in and a restart. That widens
+    nothing. The text is raised by a rule tool that is already loaded, so it must not
+    say the rule tools are missing."""
     text = str(RULE_WRITE_NEEDS_SETTINGS_WRITE)
 
-    assert "the rule tools appear only after a restart" in text, text
+    assert "takes effect only after a restart" in text, text
     assert "`outlook-mcp auth`" in text, text
+    assert "rule tools appear" not in text, text

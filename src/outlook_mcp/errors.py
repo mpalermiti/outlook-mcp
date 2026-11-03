@@ -477,8 +477,9 @@ RULE_WRITE_NEEDS_SETTINGS_WRITE = (
     "only, or a mail-flow policy on the mailbox refuses rule writes — the same 403 "
     "covers both. If it is the consent, the user's `mailbox_settings_write` setting "
     "decides it. A change to that setting needs a fresh `outlook-mcp auth`, and the "
-    "server reads it only at start, so the rule tools appear only after a restart. If "
-    "it is a policy, the refusal will repeat after a fresh consent. " + LEAVE_SETTINGS_TO_THE_USER
+    "server reads it only at start, so the change takes effect only after a restart. "
+    "If it is a policy, the refusal will repeat after a fresh consent. "
+    + LEAVE_SETTINGS_TO_THE_USER
 )
 
 # A 403 with the setting already on. The consent advice would be wrong twice
