@@ -6,6 +6,38 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security
+
+- **`attachments_dir` checks recognise more spellings of the home or settings folder.** A
+  folder that holds home by another route is refused: on macOS, the Data volume and the
+  folders above it; on Windows, `\\?\C:\`-style device spellings, which are treated as the
+  drive path they name. The check never looks anything up on another filesystem, so loading
+  the config makes no network or directory-service request.
+- **An event's time-zone name is checked** before it goes into a request header.
+- **Document-reading errors use fixed phrases.** When `outlook_read_attachment` cannot read a
+  PDF or XLSX file, the error is one of three plain sentences (damaged or not a valid file,
+  hit a size or time limit, unexpected parser problem) instead of an internal exception name.
+
+### Fixed
+
+- **Malformed cursors are refused cleanly.** A pagination cursor's `skip` must be a
+  non-negative count; a delta link may carry only the query options its endpoint uses; a
+  digest token that is not a non-empty string is refused by name.
+- **A reply's text is placed above the quote** even when the quoted message or its header
+  content contains the text `<body`.
+- **`format="html"` and `format="full"` message bodies drop control characters,** as text
+  bodies already did.
+- **A download that finds `attachments_dir` changed mid-download** now gives the same refusal
+  as the other attachments-folder refusals.
+
+### Changed
+
+- **`outlook_reply` / `outlook_forward`: clearer failure messages.** A server error while the
+  reply is being created says it was not sent. When a draft made on the way could not be
+  cleaned up after a failure (these two tools, and the reply and forward drafts of the draft
+  tools), the error says a draft may remain in Drafts and gives its id.
+- **The inbox-rule write refusal** says a changed setting takes effect only after a restart.
+
 ## [1.31.3] — 2026-11-02
 
 Hardening: what an email can steer the agent into, and what a config can point it at.

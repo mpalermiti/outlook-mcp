@@ -98,7 +98,9 @@ outlook-mcp is designed with security in mind:
   the target cannot redirect the bytes.
 - **`attachments_dir` is a folder of its own.** It must be an absolute path and cannot be the
   home folder, a folder that contains it, or a folder that contains the settings folder, since
-  the attachment tools read and write everything under it. A config that breaks the rule fails
+  the attachment tools read and write everything under it. Other spellings of those folders
+  count too (on macOS the Data volume and the folders above it; on Windows `\\?\C:\`-style
+  device paths), and the check looks nothing up on another filesystem. A config that breaks the rule fails
   to load, so the server starts in its safe state; choose a subfolder. A `config.json` that
   repeats a key is refused for the same reason: it does not say which value is meant.
 - **Attachments as content touch no disk.** `as_content=True` on the downloads returns the
