@@ -797,7 +797,9 @@ def _attachments_value(which: str, home: Path, settings: Path, tmp_path: Path) -
         "relative": "relative/dir",
         "tilde": "~",
         "home realpath": os.path.realpath(home),
-        "filesystem root": "/",
+        # The root of home's own drive: on Windows a bare `/` has no drive, so it
+        # would only ever meet the "absolute" rule, never the home one.
+        "filesystem root": home.anchor,
         "folder above home": str(home.parent),
         "settings dir": str(settings),
         "folder above settings": str(settings.parent),
@@ -813,21 +815,28 @@ def _load_with_attachments_dir(tmp_path: Path, value: str):
     return load_config(config_dir=str(config_dir))
 
 
+# Each refusal names the rule that fired, in the validator's own words.
+_NOT_ABSOLUTE = "attachments_dir must be an absolute folder path"
+_HOLDS_HOME = "attachments_dir must not be the home directory or a folder that contains it"
+_HOLDS_SETTINGS = "attachments_dir must not be the settings directory or a folder that contains it"
+_RULE = {"absolute": _NOT_ABSOLUTE, "home": _HOLDS_HOME, "settings": _HOLDS_SETTINGS}
+
+
 @pytest.mark.parametrize(
-    "which",
+    "which,rule",
     [
-        "empty",
-        "relative",
-        "tilde",
-        "home realpath",
-        "filesystem root",
-        "folder above home",
-        "settings dir",
-        "folder above settings",
+        ("empty", "absolute"),
+        ("relative", "absolute"),
+        ("tilde", "home"),
+        ("home realpath", "home"),
+        ("filesystem root", "home"),
+        ("folder above home", "home"),
+        ("settings dir", "settings"),
+        ("folder above settings", "settings"),
     ],
 )
 def test_attachments_dir_that_is_not_a_folder_of_its_own_is_refused(
-    tmp_path, home_and_settings, which
+    tmp_path, home_and_settings, which, rule
 ):
     value = _attachments_value(which, *home_and_settings, tmp_path)
 
@@ -836,7 +845,8 @@ def test_attachments_dir_that_is_not_a_folder_of_its_own_is_refused(
 
     repair = config_repair_lines(exc.value)
     assert repair[0] == "The config file is invalid — the server cannot start:"
-    assert any(line.startswith("  attachments_dir: ") for line in repair)
+    [line] = [line for line in repair if line.startswith("  attachments_dir: ")]
+    assert _RULE[rule] in line
     assert "private-client-sentinel" not in "\n".join(repair)
     assert "private-client-sentinel" not in str(exc.value)
 
@@ -867,7 +877,7 @@ def test_attachments_dir_symlinked_to_home_or_settings_is_refused(
     except OSError:
         pytest.skip("symlink privilege unavailable")
 
-    with pytest.raises(ValidationError, match="attachments_dir"):
+    with pytest.raises(ValidationError, match=_RULE[target]):
         _load_with_attachments_dir(tmp_path, str(link))
 
 
@@ -878,7 +888,7 @@ def test_attachments_dir_spelt_in_another_case_is_still_home(tmp_path, home_and_
     if not (os.path.isdir(respelt) and os.path.samefile(respelt, home)):
         pytest.skip("this filesystem is case-sensitive")
 
-    with pytest.raises(ValidationError, match="attachments_dir"):
+    with pytest.raises(ValidationError, match=_HOLDS_HOME):
         _load_with_attachments_dir(tmp_path, respelt)
 
 
@@ -891,7 +901,7 @@ def test_the_default_attachments_dir_is_checked_too(tmp_path, home_and_settings)
         (settings / "attachments").symlink_to(home, target_is_directory=True)
     except OSError:
         pytest.skip("symlink privilege unavailable")
-    with pytest.raises(ValidationError, match="attachments_dir"):
+    with pytest.raises(ValidationError, match=_HOLDS_HOME):
         load_config(config_dir=no_file)
 
 
