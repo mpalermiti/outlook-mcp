@@ -33,11 +33,34 @@ def _failure(message: str) -> OutlookMCPError:
     )
 
 
+_DAMAGED = "Could not extract this document: the file is damaged or not a valid PDF/XLSX file."
+_LIMIT = "Could not extract this document: the file hit a size or time limit."
+_UNEXPECTED = "Could not extract this document: the parser failed on an unexpected problem."
+# Fixed phrases by exception class name. The worker reports only a class name and
+# any name not listed here gets the generic phrase, so no string a document can
+# influence ever reaches the model.
+_FAILURE_PHRASES = {
+    "PdfReadError": _DAMAGED,
+    "PdfStreamError": _DAMAGED,
+    "EmptyFileError": _DAMAGED,
+    "ParseError": _DAMAGED,
+    "BadZipFile": _DAMAGED,
+    "InvalidFileException": _DAMAGED,
+    "LimitReachedError": _LIMIT,
+    "RecursionError": _LIMIT,
+}
+
+
 def _parser_result(stdout: bytes) -> dict:
     try:
         parsed = json.loads(stdout)
         if not isinstance(parsed, dict):
             raise ValueError
+        if "failure" in parsed:
+            name = parsed["failure"]
+            raise _failure(
+                _FAILURE_PHRASES.get(name, _UNEXPECTED) if isinstance(name, str) else _UNEXPECTED
+            )
         if "error" in parsed:
             if not isinstance(parsed["error"], str):
                 raise ValueError

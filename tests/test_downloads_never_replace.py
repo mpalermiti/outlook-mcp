@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from outlook_mcp.config import Config
+from outlook_mcp.errors import LEAVE_SETTINGS_TO_THE_USER
 from outlook_mcp.tools import mail_attachments
 from outlook_mcp.tools.mail_attachments import (
     _validated_download_target,
@@ -236,6 +237,21 @@ def test_the_landing_check_refuses_a_target_outside_the_root_on_its_own(tmp_path
         _validated_download_target(str(elsewhere / "report.pdf"), str(base), requested="report.pdf")
 
 
+def test_a_moved_root_is_refused_in_the_resolvers_words_and_leaves_settings_alone(tmp_path):
+    base = tmp_path / "attachments"
+    base.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    with pytest.raises(ValueError) as error:
+        _validated_download_target(str(elsewhere / "report.pdf"), str(base), requested="report.pdf")
+
+    message = str(error.value)
+    assert message.startswith("Attachment path is outside the permitted directory: report.pdf. ")
+    assert f"Attachments may only be read from or written to {base}" in message
+    assert message.endswith(LEAVE_SETTINGS_TO_THE_USER)
+
+
 # ── The write itself never replaces a file ────────────────────────────────────
 
 
@@ -322,6 +338,27 @@ async def test_without_hard_links_a_file_created_meanwhile_is_not_replaced(tool,
 
     assert str(error.value) == _already_exists("report.pdf")
     assert target.read_bytes() == STAGED
+    assert _leftover_temp_files(base) == []
+
+
+@no_symlinks_on_windows
+async def test_without_hard_links_a_symlink_appearing_meanwhile_is_not_written_through(
+    tool, base, tmp_path, monkeypatch
+):
+    """A symlink (not a regular file) planted at the target while Graph answers is refused
+    by the exclusive create: nothing reaches what it points at, and no temp file stays."""
+    _no_hard_links(monkeypatch, "refused")
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(STAGED)
+    target = base / "report.pdf"
+    download, _ = tool(base, on_get=lambda: target.symlink_to(outside))
+
+    with pytest.raises(ValueError) as error:
+        await download("report.pdf")
+
+    assert str(error.value) == _already_exists("report.pdf")
+    assert target.is_symlink() and os.readlink(target) == str(outside)
+    assert outside.read_bytes() == STAGED
     assert _leftover_temp_files(base) == []
 
 

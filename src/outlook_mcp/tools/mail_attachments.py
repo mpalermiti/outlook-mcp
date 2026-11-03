@@ -107,6 +107,16 @@ def _starts_with_two_separators(path: str) -> bool:
     return len(path) >= 2 and path[0] in "\\/" and path[1] in "\\/"
 
 
+def _path_as_named(path: str, base: Path) -> Path:
+    """``path`` the way the caller named it: ``~`` expanded, a relative one joined to ``base``.
+
+    One rule for the confinement check and the download's name check, so they
+    cannot disagree about which path was asked for. Nothing is resolved here.
+    """
+    named = Path(os.path.expanduser(path))
+    return named if named.is_absolute() else base / named
+
+
 def resolve_attachment_path(
     path: str, attachments_dir: str, *, file_root: str | None = None
 ) -> str:
@@ -169,9 +179,7 @@ def resolve_attachment_path(
             f"directory: {path}. Attachments may only be read from or written to "
             f"{attachments_dir}."
         )
-    candidate = Path(expanded)
-    if not candidate.is_absolute():
-        candidate = base / candidate
+    candidate = _path_as_named(path, base)
     # strict=False by default: download writes a file that does not exist yet.
     resolved = candidate.resolve()
 
@@ -401,6 +409,9 @@ def _readable_text(
 ) -> str | None:
     """Decode supported text, returning None when its declared codec cannot decode it.
 
+    Also None for a charset that is not a standard text charset: a sender chooses
+    the declared charset, so only real text charsets are decoded.
+
     Ordinary byte-content delivery leaves decoded text unaltered; control-bearing text
     goes out whole as a resource instead. Extraction normalizes lines, strips controls
     and replaces unpaired surrogates before paging.
@@ -589,7 +600,10 @@ def _validated_download_target(save_path: str, attachments_dir: str, *, requeste
     except ValueError:
         # resolve_attachment_path has just confined it, so this means the root moved.
         raise ValueError(
-            f"Attachment path is outside the permitted directory: {requested}."
+            f"Attachment path is outside the permitted directory: {requested}. "
+            f"Attachments may only be read from or written to {attachments_dir}, "
+            "the server's attachments_dir setting, which changed while this download "
+            f"was running. {LEAVE_SETTINGS_TO_THE_USER}"
         ) from None
     hidden = next((part for part in below_root.parts if part.startswith(".")), None)
     if hidden is not None:
@@ -602,9 +616,7 @@ def _validated_download_target(save_path: str, attachments_dir: str, *, requeste
             f"Attachment download directory does not exist: {target.parent}. "
             "Create it first — downloads do not create directories on demand."
         )
-    named = Path(os.path.expanduser(requested))
-    if not named.is_absolute():
-        named = base / named
+    named = _path_as_named(requested, base)
     as_named = named.parent.resolve() / named.name
     for path in (as_named, target):
         if os.path.lexists(path):

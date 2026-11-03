@@ -168,7 +168,8 @@ def main() -> None:
     except RefusalError as exc:
         result = {"error": str(exc)}
     except Exception as exc:
-        result = {"error": f"Could not extract this document ({type(exc).__name__})."}
+        # Only the class name leaves the worker; the parent maps it to a fixed phrase.
+        result = {"failure": type(exc).__name__}
     else:
         sys.stdout.buffer.write(output + b"\n")
         return

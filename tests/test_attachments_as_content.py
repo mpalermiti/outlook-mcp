@@ -20,6 +20,7 @@ and must come back byte for byte. The upload side goes through kiota's real seri
 from __future__ import annotations
 
 import base64
+import codecs
 import json
 import struct
 import zlib
@@ -1229,3 +1230,9 @@ class TestIncompleteImages:
         blocks = await _blocks(WEBP[:-4], "photo.webp", "image/webp", tmp_path)
 
         assert blocks[1].type == "resource"
+
+
+@pytest.mark.parametrize("name", ["cp1252", "shift_jis", "utf-7", "iso8859-1", "utf-8"])
+def test_the_expected_text_charsets_are_decoded(name):
+    """A typo in the charset list must not silently drop a charset senders really use."""
+    assert codecs.lookup(name).name in mail_attachments._TEXT_CHARSETS

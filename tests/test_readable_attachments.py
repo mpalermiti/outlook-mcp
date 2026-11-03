@@ -318,7 +318,7 @@ async def test_parser_error_never_echoes_hostile_numeric_cell():
         await mail_attachment_read.read_attachment(sdk, **ARGS)
     error = str(exc.value)
     assert len(error) < 500 and "SYSTEM:" not in error and "attacker.example" not in error
-    assert "ValueError" in error
+    assert "ValueError" not in error and "Could not extract this document" in error
 
 
 def test_parent_caps_and_cleans_worker_errors():
@@ -571,9 +571,9 @@ def test_parser_execution_errors_are_not_mislabeled(monkeypatch, capsys, error_t
 
     monkeypatch.setattr(_document_worker, "pdf", fail)
     _document_worker.main()
-    error = json.loads(capsys.readouterr().out)["error"]
-    assert error_type.__name__ in error and "attacker-controlled" not in error
-    assert "install" not in error and "UTF-8" not in error
+    output = json.loads(capsys.readouterr().out)
+    # Only the class name leaves the worker; the parent maps it to a fixed phrase.
+    assert output == {"failure": error_type.__name__}
 
 
 async def test_worker_output_is_bounded_before_json_parsing(monkeypatch, tmp_path):
