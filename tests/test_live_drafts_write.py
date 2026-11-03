@@ -120,29 +120,37 @@ class _TextRuns(HTMLParser):
             self.runs.append(data)
 
 
+# Zero-width and format characters: invisible, and Graph may add or drop them.
+_INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff\u034f"))
+
+
 def _visible_text(html: str) -> str:
-    """The text a reader sees, whitespace collapsed: what a quote must keep.
+    """The characters a reader sees, whitespace and invisible characters removed.
 
     Graph rewrites a draft's HTML when it saves one (attribute order and quoting,
     inline styles, entities), most visibly in heavy marketing mail, so the quote's
     markup after our PATCH is not byte-for-byte the markup Graph quoted. Its text
-    is. Runs are joined with a space, so markup Graph re-indents or joins between
-    two tags cannot glue words together or split them apart.
+    is, up to layout: Graph re-indents or joins markup between two tags, drops an
+    empty inline element inside a word (``Sa<span></span>le``) and escapes a bare
+    ``<``. So the runs are joined with nothing between them and every whitespace
+    character is removed, and with them the zero-width and format characters.
     """
     parser = _TextRuns()
     parser.feed(html)
     parser.close()
-    return " ".join(" ".join(parser.runs).split())
+    return "".join("".join(parser.runs).translate(_INVISIBLE).split())
 
 
 def _first_difference(expected: str, actual: str) -> str:
+    """Where two :func:`_visible_text` results part, with the text around it."""
     at = next(
         (i for i, (x, y) in enumerate(zip(expected, actual)) if x != y),
         min(len(expected), len(actual)),
     )
     start = max(at - 60, 0)
     return (
-        f"first difference at character {at} of {len(expected)}:\n"
+        f"first difference at visible character {at} of {len(expected)} "
+        f"(kept: {len(actual)}; whitespace removed):\n"
         f"  quoted: {expected[start : at + 120]!r}\n"
         f"  kept:   {actual[start : at + 120]!r}"
     )
