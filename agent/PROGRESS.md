@@ -2,6 +2,13 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-03 — live-gap-98-run (second session today; parked as `[?]`)
+
+- Smoke: 3083 passed, 4 skipped, 126 deselected; ruff check + format clean. Never passed `-m`. No source or test change since the earlier session today (HEAD d6897c1 is notes only), so its offline re-verification still stands.
+- No `*(steering: …)*` line carries Neil's result. Workers can't read GitHub, so a `[ ]` box here only gets the card handed out again with nothing to do — it was, twice today.
+- Flipped the line to `[?]` with a fresh question: keep waiting for Neil (relay his output as a comment), run it himself, or drop the card into the first step of a #98 fix. Rewrote only this card's own line; history condensed into its Notes.
+- No code change, no task file (nothing for a PR to describe beyond the queue line). Live test NOT run.
+
 ## 2026-11-03 — live-gap-98-run (still waiting on Neil; re-verified offline)
 
 - Smoke: `uv sync --all-extras --locked` (the venv was behind `uv.lock`; no lock change), then 3083 passed, 4 skipped, 126 deselected; ruff check + format clean. Never passed `-m`.
