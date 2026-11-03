@@ -2,6 +2,14 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-03 — live-gap-98-run (still waiting on Neil; re-verified offline)
+
+- Smoke: `uv sync --all-extras --locked` (the venv was behind `uv.lock`; no lock change), then 3083 passed, 4 skipped, 126 deselected; ruff check + format clean. Never passed `-m`.
+- Neil's result can't be checked: this contract forbids `gh` and says workers don't read GitHub, and no `*(steering: …)*` line carries a result. #119 NOT re-checked.
+- Re-verified the #98 test is still runnable as written against today's code: `update_event` re-sends `recurrence` only when the zone changes (`stored_zone != start_zone`), so the same-zone date move #98 describes still sends `start`/`end` alone → bug still present in code, XFAIL still the expected outcome. Test calls still match `update_event`/`_temporary_event` signatures; `tests/test_live_gap_98_classifier.py` 8 passed. Live test NOT run.
+- No code change. Queue line: worker note + For Michael updated; box left `[ ]` (waiting on an outside reporter, not a decision).
+- Env: `uv` needs the sandbox off (`~/.cache/uv` not permitted) and `PATH=$HOME/.local/bin:$PATH`; `uv run --offline` after the sync.
+
 ## 2026-10-29 — full-format-text-half (#124 follow-up)
 
 - Addressed PR comments: IC_kwDOSA_0Lc8AAAABgqxo3g (`[construct review]` of 2345497: the `_TEXT_BODY_PREFER` comment and the wire-test docstring claimed a `text` read hides `display:none` text; the CHANGELOG says it may remain). Valid; both now say markup, comments and `<style>` go, styled-hidden text may remain. No Michael comments, no inline comments on #171.
