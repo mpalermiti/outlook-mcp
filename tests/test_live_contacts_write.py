@@ -522,7 +522,11 @@ class TestEmailAddressRoundTrip:
 
         If Graph ignored the header on contacts, the pin on the merge would protect
         nothing and an address added elsewhere between the read and the PATCH would
-        be silently dropped.
+        be silently dropped. So that is the sequence here: read the contact and keep
+        its tag, add an address with an unpinned PATCH as another client would, then
+        send the addresses from the first read pinned to the first read's tag. The
+        tag is a real one Graph issued, now out of date; a made-up tag is refused as
+        malformed (400), which says nothing about whether a stale one is enforced.
         """
         import httpx
 
@@ -537,26 +541,55 @@ class TestEmailAddressRoundTrip:
             email="pinned@example.com",
         ) as contact_id:
             url = f"https://graph.microsoft.com/v1.0/me/contacts/{contact_id}"
-            current = httpx.get(url, headers=headers, timeout=30).json()
-            etag = current.get("@odata.etag")
-            assert etag, "Graph returned no @odata.etag on a contact, so the merge cannot pin"
+            first_read = httpx.get(url, headers=headers, timeout=30)
+            assert first_read.status_code == 200, first_read.text
+            first = first_read.json()
+            stale_tag = first.get("@odata.etag")
+            assert stale_tag, "Graph returned no @odata.etag on a contact, so the merge cannot pin"
+
+            # The edit made elsewhere between our read and our write: no If-Match.
+            elsewhere = httpx.patch(
+                url,
+                headers=headers,
+                json={
+                    "emailAddresses": [
+                        *first["emailAddresses"],
+                        {"address": "elsewhere@example.com"},
+                    ]
+                },
+                timeout=30,
+            )
+            assert elsewhere.status_code == 200, elsewhere.text
+            second_read = httpx.get(url, headers=headers, timeout=30)
+            assert second_read.status_code == 200, second_read.text
+            second = second_read.json()
+            current_tag = second.get("@odata.etag")
+            assert current_tag and current_tag != stale_tag, (
+                f"Graph kept the contact's tag ({stale_tag}) across a change, so an "
+                "If-Match cannot tell a stale read from a current one and pinning the "
+                "address merge protects nothing."
+            )
 
             stale = httpx.patch(
                 url,
-                headers={**headers, "If-Match": 'W/"AAAAAAAAAAAAAAAAAAAAAAAAAAAA"'},
-                json={"emailAddresses": current["emailAddresses"]},
+                headers={**headers, "If-Match": stale_tag},
+                json={"emailAddresses": first["emailAddresses"]},
                 timeout=30,
             )
             assert stale.status_code == 412, (
-                f"Graph ignored a stale If-Match on a contact (answered {stale.status_code}), "
-                "so pinning the address merge protects nothing."
+                f"Graph ignored a stale If-Match on a contact (answered {stale.status_code}: "
+                f"{stale.text[:300]}), so pinning the address merge protects nothing."
             )
             assert stale.json()["error"]["code"] == "ErrorIrresolvableConflict"
 
+            # Refused means not applied: the address added elsewhere is still there.
+            got = await get_contact(real_graph_client.sdk_client, contact_id)
+            assert self._addresses(got) == ["pinned@example.com", "elsewhere@example.com"]
+
             fresh = httpx.patch(
                 url,
-                headers={**headers, "If-Match": etag},
-                json={"emailAddresses": current["emailAddresses"]},
+                headers={**headers, "If-Match": current_tag},
+                json={"emailAddresses": second["emailAddresses"]},
                 timeout=30,
             )
             assert fresh.status_code == 200, fresh.text
