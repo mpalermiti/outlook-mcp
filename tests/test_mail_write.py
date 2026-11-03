@@ -2,11 +2,14 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from msgraph.generated.models.o_data_errors.o_data_error import ODataError
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import GraphAPIError, ReadOnlyError
+from outlook_mcp.errors import GraphAPIError, ReadOnlyError, wrap_graph_error
 from outlook_mcp.tools.mail_write import forward, reply, send_message
+from tests.test_mail_drafts import _graph_refusal
 
 _CFG = Config(client_id="test")
 _CFG_RO = Config(client_id="test", read_only=True)
@@ -267,7 +270,6 @@ class TestReplyContentType:
     async def test_a_failed_patch_deletes_the_draft_and_sends_nothing(self):
         client, _, draft = _thread_client()
         draft.patch = AsyncMock(side_effect=RuntimeError("patch refused"))
-        draft.delete = AsyncMock(side_effect=RuntimeError("delete refused"))
 
         with pytest.raises(RuntimeError, match="patch refused"):
             await reply(client, message_id="AAMkAG123=", body="x", config=_CFG)
@@ -289,6 +291,69 @@ class TestReplyContentType:
         assert "OSError" in text and "connection reset" not in text, text
         assert "Check Sent Items" in text and "still in Drafts" in text, text
         assert "The draft's id is R1." in text, text
+
+
+def _fail(draft, step):
+    """Make the draft's PATCH, or its send, answer 400; return the error raised."""
+    refusal = _graph_refusal(400)
+    if step == "patch":
+        draft.patch = AsyncMock(side_effect=refusal)
+    else:
+        draft.send.post = AsyncMock(side_effect=refusal)
+    return refusal
+
+
+class TestADraftThatCouldNotBeRemoved:
+    """A reply's draft whose PATCH failed, or whose send Graph refused, is deleted.
+
+    When that delete fails too, the draft is still there: the error the agent reads
+    says so and gives its id. When the delete worked, the error says nothing of it.
+    """
+
+    @pytest.mark.parametrize("step", ["patch", "send"])
+    async def test_the_error_says_the_draft_may_remain_in_drafts(self, step):
+        client, _, draft = _thread_client()
+        _fail(draft, step)
+        draft.delete = AsyncMock(side_effect=_graph_refusal(503, "ServiceUnavailable"))
+
+        with pytest.raises(GraphAPIError) as caught:
+            await reply(client, message_id="AAMkAG123=", body="x", config=_CFG)
+
+        draft.delete.assert_awaited_once()
+        # The PATCH's or the send's error is the one reported, not the delete's.
+        assert (caught.value.status_code, caught.value.message) == (400, "Refused.")
+        text = str(caught.value)
+        assert "may remain in Drafts" in text, text
+        assert "The draft's id is R1." in text, text
+
+    async def test_a_patch_failure_that_is_not_a_graph_answer_says_so_too(self):
+        """Only the failure's type is named: its text can carry the request URL."""
+        client, _, draft = _thread_client()
+        url = "https://graph.microsoft.com/v1.0/me/messages/R1"
+        draft.patch = AsyncMock(side_effect=httpx.ConnectError(url))
+        draft.delete = AsyncMock(side_effect=httpx.ConnectError(url))
+
+        with pytest.raises(GraphAPIError) as caught:
+            await forward(client, "AAMkAG123=", ["a@example.com"], comment="x", config=_CFG)
+
+        draft.send.post.assert_not_called()
+        text = str(caught.value)
+        assert "ConnectError" in text and "may remain in Drafts" in text, text
+        assert "graph.microsoft.com" not in text, text
+
+    @pytest.mark.parametrize("step", ["patch", "send"])
+    async def test_a_draft_that_was_deleted_is_not_said_to_remain(self, step):
+        client, _, draft = _thread_client()
+        refusal = _fail(draft, step)
+
+        with pytest.raises((GraphAPIError, ODataError)) as caught:
+            await reply(client, message_id="AAMkAG123=", body="x", config=_CFG)
+
+        draft.delete.assert_awaited_once()
+        # The PATCH's own error, or the send's as call_without_replay reports it.
+        assert caught.value is refusal or caught.value.__cause__ is refusal
+        reported = caught.value if step == "send" else wrap_graph_error(caught.value)
+        assert "Drafts" not in str(reported), str(reported)
 
 
 class TestForwardComment:

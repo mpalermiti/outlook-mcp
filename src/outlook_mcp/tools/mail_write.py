@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any
 
 from outlook_mcp.config import Config
@@ -15,6 +14,7 @@ from outlook_mcp.errors import (
 from outlook_mcp.permissions import CATEGORY_MAIL_SEND, check_permission
 from outlook_mcp.throttle import call_without_replay
 from outlook_mcp.tools._mail_body import above_quote, check_body_format, message_body
+from outlook_mcp.tools.mail_drafts import _left_in_drafts
 from outlook_mcp.validation import validate_email, validate_graph_id
 
 
@@ -119,7 +119,8 @@ async def _send_in_thread(
     draft is sent.
 
     Nothing has gone out before the send. A failed PATCH, or a send Graph refused
-    (a 4xx), deletes the draft and raises. After a 5xx, or a send cut off before
+    (a 4xx), deletes the draft and raises; if the delete fails too, the error says
+    the draft may remain in Drafts and gives its id. After a 5xx, or a send cut off before
     Graph answered (a dropped connection, a timeout), the send may have happened,
     so the draft is left alone and the error says where to look and gives its id.
     """
@@ -158,10 +159,13 @@ async def _send_in_thread(
             patch = Message()
             patch.body = above_quote(draft.body, text, is_html, is_markdown=is_markdown)
             await new_draft.patch(patch)
-    except Exception:
-        # The PATCH's error is the one to report, even if the delete fails too.
-        with contextlib.suppress(Exception):
+    except Exception as exc:
+        # The PATCH's error is the one to report, and if the delete fails too, it says
+        # the draft may still be in Drafts.
+        try:
             await new_draft.delete()
+        except Exception:
+            raise _left_in_drafts(exc, draft.id) from exc
         raise
 
     in_doubt = f"{DRAFT_MAY_HAVE_BEEN_SENT} The draft's id is {draft.id}."
@@ -172,9 +176,11 @@ async def _send_in_thread(
         )
     except GraphAPIError as exc:
         if 400 <= exc.status_code < 500:
-            # Refused, so not sent: leave nothing behind.
-            with contextlib.suppress(Exception):
+            # Refused, so not sent: leave nothing behind, or say what was left.
+            try:
                 await new_draft.delete()
+            except Exception:
+                raise _left_in_drafts(exc, draft.id) from exc
         raise
     except Exception as exc:
         # No answer from Graph at all, which leaves the send as much in doubt as a
