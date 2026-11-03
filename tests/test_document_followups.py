@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import sys
+from io import BytesIO
+from zipfile import ZipFile
 
 import pytest
 from kiota_abstractions.base_request_configuration import RequestConfiguration
@@ -96,6 +98,7 @@ print(json.dumps({
     [
         ("PdfReadError", "damaged or not a valid"),
         ("BadZipFile", "damaged or not a valid"),
+        ("KeyError", "damaged or not a valid"),
         ("LimitReachedError", "size or time limit"),
     ],
 )
@@ -104,6 +107,26 @@ def test_a_worker_failure_class_is_shown_as_a_fixed_phrase(failure, phrase):
         mail_attachment_read._parser_result(json.dumps({"failure": failure}).encode())
     assert phrase in str(error.value)
     assert failure not in str(error.value)
+
+
+async def test_a_workbook_missing_its_workbook_part_reads_as_damaged():
+    """openpyxl raises KeyError for an archive without ``xl/workbook.xml``, a common
+    damaged-file case; it reads as damaged, not as an unexpected problem."""
+    openpyxl = pytest.importorskip("openpyxl")
+    book = BytesIO()
+    openpyxl.Workbook().save(book)
+    damaged = BytesIO()
+    with ZipFile(book) as original, ZipFile(damaged, "w") as rewritten:
+        for item in original.infolist():
+            if item.filename != "xl/workbook.xml":
+                rewritten.writestr(item, original.read(item))
+    sdk, _ = graph(damaged.getvalue(), "damaged.xlsx", "application/octet-stream")
+
+    with pytest.raises(OutlookMCPError) as error:
+        await mail_attachment_read.read_attachment(sdk, **ARGS)
+
+    assert "damaged or not a valid" in str(error.value)
+    assert "KeyError" not in str(error.value)
 
 
 def test_a_worker_failure_name_is_never_echoed():

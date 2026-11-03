@@ -46,6 +46,8 @@ _FAILURE_PHRASES = {
     "ParseError": _DAMAGED,
     "BadZipFile": _DAMAGED,
     "InvalidFileException": _DAMAGED,
+    # openpyxl's answer to an archive without a part it needs, xl/workbook.xml say.
+    "KeyError": _DAMAGED,
     "LimitReachedError": _LIMIT,
     "RecursionError": _LIMIT,
 }
