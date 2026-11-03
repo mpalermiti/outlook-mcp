@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import httpx
 
@@ -71,6 +71,39 @@ _DELTA_ENDPOINTS: dict[str, re.Pattern[str]] = {
 # An HTTP client collapses `..` before sending, so a path that matches the
 # pattern above as written could still arrive somewhere else.
 _PATH_TRICKS = re.compile(r"(?:^|/)(?:\.|%2e){1,2}(?:/|$)|%2f|%5c|\\", re.IGNORECASE)
+
+# The query options each tool's delta link may carry, lower-cased. Graph folds
+# every option of a sync round into its `$deltatoken` or `$skiptoken`, so the
+# links it issues carry one of those; the rest are what this server's own first
+# request sends to that endpoint (`mail_delta`, `calendar_delta`,
+# `contacts_delta`). Pinning the path alone left a cursor free to add options —
+# `$select`, `$expand` — that Graph never issued and this server never asks for.
+_STATE_TOKENS = frozenset({"$deltatoken", "$skiptoken"})
+_DELTA_QUERY_OPTIONS: dict[str, frozenset[str]] = {
+    "mail": _STATE_TOKENS | {"$top", "$filter"},
+    "calendar": _STATE_TOKENS | {"startdatetime", "enddatetime"},
+    "contacts": _STATE_TOKENS,
+}
+
+
+def _query_is_the_endpoints_own(query: str, resource: str) -> bool:
+    """Whether every option in ``query`` is one ``resource``'s delta links carry.
+
+    Names are compared as Graph reads them: percent-decoded, and in any ASCII
+    case, since Graph ignores case in option names as it does in the path. Only
+    the names are checked; the values are Graph's tokens and this server's own.
+    """
+    if not query:
+        return True
+    allowed = _DELTA_QUERY_OPTIONS[resource]
+    for option in query.split("&"):
+        name = unquote(option.partition("=")[0])
+        # ASCII first: `str.lower()` folds a few non-ASCII letters (the Kelvin
+        # sign, say) onto ASCII ones, and the names are ASCII.
+        if not name.isascii() or name.lower() not in allowed:
+            return False
+    return True
+
 
 # Safety cap multiplier — bound a single tool call to at most this many
 # items even when Graph keeps handing us more ``@odata.nextLink`` pages
@@ -165,7 +198,11 @@ def require_graph_url(url: str, *, source: str, resource: str | None = None) -> 
 
     if resource is not None:
         endpoint = _DELTA_ENDPOINTS[resource]
-        if _PATH_TRICKS.search(parsed.path) or not endpoint.fullmatch(parsed.path):
+        if (
+            _PATH_TRICKS.search(parsed.path)
+            or not endpoint.fullmatch(parsed.path)
+            or not _query_is_the_endpoints_own(parsed.query, resource)
+        ):
             raise ForeignCursorError(source, url, resource)
 
     # Return what was checked, not what was passed in — validating one string

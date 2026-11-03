@@ -384,6 +384,128 @@ class TestCursorIsBoundToItsTool:
             require_graph_url(f"{G}/v1.0/me/contacts/delta", source="x", resource="notes")
 
 
+# ── A cursor's query is Graph's, not the caller's ────────────────────
+# Graph folds every option of a delta round into its `$deltatoken` or
+# `$skiptoken`, so a link it issues carries one of those and, on a first URL,
+# only what this server's own first request sends: `$top` and `$filter` for
+# mail, `startDateTime` and `endDateTime` for the calendar view, nothing for
+# contacts. Anything else on a cursor was added after Graph issued it.
+
+MAIL_DELTA = f"{G}/v1.0/me/mailFolders('AQMkADAwATM0MDAAMS1iNTcAZC04MgBlLTAwAi0wMAoALgAAA')"
+MAIL_DELTA += "/messages/delta"
+CALENDAR_DELTA = f"{G}/v1.0/me/calendarView/delta"
+CONTACTS_DELTA = f"{G}/v1.0/me/contacts/delta"
+
+OWN_QUERIES = [
+    pytest.param(
+        "mail",
+        f"{G}/v1.0/me/mailFolders/INBOX_ID/messages/delta?$top=50"
+        "&$filter=receivedDateTime%20ge%202026-05-21T06:00:00Z",
+        id="mail-first-with-window",
+    ),
+    pytest.param("mail", f"{MAIL_DELTA}?$skiptoken=abc", id="mail-nextlink"),
+    pytest.param("mail", f"{MAIL_DELTA}?%24deltatoken=abc", id="mail-encoded-dollar"),
+    pytest.param("calendar", f"{CALENDAR_DELTA}?$deltaToken=abc", id="calendar-mixed-case"),
+    pytest.param("calendar", f"{CALENDAR_DELTA}?$skiptoken=abc", id="calendar-nextlink"),
+    pytest.param("contacts", f"{CONTACTS_DELTA}?$deltatoken=abc", id="contacts-deltalink"),
+    pytest.param("contacts", f"{CONTACTS_DELTA}?", id="contacts-empty-query"),
+]
+
+WIDENED_QUERIES = [
+    pytest.param(
+        "mail",
+        f"{MAIL_DELTA}?$deltatoken=abc&$select=body,internetMessageHeaders&$expand=attachments",
+        id="mail-select-and-expand",
+    ),
+    pytest.param("mail", f"{MAIL_DELTA}?$deltatoken=abc&%24select=body", id="encoded-select"),
+    pytest.param("mail", f"{MAIL_DELTA}?$deltatoken=abc&select=body", id="select-without-dollar"),
+    pytest.param("mail", f"{MAIL_DELTA}?$deltatoken=abc&$SELECT=body", id="select-upper-case"),
+    pytest.param(
+        "mail",
+        f"{MAIL_DELTA}?startDateTime=2026-01-01T00:00:00Z&$deltatoken=abc",
+        id="calendar-option-on-mail",
+    ),
+    pytest.param("calendar", f"{CALENDAR_DELTA}?$deltatoken=abc&$top=999", id="calendar-top"),
+    pytest.param(
+        "calendar", f"{CALENDAR_DELTA}?$deltatoken=abc&$expand=attachments", id="calendar-expand"
+    ),
+    pytest.param(
+        "contacts", f"{CONTACTS_DELTA}?$filter=startswith(displayName,'a')", id="contacts-filter"
+    ),
+    pytest.param("contacts", f"{CONTACTS_DELTA}?$skiptoken=abc&", id="trailing-empty-option"),
+    pytest.param("contacts", f"{CONTACTS_DELTA}?=abc", id="nameless-option"),
+    # `str.lower()` maps the Kelvin sign onto an ASCII `k`; the names are ASCII.
+    pytest.param("contacts", f"{CONTACTS_DELTA}?$sKiptoken=abc", id="unicode-case-fold"),
+]
+
+
+class TestCursorQueryIsGraphs:
+    @pytest.mark.parametrize(("resource", "url"), OWN_QUERIES)
+    def test_the_options_a_real_link_carries_are_accepted(self, resource, url):
+        assert require_graph_url(url, source="delta_token", resource=resource) == url
+
+    @pytest.mark.parametrize(("resource", "url"), WIDENED_QUERIES)
+    def test_any_other_option_is_refused_as_a_foreign_cursor(self, resource, url):
+        with pytest.raises(OutlookMCPError) as exc:
+            require_graph_url(url, source="delta_token", resource=resource)
+        assert exc.value.code == "foreign_cursor"
+        assert "delta_token" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_a_widened_caller_cursor_sends_no_request_at_all():
+    patcher, sent = _recording_client([])
+    with patcher:
+        with pytest.raises(OutlookMCPError):
+            await fetch_delta_pages(
+                _credential(),
+                initial_url="",
+                delta_token=f"{MAIL_DELTA}?$deltatoken=abc&$expand=attachments",
+                page_size=10,
+                resource="mail",
+            )
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_a_widened_nextlink_stops_the_walk_and_a_real_one_is_followed():
+    """Response links go through the same check as the caller's cursor."""
+    real = f"{MAIL_DELTA}?$skiptoken=page2"
+    pages = [
+        _http_response({"value": [{"id": "m1"}], "@odata.nextLink": real}),
+        _http_response(
+            {"value": [{"id": "m2"}], "@odata.nextLink": f"{real}&$select=body"},
+        ),
+        _http_response({"value": []}),
+    ]
+    patcher, sent = _recording_client(pages)
+    with patcher:
+        with pytest.raises(OutlookMCPError):
+            await fetch_delta_pages(
+                _credential(),
+                initial_url=GRAPH_DELTA,
+                delta_token=None,
+                page_size=10,
+                resource="mail",
+            )
+    assert [url for url, _ in sent] == [GRAPH_DELTA, real]
+
+
+@pytest.mark.asyncio
+async def test_a_widened_deltalink_is_not_handed_back():
+    body = {"value": [], "@odata.deltaLink": f"{CONTACTS_DELTA}?$deltatoken=abc&$top=1000"}
+    patcher, _sent = _recording_client([_http_response(body)])
+    with patcher:
+        with pytest.raises(OutlookMCPError):
+            await fetch_delta_pages(
+                _credential(),
+                initial_url=CONTACTS_DELTA,
+                delta_token=None,
+                page_size=10,
+                resource="contacts",
+            )
+
+
 @pytest.mark.asyncio
 async def test_another_tools_cursor_sends_no_request_at_all():
     patcher, sent = _recording_client([])
