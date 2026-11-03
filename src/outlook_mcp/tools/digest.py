@@ -462,8 +462,7 @@ async def changes_since(
     # Each token becomes a request URL, so anything but the cursor string a
     # previous call returned is refused here, naming the key, before Graph is
     # asked. A list or a number would otherwise fail deep in the URL check as an
-    # unexplained crash; an empty string would skip that check and bootstrap
-    # without the window.
+    # unexplained crash, and an empty string would skip that check altogether.
     for key in ("mail", "events", "contacts"):
         token = tokens.get(key)
         if token is not None and (not isinstance(token, str) or not token):

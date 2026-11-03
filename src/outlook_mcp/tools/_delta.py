@@ -89,9 +89,10 @@ _DELTA_QUERY_OPTIONS: dict[str, frozenset[str]] = {
 def _query_is_the_endpoints_own(query: str, resource: str) -> bool:
     """Whether every option in ``query`` is one ``resource``'s delta links carry.
 
-    Names are compared as Graph reads them: percent-decoded, and in any ASCII
-    case, since Graph ignores case in option names as it does in the path. Only
-    the names are checked; the values are Graph's tokens and this server's own.
+    Names are compared percent-decoded and in any ASCII case, so a real link is
+    not refused for spelling an option `%24skiptoken` or `$deltaToken`; either
+    way the name must still be one listed above. Only the names are checked: the
+    values are Graph's tokens and this server's own first-request values.
     """
     if not query:
         return True
