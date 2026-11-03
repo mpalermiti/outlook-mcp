@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from outlook_mcp import config as _config
 from outlook_mcp.config import Config, EnvironmentConfigError, _misspelt_safety_key, _squash
 from outlook_mcp.permissions import VALID_CATEGORIES
 
@@ -25,7 +26,6 @@ SECURITY_FIELDS = (
 )
 ENV_FIELDS = {PREFIX + field.upper(): field for field in (*PLAIN_FIELDS, *SECURITY_FIELDS)}
 BOOL_FIELDS = {"read_only", "read_only_consent", "allow_unencrypted_token_cache"}
-_WINDOWS = os.name == "nt"
 
 
 def _refuse(variable: str, reason: str) -> EnvironmentConfigError:
@@ -57,23 +57,21 @@ def _narrow_attachment_root(value: str, baseline: str) -> tuple[str, str]:
 
     A new Windows UNC/device location is rejected lexically before resolution can
     contact a server. An operator-approved UNC root can only name its descendants.
+    Whether this is Windows, and what counts as a network path, are the config
+    file's own rules, read from that module when called.
     """
     variable = PREFIX + "ATTACHMENTS_DIR"
     value, baseline = os.path.expanduser(value), os.path.expanduser(baseline)
-    if _WINDOWS:
+    if _config._WINDOWS:
         root_drive = ntpath.splitdrive(ntpath.abspath(baseline))[0].casefold()
         target_drive = ntpath.splitdrive(ntpath.abspath(value))[0].casefold()
         if target_drive != root_drive:
             raise _refuse(variable, "an override on a different drive or share is refused.")
-    if _WINDOWS and len(value) >= 2 and all(c in "\\/" for c in value[:2]):
+    if _config._is_network_path(value):
         root = ntpath.normcase(ntpath.abspath(baseline))
         target = ntpath.normcase(ntpath.abspath(value))
         try:
-            within = (
-                len(root) >= 2
-                and all(c in "\\/" for c in root[:2])
-                and ntpath.commonpath((root, target)) == root
-            )
+            within = _config._is_network_path(root) and ntpath.commonpath((root, target)) == root
         except ValueError:
             within = False
         if not within:

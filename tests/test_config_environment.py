@@ -13,6 +13,7 @@ import pytest
 from mcp.client import Client
 
 from outlook_mcp import _config_env
+from outlook_mcp import config as config_mod
 from outlook_mcp.config import Config, EnvironmentConfigError, config_repair_lines, load_config
 from outlook_mcp.permissions import VALID_CATEGORIES
 from outlook_mcp.tools.mail_attachments import resolve_attachment_path
@@ -463,7 +464,7 @@ def test_relative_attachment_override_is_frozen_after_checking(tmp_path, monkeyp
     ],
 )
 def test_windows_network_escape_is_refused_before_any_resolution(monkeypatch, target):
-    monkeypatch.setattr(_config_env, "_WINDOWS", True)
+    monkeypatch.setattr(config_mod, "_WINDOWS", True)
     monkeypatch.setattr(
         _config_env, "Path", lambda *_: pytest.fail("resolved an unapproved network path")
     )
@@ -805,7 +806,7 @@ def test_existing_windows_unc_root_can_narrow_without_real_network(monkeypatch):
     from pathlib import PureWindowsPath
     from types import SimpleNamespace
 
-    monkeypatch.setattr(_config_env, "_WINDOWS", True)
+    monkeypatch.setattr(config_mod, "_WINDOWS", True)
     monkeypatch.setattr(
         _config_env, "Path", lambda path: SimpleNamespace(resolve=lambda: PureWindowsPath(path))
     )
@@ -817,7 +818,7 @@ def test_existing_windows_unc_root_can_narrow_without_real_network(monkeypatch):
 
 
 def test_same_share_network_sibling_is_refused_before_resolution(monkeypatch):
-    monkeypatch.setattr(_config_env, "_WINDOWS", True)
+    monkeypatch.setattr(config_mod, "_WINDOWS", True)
     monkeypatch.setattr(
         _config_env, "Path", lambda *_: pytest.fail("resolved outside the approved network root")
     )
