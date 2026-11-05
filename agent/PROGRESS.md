@@ -2,6 +2,29 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-03 — live-gap-98-run (done: Michael's run recorded)
+
+- Smoke: 3083 passed, 4 skipped, 126 deselected; ruff check + format clean. Never passed `-m`.
+- Michael's steering on the card (2026-11-03 14:19): he ran the test on 2026-11-02 during the 1.31.3 release checks (main 0f9b469); both XFAIL with reason `#98: a same-zone date move of a series master leaves its occurrences`.
+- Recorded in `agent/findings/live-gap-98.md` § Result (above § Where), and the NOT RUN line updated. Checked offline that nothing since 0f9b469 changes the result: only b714b3b touched `calendar_write.py` (header zone validation on the recurrence-only path); `tests/test_live_calendar_write.py` unchanged.
+- Card checked off. No code change, no task file (notes only). Live test NOT run by me.
+- Next: a #98 fix can now be checked against this test (expect `XPASS(strict)`, remove the marker in the fix); live-gap cards for #97/#70/#72 can reuse the pattern.
+
+## 2026-11-03 — live-gap-98-run (second session today; parked as `[?]`)
+
+- Smoke: 3083 passed, 4 skipped, 126 deselected; ruff check + format clean. Never passed `-m`. No source or test change since the earlier session today (HEAD d6897c1 is notes only), so its offline re-verification still stands.
+- No `*(steering: …)*` line carries Neil's result. Workers can't read GitHub, so a `[ ]` box here only gets the card handed out again with nothing to do — it was, twice today.
+- Flipped the line to `[?]` with a fresh question: keep waiting for Neil (relay his output as a comment), run it himself, or drop the card into the first step of a #98 fix. Rewrote only this card's own line; history condensed into its Notes.
+- No code change, no task file (nothing for a PR to describe beyond the queue line). Live test NOT run.
+
+## 2026-11-03 — live-gap-98-run (still waiting on Neil; re-verified offline)
+
+- Smoke: `uv sync --all-extras --locked` (the venv was behind `uv.lock`; no lock change), then 3083 passed, 4 skipped, 126 deselected; ruff check + format clean. Never passed `-m`.
+- Neil's result can't be checked: this contract forbids `gh` and says workers don't read GitHub, and no `*(steering: …)*` line carries a result. #119 NOT re-checked.
+- Re-verified the #98 test is still runnable as written against today's code: `update_event` re-sends `recurrence` only when the zone changes (`stored_zone != start_zone`), so the same-zone date move #98 describes still sends `start`/`end` alone → bug still present in code, XFAIL still the expected outcome. Test calls still match `update_event`/`_temporary_event` signatures; `tests/test_live_gap_98_classifier.py` 8 passed. Live test NOT run.
+- No code change. Queue line: worker note + For Michael updated; box left `[ ]` (waiting on an outside reporter, not a decision).
+- Env: `uv` needs the sandbox off (`~/.cache/uv` not permitted) and `PATH=$HOME/.local/bin:$PATH`; `uv run --offline` after the sync.
+
 ## 2026-10-29 — full-format-text-half (#124 follow-up)
 
 - Addressed PR comments: IC_kwDOSA_0Lc8AAAABgqxo3g (`[construct review]` of 2345497: the `_TEXT_BODY_PREFER` comment and the wire-test docstring claimed a `text` read hides `display:none` text; the CHANGELOG says it may remain). Valid; both now say markup, comments and `<style>` go, styled-hidden text may remain. No Michael comments, no inline comments on #171.
