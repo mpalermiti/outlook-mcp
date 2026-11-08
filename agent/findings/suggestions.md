@@ -1,0 +1,1 @@
+- `calendar_write` throws away `validate_datetime`'s result, so a relative `start`/`end` such as `+7d` would reach Graph as literal text; `due` on To Do had the same defect (fixed under #72).
