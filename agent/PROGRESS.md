@@ -2,6 +2,26 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-08 — checker-todo-dates-use-configured-timezone
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3071 passed, 4 skipped, 127 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1, same as the last session). Ruff clean.
+- Finding confirmed before touching anything: a scratch plugin outside the repo set the clock for the old test. 2027-03-10 20:00Z failed, 2027-10-31 20:00Z failed, 2027-06-10 20:00Z passed. Cause: both sides of the subtraction carried the same `ZoneInfo`, so Python subtracts wall clocks, not moments.
+- Not the checker's literal fix. Comparing against `datetime.now(timezone.utc) + 7d` still needs the wall clock read back into the zone, which is off by an hour when the due moment lands in the second pass of the repeated autumn hour (2027-10-31 09:30Z + 7d: `2027-11-07T01:30:00`, off by 1:00:00, computed). Instead the test patches `validation.datetime` (same `FrozenDatetime` shape as `test_live_query_shape.py`) and asserts the exact payload, across four dates: no clock change, forward, back, repeated hour.
+- Teeth: temporarily replaced the zone conversion in `_due_in_zone` with a fixed -8h offset: `no-clock-change` and `clocks-go-forward` failed on the hour, the two winter-dated cases passed, as they should. First attempt at this was invalid (my edit missed an import, so all four failed on a NameError); redone. `todo.py` restored, not in the diff.
+- Suite: 3074 passed, 4 skipped, 127 deselected, same 1 failed + 25 errors in `tests/test_http_transport.py` and nothing else; same with every toolset loaded. Ruff check + format clean. Test-only, so no CHANGELOG line.
+- Env: a bare grep for `^ERROR` over the output also hits uvicorn's captured `ERROR: [Errno 1]` log line; match `^(FAILED|ERROR) tests/`.
+
+## 2026-11-08 — todo-dates-use-configured-timezone (#72)
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3057 passed, 4 skipped, 126 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff clean.
+- Fix in `tools/todo.py`: `_due_in_zone` (zone-less goes out as written, labelled with the zone; `Z`/offset/relative become wall-clock there) and `_recurrence_in_zone` (fills `range.recurrenceTimeZone` unless named; UTC config leaves the payload as it was). Zone via `resolve_config_event_timezone`, the calendar's rule, so legacy `EST` etc. fall back to UTC. Used on `create_task` (due, reminder, recurrence) and `update_task` (due).
+- Differs from #71 on purpose: an instant is converted to wall-clock rather than sent as written, because no live run has shown To Do honours a `Z` string under a non-UTC label. `update_task` uses the config zone, not the task's own: Graph reads a due back labelled UTC (ASSUMED from the read path), so there is no anchor to keep.
+- Also fixed: `validate_datetime`'s result was discarded, so `due="+7d"` reached Graph literally. `calendar_write` discards it the same way (`start`/`end`); left alone per the card, noted in suggestions.
+- Tests: 14 new in `test_write_payloads_reach_the_wire.py::TestTodoDatesUseTheConfiguredZone`, on the serialized payload. Red first: 11 failed on the `UTC` label, 3 regression pins passed. Final: 3071 passed, 4 skipped, 127 deselected with the same 1 failed + 25 errors; `tests/test_http_transport.py` alone outside the sandbox: 131 passed. Same result with every toolset loaded. Ruff check + format clean.
+- Live test `TestDueIsAnchoredInTheConfiguredZone` written, NOT run; parked as `todo-dates-live-check`.
+- Docs: README `timezone` row, `config.py` field description, CHANGELOG Unreleased. No version touched.
+- Env: `uv run` still fails in the sandbox (`~/.cache/uv`); `.venv/bin/python -m pytest` and `.venv/bin/ruff` work without it.
+
 ## 2026-11-03 — live-gap-98-run (done: Michael's run recorded)
 
 - Smoke: 3083 passed, 4 skipped, 126 deselected; ruff check + format clean. Never passed `-m`.
