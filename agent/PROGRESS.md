@@ -2,6 +2,16 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-08 — checker-checker-todo-dates-use-configured-timezone
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3074 passed, 4 skipped, 127 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff clean.
+- Finding 1: `_format_task` returns `due_time_zone` beside `due` (`None` when absent or not a string). README and SKILL say a To Do `due` is the exception to "responses are UTC".
+- Finding 2: new `_due_for_update` does a plain GET when `due` is given. Repeating task with a stored due: reuse its zone, as `update_event` does. Non-repeating, or repeating with no due: config zone. Windows-named stored zone: zone-less goes back labelled with it; `Z`/offset/relative is refused, because Python can't convert into it. `tzone://` sentinel and a no-task reply are refused. Nothing is patched on any refusal; a bad `due` costs no GET; an update without `due` reads nothing. `_usable_zone` imported from `calendar_write` rather than copied.
+- Finding 3: docs and CHANGELOG now say To Do keeps only the date of a non-repeating task; the 9:00 promise is gone, including from the earlier task file the PR text comes from. Not reworded: that task's queue line, which isn't this session's to edit. The choice itself is parked as `todo-plain-due-zone-decision`.
+- Finding 4: live test rebuilt, class name kept so the command on `todo-dates-live-check` still works. Plain task asserts the stored hour (midnight on the written day in the zone, read back UTC); repeating task reads `recurrence.range.recurrenceTimeZone` from the raw task; a third moves a repeating task's due under a different config zone. No date asserted on a repeating task. Now three throwaway tasks, not one; the findings file says so, the card's "one throwaway task" is stale. NOT run.
+- TDD: 12 failed first on the missing field or the config-zone label, 5 regression pins passed. Final: 3090 passed, 4 skipped, 129 deselected (+2 live tests), same 1 failed + 25 errors in `tests/test_http_transport.py` and nothing else; same with every toolset loaded. Ruff check + format clean.
+- Next: Michael's live run decides the two ASSUMED lines in `agent/findings/todo-dates-live-check.md`. Converting a due to the config zone on read is not done; it depends on the parked answer.
+
 ## 2026-11-08 — checker-todo-dates-use-configured-timezone
 
 - Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3071 passed, 4 skipped, 127 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1, same as the last session). Ruff clean.

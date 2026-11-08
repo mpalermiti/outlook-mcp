@@ -1,5 +1,5 @@
 # todo-dates-use-configured-timezone
-**What it does:** A To Do due date, reminder or repeat rule now uses the time zone in your settings instead of always UTC. A task due at 9:00 means 9:00 where you are.
+**What it does:** A To Do due date, reminder or repeat rule now uses the time zone in your settings instead of always UTC. To Do keeps only the date of a non-repeating task, so there the zone decides which day is stored.
 **Pictures:** not needed — this changes what is sent to Microsoft; nothing on a screen in this project changes.
 ## Behaviours
 1. A due date with no zone, on a new or updated task, goes out as written and labelled with your configured zone — proof: test_a_zone_less_due_is_labelled_with_the_configured_zone, test_a_bare_date_is_labelled_with_the_configured_zone, test_update_task_labels_a_zone_less_due_with_the_configured_zone
@@ -14,4 +14,4 @@
 ## Not covered
 - Completing a task: the completion time is the present moment, already correct in UTC.
 - A repeat rule's start date is still the caller's; it is not cross-checked against the due date as calendar events are.
-- Reading tasks back: responses stay in UTC, as the docs say.
+- Converting on read: a task's `due` comes back as Microsoft stored it, with its zone beside it.

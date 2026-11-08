@@ -27,18 +27,20 @@ Before the fix the same call labelled both dates `UTC` and sent no `recurrenceTi
 OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write "tests/test_live_todo_write.py::TestDueIsAnchoredInTheConfiguredZone" -v
 ```
 
-Creates one throwaway task about a month out and deletes it. Not run by any worker.
+Three tests, each creating one throwaway task about a month out and deleting it. Not run by any worker.
 
-| Result | Meaning |
-|---|---|
-| Pass | Microsoft honours the zone on a task's due date and accepts it on a repeat rule. |
-| Due date assertion fails, on the written date | Microsoft ignored the zone on the due date: the fix does not take effect there. |
-| Due date assertion fails, some other value | Microsoft rewrites a task's due date (for example to the day only); the test's expectation needs revisiting with that value. |
-| 400 from Microsoft | It refuses the zone on a task, most likely on the repeat rule. Non-UTC servers can't create repeating tasks until that field is dropped. |
+| Test | Pass means | A failure means |
+|---|---|---|
+| `test_a_plain_tasks_due_is_midnight_on_the_written_day_in_the_zone` | Microsoft used the zone to pick the day on a plain task, and stored midnight there, as the #72 probe saw. | Back at midnight UTC: the zone was ignored. Back with the hour kept: the docs' "keeps only the date" is wrong. Paste the value. |
+| `test_a_repeating_task_keeps_the_zone_on_its_rule` | Microsoft accepts `recurrenceTimeZone` on a task and stores it. | A 400 here: non-UTC servers can't create repeating tasks until that field is dropped. |
+| `test_moving_a_repeating_tasks_due_keeps_its_stored_zone` | Changing the due date of a series anchored in another zone is accepted and leaves its zone alone. | A 400 here, or a changed zone: the stored-zone rule needs revisiting. Paste the error. |
+
+No date is asserted on the repeating tasks: the #72 probe saw a repeating task's due move to midnight the next day, a shift whose rule is still unknown. A date alone can't show the zone was used.
 
 ## Prerequisites
 
 - VERIFIED: the payload above, by running the real code path offline with a mock client.
 - VERIFIED: the new test is well-formed, by the plain suite importing it (127 deselected, up from 126).
-- ASSUMED: Microsoft honours `timeZone` on a task's `dueDateTime` as it does on an event. Read in Graph's model, not confirmed on a task.
+- ASSUMED: Microsoft honours `timeZone` on a task's `dueDateTime`. The #72 probe (2026-09-25, a Windows zone name) points that way; an IANA name has not been seen.
+- ASSUMED: a repeating task reads back labelled with its own zone, which is what the update path relies on. Seen once in the #72 probe.
 - ASSUMED: Microsoft accepts `recurrenceTimeZone` on a task. No earlier live run sent it.
