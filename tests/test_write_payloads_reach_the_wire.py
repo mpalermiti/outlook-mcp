@@ -1639,17 +1639,42 @@ class TestTodoDatesUseTheConfiguredZone:
             "timeZone": "America/Los_Angeles",
         }
 
-    async def test_a_relative_due_is_resolved_before_it_is_sent(self):
-        from datetime import datetime, timedelta
-        from zoneinfo import ZoneInfo
+    @pytest.mark.parametrize(
+        ("now", "wall_clock"),
+        [
+            pytest.param("2027-06-10T20:00:00+00:00", "2027-06-17T13:00:00", id="no-clock-change"),
+            # "+7d" is seven days of real time, so a clock change inside the week
+            # moves the local time it lands on.
+            pytest.param(
+                "2027-03-10T20:00:00+00:00", "2027-03-17T13:00:00", id="clocks-go-forward"
+            ),
+            pytest.param("2027-10-31T20:00:00+00:00", "2027-11-07T12:00:00", id="clocks-go-back"),
+            pytest.param(
+                "2027-10-31T09:30:00+00:00", "2027-11-07T01:30:00", id="the-repeated-hour"
+            ),
+        ],
+    )
+    async def test_a_relative_due_is_resolved_before_it_is_sent(self, now, wall_clock):
+        """The clock is set here: against the real one this failed around each clock change."""
+        from datetime import datetime
+        from unittest.mock import patch
 
-        zone = ZoneInfo("America/Los_Angeles")
-        body = await self._created(due="+7d")
+        from outlook_mcp import validation
 
-        due = body["dueDateTime"]
-        assert due["timeZone"] == "America/Los_Angeles"
-        sent = datetime.fromisoformat(due["dateTime"]).replace(tzinfo=zone)
-        assert abs(sent - (datetime.now(zone) + timedelta(days=7))) < timedelta(minutes=5)
+        frozen = datetime.fromisoformat(now)
+
+        class FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen.astimezone(tz)
+
+        with patch.object(validation, "datetime", FrozenDatetime):
+            body = await self._created(due="+7d")
+
+        assert body["dueDateTime"] == {
+            "dateTime": wall_clock,
+            "timeZone": "America/Los_Angeles",
+        }
 
     async def test_a_reminder_matches_the_due_time_and_zone(self):
         body = await self._created(due="2026-10-29T01:00:00Z", reminder=True)
