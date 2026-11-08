@@ -301,8 +301,9 @@ class Config(BaseModel):
         default="UTC",
         description=(
             "IANA timezone. Interprets zone-less dates, and anchors every event "
-            "created — a recurring event is expanded in this zone, so the UTC "
-            "default makes one shift an hour across a daylight-saving change."
+            "created and every To Do due date, reminder and recurrence — a "
+            "recurring event is expanded in this zone, so the UTC default makes "
+            "one shift an hour across a daylight-saving change."
         ),
     )
     attachments_dir: str = Field(

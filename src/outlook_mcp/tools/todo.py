@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 from weakref import WeakKeyDictionary
+from zoneinfo import ZoneInfo
 
 from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
@@ -15,7 +16,12 @@ from outlook_mcp.permissions import (
     mail_send_withheld,
 )
 from outlook_mcp.tools._recurrence import build_patterned_recurrence as _build_recurrence
-from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
+from outlook_mcp.validation import (
+    resolve_config_event_timezone,
+    sanitize_output,
+    validate_datetime,
+    validate_graph_id,
+)
 
 _VALID_IMPORTANCES = {"low", "normal", "high"}
 
@@ -48,6 +54,37 @@ def _datetime_timezone(iso_dt: str, tz: str = "UTC") -> Any:
     dtz.date_time = iso_dt
     dtz.time_zone = tz
     return dtz
+
+
+def _due_in_zone(due: str, zone: str) -> Any:
+    """``due`` as a Graph DateTimeTimeZone anchored in ``zone`` (#72).
+
+    Zone-less input is already wall-clock time in ``zone``, so it goes out as
+    written. Anything naming an instant (a ``Z``, an offset, ``+7d``, ``now``) is
+    converted to wall-clock time there: the instant is unchanged, and Graph is
+    never handed a string whose offset disagrees with its ``timeZone`` label.
+    """
+    instant = validate_datetime(due, zone)
+    try:
+        if datetime.fromisoformat(due).tzinfo is None:
+            return _datetime_timezone(due, zone)
+    except ValueError:
+        pass  # A `Z` before Python 3.11, or a relative offset.
+    local = datetime.fromisoformat(instant.replace("Z", "+00:00")).astimezone(ZoneInfo(zone))
+    return _datetime_timezone(local.strftime("%Y-%m-%dT%H:%M:%S"), zone)
+
+
+def _recurrence_in_zone(recurrence: dict, zone: str) -> dict:
+    """``recurrence`` with ``range.recurrenceTimeZone`` filled in from ``zone``.
+
+    A zone the caller named is theirs. A malformed shape is returned untouched
+    for ``build_patterned_recurrence`` to refuse; filling in an empty range
+    would make it look complete. On UTC the payload stays as it has always been.
+    """
+    rng = recurrence.get("range") if isinstance(recurrence, dict) else None
+    if zone == "UTC" or not isinstance(rng, dict) or not rng or "recurrenceTimeZone" in rng:
+        return recurrence
+    return {**recurrence, "range": {**rng, "recurrenceTimeZone": zone}}
 
 
 def _text_body(content: str) -> Any:
@@ -522,9 +559,11 @@ async def create_task(
     task_body = TodoTask()
     task_body.title = title
 
+    # Only when something is dated: a task with neither never reads the zone.
+    zone = resolve_config_event_timezone(config.timezone) if due or recurrence else "UTC"
+
     if due:
-        validate_datetime(due)
-        task_body.due_date_time = _datetime_timezone(due)
+        task_body.due_date_time = _due_in_zone(due, zone)
 
     if importance:
         task_body.importance = _importance_enum(importance)
@@ -543,10 +582,10 @@ async def create_task(
             )
         task_body.is_reminder_on = reminder
         if reminder:
-            task_body.reminder_date_time = _datetime_timezone(due)
+            task_body.reminder_date_time = _due_in_zone(due, zone)
 
     if recurrence:
-        task_body.recurrence = _build_recurrence(recurrence)
+        task_body.recurrence = _build_recurrence(_recurrence_in_zone(recurrence, zone))
 
     await refuse_someone_elses_list(graph_client, resolved_id, config, "outlook_create_task")
     response = await graph_client.me.todo.lists.by_todo_task_list_id(resolved_id).tasks.post(
@@ -599,8 +638,10 @@ async def update_task(
         patch_body.title = title
 
     if due is not None:
-        validate_datetime(due)
-        patch_body.due_date_time = _datetime_timezone(due)
+        # The config zone, not the task's own as on `update_event`: Graph reads
+        # a task's due back labelled UTC, so there is no anchor to preserve.
+        zone = resolve_config_event_timezone(config.timezone)
+        patch_body.due_date_time = _due_in_zone(due, zone)
 
     if body is not None:
         patch_body.body = _text_body(body)

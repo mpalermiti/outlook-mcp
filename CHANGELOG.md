@@ -6,6 +6,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **To Do due dates, reminders and recurrence use the configured time zone** (#72).
+  `outlook_create_task` and `outlook_update_task` labelled every date `UTC` and sent no zone
+  with a recurrence, so `due="2026-11-10T09:00:00"` meant 09:00 UTC whatever `config.timezone`
+  said. A zone-less `due` now goes out as written, labelled with `config.timezone`. A `due`
+  with a `Z` or an offset keeps its instant, sent as wall-clock time in that zone. A recurrence
+  gets that zone as `range.recurrenceTimeZone` unless it already names one. **Behaviour change:**
+  on a non-UTC server a zone-less `due` now means local time, as the docs have always said. On
+  a UTC server the times are unchanged. A `config.timezone` Graph refuses (`EST` and five others)
+  falls back to UTC, as calendar events do.
+- **A relative `due` is worked out before it is sent.** `due="+7d"` passed validation and then
+  reached Graph as the literal text `+7d`.
+
 ## [1.31.4] — 2026-11-03
 
 Follow-ups to the 1.31.3 hardening: more ways of naming the home folder are recognised, cursors

@@ -13,8 +13,9 @@ list_tasks (overview shape). The default list is scanned up to 100 entries.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -81,6 +82,38 @@ class TestCreateTaskRoundTrip:
             assert due in (got["due"] or "")
             assert "live write guard body" in (got["body"] or "")
             assert got["is_reminder_on"] is True
+            assert got["has_recurrence"] is True
+
+
+class TestDueIsAnchoredInTheConfiguredZone:
+    async def test_a_late_evening_due_lands_on_the_next_utc_day(
+        self, real_graph_client, live_write_config
+    ):
+        """#72: 23:30 in Los Angeles is already tomorrow in UTC.
+
+        Graph reads a task's due back in UTC, so a zone it ignored would come
+        back on the written date, and a zone it honoured on the day after. The
+        recurrence shows Graph accepts `recurrenceTimeZone` on a task.
+        """
+        zone = "America/Los_Angeles"
+        config = live_write_config.model_copy(update={"timezone": zone})
+        written = date.today() + timedelta(days=30)
+        due = datetime(written.year, written.month, written.day, 23, 30)
+        expected = due.replace(tzinfo=ZoneInfo(zone)).astimezone(timezone.utc).date()
+
+        async with _temporary_task(
+            real_graph_client,
+            config,
+            title=f"{LIVE_WRITE_NAME} zone",
+            due=due.strftime("%Y-%m-%dT%H:%M:%S"),
+            recurrence={
+                "pattern": {"type": "daily", "interval": 2},
+                "range": {"type": "noEnd", "startDate": written.isoformat()},
+            },
+        ) as task_id:
+            got = await _find_task(real_graph_client, task_id)
+
+            assert (got["due"] or "").startswith(expected.isoformat())
             assert got["has_recurrence"] is True
 
 
