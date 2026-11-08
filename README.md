@@ -298,7 +298,8 @@ On Linux without an encrypted store (`libsecret`/PyGObject not importable, or no
 relative offset: `7d` is seven days **ago**, `+7d` is seven days **from now**, and `now` is
 this moment. Units are `m`, `h`, `d`, `w`. Bare means *ago*, matching the usual CLI
 convention, so a due date in the future needs the `+`. Zone-less input is interpreted in your
-configured `timezone`; responses are always UTC.
+configured `timezone`; responses are UTC, except a To Do task's `due`, which comes with its zone
+in `due_time_zone` because Microsoft keeps a repeating task's due in its own zone.
 
 **Folders.** Every `folder` argument, `outlook_create_folder`'s `parent_folder` and
 `outlook_batch_triage`'s move target take a well-known name (`inbox`, `junkemail`), a display
@@ -428,7 +429,7 @@ Creating, updating or deleting a rule also needs `MailboxSettings.ReadWrite` on 
 |------|-------------|
 | `outlook_list_task_lists` | List To Do lists, with `is_owner` and `is_shared` so a list someone else owns is visible. |
 | `outlook_list_tasks` | List tasks with status filter and pagination. |
-| `outlook_get_task` | Get full task details: notes (`body`), checklist items (ordered unchecked-first), due, recurrence flag. |
+| `outlook_get_task` | Get full task details: notes (`body`), checklist items (ordered unchecked-first), due and its zone, recurrence flag. |
 | `outlook_create_task` | Create task with due date, importance, recurrence. |
 | `outlook_update_task` | Update task fields. |
 | `outlook_complete_task` | Mark task as completed. |
@@ -593,7 +594,7 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions on
 | `client_id` | `string` | `null` | Azure AD application (client) ID. Required for auth. |
 | `tenant_id` | `string` | `"consumers"` | Azure AD tenant. Use `"consumers"` for personal Microsoft accounts. |
 | `expected_username` | `string` | `null` | Since 1.29: optional sign-in username for this instance. A saved sign-in for another username is refused before refreshing it; a new sign-in is checked before saving its record or using its credential. Case-insensitive; compares Microsoft's sign-in username literally, without resolving aliases. Unset keeps the existing behaviour. Older versions ignore this key with a warning and do not enforce the guard. |
-| `timezone` | `string` | `"UTC"` | IANA timezone (e.g. `"America/New_York"`). Interprets zone-less dates, **and anchors every event you create and every To Do due date, reminder and recurrence** — a recurring event is expanded in this zone, so on the default `"UTC"` a 09:00 weekly meeting shifts an hour when the clocks change. Set it to where you are. |
+| `timezone` | `string` | `"UTC"` | IANA timezone (e.g. `"America/New_York"`). Interprets zone-less dates, **and anchors every event you create and every new To Do recurrence** — a recurring event is expanded in this zone, so on the default `"UTC"` a 09:00 weekly meeting shifts an hour when the clocks change. To Do due dates and reminders are sent in this zone too, but To Do keeps only the date of a non-repeating task, not its hour. Changing the due date of a repeating task keeps the zone that task is stored in. Set it to where you are. |
 | `read_only` | `bool` | `false` | When `true`, all write tools (send, reply, move, delete, create, update, RSVP) return an error. Gates the tools, not the Microsoft token -- see below. |
 | `mailbox_settings_write` | `bool` | `false` | When `true`, `outlook-mcp auth` asks for `MailboxSettings.ReadWrite` instead of `MailboxSettings.Read`, which is what the inbox-rule write tools need. Consent is per requested scope, so the Azure-portal permission alone does not put it in the token. It also loads the opt-in `rules` toolset group: asking for the scope is asking to manage rules, so the four rule tools come with it. Off by default: it widens the token to every mailbox setting, not only rules. Refused in combination with `read_only_consent`, which asks for the read scopes only — that pairing would silently never request the write scope. |
 | `read_only_consent` | `bool` | `false` | When `true`, `outlook-mcp auth` asks Microsoft for the read permissions only, instead of the read-write set. For a second, read-only app registration -- see [What `read_only` does and does not do](#what-read_only-does-and-does-not-do). Requires `read_only: true`; the config is refused without it. |

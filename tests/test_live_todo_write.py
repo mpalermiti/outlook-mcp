@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from outlook_mcp.tools.todo import (
+    _resolve_list_id,
     add_checklist_item,
     create_task,
     delete_checklist_item,
@@ -85,36 +86,99 @@ class TestCreateTaskRoundTrip:
             assert got["has_recurrence"] is True
 
 
+_LA = "America/Los_Angeles"
+# The #72 probe sent a Windows name and got it back; which spelling Graph
+# returns for an IANA name has not been seen, so either one counts.
+_LA_SPELLINGS = (_LA, "Pacific Standard Time")
+
+
+async def _raw_task(client, task_id: str):
+    """The task as Graph holds it: `recurrenceTimeZone` is not in the tool's output."""
+    list_id = await _resolve_list_id(client.sdk_client, None)
+    tasks = client.sdk_client.me.todo.lists.by_todo_task_list_id(list_id).tasks
+    return await tasks.by_todo_task_id(task_id).get()
+
+
 class TestDueIsAnchoredInTheConfiguredZone:
-    async def test_a_late_evening_due_lands_on_the_next_utc_day(
+    """#72: what Graph does with the zone, on a plain task and on a repeating one.
+
+    The probe on #72 sent 09:00 on 10-15 as China Standard Time. A plain task
+    came back as 16:00 UTC on 10-14, midnight on the 15th in that zone: the
+    date survived, the hour did not. A repeating one came back labelled with
+    its zone at 10-16T00:00, a shift whose rule is unknown, so no date is
+    asserted on a repeating task here.
+    """
+
+    @staticmethod
+    def _recurrence(start: date) -> dict:
+        return {
+            "pattern": {"type": "daily", "interval": 2},
+            "range": {"type": "noEnd", "startDate": start.isoformat()},
+        }
+
+    async def test_a_plain_tasks_due_is_midnight_on_the_written_day_in_the_zone(
         self, real_graph_client, live_write_config
     ):
-        """#72: 23:30 in Los Angeles is already tomorrow in UTC.
-
-        Graph reads a task's due back in UTC, so a zone it ignored would come
-        back on the written date, and a zone it honoured on the day after. The
-        recurrence shows Graph accepts `recurrenceTimeZone` on a task.
-        """
-        zone = "America/Los_Angeles"
-        config = live_write_config.model_copy(update={"timezone": zone})
+        """A zone Graph ignored would come back at midnight UTC: same day, other hour."""
+        config = live_write_config.model_copy(update={"timezone": _LA})
         written = date.today() + timedelta(days=30)
-        due = datetime(written.year, written.month, written.day, 23, 30)
-        expected = due.replace(tzinfo=ZoneInfo(zone)).astimezone(timezone.utc).date()
+        midnight = datetime(written.year, written.month, written.day, tzinfo=ZoneInfo(_LA))
 
         async with _temporary_task(
             real_graph_client,
             config,
-            title=f"{LIVE_WRITE_NAME} zone",
-            due=due.strftime("%Y-%m-%dT%H:%M:%S"),
-            recurrence={
-                "pattern": {"type": "daily", "interval": 2},
-                "range": {"type": "noEnd", "startDate": written.isoformat()},
-            },
+            title=f"{LIVE_WRITE_NAME} zone plain",
+            due=f"{written.isoformat()}T23:30:00",
         ) as task_id:
             got = await _find_task(real_graph_client, task_id)
 
-            assert (got["due"] or "").startswith(expected.isoformat())
-            assert got["has_recurrence"] is True
+            assert got["due_time_zone"] == "UTC"
+            stored = datetime.fromisoformat((got["due"] or "").split(".")[0])
+            assert stored.replace(tzinfo=timezone.utc) == midnight.astimezone(timezone.utc)
+
+    async def test_a_repeating_task_keeps_the_zone_on_its_rule(
+        self, real_graph_client, live_write_config
+    ):
+        """Shows Graph accepts `recurrenceTimeZone` on a task and stores it."""
+        config = live_write_config.model_copy(update={"timezone": _LA})
+        written = date.today() + timedelta(days=30)
+
+        async with _temporary_task(
+            real_graph_client,
+            config,
+            title=f"{LIVE_WRITE_NAME} zone repeating",
+            due=f"{written.isoformat()}T09:00:00",
+            recurrence=self._recurrence(written),
+        ) as task_id:
+            task = await _raw_task(real_graph_client, task_id)
+
+            assert task.recurrence.range.recurrence_time_zone in _LA_SPELLINGS
+
+    async def test_moving_a_repeating_tasks_due_keeps_its_stored_zone(
+        self, real_graph_client, live_write_config
+    ):
+        """The update sends the task's own zone, not this server's: a 400 fails here."""
+        created_in = live_write_config.model_copy(update={"timezone": _LA})
+        updated_in = live_write_config.model_copy(update={"timezone": "Asia/Tokyo"})
+        written = date.today() + timedelta(days=30)
+
+        async with _temporary_task(
+            real_graph_client,
+            created_in,
+            title=f"{LIVE_WRITE_NAME} zone update",
+            due=f"{written.isoformat()}T09:00:00",
+            recurrence=self._recurrence(written),
+        ) as task_id:
+            await update_task(
+                real_graph_client.sdk_client,
+                task_id=task_id,
+                due=f"{(written + timedelta(days=2)).isoformat()}T09:00:00",
+                config=updated_in,
+            )
+
+            task = await _raw_task(real_graph_client, task_id)
+            assert task.due_date_time.time_zone in _LA_SPELLINGS
+            assert task.recurrence.range.recurrence_time_zone in _LA_SPELLINGS
 
 
 class TestUpdateTaskRoundTrip:
