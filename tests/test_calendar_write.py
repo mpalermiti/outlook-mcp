@@ -2548,18 +2548,38 @@ class TestCalendarWritesThatSendEmail:
         builder.get.assert_not_called()
         builder.patch.assert_not_called()
 
-    @pytest.mark.parametrize("field", ["subject", "body", "location"])
-    async def test_rewording_a_meeting_with_attendees_needs_mail_send(self, field):
+    @pytest.mark.parametrize(
+        "change",
+        [
+            {"subject": "mailbox contents"},
+            {"body": "mailbox contents"},
+            {"location": "mailbox contents"},
+            # Adding an online meeting writes join details into it. That the
+            # update reaches attendees is inferred (#70): the live tier cannot
+            # have attendees, so the worse case is taken.
+            {"is_online": True},
+        ],
+        ids=lambda change: next(iter(change)),
+    )
+    async def test_rewording_a_meeting_with_attendees_needs_mail_send(self, change):
         """Graph mails the update to the people already on the meeting."""
         builder, client = _client_with(_meeting())
 
         with pytest.raises(PermissionDeniedError) as exc:
-            await update_event(
-                client, event_id="AAMkAG123=", config=_CFG_CAL_ONLY, **{field: "mailbox contents"}
-            )
+            await update_event(client, event_id="AAMkAG123=", config=_CFG_CAL_ONLY, **change)
 
         assert "mail_send" in str(exc.value)
         builder.patch.assert_not_called()
+
+    async def test_an_online_meeting_on_an_event_with_nobody_on_it_stays_calendar_only(self):
+        builder, client = _client_with(_meeting(attendees=0))
+
+        result = await update_event(
+            client, event_id="AAMkAG123=", is_online=True, config=_CFG_CAL_ONLY
+        )
+
+        assert result["status"] == "updated"
+        builder.patch.assert_called_once()
 
     async def test_rewording_an_event_with_nobody_on_it_stays_calendar_only(self):
         builder, client = _client_with(_meeting(attendees=0))
@@ -2998,8 +3018,9 @@ class TestEventKeyWrites:
         builder.patch.assert_not_called()
 
     async def test_a_key_on_an_event_with_attendees_needs_no_mail_send(self):
-        """The reword gate covers what Outlook shows attendees (subject, body and
-        location); a key is not one of them, so it pays for no read."""
+        """The reword gate covers what Outlook shows attendees (subject, body,
+        location and an online meeting); a key is not one of them, so it pays for
+        no read."""
         builder, client = _client_with(_meeting())
 
         await update_event(
@@ -3007,3 +3028,113 @@ class TestEventKeyWrites:
         )
 
         builder.patch.assert_called_once()
+
+
+# ── is_online: what Graph does with it differs by account (#70) ───────
+
+
+def _reply(is_online_meeting):
+    """A write reply whose `is_online_meeting` is set explicitly.
+
+    Never left to MagicMock: an auto-created attribute is neither a bool nor
+    None, so a test of "reported as Graph states it" would pass on a reply
+    that states nothing.
+    """
+    return MagicMock(id="AAMkAG123=", subject="Sync", is_online_meeting=is_online_meeting)
+
+
+class TestOnlineMeeting:
+    @pytest.mark.parametrize("stated", [True, False])
+    async def test_update_reports_is_online_as_graph_states_it(self, stated):
+        """`False` is what an account that ignores the request answers — the
+        caller has to see it on the call itself, not a bare `updated`."""
+        builder, client = _client_with(_current_event())
+        builder.patch = AsyncMock(return_value=_reply(stated))
+
+        result = await update_event(client, event_id="AAMkAG123=", is_online=True, config=_CFG)
+
+        assert builder.patch.call_args[0][0].is_online_meeting is True
+        assert result["is_online"] is stated
+
+    async def test_update_omits_is_online_when_the_reply_does_not_carry_it(self):
+        """Absent is not "no meeting"; reporting `False` here would invent one."""
+        builder, client = _client_with(_current_event())
+        builder.patch = AsyncMock(return_value=_reply(None))
+
+        result = await update_event(client, event_id="AAMkAG123=", is_online=True, config=_CFG)
+
+        assert "is_online" not in result
+
+    async def test_update_without_is_online_reports_nothing_about_it(self):
+        builder, client = _client_with(_current_event())
+        builder.patch = AsyncMock(return_value=_reply(True))
+
+        result = await update_event(client, event_id="AAMkAG123=", subject="X", config=_CFG)
+
+        assert result == {"status": "updated", "event_id": "AAMkAG123="}
+
+    @pytest.mark.parametrize("config", [_CFG, _CFG_CAL_ONLY], ids=["open", "restricted"])
+    async def test_update_refuses_is_online_false_before_any_request(self, config):
+        """Graph accepts `isOnlineMeeting: false` and keeps the meeting — probed
+        2026-11-09, the reply and a fresh GET both still reporting it 90 s later.
+        `test_patching_online_off_keeps_the_meeting` is the live premise guard.
+
+        Under a restricted policy as well, because that is where the reads before
+        the PATCH happen: an unrestricted call reads nothing either way, so a
+        refusal moved below the first network call would pass there."""
+        builder, client = _client_with(_current_event())
+
+        with pytest.raises(ValueError, match="cannot remove an online meeting"):
+            await update_event(client, event_id="AAMkAG123=", is_online=False, config=config)
+
+        builder.get.assert_not_called()
+        builder.calendar.get.assert_not_called()
+        builder.patch.assert_not_called()
+
+    @pytest.mark.parametrize("stated", [True, False])
+    async def test_create_reports_is_online_as_graph_states_it(self, stated):
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_reply(stated))
+
+        result = await create_event(
+            mock_client,
+            subject="Sync",
+            start="2026-04-15T14:00:00Z",
+            end="2026-04-15T15:00:00Z",
+            is_online=True,
+            config=_CFG,
+        )
+
+        assert _posted(mock_client).is_online_meeting is True
+        assert result["is_online"] is stated
+
+    async def test_create_omits_is_online_when_the_reply_does_not_carry_it(self):
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_reply(None))
+
+        result = await create_event(
+            mock_client,
+            subject="Sync",
+            start="2026-04-15T14:00:00Z",
+            end="2026-04-15T15:00:00Z",
+            is_online=True,
+            config=_CFG,
+        )
+
+        assert "is_online" not in result
+
+    async def test_create_without_is_online_keeps_its_old_result(self):
+        """The default `False` is not reported: it cannot be told apart from an
+        argument nobody passed, and every create would grow a key."""
+        mock_client = AsyncMock()
+        mock_client.me.events.post = AsyncMock(return_value=_reply(False))
+
+        result = await create_event(
+            mock_client,
+            subject="Sync",
+            start="2026-04-15T14:00:00Z",
+            end="2026-04-15T15:00:00Z",
+            config=_CFG,
+        )
+
+        assert result == {"status": "created", "event_id": "AAMkAG123=", "subject": "Sync"}

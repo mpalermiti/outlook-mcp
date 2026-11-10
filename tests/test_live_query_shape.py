@@ -966,9 +966,9 @@ async def test_the_event_delta_carries_type_without_a_select(real_graph_client):
     returns `type` regardless. That is a claim about an external service, and
     those expire: #68's consumer-vs-work lesson is that what Graph does for one
     account type is not what it does for another, and the same field can change
-    under you. (#70 reports exactly that happening to `isOnlineMeeting` — but
-    it is **open**, this repo's live pin still asserts the old behaviour, and
-    nothing here should be read as its ruling.) **If this test fails, Graph has
+    under you. (#70 is that happening to `isOnlineMeeting`: honoured on some
+    mailboxes of one kind and ignored on others, so its live tests assert
+    agreement rather than a direction.) **If this test fails, Graph has
     stopped sending `type` on the delta endpoint**, and
     `outlook_list_events_delta` is silently reporting
     `""` for a field `outlook_list_events` still populates — the key-set parity

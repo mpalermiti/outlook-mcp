@@ -1060,9 +1060,8 @@ async def outlook_create_event(
 
     Example: outlook_create_event(subject="Q3 review", start="2026-08-15T14:00:00Z",
     end="2026-08-15T15:00:00Z", attendees=["alice@acme.com"])
-    `is_online` is accepted but has no effect on personal accounts — Graph silently ignores
-    isOnlineMeeting for consumer mailboxes (it returns isOnlineMeeting: False,
-    onlineMeetingProvider: "unknown"). Teams meetings require a work/school account.
+    `is_online` adds an online meeting; it may have no effect on some personal accounts,
+    so check `is_online` in the result (absent there: read it with outlook_get_event).
     `start`/`end` are ISO 8601. Passing `recurrence` creates a series, not a single event.
     It takes either a shorthand — "daily", "weekdays", "weekly", "monthly", "yearly", all
     anchored on `start` and open-ended — or a full Microsoft Graph recurrence object for
@@ -1118,6 +1117,7 @@ async def outlook_update_event(
     show_as: str | None = None,
     timezone: str | None = None,
     key: str | None = None,
+    is_online: bool | None = None,
 ) -> dict:
     """Update fields on an existing event (partial patch — only provided fields change).
 
@@ -1137,6 +1137,8 @@ async def outlook_update_event(
     `show_as` is Outlook's "Show as" — same values as outlook_create_event — and patches
     on its own; unlike is_all_day it needs nothing resent alongside it.
     `key` patches on its own too.
+    `is_online=True` adds an online meeting, as on create (check `is_online` in the result);
+    False is refused, because Graph keeps an online meeting once it exists.
     """
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
@@ -1155,6 +1157,7 @@ async def outlook_update_event(
         show_as,
         timezone,
         key,
+        is_online,
         config=config,
     )
 

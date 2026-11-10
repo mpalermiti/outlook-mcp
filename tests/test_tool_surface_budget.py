@@ -217,6 +217,8 @@ CHARS_PER_TOKEN = 4
 # Default/documents/MIME: 11,163 / 11,307 / 11,243. No ceiling changes.
 # 11,144 once `outlook_download_task_attachment` stops claiming an atomic replace (-19).
 # Default is 71 / 11,144; no ceiling changes.
+# 11,173 with `is_online` on `outlook_update_event` and create's three-line warning cut to
+# two (+29, #70). Default is 71 / 11,173; every group 77 / 12,218. No ceiling changes.
 TOOL_SURFACE_CEILING = 12_150
 DEFAULT_SURFACE_CEILING = 11_250
 

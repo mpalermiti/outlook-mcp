@@ -6,6 +6,26 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **`is_online` is described as it behaves, and `outlook_update_event` takes it (#70).** Graph
+  honours `isOnlineMeeting` on some personal accounts and ignores it on others, while
+  `outlook_create_event`'s description, the README and `SKILL.md` said it never works. They now
+  say it may have no effect on some personal accounts. `outlook_update_event` gains
+  `is_online=True`, which adds an online meeting. `is_online=False` is refused: Graph accepts it
+  and keeps the meeting, unchanged 90 seconds later, on a personal account. On an event with
+  attendees, `is_online` needs `mail_send` under a policy that withholds it, as a subject, body
+  or location change already does. That the join details reach them is assumed, not
+  observed: the live tests create no attendees.
+
+### Changed
+
+- **`outlook_create_event` and `outlook_update_event` report `is_online` (#70).** When the call
+  asked for an online meeting (`is_online=True` on create, any `is_online` on update), the
+  result carries `is_online` as Graph's reply states it, so an account that ignored the request
+  shows `false` on the call itself. It is omitted when the reply has no such field, and every
+  other result is unchanged.
+
 ## [1.31.4] — 2026-11-03
 
 Follow-ups to the 1.31.3 hardening: more ways of naming the home folder are recognised, cursors
@@ -1837,7 +1857,7 @@ Calendar editing catches up with calendar creation, and a layer that only looked
 
 ### Fixed
 
-- **`is_online` is documented as a no-op on personal accounts.** Adding it to `outlook_update_event` was in scope until the live write tier caught what mocks cannot: Graph accepts `isOnlineMeeting` on a consumer mailbox and silently ignores it. A created event comes back `isOnlineMeeting: False`, `onlineMeetingProvider: "unknown"`, `onlineMeeting: None`. Teams meetings require a work/school account, which this server does not target — so `outlook_create_event`'s `is_online` parameter has never done anything for this project's only audience. Rather than ship a convincing no-op on a second tool, the parameter was left off `update_event`, the behavior is documented on `create_event`, and a live test now pins it: if Microsoft ever starts honouring it, that test fails and tells us the parameter is worth adding.
+- **`is_online` is documented as a no-op on personal accounts.** Adding it to `outlook_update_event` was in scope until the live write tier caught what mocks cannot: Graph accepts `isOnlineMeeting` on a consumer mailbox and silently ignores it. A created event comes back `isOnlineMeeting: False`, `onlineMeetingProvider: "unknown"`, `onlineMeeting: None`. Teams meetings require a work/school account, which this server does not target — so `outlook_create_event`'s `is_online` parameter has never done anything for this project's only audience. Rather than ship a convincing no-op on a second tool, the parameter was left off `update_event`, the behavior is documented on `create_event`, and a live test now pins it: if Microsoft ever starts honouring it, that test fails and tells us the parameter is worth adding. *Superseded — see #70: it is honoured on some personal accounts, and `outlook_update_event` takes it since.*
 
 ### Verified
 
