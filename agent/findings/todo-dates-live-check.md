@@ -27,15 +27,17 @@ Before the fix the same call labelled both dates `UTC` and sent no `recurrenceTi
 OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write "tests/test_live_todo_write.py::TestDueIsAnchoredInTheConfiguredZone" -v
 ```
 
-Three tests, each creating one throwaway task about a month out and deleting it. Not run by any worker.
+Four tests (the plain-task one runs once in Los Angeles and once in Tokyo), each creating one throwaway task about a month out and deleting it. Each sets its own zone, so the machine it runs on makes no difference. Not run by any worker.
 
 | Test | Pass means | A failure means |
 |---|---|---|
-| `test_a_plain_tasks_due_is_midnight_on_the_written_day_in_the_zone` | Microsoft used the zone to pick the day on a plain task, and stored midnight there, as the #72 probe saw. | Back at midnight UTC: the zone was ignored. Back with the hour kept: the docs' "keeps only the date" is wrong. Paste the value. |
+| `test_a_plain_tasks_due_is_midnight_on_the_written_day_in_the_zone[America/Los_Angeles]` and `[Asia/Tokyo]` | Microsoft used the zone to pick the day on a plain task, and stored midnight there, as the #72 probe saw. West of UTC that reads back as the written day; in Tokyo it reads back as 15:00 UTC the day before, which is what option A on the plain-task question means east of UTC. | Back at midnight UTC: the zone was ignored. Back with the hour kept: the docs' "keeps only the date" is wrong. Paste the value. |
 | `test_a_repeating_task_keeps_the_zone_on_its_rule` | Microsoft accepts `recurrenceTimeZone` on a task and stores it. | A 400 here: non-UTC servers can't create repeating tasks until that field is dropped. |
 | `test_moving_a_repeating_tasks_due_keeps_its_stored_zone` | Changing the due date of a series anchored in another zone is accepted and leaves its zone alone. | A 400 here, or a changed zone: the stored-zone rule needs revisiting. Paste the error. |
 
 No date is asserted on the repeating tasks: the #72 probe saw a repeating task's due move to midnight the next day, a shift whose rule is still unknown. A date alone can't show the zone was used.
+
+The two older round-trip tests in the same file (`test_every_create_field_persists`, `test_every_update_field_persists`) now pin `timezone: "UTC"`, so the full live tier the release checklist asks for after a `todo.py` change no longer depends on the runner's configured zone.
 
 ## Prerequisites
 

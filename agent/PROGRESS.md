@@ -2,6 +2,17 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-09 — pr-todo-dates-use-configured-timezone-s1794187944-806779 (Michael's PR comment)
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1); everything else passed. Ruff clean.
+- CHANGELOG: "On a UTC server the payloads are unchanged" was false for a `Z`/offset `due` (base `todo.py:527` sent the raw string; `_due_in_zone` now converts in every zone). Now says zone-less `due` and recurrence are unchanged on UTC, with the offset example. Pinned by `test_a_utc_config_sends_an_offset_due_as_utc_wall_clock` and `test_a_utc_config_sends_a_zone_less_due_as_written` (both pass on this code; they pin the documented claim, not new behaviour).
+- `test_every_create_field_persists` and `test_every_update_field_persists` pinned to `timezone: "UTC"` with `model_copy`, comment says why.
+- `test_a_plain_tasks_due_is_midnight_on_the_written_day_in_the_zone` parametrized over `America/Los_Angeles` and `Asia/Tokyo`; same assertion (Tokyo: written day D reads back D-1T15:00 UTC). Collect-only on the file: 9 deselected, was 8. NOT run.
+- Promises list (`agent/findings/tasks/todo-dates-use-configured-timezone.md`): behaviour 1 adds the repeating-task exception, behaviour 9 names the three live tests. All 15 named offline tests grep-verified to exist.
+- `agent/findings/todo-dates-live-check.md`: four tasks, Tokyo row, UTC pin noted. The `todo-dates-live-check` card's "one throwaway task" wording is stale (not my line).
+- Final: 3092 passed, 4 skipped, 130 deselected, same 1 failed + 25 errors in `tests/test_http_transport.py` only; same with every toolset loaded. Ruff check + format clean.
+- Held: the A/B question (`todo-plain-due-zone-decision`) per Michael's comment. Don't merge before Nov 13 (#72 is Neil's until then) — that's for the construct/Michael.
+
 ## 2026-11-08 — checker-checker-todo-dates-use-configured-timezone
 
 - Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3074 passed, 4 skipped, 127 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff clean.
