@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import ReadOnlyError
+from outlook_mcp.errors import ReadOnlyError, ToolInputError
 from outlook_mcp.tools.mail_attachments import (
     attach_to_draft,
     download_attachment,
@@ -290,13 +290,13 @@ class TestSendWithAttachments:
             )
 
     async def test_send_rejects_missing_file(self, tmp_path):
-        """send_with_attachments raises FileNotFoundError for missing files.
+        """send_with_attachments raises ToolInputError for missing files.
 
         The path is inside the permitted directory — a path outside it is refused
         earlier, with a different error (see tests/test_attachment_paths.py).
         """
         mock_client = MagicMock()
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(ToolInputError):
             await send_with_attachments(
                 mock_client,
                 to=["a@b.com"],
@@ -464,12 +464,12 @@ class TestAttachToDraft:
             )
 
     async def test_attach_raises_on_missing_file(self, tmp_path):
-        """attach_to_draft raises FileNotFoundError when a path does not exist.
+        """attach_to_draft raises ToolInputError when a path does not exist.
 
         Inside the permitted directory — outside it the path is refused earlier.
         """
         mock_client = MagicMock()
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(ToolInputError):
             await attach_to_draft(
                 mock_client,
                 draft_id="AAMkAG123=",

@@ -40,9 +40,8 @@ def _confined_files(
     """Each path resolved inside ``attachments_dir``, with its size; refused otherwise.
 
     Every path is checked before anything is sent, so one bad entry attaches
-    nothing. A missing file is a ``ValueError`` rather than the
-    ``FileNotFoundError`` the mail tools raise: an ``OSError`` reaches the model
-    as a bare "Error executing tool", and this is the caller's mistake to fix.
+    nothing. A missing file is a ``ValueError`` so its text reaches the model;
+    an ``OSError`` would arrive as a bare "Error executing tool".
     """
     if not attachment_paths:
         raise ValueError("Pass at least one file in attachment_paths.")
