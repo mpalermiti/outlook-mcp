@@ -1813,6 +1813,16 @@ class TestTodoDatesUseTheConfiguredZone:
         body = await self._created(config=_CFG, recurrence=self._WEEKLY)
         assert "recurrenceTimeZone" not in body["recurrence"]["range"]
 
+    async def test_a_utc_config_sends_a_zone_less_due_as_written(self):
+        body = await self._created(config=_CFG, due="2026-11-10T09:00:00")
+        assert body["dueDateTime"] == {"dateTime": "2026-11-10T09:00:00", "timeZone": "UTC"}
+
+    async def test_a_utc_config_sends_an_offset_due_as_utc_wall_clock(self):
+        # Before #72 the string went out as written. Now even a UTC server sends
+        # the moment's UTC time, which here is the day before the written one.
+        body = await self._created(config=_CFG, due="2026-11-10T05:00:00+09:00")
+        assert body["dueDateTime"] == {"dateTime": "2026-11-09T20:00:00", "timeZone": "UTC"}
+
     async def test_a_legacy_config_zone_falls_back_to_utc(self):
         # Graph refuses `EST`; calendar events fall back to UTC for it too.
         body = await self._created(

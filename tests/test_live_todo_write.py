@@ -61,11 +61,14 @@ async def _temporary_task(client, config, **kwargs):
 
 class TestCreateTaskRoundTrip:
     async def test_every_create_field_persists(self, real_graph_client, live_write_config):
+        # Pinned to UTC: the written date is asserted on a repeating task, and
+        # under another zone Graph can move it (see TestDueIsAnchoredInTheConfiguredZone).
+        config = live_write_config.model_copy(update={"timezone": "UTC"})
         due = (date.today() + timedelta(days=30)).isoformat()
 
         async with _temporary_task(
             real_graph_client,
-            live_write_config,
+            config,
             title=f"{LIVE_WRITE_NAME} create",
             due=f"{due}T17:00:00Z",
             importance="high",
@@ -116,13 +119,16 @@ class TestDueIsAnchoredInTheConfiguredZone:
             "range": {"type": "noEnd", "startDate": start.isoformat()},
         }
 
+    # Each case sets its own zone, so the machine running it makes no difference.
+    # West of UTC midnight there is the written day in UTC; east of it, the day before.
+    @pytest.mark.parametrize("zone", [_LA, "Asia/Tokyo"])
     async def test_a_plain_tasks_due_is_midnight_on_the_written_day_in_the_zone(
-        self, real_graph_client, live_write_config
+        self, real_graph_client, live_write_config, zone
     ):
         """A zone Graph ignored would come back at midnight UTC: same day, other hour."""
-        config = live_write_config.model_copy(update={"timezone": _LA})
+        config = live_write_config.model_copy(update={"timezone": zone})
         written = date.today() + timedelta(days=30)
-        midnight = datetime(written.year, written.month, written.day, tzinfo=ZoneInfo(_LA))
+        midnight = datetime(written.year, written.month, written.day, tzinfo=ZoneInfo(zone))
 
         async with _temporary_task(
             real_graph_client,
@@ -183,11 +189,14 @@ class TestDueIsAnchoredInTheConfiguredZone:
 
 class TestUpdateTaskRoundTrip:
     async def test_every_update_field_persists(self, real_graph_client, live_write_config):
+        # Pinned to UTC: a plain task keeps only the date, picked in the
+        # configured zone, so east of UTC 09:00Z would be stored the day before.
+        config = live_write_config.model_copy(update={"timezone": "UTC"})
         due = (date.today() + timedelta(days=31)).isoformat()
 
         async with _temporary_task(
             real_graph_client,
-            live_write_config,
+            config,
             title=f"{LIVE_WRITE_NAME} before",
             importance="low",
         ) as task_id:
@@ -198,7 +207,7 @@ class TestUpdateTaskRoundTrip:
                 due=f"{due}T09:00:00Z",
                 body="updated body",
                 importance="high",
-                config=live_write_config,
+                config=config,
             )
 
             got = await _find_task(real_graph_client, task_id)

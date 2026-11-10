@@ -16,7 +16,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   it already names one. To Do keeps only the date of a non-repeating task's `due`, so there the
   zone decides which day is stored and the hour is not kept. **Behaviour change:** on a non-UTC
   server a zone-less `due` now means local time, as the docs have always said. On a UTC server
-  the payloads are unchanged. A `config.timezone` Graph refuses (`EST` and five others) falls
+  a zone-less `due` and a recurrence go out as before; a `due` with a `Z` or an offset, which
+  went out as written, is now sent as that instant's UTC time, so `2026-11-10T05:00:00+09:00`
+  is sent as `2026-11-09T20:00:00`. A `config.timezone` Graph refuses (`EST` and five others) falls
   back to UTC, as calendar events do.
 - **Changing a repeating task's `due` keeps the zone it is stored in**, as `outlook_update_event`
   does for a series, instead of relabelling it with `config.timezone`. `outlook_update_task` now
