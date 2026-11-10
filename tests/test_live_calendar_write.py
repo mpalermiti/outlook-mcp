@@ -19,6 +19,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from datetime import time as dt_time
+from datetime import timezone as dt_timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -1958,3 +1959,104 @@ class TestEventAttachments:
                     sdk, event_id, attachment["id"], config=live_write_config
                 )
             assert (await get_event(sdk, event_id))["attachments"] == []
+
+
+def _stored_instant(summary: str) -> datetime:
+    """A ``get_event`` start or end as the UTC instant Graph stored."""
+    date_time, _, zone = summary.partition(" (")
+    assert zone.rstrip(")") == "UTC", f"get_event stopped returning UTC: {summary}"
+    return datetime.fromisoformat(date_time[:19]).replace(tzinfo=dt_timezone.utc)
+
+
+class TestRelativeTimesKeepTheEventsZone:
+    """`start="+2h"` is stored as the moment it names, in the zone asked for (#74).
+
+    Before, both tools sent the text "+720h" and Graph answered 400. Sent as a
+    `Z` instant instead, Graph stores the moment but anchors a single event in
+    UTC (#236), so the zone is asserted as well as the time. The zone is named
+    explicitly: under a UTC config a `Z` and a wall-clock time would both keep
+    "UTC", and the zone assertion would prove nothing.
+
+    Times are a month out, like the rest of this tier. The window allows for
+    the seconds between reading the clock here and the tool reading its own.
+    """
+
+    _SLACK = timedelta(minutes=2)
+    _ZONE = "America/New_York"
+
+    async def test_create_and_update_store_the_moment_in_the_zone_asked_for(
+        self, real_graph_client, live_write_config
+    ):
+        sdk = real_graph_client.sdk_client
+        asked = datetime.now(dt_timezone.utc)
+        async with _temporary_event(
+            real_graph_client, live_write_config, start="+720h", end="+721h", timezone=self._ZONE
+        ) as event_id:
+            created = await get_event(sdk, event_id)
+            start = _stored_instant(created["start"])
+            assert abs(start - (asked + timedelta(hours=720))) < self._SLACK, created["start"]
+            assert _stored_instant(created["end"]) - start == timedelta(hours=1)
+            assert created["original_start_time_zone"] == self._ZONE
+
+            asked = datetime.now(dt_timezone.utc)
+            await update_event(
+                sdk, event_id=event_id, start="+744h", end="+746h", config=live_write_config
+            )
+            updated = await get_event(sdk, event_id)
+            start = _stored_instant(updated["start"])
+            assert abs(start - (asked + timedelta(hours=744))) < self._SLACK, updated["start"]
+            assert _stored_instant(updated["end"]) - start == timedelta(hours=2)
+            assert updated["original_start_time_zone"] == self._ZONE
+
+    async def test_a_windows_zoned_event_refuses_a_relative_time_and_is_left_alone(
+        self, real_graph_client, live_write_config
+    ):
+        """The refusal is real against Graph: nothing is patched, nothing moves.
+
+        Created through raw Graph with a Windows zone name, as in
+        `test_a_windows_anchored_evening_series_uses_its_local_day`; events this
+        server creates as single instances carry IANA names.
+        """
+        import httpx
+
+        day = _anchor_monday() + timedelta(days=2)
+        token = real_graph_client.credential.get_token("https://graph.microsoft.com/.default").token
+        created = httpx.post(
+            "https://graph.microsoft.com/v1.0/me/events",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={
+                "subject": LIVE_WRITE_SUBJECT + " relative-windows",
+                "start": {
+                    "dateTime": f"{day.isoformat()}T18:00:00",
+                    "timeZone": "Pacific Standard Time",
+                },
+                "end": {
+                    "dateTime": f"{day.isoformat()}T19:00:00",
+                    "timeZone": "Pacific Standard Time",
+                },
+            },
+            timeout=30,
+        )
+        created.raise_for_status()
+        event_id = created.json()["id"]
+        sdk = real_graph_client.sdk_client
+
+        try:
+            before = await get_event(sdk, event_id)
+            zone = before["original_start_time_zone"]
+            if maybe_zone(zone) is not None:
+                pytest.skip(
+                    f"this mailbox returned an IANA anchor ({zone}), so there is no "
+                    "Windows-named event here to refuse a relative time on"
+                )
+
+            with pytest.raises(ValueError, match="cannot convert a moment into"):
+                await update_event(
+                    sdk, event_id=event_id, start="+745h", end="+746h", config=live_write_config
+                )
+
+            after = await get_event(sdk, event_id)
+            assert (after["start"], after["end"]) == (before["start"], before["end"])
+            assert after["original_start_time_zone"] == zone
+        finally:
+            await delete_event(sdk, event_id, config=live_write_config)

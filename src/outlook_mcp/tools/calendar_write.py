@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+from datetime import timezone as dt_timezone
 from typing import Any
 
 from outlook_mcp.calendar_resolver import (
@@ -36,13 +37,62 @@ from outlook_mcp.tools._recurrence import (
 from outlook_mcp.tools.calendar_read import EVENT_KEY_PROPERTY_ID
 from outlook_mcp.validation import (
     resolve_config_event_timezone,
-    validate_datetime,
+    resolve_relative_datetime,
     validate_email,
     validate_event_key,
     validate_event_timezone,
     validate_graph_id,
     validate_header_zone,
 )
+
+
+def _now() -> datetime:
+    """The clock a call resolves its relative ``start``/``end`` against (#74).
+
+    Read once per call and shared by both ends, so ``+2h``/``+3h`` are exactly
+    an hour apart: two reads can straddle a second boundary, and the
+    seconds-precision result would then make the event a second longer.
+    """
+    return datetime.now(dt_timezone.utc)
+
+
+def _in_zone(instant: str, zone: str, given: str) -> str:
+    """A resolved relative time as wall-clock time in ``zone``, the event's anchor (#74).
+
+    Same moment, written without a zone or offset, because that is the only form
+    Graph keeps the zone for: handed a ``Z`` or an offset, it anchors a single
+    event in UTC whatever ``timeZone`` says (#236). Measured live on a consumer
+    mailbox, 2026-11-10; a naive time kept both an IANA and a Windows label.
+
+    Refused, rather than sent some other way, when that form cannot say which
+    moment is meant: in a zone ``zoneinfo`` cannot convert into (Graph's Windows
+    names, which every series this server makes comes back with), and inside
+    the interval a zone repeats when daylight saving ends, where one wall-clock
+    time names two moments. ``given`` is the caller's own text, for the message.
+    """
+    tz = maybe_zone(zone)
+    if tz is None:
+        raise ValueError(
+            f"This event is anchored in {zone!r}, which this server cannot convert a "
+            "moment into, so a relative time cannot be placed in it. Nothing was "
+            "modified. Pass `start` and `end` as local time without a zone or offset "
+            "(2026-11-10T09:00:00); they are read in the event's own zone."
+        )
+    # `astimezone`, never timedelta arithmetic: it keeps `fold`, and cannot land
+    # in a spring-forward gap, so the one case left to catch is the repeat.
+    local = datetime.fromisoformat(instant.replace("Z", "+00:00")).astimezone(tz)
+    if local.replace(fold=0).astimezone(dt_timezone.utc) != local.replace(fold=1).astimezone(
+        dt_timezone.utc
+    ):
+        offset = local.strftime("%z")
+        raise ValueError(
+            f"{given!r} falls in the interval {zone} repeats when daylight saving ends, "
+            "so it names two different times there. Nothing was modified. Pass a time "
+            "outside that interval, or this one with its UTC offset "
+            f"({local:%Y-%m-%dT%H:%M:%S}{offset[:3]}:{offset[3:]}), which names exactly "
+            "one of them."
+        )
+    return local.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _usable_zone(value: Any) -> str | None:
@@ -517,6 +567,11 @@ async def create_event(
     event to start on a midnight boundary, which a UTC conversion of local
     midnight is not.
 
+    A relative ``start``/``end`` (``+2h``, ``now``) is the exception (#74). It
+    names a moment, so it is resolved before anything is sent, and then written
+    as wall-clock time in the anchor zone (``_in_zone``), the form Graph keeps
+    the zone for. Sent as typed, Graph refused it with a 400.
+
     ``show_as`` is Graph's ``showAs`` — the free/busy status Outlook labels
     "Show as". Omitted, Graph applies its own default (``busy``); we do not
     send one, so the default stays Graph's to change.
@@ -564,9 +619,10 @@ async def create_event(
         # Graph emails the subject and body to every attendee.
         check_sends_mail(config, "outlook_create_event", "invite attendees")
 
-    # Validate datetime inputs
-    validate_datetime(start)
-    validate_datetime(end)
+    # Validated, and only a relative form resolved; see the docstring.
+    moment = _now()
+    start_resolved = resolve_relative_datetime(start, now=moment)
+    end_resolved = resolve_relative_datetime(end, now=moment)
     # `is None`, not `or`: an explicitly empty timezone is a mistake to refuse,
     # not a synonym for "use the configured one". The two sources are held to
     # different standards on purpose — a stored config value can be legacy, a
@@ -585,6 +641,12 @@ async def create_event(
         # 17:00 the previous day, so the recurrence would be built for the
         # wrong date and weekday. Label it as Graph will store it.
         zone = "UTC"
+    # The resolver hands ISO input back as the same object, so identity says
+    # which ends were relative.
+    if start_resolved is not start:
+        start = _in_zone(start_resolved, zone, start)
+    if end_resolved is not end:
+        end = _in_zone(end_resolved, zone, end)
 
     # Validate attendee emails if provided
     validated_attendees = []
@@ -723,6 +785,13 @@ async def update_event(
     Patching a colleague's New York meeting to ``"2026-11-03T09:00:00"`` means
     09:00 in New York, not 09:00 where this server is configured.
 
+    A relative ``start``/``end`` (``+2h``) is written as wall-clock time in the
+    zone that end is anchored in, as in ``create_event``, so it is placed only
+    once that zone has been read. It is refused on an event Graph names in
+    Windows terms ("Pacific Standard Time", which is how every series this
+    server creates comes back), and inside the interval a zone repeats when
+    daylight saving ends; see ``_in_zone``.
+
     ``timezone`` re-anchors the event into a *different* zone, and requires
     ``start`` and ``end`` in the same call for the reason above: Graph rejects a
     ``start`` patch carrying no ``timeZone``, so the zone is never an
@@ -805,10 +874,12 @@ async def update_event(
     # two costs: a stale id plus a malformed time surfaced as
     # `404 ErrorItemNotFound` instead of the input error, and every rejected
     # patch paid for a full-event round trip.
-    if start is not None:
-        validate_datetime(start)
-    if end is not None:
-        validate_datetime(end)
+    # Validated, and only a relative form resolved, as in `create_event`.
+    # Each resolved instant is placed in its zone once that zone has been read,
+    # below; the resolver hands ISO input back as the same object.
+    moment = _now()
+    start_resolved = start if start is None else resolve_relative_datetime(start, now=moment)
+    end_resolved = end if end is None else resolve_relative_datetime(end, now=moment)
     if is_all_day is not None and (start is None or end is None):
         raise ValueError(
             "is_all_day requires start and end in the same call; Graph rejects a lone "
@@ -932,6 +1003,15 @@ async def update_event(
                 # above, one round trip later because nothing knew sooner.
                 raise ValueError(_ALL_DAY_ZONE_REFUSAL)
             start_zone = end_zone = "UTC"
+
+    # A relative end is placed in the zone that end is anchored in, which is
+    # only known now. Before the occurrence read below, since nothing it finds
+    # could rescue a time `_in_zone` refuses. A zone of None (Graph's custom-zone
+    # sentinel) is left for `_anchored` to refuse with its own message.
+    if start_resolved is not start and start_zone is not None:
+        start = _in_zone(start_resolved, start_zone, start)
+    if end_resolved is not end and end_zone is not None:
+        end = _in_zone(end_resolved, end_zone, end)
 
     # Last of the checks, because it is the only one that costs a second read,
     # and only a master can have occurrences to lose. `remove_recurrence` is left

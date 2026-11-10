@@ -18,6 +18,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   or location change already does. That the join details reach them is assumed, not
   observed: the live tests create no attendees.
 
+- **`outlook_create_event` and `outlook_update_event` accept relative times for `start` and
+  `end`** (`+2h`, `now`, `7d`), as the server's other date arguments do. They passed
+  validation and were then sent to Microsoft as typed, which refused the request. A relative
+  time is now sent as local time in the event's own time zone, so the event keeps that zone;
+  ISO 8601 times are still sent exactly as written. Two cases are refused instead, before
+  anything is sent: an event stored in a Windows-named time zone ("Pacific Standard Time",
+  which is how Microsoft returns repeating events), where the time has to be given as local
+  time without a zone; and a time in the interval a zone repeats when daylight saving ends,
+  where it names two moments, so it has to be given with its UTC offset. (#74)
+
 ### Changed
 
 - **`outlook_create_event` and `outlook_update_event` report `is_online` (#70).** When the call
