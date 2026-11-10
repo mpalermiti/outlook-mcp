@@ -66,7 +66,8 @@ def _in_zone(instant: str, zone: str, given: str) -> str:
 
     Refused, rather than sent some other way, when that form cannot say which
     moment is meant: in a zone ``zoneinfo`` cannot convert into (Graph's Windows
-    names, which every series this server makes comes back with), and inside
+    names — each series this server created in the 2026-11-10 measurement came
+    back named that way, though it was sent an IANA zone), and inside
     the interval a zone repeats when daylight saving ends, where one wall-clock
     time names two moments. ``given`` is the caller's own text, for the message.
     """
@@ -788,8 +789,8 @@ async def update_event(
     A relative ``start``/``end`` (``+2h``) is written as wall-clock time in the
     zone that end is anchored in, as in ``create_event``, so it is placed only
     once that zone has been read. It is refused on an event Graph names in
-    Windows terms ("Pacific Standard Time", which is how every series this
-    server creates comes back), and inside the interval a zone repeats when
+    Windows terms ("Pacific Standard Time", as the series this server created
+    came back when measured), and inside the interval a zone repeats when
     daylight saving ends; see ``_in_zone``.
 
     ``timezone`` re-anchors the event into a *different* zone, and requires

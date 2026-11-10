@@ -3311,7 +3311,8 @@ class TestRelativeEventTimes:
     async def test_a_relative_time_on_a_windows_zoned_event_is_refused(self, clock, start, end):
         """`zoneinfo` cannot convert into "Pacific Standard Time".
 
-        Every series this server creates comes back named that way. Sending `Z`
+        The series this server created came back named that way when measured
+        (2026-11-10, a consumer mailbox), so this is not rare. Sending `Z`
         instead would re-anchor the event in UTC (#236), so it is refused before
         anything is sent.
         """
