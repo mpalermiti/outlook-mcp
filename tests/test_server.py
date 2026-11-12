@@ -591,7 +591,7 @@ class TestCalendarWriteArgumentOrder:
             patch.object(server_mod, "_get_graph_client", return_value=client),
             patch.object(server_mod, "_get_config", return_value=config),
         ):
-            await server_mod.outlook_create_event(
+            result = await server_mod.outlook_create_event(
                 self._ctx(), subject="Review", start="+2h", end="+3h"
             )
         after = datetime.now(timezone.utc)
@@ -603,6 +603,9 @@ class TestCalendarWriteArgumentOrder:
         end = datetime.fromisoformat(event.end.date_time).replace(tzinfo=tokyo)
         assert before + timedelta(hours=2) <= start <= after + timedelta(hours=2)
         assert end - start == timedelta(hours=1)
+        # The result reaches the caller through the wrapper, naming what was sent.
+        assert result["start"] == f"{event.start.date_time} (Asia/Tokyo)"
+        assert result["end"] == f"{event.end.date_time} (Asia/Tokyo)"
 
     @pytest.mark.asyncio
     async def test_show_as_alone_is_not_read_as_a_timezone(self):

@@ -22,15 +22,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `end`** (`+2h`, `now`, or `7d` for seven days ago), as the server's other date arguments
   do. They passed validation and were then sent to Microsoft as typed, which refused the
   request. A relative time is now sent as local time in the event's own time zone, so the
-  event keeps that zone; ISO 8601 times are still sent exactly as written. When `start` or
-  `end` was relative, the result carries it as it was written, with its zone
-  (`"start": "2026-11-04T17:00:00 (America/Los_Angeles)"`), so a `7d` is seen to make an
-  event in the past. Three cases are refused instead, before anything is sent: an event
-  stored in a Windows-named time zone ("Pacific Standard Time", as Microsoft has returned
-  repeating events), where the time has to be given as local time without a zone; a time in
-  the interval a zone repeats when daylight saving ends, where it names two moments, so a
-  time outside that interval has to be given; and a relative time on an all-day event,
-  which Microsoft needs at midnight. (#74)
+  event keeps that zone; ISO 8601 times are still sent exactly as written. Three cases are
+  refused instead, before the event is written: an event stored in a Windows-named time zone
+  ("Pacific Standard Time", as Microsoft has returned repeating events), where the time has
+  to be given as local time without a zone; a time in the interval a zone repeats when
+  daylight saving ends, where it names two moments, so a time outside that interval has to
+  be given; and a relative time on an all-day event, which Microsoft needs at midnight. (#74)
 
 ### Changed
 
@@ -39,6 +36,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   result carries `is_online` as Graph's reply states it, so an account that ignored the request
   shows `false` on the call itself. It is omitted when the reply has no such field, and every
   other result is unchanged.
+
+- **`outlook_create_event` and `outlook_update_event` report a relative `start` or `end` as it
+  was written (#74).** Each end given as a relative time is in the result, with its zone, in
+  the form the read tools use: `"start": "2026-11-04T17:00:00 (America/Los_Angeles)"`. So a
+  `start="7d"` is seen to make an event in the past. An end given in ISO 8601 is not echoed,
+  and a call with no relative time returns what it did before.
 
 ## [1.31.4] — 2026-11-03
 
