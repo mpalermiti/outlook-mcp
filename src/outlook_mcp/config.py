@@ -301,8 +301,10 @@ class Config(BaseModel):
         default="UTC",
         description=(
             "IANA timezone. Interprets zone-less dates, and anchors every event "
-            "created — a recurring event is expanded in this zone, so the UTC "
-            "default makes one shift an hour across a daylight-saving change."
+            "created and every new To Do recurrence — a recurring event is "
+            "expanded in this zone, so the UTC default makes one shift an hour "
+            "across a daylight-saving change. To Do due dates and reminders are "
+            "sent in it too, but To Do keeps only the date of a non-repeating task."
         ),
     )
     attachments_dir: str = Field(

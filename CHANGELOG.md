@@ -17,6 +17,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   attendees, `is_online` needs `mail_send` under a policy that withholds it, as a subject, body
   or location change already does. That the join details reach them is assumed, not
   observed: the live tests create no attendees.
+- **To Do due dates, reminders and recurrence are sent in the configured time zone** (#72).
+  `outlook_create_task` and `outlook_update_task` labelled every date `UTC` and sent no zone
+  with a recurrence, whatever `config.timezone` said. A zone-less `due` now goes out as written,
+  labelled with `config.timezone`. A `due` with a `Z` or an offset keeps its instant, sent as
+  wall-clock time in that zone. A recurrence gets that zone as `range.recurrenceTimeZone` unless
+  it already names one. To Do keeps only the date of a non-repeating task's `due`, so there the
+  zone decides which day is stored and the hour is not kept. **Behaviour change:** on a non-UTC
+  server a zone-less `due` now means local time, as the docs have always said. On a UTC server
+  a zone-less `due` and a recurrence go out as before; a `due` with a `Z` or an offset, which
+  went out as written, is now sent as that instant's UTC time, so `2026-11-10T05:00:00+09:00`
+  is sent as `2026-11-09T20:00:00`. A `config.timezone` Graph refuses (`EST` and five others) falls
+  back to UTC, as calendar events do.
+- **Changing a repeating task's `due` keeps the zone it is stored in**, as `outlook_update_event`
+  does for a series, instead of relabelling it with `config.timezone`. `outlook_update_task` now
+  reads the task first when `due` is given. A `due` with a `Z`, an offset or a relative value is
+  refused, with nothing modified, on a task stored under a Windows zone name this server cannot
+  convert into; pass local time without a zone.
+- **`outlook_list_tasks` and `outlook_get_task` return `due_time_zone` beside `due`.** Microsoft
+  keeps a repeating task's due in its own zone, so a bare time could be read as UTC and reported
+  on the wrong day.
+- **A relative `due` is worked out before it is sent.** `due="+7d"` passed validation and then
+  reached Graph as the literal text `+7d`.
 
 ### Changed
 

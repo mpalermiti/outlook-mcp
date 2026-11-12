@@ -1005,3 +1005,29 @@ class TestDeleteChecklistItem:
             await delete_checklist_item(
                 client, task_id="task1", checklist_item_id="ci1", config=_CFG_RO
             )
+
+
+class TestTaskResponsesNameTheDueZone:
+    """Graph keeps a repeating task's due in its own zone; a bare time reads as UTC."""
+
+    @staticmethod
+    def _due(zone):
+        return MagicMock(date_time="2026-10-16T00:00:00.0000000", time_zone=zone)
+
+    async def test_list_tasks_reports_the_zone_beside_due(self):
+        client = _build_mock_client(tasks=[_mock_task(due=self._due("China Standard Time"))])
+        task = (await list_tasks(client))["tasks"][0]
+        assert task["due"] == "2026-10-16T00:00:00.0000000"
+        assert task["due_time_zone"] == "China Standard Time"
+
+    async def test_get_task_reports_the_zone_beside_due(self):
+        client = _build_mock_client(tasks=[_mock_task(due=self._due("UTC"))])
+        assert (await get_task(client, task_id="task1"))["due_time_zone"] == "UTC"
+
+    async def test_a_task_without_a_due_reports_no_zone(self):
+        client = _build_mock_client(tasks=[_mock_task(due=None)])
+        assert (await list_tasks(client))["tasks"][0]["due_time_zone"] is None
+
+    async def test_a_due_without_a_zone_reports_no_zone(self):
+        client = _build_mock_client(tasks=[_mock_task(due=self._due(None))])
+        assert (await list_tasks(client))["tasks"][0]["due_time_zone"] is None
