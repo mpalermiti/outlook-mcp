@@ -1150,6 +1150,7 @@ contributors' mailboxes Graph now honours it and creates a real Teams meeting. O
 maintainer's it is still ignored, re-checked on 2026-09-30. `outlook_create_event`'s description
 and the README say it has no effect, which is wrong for some users. Check `is_online` in the
 event you get back. The docs correction, and `is_online` on `outlook_update_event`, are in progress (#70).
+*Superseded — see #70: the docs are corrected, and `outlook_update_event` takes `is_online`.*
 
 ### Added
 
