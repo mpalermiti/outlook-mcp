@@ -2,6 +2,16 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-11 — redo-todo-dates-use-configured-timezone
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3073 passed, 4 skipped, 128 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff clean.
+- Source: branch `construct-kept/todo-dates-use-configured-timezone-20261112-044752` (tip fdba3e6, merge base with this branch f76dabc). Took `git diff f76dabc <kept> -- . ':!agent'` and `git apply -3` onto 8b44da8 (main incl. #70 fix 094a1fa).
+- Only CHANGELOG.md conflicted. Unreleased now: Fixed = #70 bullet, then the four #72 bullets; Changed = #70 bullet.
+- Check: the +/- lines for the other 7 files are byte-identical to the kept branch's (533 lines, `cmp`). `_usable_zone` still exists in `calendar_write.py` after #70.
+- Final: 3108 passed, 4 skipped, 132 deselected (+35 offline, +4 live: 3 tests, Tokyo param), same 1 failed + 25 errors in `tests/test_http_transport.py` only; same with every toolset loaded. Ruff check + format clean. Targeted: `TestTodoDatesUseTheConfiguredZone` + `TestTaskResponsesNameTheDueZone` 35 passed.
+- Commit 8b3502a. Live tests NOT run. `todo-plain-due-zone-decision` still parked; "don't merge before Nov 13" (#72 is Neil's until then) still stands.
+- Env gotcha: in zsh an unquoted `$F` holding several paths is not word-split; use an array.
+
 ## 2026-11-09 — pr-todo-dates-use-configured-timezone-s1794187944-806779 (Michael's PR comment)
 
 - Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1); everything else passed. Ruff clean.
