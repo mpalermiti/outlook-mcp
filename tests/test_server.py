@@ -760,6 +760,48 @@ class TestCalendarWriteArgumentOrder:
         event = builder.patch.call_args[0][0]
         assert event.single_value_extended_properties[0].value == "booking:ABC123"
         assert event.start is None
+        # `is_online` is appended after `key`; swapped, the key lands here.
+        assert event.is_online_meeting is None
+
+    @staticmethod
+    async def _update_through_the_server(**kwargs):
+        """Run `outlook_update_event` for real and return the Event it patched."""
+        from unittest.mock import AsyncMock
+
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123=", is_online_meeting=True))
+        sdk = MagicMock()
+        sdk.me.events.by_event_id = MagicMock(return_value=builder)
+        client = MagicMock()
+        client.sdk_client = sdk
+
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=Config(client_id="test")),
+        ):
+            result = await server_mod.outlook_update_event(
+                TestCalendarWriteArgumentOrder._ctx(), event_id="AAMkAG123=", **kwargs
+            )
+        return builder.patch.call_args[0][0], result
+
+    @pytest.mark.asyncio
+    async def test_update_is_online_alone_is_not_read_as_a_key(self):
+        """Swapped with `key`, `True` reaches the key validator instead."""
+        event, result = await self._update_through_the_server(is_online=True)
+
+        assert event.is_online_meeting is True
+        assert event.single_value_extended_properties is None
+        assert result["is_online"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_key_and_is_online_each_land_in_their_own_slot(self):
+        event, _ = await self._update_through_the_server(key="booking:ABC123", is_online=True)
+
+        assert event.single_value_extended_properties[0].value == "booking:ABC123"
+        assert event.is_online_meeting is True
 
     @pytest.mark.asyncio
     async def test_update_event_arguments_land_in_the_right_slots(self):

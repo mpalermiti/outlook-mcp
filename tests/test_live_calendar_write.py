@@ -40,12 +40,15 @@ def _anchor_monday() -> date:
 
 
 @asynccontextmanager
-async def _temporary_event(client, config, subject_suffix: str = "", **kwargs):
+async def _temporary_event(
+    client, config, subject_suffix: str = "", with_result: bool = False, **kwargs
+):
     """Create an event, hand back its id, and always delete it.
 
     ``subject_suffix`` narrows the marker for a test that has to find its own
     event again in a calendar listing; the shared prefix still makes anything a
-    crash leaks greppable in the UI.
+    crash leaks greppable in the UI. ``with_result`` hands back
+    ``(id, create_event's result)`` for a test that reads what create reported.
     """
     created = await create_event(
         client.sdk_client,
@@ -55,7 +58,7 @@ async def _temporary_event(client, config, subject_suffix: str = "", **kwargs):
     )
     event_id = created["event_id"]
     try:
-        yield event_id
+        yield (event_id, created) if with_result else event_id
     finally:
         await delete_event(client.sdk_client, event_id, config=config)
 
@@ -217,8 +220,9 @@ class TestPatchingEventFlags:
     coverage. The attendee path is unit-tested against the built payload; its
     Graph behavior is documented in the tool docstring, not asserted here.
 
-    `is_online` is absent because Graph ignores isOnlineMeeting on consumer
-    mailboxes — see test_online_meeting_is_not_supported_on_personal_accounts.
+    `is_online` is honoured on some personal accounts and ignored on others
+    (#70), so its tests assert that what Graph reports agrees with itself rather
+    than which way it went — see `TestOnlineMeetingsArePerAccount`.
     """
 
     async def test_update_can_make_a_midnight_event_all_day(
@@ -282,32 +286,132 @@ class TestPatchingEventFlags:
             assert after["location"] == "Room 101"
             assert after["is_all_day"] is False
 
-    async def test_online_meeting_is_not_supported_on_personal_accounts(
+
+def _online_state(detail: dict, how: str) -> tuple[bool, bool]:
+    """``(is_online, has a join link)`` off ``outlook_get_event``, printed.
+
+    The print is the record of which way this account went, so run with
+    ``-rP`` to see it. Booleans only: a join link is a live meeting.
+    """
+    state = (detail["is_online"], bool(detail["online_meeting_url"]))
+    print(f"#70 {how}: is_online={state[0]}, join link present={state[1]}")
+    return state
+
+
+class TestOnlineMeetingsArePerAccount:
+    """`isOnlineMeeting` is honoured on some personal mailboxes and ignored on
+    others (#70): two contributors' mailboxes mint a real meeting, the
+    maintainer's has read back `False` since 1.16.0. A staged rollout is the
+    likeliest explanation, so no test here may assert a direction.
+
+    They assert **agreement** instead: the flag and the join link describe one
+    meeting or none, and the tool's own result says what the read-back says.
+    Agreement cannot tell "Graph ignored it" from "the formatter reads
+    nothing" — that is pinned offline by
+    `test_get_event_reads_an_online_meeting_flag_and_link_together` — which is
+    why each test also prints which way it went.
+
+    ``consumer_mailbox_only`` is load-bearing: these are claims about personal
+    accounts. Before it existed the predecessor of these tests failed on two
+    contributor PRs run against work accounts, where Graph always honours it.
+    """
+
+    async def test_online_meeting_flag_and_join_url_agree_on_personal_accounts(
         self, real_graph_client, live_write_config, consumer_mailbox_only
     ):
-        """Pins the reason `is_online` is absent from update_event.
-
-        Graph accepts isOnlineMeeting on a consumer mailbox and silently drops
-        it. If Microsoft ever starts honouring it, this test fails and tells us
-        the parameter is worth adding.
-
-        ``consumer_mailbox_only`` is load-bearing, not decoration. The assertion
-        is a claim about personal accounts and the name says so, but nothing
-        checked it until 2026-09-17 — so on a work or school account, where
-        Graph really does honour isOnlineMeeting, this failed correctly and
-        meant nothing. It did that on two contributor PRs before anyone ran it
-        against a consumer mailbox and found it green.
-        """
+        """Replaces the test that asserted Graph *ignores* `is_online` — it
+        failed, correctly, when Microsoft started honouring it on some accounts.
+        If this one fails, Graph reported an online meeting without a link, a
+        link without the flag, or a create result the event does not match."""
         monday = _anchor_monday()
 
         async with _temporary_event(
             real_graph_client,
             live_write_config,
+            with_result=True,
             start=f"{monday.isoformat()}T23:00:00Z",
             end=f"{monday.isoformat()}T23:30:00Z",
             is_online=True,
+        ) as (event_id, created):
+            detail = await get_event(real_graph_client.sdk_client, event_id)
+            is_online, has_link = _online_state(detail, "create")
+
+            assert is_online is has_link, "the flag and the join link disagree"
+            if "is_online" in created:
+                assert created["is_online"] is is_online, (
+                    "create reported a different is_online from the event it made"
+                )
+            else:
+                print("#70 create: Graph's reply carried no isOnlineMeeting")
+
+    async def test_update_can_add_an_online_meeting_and_says_whether_it_did(
+        self, real_graph_client, live_write_config, consumer_mailbox_only
+    ):
+        """Turning one on later; the same agreement, through PATCH (#70)."""
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            start=f"{monday.isoformat()}T22:00:00Z",
+            end=f"{monday.isoformat()}T22:30:00Z",
         ) as event_id:
-            assert (await get_event(real_graph_client.sdk_client, event_id))["is_online"] is False
+            updated = await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                is_online=True,
+                config=live_write_config,
+            )
+            detail = await get_event(real_graph_client.sdk_client, event_id)
+            is_online, has_link = _online_state(detail, "update")
+
+            assert is_online is has_link, "the flag and the join link disagree"
+            if "is_online" in updated:
+                assert updated["is_online"] is is_online, (
+                    "update reported a different is_online from the event it left"
+                )
+            else:
+                print("#70 update: Graph's reply carried no isOnlineMeeting")
+
+    async def test_patching_online_off_keeps_the_meeting(
+        self, real_graph_client, live_write_config, consumer_mailbox_only
+    ):
+        """The premise behind `update_event` refusing `is_online=False`.
+
+        Graph accepts `isOnlineMeeting: false` on a PATCH and keeps the meeting
+        (probed 2026-11-09, still there 90 seconds later). The tool refuses the
+        argument, so this sends it through the SDK directly. **If this fails,
+        Graph has started removing online meetings on PATCH, and the refusal is
+        now refusing something that works — lift it.**
+        """
+        from msgraph.generated.models.event import Event
+
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            start=f"{monday.isoformat()}T21:00:00Z",
+            end=f"{monday.isoformat()}T21:30:00Z",
+            is_online=True,
+        ) as event_id:
+            before = await get_event(real_graph_client.sdk_client, event_id)
+            if _online_state(before, "before PATCH false") != (True, True):
+                pytest.skip(
+                    "this mailbox did not create an online meeting, so there is "
+                    "nothing for PATCH false to remove (#70: per account)"
+                )
+
+            patch = Event()
+            patch.is_online_meeting = False
+            builder = real_graph_client.sdk_client.me.events.by_event_id(event_id)
+            await builder.patch(patch)
+
+            after = await get_event(real_graph_client.sdk_client, event_id)
+            assert _online_state(after, "after PATCH false") == (True, True), (
+                "Graph removed the online meeting: update_event's refusal of "
+                "is_online=False can be lifted (#70)"
+            )
 
 
 class TestRemovingRecurrence:
@@ -694,9 +798,9 @@ class TestShowAsIsHonoured:
     This is the assertion the mock tier structurally cannot make. A mock sees
     the enum on the model and the camelCase key on the wire; neither can tell a
     field Graph *stores* from one it accepts with a 201 and drops. That is not
-    hypothetical here — it is exactly what `isOnlineMeeting` does on a consumer
-    mailbox, which is why `create_event` has an `is_online` that has never done
-    anything and a live test saying so.
+    hypothetical here — it is what `isOnlineMeeting` does on some consumer
+    mailboxes (#70), and what `isOnlineMeeting: false` on a PATCH does on all of
+    them seen so far.
 
     No `consumer_mailbox_only` gate, deliberately. That fixture is for claims
     that something does *not* work on a personal account, where a work account
@@ -720,7 +824,7 @@ class TestShowAsIsHonoured:
 
             assert read_back["show_as"] == "tentative", (
                 "Graph accepted the POST and did not store showAs — the same "
-                "shape as isOnlineMeeting on a consumer mailbox."
+                "shape as isOnlineMeeting on some consumer mailboxes."
             )
 
     @pytest.mark.parametrize(
@@ -740,7 +844,7 @@ class TestShowAsIsHonoured:
         `show_as` lets Graph apply its default of `busy`, and the `busy`
         parameter would then assert `busy == busy` with the PATCH doing
         nothing — passing just as happily if Graph started dropping `showAs`
-        the way it dropped `isOnlineMeeting`. So the event is created at a
+        the way some accounts drop `isOnlineMeeting`. So the event is created at a
         value the case under test never uses.
 
         The starting value must also never be `busy`, for the same reason one

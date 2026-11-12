@@ -467,6 +467,24 @@ class TestGetEvent:
         assert result["attendees"][0]["response"] == "accepted"
         assert result["categories"] == ["Blue Category"]
 
+    async def test_get_event_reads_an_online_meeting_flag_and_link_together(self):
+        """The pair the live honesty test compares (#70). The detail test above
+        leaves the flag at its `False` default, so a formatter reading the wrong
+        field for `is_online` would pass it — and the live test, comparing two
+        values the same broken read produced, could pass with it."""
+        mock_event = _make_mock_event(
+            is_online=True, join_url="https://teams.live.com/meet/0000000000000"
+        )
+        builder = MagicMock()
+        builder.get = AsyncMock(return_value=mock_event)
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        result = await get_event(mock_client, event_id="AAMkAG123=")
+
+        assert result["is_online"] is True
+        assert result["online_meeting_url"] == "https://teams.live.com/meet/0000000000000"
+
 
 class TestEventDetailAnchorZone:
     """The detail payload has to say which zone the event is anchored in.

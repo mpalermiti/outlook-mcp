@@ -2,7 +2,7 @@
 
 Tier 3 of the silent-no-op audit. The mock suite and the wire-level payload
 tests prove what we *send*. Only Graph can say what it *kept* — `is_online`
-was accepted and dropped on personal accounts with a 201 and no error. Each
+is accepted and dropped on some personal accounts with a 201 and no error. Each
 test here writes every parameter a tool accepts, reads the object back
 through the tool's own read path, and asserts each value persisted.
 

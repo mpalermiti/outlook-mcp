@@ -104,6 +104,29 @@ _ALL_DAY_ZONE_REFUSAL = (
     "start and end times."
 )
 
+# Graph accepts `isOnlineMeeting: false` on a PATCH and keeps the meeting: the
+# reply and a fresh GET both still report it, unchanged 90 seconds later, on a
+# personal account (probed 2026-11-09, #70). Answering `updated` would report
+# success for nothing, so the argument is refused before anything is sent.
+_ONLINE_REMOVAL_REFUSAL = (
+    "is_online=False cannot remove an online meeting: Graph accepts the request "
+    "and keeps the meeting (verified on a personal account). To drop it, create "
+    "the event again without is_online — on an event with attendees that sends "
+    "them a cancellation and a new invitation."
+)
+
+
+def _online_reply(response: Any) -> dict:
+    """``is_online`` as Graph's write reply states it, or nothing.
+
+    Graph honours ``isOnlineMeeting`` on some personal accounts and ignores it
+    on others (#70), and its reply says which — even for a request it ignored.
+    A reply that does not carry the field as a boolean yields no key rather
+    than ``False``: absent is not "no meeting".
+    """
+    value = getattr(response, "is_online_meeting", None)
+    return {"is_online": value} if isinstance(value, bool) else {}
+
 
 def _key_property(key: str) -> Any:
     """The extended property that stamps an event with ``key``.
@@ -529,6 +552,12 @@ async def create_event(
     booking arrives. Nothing here refuses a key another event already has:
     looking first is the caller's step, and a check here could not stop two
     concurrent creates anyway.
+
+    ``is_online`` asks Graph for an online meeting. Some personal accounts
+    honour it and some ignore it (#70), so when it is ``True`` the result
+    carries ``is_online`` as Graph's reply states it — omitted if the reply
+    lacks the field. Only ``True`` is reported: the default ``False`` cannot be
+    told apart from an argument nobody passed.
     """
     check_permission(config, CATEGORY_CALENDAR_WRITE, "outlook_create_event")
     if attendees:
@@ -639,6 +668,7 @@ async def create_event(
         "status": "created",
         "event_id": response.id,
         "subject": response.subject,
+        **(_online_reply(response) if is_online else {}),
     }
 
 
@@ -657,6 +687,7 @@ async def update_event(
     show_as: str | None = None,
     timezone: str | None = None,
     key: str | None = None,
+    is_online: bool | None = None,
     *,
     config: Config,
 ) -> dict:
@@ -720,11 +751,12 @@ async def update_event(
     sent, so there is no zone to move it to and accepting the argument would
     report success for nothing.
 
-    There is deliberately no ``is_online`` here. Graph accepts ``isOnlineMeeting``
-    on a personal (consumer) account and silently ignores it — a created or
-    patched event comes back ``isOnlineMeeting: False, onlineMeetingProvider:
-    'unknown'``. Teams meetings need a work/school account, which this server
-    does not target. Adding the parameter would only ship a convincing no-op.
+    ``is_online=True`` asks Graph to add an online meeting; it is idempotent (a
+    second request keeps the same join link). Some personal accounts honour it
+    and some ignore it (#70), so the result carries ``is_online`` as Graph's
+    reply states it, as ``create_event`` does. ``is_online=False`` is refused
+    (``_ONLINE_REMOVAL_REFUSAL``): Graph accepts it and keeps the meeting.
+    Appended after ``key`` for the reason ``create_event`` gives.
 
     Setting ``recurrence`` turns a single event into a series, or replaces the
     pattern of an existing one. It takes the same shapes as ``create_event``.
@@ -820,6 +852,8 @@ async def update_event(
         check_recurrence_shape(recurrence)
     if key is not None:
         key = validate_event_key(key)
+    if is_online is False:
+        raise ValueError(_ONLINE_REMOVAL_REFUSAL)
 
     # The event as Graph currently holds it, fetched at most once and only when
     # something actually needs it: the zone a start/end patch must carry, the
@@ -839,13 +873,17 @@ async def update_event(
     # A reworded meeting reaches the other people on it — as the organizer's
     # update, or in an attendee's next response — so rewording one needs
     # `mail_send` as inviting them did. Only a restricted policy pays for the
-    # read that finds out.
-    if mail_send_withheld(config) and not (subject is None and body is None and location is None):
+    # read that finds out. Adding an online meeting is counted with them: it
+    # writes the join details into the meeting, which presumably goes out the
+    # same way — inferred, not observed, since the live tier has no attendees.
+    rewords = not (subject is None and body is None and location is None and is_online is None)
+    if mail_send_withheld(config) and rewords:
         if _has_attendees(await current_event()):
             check_sends_mail(
                 config,
                 "outlook_update_event",
-                "change the subject, body or location of an event that has attendees",
+                "change the subject, body, location or online meeting of an event "
+                "that has attendees",
             )
 
     from msgraph.generated.models.attendee import Attendee
@@ -1036,6 +1074,9 @@ async def update_event(
     if key is not None:
         event.single_value_extended_properties = [_key_property(key)]
 
+    if is_online is not None:
+        event.is_online_meeting = is_online
+
     request_builder = graph_client.me.events.by_event_id(event_id)
 
     def _patch(once: Any) -> Any:
@@ -1051,6 +1092,7 @@ async def update_event(
     return {
         "status": "updated",
         "event_id": response.id,
+        **(_online_reply(response) if is_online is not None else {}),
     }
 
 

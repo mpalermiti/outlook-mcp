@@ -31,7 +31,7 @@ Every string argument gets a distinctive sentinel so a match is unambiguous.
 Booleans and enums are asserted by the wire key/value they must produce.
 
 What this cannot see: Graph accepting a field and ignoring it (``is_online``
-on personal accounts). That needs the live tier.
+on some personal accounts, #70). That needs the live tier.
 """
 
 from __future__ import annotations
@@ -285,6 +285,7 @@ class TestCalendarWrite:
             attendees=["sentinel.guest@example.com"],
             is_all_day=True,
             show_as="workingElsewhere",
+            is_online=True,
             config=_CFG,
         )
 
@@ -303,6 +304,7 @@ class TestCalendarWrite:
             '"isAllDay": true',
             '"daysOfWeek": ["thursday"]',  # 2026-10-22 is a Thursday
             '"showAs": "workingElsewhere"',
+            '"isOnlineMeeting": true',
         )
 
     async def test_update_event_puts_the_preserved_anchor_on_the_wire(self):
@@ -366,6 +368,22 @@ class TestCalendarWrite:
         # each show up as an extra key — and additionally pins that no other
         # field was sent at all.
         assert set(body) == {"@odata.type", "showAs"}
+
+    async def test_update_event_is_online_alone_patches_nothing_else(self):
+        """The same one-in, one-out shape for an online meeting (#70)."""
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="E1", is_online_meeting=True))
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await calendar_write.update_event(
+            client, event_id="AAMkAG123=", is_online=True, config=_CFG
+        )
+
+        body = json.loads(wire(builder.patch.call_args[0][0]))
+
+        assert body["isOnlineMeeting"] is True
+        assert set(body) == {"@odata.type", "isOnlineMeeting"}
 
     async def test_update_event_puts_a_requested_zone_on_the_wire(self):
         """An explicit `timezone` is a value Graph reads, so assert it in the payload.

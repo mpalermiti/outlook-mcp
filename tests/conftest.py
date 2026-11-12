@@ -136,11 +136,12 @@ def consumer_mailbox_only(real_auth):
     Graph may honour the very thing the test says is unsupported, so the test
     fails correctly and tells us nothing about the claim.
 
-    That is not hypothetical. ``test_online_meeting_is_not_supported_on_personal_accounts``
-    reached two separate contributor PRs as a red test each author had to
-    explain was not theirs, while passing on the maintainer's mailbox
-    throughout. The tier already refuses to assume whose mailbox it is running
-    against; this extends that to what *kind* of mailbox it is.
+    That is not hypothetical. The old ``is_online`` live pin (since replaced by
+    ``TestOnlineMeetingsArePerAccount``, #70) reached two separate contributor
+    PRs as a red test each author had to explain was not theirs, while passing
+    on the maintainer's mailbox throughout. The tier already refuses to assume
+    whose mailbox it is running against; this extends that to what *kind* of
+    mailbox it is.
 
     The skip names the tenant it found, because a skip that does not say why it
     skipped is indistinguishable from coverage.
