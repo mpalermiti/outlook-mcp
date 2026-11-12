@@ -3370,13 +3370,8 @@ class TestRelativeEventTimes:
         assert first.strftime("%H:%M") == second.strftime("%H:%M") == "01:30"
         assert first.utcoffset() != second.utcoffset()
 
-    @pytest.mark.parametrize(
-        ("start", "end", "offset"),
-        [("+2h", "+5h", "-07:00"), ("+3h", "+5h", "-08:00"), ("+1h", "+2h", "-07:00")],
-    )
-    async def test_create_refuses_a_time_in_the_repeated_interval(
-        self, monkeypatch, start, end, offset
-    ):
+    @pytest.mark.parametrize(("start", "end"), [("+2h", "+5h"), ("+3h", "+5h"), ("+1h", "+2h")])
+    async def test_create_refuses_a_time_in_the_repeated_interval(self, monkeypatch, start, end):
         self._fixed(monkeypatch, self.REPEAT)
         mock_client = MagicMock()
         mock_client.me.events.post = AsyncMock(return_value=_created("Late"))
@@ -3384,8 +3379,13 @@ class TestRelativeEventTimes:
         with pytest.raises(ValueError, match="repeats when daylight saving ends") as exc:
             await create_event(mock_client, subject="Late", start=start, end=end, config=_CFG_LA)
 
-        # The remedy names the one moment the caller meant, with its offset.
-        assert f"2027-11-07T01:30:00{offset}" in str(exc.value)
+        # It names the local time that happens twice, and offers no offset as
+        # the remedy: a typed one anchors a single event in UTC (#236).
+        message = str(exc.value)
+        assert "2027-11-07T01:30:00 happens twice" in message
+        assert "Pass a time outside that interval." in message
+        assert "-07:00" not in message and "-08:00" not in message
+        assert "offset" not in message
         mock_client.me.events.post.assert_not_called()
 
     async def test_create_refuses_it_with_a_recurrence_too(self, monkeypatch):
@@ -3442,3 +3442,119 @@ class TestRelativeEventTimes:
             "2027-11-07T00:30:00",
             "2027-11-07T02:30:00",
         )
+
+    # ── what the result reports (#74) ─────────────────────────────────
+
+    async def test_create_reports_each_relative_end_as_written(self, clock):
+        """So an agent that passed `start="7d"` can see it made a past event."""
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
+
+        result = await create_event(
+            mock_client, subject="Standup", start="7d", end="+3h", config=_CFG_LA
+        )
+
+        assert result["start"] == "2026-11-04T17:00:00 (America/Los_Angeles)"
+        assert result["end"] == "2026-11-11T20:00:00 (America/Los_Angeles)"
+
+    async def test_update_reports_each_relative_end_in_its_own_zone(self, clock):
+        builder, mock_client = self._updatable("America/New_York", "America/Los_Angeles")
+
+        result = await update_event(
+            mock_client, event_id="AAMkAG123=", start="+2h", end="+8h", config=_CFG
+        )
+
+        assert result["start"] == "2026-11-11T22:00:00 (America/New_York)"
+        assert result["end"] == "2026-11-12T01:00:00 (America/Los_Angeles)"
+
+    async def test_a_typed_end_is_not_reported(self, clock):
+        """Only what the server worked out is echoed; typed input the caller knows."""
+        builder, mock_client = self._updatable("America/New_York")
+
+        result = await update_event(
+            mock_client, event_id="AAMkAG123=", start="+2h", end="2026-11-12T23:30:00", config=_CFG
+        )
+
+        assert result["start"] == "2026-11-11T22:00:00 (America/New_York)"
+        assert "end" not in result
+
+    async def test_iso_times_keep_the_old_results(self, clock):
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
+        created = await create_event(
+            mock_client,
+            subject="Standup",
+            start="2026-11-12T09:00:00",
+            end="2026-11-12T10:00:00",
+            config=_CFG_LA,
+        )
+        builder, update_client = self._updatable("America/New_York")
+        updated = await update_event(
+            update_client,
+            event_id="AAMkAG123=",
+            start="2026-11-12T09:00:00",
+            end="2026-11-12T10:00:00",
+            config=_CFG,
+        )
+
+        assert created == {"status": "created", "event_id": "AAMkAGnew=", "subject": "Standup"}
+        assert updated == {"status": "updated", "event_id": "AAMkAG123="}
+
+    # ── all-day events (#74) ──────────────────────────────────────────
+
+    @pytest.mark.parametrize(("start", "end"), [("+24h", "2026-11-14T00:00:00"), ("now", "+1d")])
+    async def test_create_refuses_a_relative_all_day_time_before_sending(self, clock, start, end):
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Off"))
+
+        with pytest.raises(ValueError, match="cannot place an all-day event"):
+            await create_event(
+                mock_client, subject="Off", start=start, end=end, is_all_day=True, config=_CFG_LA
+            )
+
+        mock_client.me.events.post.assert_not_called()
+
+    async def test_update_refuses_it_before_any_request_when_the_caller_says_all_day(self, clock):
+        builder, mock_client = self._updatable("America/New_York")
+
+        with pytest.raises(ValueError, match="cannot place an all-day event"):
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="+24h",
+                end="+48h",
+                is_all_day=True,
+                config=_CFG,
+            )
+
+        builder.get.assert_not_called()
+        builder.patch.assert_not_called()
+
+    async def test_update_refuses_it_when_only_the_stored_event_is_all_day(self, clock):
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=_current_event(is_all_day=True))
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError, match="cannot place an all-day event"):
+            await update_event(mock_client, event_id="AAMkAG123=", start="+24h", config=_CFG)
+
+        builder.patch.assert_not_called()
+
+    async def test_a_typed_midnight_on_an_all_day_event_is_still_sent(self, clock):
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=_current_event(is_all_day=True))
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-14T00:00:00",
+            end="2026-11-15T00:00:00",
+            config=_CFG,
+        )
+
+        builder.patch.assert_called_once()

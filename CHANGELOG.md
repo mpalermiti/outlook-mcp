@@ -22,12 +22,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `end`** (`+2h`, `now`, or `7d` for seven days ago), as the server's other date arguments
   do. They passed validation and were then sent to Microsoft as typed, which refused the
   request. A relative time is now sent as local time in the event's own time zone, so the
-  event keeps that zone; ISO 8601 times are still sent exactly as written. Two cases are
-  refused instead, before anything is sent: an event stored in a Windows-named time zone
-  ("Pacific Standard Time", as Microsoft has returned repeating events), where the time has
-  to be given as local time without a zone; and a time in the interval a zone repeats when
-  daylight saving ends, where it names two moments, so it has to be given with its UTC
-  offset. (#74)
+  event keeps that zone; ISO 8601 times are still sent exactly as written. When `start` or
+  `end` was relative, the result carries it as it was written, with its zone
+  (`"start": "2026-11-04T17:00:00 (America/Los_Angeles)"`), so a `7d` is seen to make an
+  event in the past. Three cases are refused instead, before anything is sent: an event
+  stored in a Windows-named time zone ("Pacific Standard Time", as Microsoft has returned
+  repeating events), where the time has to be given as local time without a zone; a time in
+  the interval a zone repeats when daylight saving ends, where it names two moments, so a
+  time outside that interval has to be given; and a relative time on an all-day event,
+  which Microsoft needs at midnight. (#74)
 
 ### Changed
 

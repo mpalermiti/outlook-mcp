@@ -1999,12 +1999,17 @@ class TestRelativeTimesKeepTheEventsZone:
             assert created["original_start_time_zone"] == self._ZONE
 
             asked = datetime.now(dt_timezone.utc)
-            await update_event(
+            result = await update_event(
                 sdk, event_id=event_id, start="+744h", end="+746h", config=live_write_config
             )
             updated = await get_event(sdk, event_id)
             start = _stored_instant(updated["start"])
             assert abs(start - (asked + timedelta(hours=744))) < self._SLACK, updated["start"]
+            # What the result reports is the moment Graph stored, in the zone it kept.
+            local, _, zone = result["start"].partition(" (")
+            assert zone == f"{self._ZONE})"
+            reported = datetime.fromisoformat(local).replace(tzinfo=maybe_zone(self._ZONE))
+            assert reported.astimezone(dt_timezone.utc) == start
             assert _stored_instant(updated["end"]) - start == timedelta(hours=2)
             assert updated["original_start_time_zone"] == self._ZONE
 

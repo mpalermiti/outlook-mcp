@@ -85,13 +85,12 @@ def _in_zone(instant: str, zone: str, given: str) -> str:
     if local.replace(fold=0).astimezone(dt_timezone.utc) != local.replace(fold=1).astimezone(
         dt_timezone.utc
     ):
-        offset = local.strftime("%z")
+        # No offset is offered as the remedy: a typed one anchors a single event
+        # in UTC (#236), so only a time outside the repeat is safe to suggest.
         raise ValueError(
-            f"{given!r} falls in the interval {zone} repeats when daylight saving ends, "
-            "so it names two different times there. Nothing was modified. Pass a time "
-            "outside that interval, or this one with its UTC offset "
-            f"({local:%Y-%m-%dT%H:%M:%S}{offset[:3]}:{offset[3:]}), which names exactly "
-            "one of them."
+            f"{given!r} falls in the interval {zone} repeats when daylight saving ends: "
+            f"{local:%Y-%m-%dT%H:%M:%S} happens twice there, so it names two different "
+            "times. Nothing was modified. Pass a time outside that interval."
         )
     return local.strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -177,6 +176,26 @@ def _online_reply(response: Any) -> dict:
     """
     value = getattr(response, "is_online_meeting", None)
     return {"is_online": value} if isinstance(value, bool) else {}
+
+
+# Graph needs an all-day event's ends at midnight, which a relative time almost
+# never is; its 400 says so, but only after the round trip. One constant for
+# both tools and both paths through `update_event` (the caller said
+# `is_all_day=True`, or only the stored event knew).
+_ALL_DAY_RELATIVE_REFUSAL = (
+    "A relative time (+2h, now, 7d) cannot place an all-day event: Graph needs "
+    "both ends at midnight. Nothing was modified. Pass dates at midnight, e.g. "
+    "start=2026-10-22T00:00:00, end=2026-10-23T00:00:00."
+)
+
+
+def _placed(local: str, zone: str) -> str:
+    """A relative time as it was written, in the form the read tools show (#74).
+
+    Reported on the write result, so a caller who passed ``start="7d"`` can see
+    it made an event a week in the past.
+    """
+    return f"{local} ({zone})"
 
 
 def _key_property(key: str) -> Any:
@@ -571,7 +590,10 @@ async def create_event(
     A relative ``start``/``end`` (``+2h``, ``now``) is the exception (#74). It
     names a moment, so it is resolved before anything is sent, and then written
     as wall-clock time in the anchor zone (``_in_zone``), the form Graph keeps
-    the zone for. Sent as typed, Graph refused it with a 400.
+    the zone for. Sent as typed, Graph refused it with a 400. The result
+    carries each end that was relative as written (``start``/``end``, in the
+    read tools' ``"<local> (<zone>)"`` form), so ``7d`` shows it is in the past.
+    A relative time on an all-day event is refused, since Graph needs midnight.
 
     ``show_as`` is Graph's ``showAs`` — the free/busy status Outlook labels
     "Show as". Omitted, Graph applies its own default (``busy``); we do not
@@ -644,10 +666,15 @@ async def create_event(
         zone = "UTC"
     # The resolver hands ISO input back as the same object, so identity says
     # which ends were relative.
+    placed: dict[str, str] = {}
+    if is_all_day and (start_resolved is not start or end_resolved is not end):
+        raise ValueError(_ALL_DAY_RELATIVE_REFUSAL)
     if start_resolved is not start:
         start = _in_zone(start_resolved, zone, start)
+        placed["start"] = _placed(start, zone)
     if end_resolved is not end:
         end = _in_zone(end_resolved, zone, end)
+        placed["end"] = _placed(end, zone)
 
     # Validate attendee emails if provided
     validated_attendees = []
@@ -731,6 +758,7 @@ async def create_event(
         "status": "created",
         "event_id": response.id,
         "subject": response.subject,
+        **placed,
         **(_online_reply(response) if is_online else {}),
     }
 
@@ -791,7 +819,8 @@ async def update_event(
     once that zone has been read. It is refused on an event Graph names in
     Windows terms ("Pacific Standard Time", as the series this server created
     came back when measured), and inside the interval a zone repeats when
-    daylight saving ends; see ``_in_zone``.
+    daylight saving ends; see ``_in_zone``. As on create, the result carries
+    each end that was relative as written, and an all-day event refuses one.
 
     ``timezone`` re-anchors the event into a *different* zone, and requires
     ``start`` and ``end`` in the same call for the reason above: Graph rejects a
@@ -905,6 +934,9 @@ async def update_event(
     # ahead of the actionable input error.
     if timezone is not None and is_all_day:
         raise ValueError(_ALL_DAY_ZONE_REFUSAL)
+    relative = start_resolved is not start or end_resolved is not end
+    if relative and is_all_day:
+        raise ValueError(_ALL_DAY_RELATIVE_REFUSAL)
     requested_zone = validate_event_timezone(timezone) if timezone is not None else None
 
     validated_attendees = None
@@ -1003,16 +1035,23 @@ async def update_event(
                 # stored event turns out to be all-day; the same refusal as
                 # above, one round trip later because nothing knew sooner.
                 raise ValueError(_ALL_DAY_ZONE_REFUSAL)
+            if relative:
+                # The stored event is all-day and the caller did not say so;
+                # the same refusal as above, one read later.
+                raise ValueError(_ALL_DAY_RELATIVE_REFUSAL)
             start_zone = end_zone = "UTC"
 
     # A relative end is placed in the zone that end is anchored in, which is
     # only known now. Before the occurrence read below, since nothing it finds
     # could rescue a time `_in_zone` refuses. A zone of None (Graph's custom-zone
     # sentinel) is left for `_anchored` to refuse with its own message.
+    placed: dict[str, str] = {}
     if start_resolved is not start and start_zone is not None:
         start = _in_zone(start_resolved, start_zone, start)
+        placed["start"] = _placed(start, start_zone)
     if end_resolved is not end and end_zone is not None:
         end = _in_zone(end_resolved, end_zone, end)
+        placed["end"] = _placed(end, end_zone)
 
     # Last of the checks, because it is the only one that costs a second read,
     # and only a master can have occurrences to lose. `remove_recurrence` is left
@@ -1173,6 +1212,7 @@ async def update_event(
     return {
         "status": "updated",
         "event_id": response.id,
+        **placed,
         **(_online_reply(response) if is_online is not None else {}),
     }
 

@@ -219,7 +219,9 @@ CHARS_PER_TOKEN = 4
 # Default is 71 / 11,144; no ceiling changes.
 # 11,173 with `is_online` on `outlook_update_event` and create's three-line warning cut to
 # two (+29, #70). Default is 71 / 11,173; every group 77 / 12,218. No ceiling changes.
-# MEASURE_ME
+# 11,178 once `outlook_create_event` says `start`/`end` take a relative offset (+5, #74).
+# Default/documents/rules/MIME: 11,178 / 11,322 / 11,999 / 11,258; every group 77 / 12,223.
+# No ceiling changes.
 TOOL_SURFACE_CEILING = 12_150
 DEFAULT_SURFACE_CEILING = 11_250
 
