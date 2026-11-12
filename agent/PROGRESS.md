@@ -2,6 +2,15 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-11 — todo-dates-live-check (re-parked for Michael)
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3073 passed, 4 skipped, 128 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff check + format clean. No code changed, so this is also the final state.
+- Found: the card's command can't work from `main` — `TestDueIsAnchoredInTheConfiguredZone` and the fix live only on `construct/redo-todo-dates-use-configured-timezone` (c5af221), checked with `git show` on both. Findings file now gives a switch-to-branch, `uv sync`, run, switch-back sequence.
+- Rehearsed the plain-task assertion's arithmetic on simulated readbacks (written 2026-12-11T23:30): zone honoured passes, zone ignored and hour kept fail, LA and Tokyo. Recorded in the findings file § Checked offline.
+- Read the branch's `todo.py` via `git show`: `create_task`/`update_task`/`delete_task`/`_resolve_list_id` signatures and `_format_task`'s `due_time_zone` match what the live tests use.
+- Card flipped back to `[?]`: run it on the branch before merge (A) or after merge from main (B). Live tests NOT run.
+- Env: extracting a branch with `git archive | tar` was denied by the permission layer; `git show <branch>:<path> > "$TMPDIR/..."` works. In zsh, `$B:src/...` is a bad substitution (`:s` modifier); spell the ref out.
+
 ## 2026-11-11 — redo-todo-dates-use-configured-timezone
 
 - Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3073 passed, 4 skipped, 128 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff clean.

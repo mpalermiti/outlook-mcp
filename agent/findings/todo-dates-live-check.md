@@ -23,8 +23,13 @@ Before the fix the same call labelled both dates `UTC` and sent no `recurrenceTi
 
 ## The test to run
 
+Run it on the fix's branch, before the PR merges. The test class and the fix exist only there; on `main` the command finds no tests and proves nothing (checked 2026-11-11: `TestDueIsAnchoredInTheConfiguredZone` is in `construct/redo-todo-dates-use-configured-timezone`'s `tests/test_live_todo_write.py` and not in `main`'s).
+
 ```
+git fetch origin && git switch --detach origin/construct/redo-todo-dates-use-configured-timezone
+uv sync
 OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write "tests/test_live_todo_write.py::TestDueIsAnchoredInTheConfiguredZone" -v
+git switch -
 ```
 
 Four tests (the plain-task one runs once in Los Angeles and once in Tokyo), each creating one throwaway task about a month out and deleting it. Each sets its own zone, so the machine it runs on makes no difference. Not run by any worker.
@@ -38,6 +43,19 @@ Four tests (the plain-task one runs once in Los Angeles and once in Tokyo), each
 No date is asserted on the repeating tasks: the #72 probe saw a repeating task's due move to midnight the next day, a shift whose rule is still unknown. A date alone can't show the zone was used.
 
 The two older round-trip tests in the same file (`test_every_create_field_persists`, `test_every_update_field_persists`) now pin `timezone: "UTC"`, so the full live tier the release checklist asks for after a `todo.py` change no longer depends on the runner's configured zone.
+
+## Checked offline (2026-11-11, todo-dates-live-check)
+
+- The plain-task assertion has teeth. Its own arithmetic, fed simulated readbacks for a task written 30 days from 2026-11-11 (due 2026-12-11T23:30 in the zone):
+
+  | Zone | Zone honoured (midnight there) | Zone ignored (midnight UTC) | Hour kept |
+  |---|---|---|---|
+  | America/Los_Angeles | `12-11T08:00` PASS | `12-11T00:00` FAIL | `12-12T07:30` FAIL |
+  | Asia/Tokyo | `12-10T15:00` PASS | `12-11T00:00` FAIL | `12-11T14:30` FAIL |
+
+  So a pass can only mean Microsoft used the zone to pick the day.
+- Every function the tests call (`create_task`, `update_task`, `delete_task`, `list_tasks`, `_resolve_list_id`) exists on the fix branch with the keyword arguments the tests pass; `_format_task` there returns `due` and `due_time_zone`, which the plain-task test reads. Read from the branch with `git show`, not run.
+- Not checked, and only the run can: anything Microsoft does.
 
 ## Prerequisites
 
