@@ -12,9 +12,9 @@ decode). Graph decodes the image itself and refuses one it cannot read with
 
 The PUT goes through the SDK's own ``photo.content.put``, which labels the body
 ``application/octet-stream``. Graph accepts that: on a personal account on
-2026-11-14 a PNG, a JPEG and a GIF each stored a photo sent that way, and came
-back as ``image/jpeg``. A repeat of the same PUT lands on the same state, so the
-SDK's normal retry stays on.
+2026-11-14 a PNG and a GIF each stored a photo sent that way, and both came back
+as ``image/jpeg``. A second PUT over an existing photo replaced it, so a repeat
+lands on the same state and the SDK's normal retry stays on.
 """
 
 from __future__ import annotations
@@ -28,11 +28,11 @@ from outlook_mcp.permissions import CATEGORY_CONTACTS_WRITE, check_permission
 from outlook_mcp.tools.mail_attachments import _image_type, resolve_attachment_path
 from outlook_mcp.validation import validate_graph_id
 
-# This server's limit, not Graph's. Graph's own limit is the mailbox store's item
-# size, checked after it re-encodes the image: on one personal account it took a
-# 26.2 MB PNG and refused a 47.2 MB one with 400 ErrorMessageSizeExceeded. 20 MiB
-# sits under the largest upload seen accepted, covers any phone photo, and is the
-# To Do attachment ceiling, read the same way (the read is the gate).
+# This server's limit, not Graph's. Graph's own limit appears to be the mailbox
+# store's item size ("Cannot save changes made to an item to store"): on one
+# personal account it took a 26.2 MB PNG and refused a 47.2 MB one with 400
+# ErrorMessageSizeExceeded. 20 MiB sits under the largest upload seen accepted and
+# is the To Do attachment ceiling, read the same way (the read is the gate).
 _MAX_PHOTO_BYTES = 20 * 1024 * 1024
 
 _PHOTO_TYPES = {"image/jpeg", "image/png", "image/gif"}

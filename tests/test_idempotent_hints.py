@@ -47,7 +47,8 @@ EXPECTED_IDEMPOTENT = {
     "outlook_download_task_attachment",
     "outlook_update_checklist_item",
     # A PUT of the photo's bytes: the same file again replaces the photo with the
-    # same image (a second PUT over an existing photo was probed live on #121).
+    # same image (a second PUT over an existing photo replaced it, probed live on
+    # a personal account on 2026-11-14).
     "outlook_set_contact_photo",
 }
 
