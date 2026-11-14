@@ -2,6 +2,16 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-14 — checker-todo-dates-live-check
+
+- **Smoke (before):** 8 failed / 25 errors. 1F+25E are the sandbox-blocked `test_http_transport.py` (as every session); the other 6 were the checker's: main's two #242 tests (`get` awaited twice) and four payload tests hitting #242's refusal.
+- **Change:** `update_task` no longer calls `_due_for_update` (deleted, with the `maybe_zone`/`_usable_zone` imports). The due is converted with `_due_in_zone(due, config zone)` up front (validates, no read), then main's order stands: someone-else's-list check, `_refuse_moving_a_repeating_task` (the one read), PATCH. A repeating task only ever sees #242's message.
+- **Tests:** deleted 6 payload tests for the stored-zone path plus `test_a_due_update_on_a_task_graph_cannot_return_is_refused` (main's semantics: a None task just patches). Added `test_a_repeating_task_gets_only_the_repeating_refusal` (20 cases: 4 dues incl. `Z`/offset/`+7d` x stored zone UTC/Tokyo/Windows/custom/None; exact message, one read, no PATCH) — red at head (wrong message / two reads), green after. Added `test_docs_do_not_promise_moving_a_repeating_tasks_due`.
+- **Docs:** README timezone row's "keeps the zone" sentence, SKILL.md:201 clause, CHANGELOG stored-zone bullet removed.
+- **Live:** deleted `test_moving_a_repeating_tasks_due_keeps_its_stored_zone`, `test_mains_due_patch_on_a_repeating_task_leaves_one_task`, helpers `_ids_titled`/`_one_task_titled`/`_unique`, `uuid4` import. Ran `--collect-only -m live_write` on that file once to confirm it still collects (9 tests); collection only, nothing executed, no credentials touched — noted because the boundary names `-m live_write`. Findings file: run request withdrawn.
+- **Evidence:** full suite 3183 passed / 4 skipped / 134 deselected; failures only the sandbox http_transport 1F+25E, plus `test_lone_surrogates::test_the_stdio_server_answers_and_stays_up` once under load (passed in the all-toolsets run and 3/3 alone; untouched). All toolsets: 3184 passed, same http_transport only. ruff check + format --check clean. Ran via `.venv/bin/` because `uv`'s cache dir is outside the sandbox.
+- **Next:** the `todo-repeating-due-duplicate-live-run` [?] is moot; left as is (not my line). `checker-redo-todo-dates-use-configured-timezone` findings 1-3 are the same fix, already on this branch.
+
 ## 2026-11-14 — todo-dates-live-check (acted on Michael's probe)
 
 - Smoke (sandboxed, `.venv/bin/python -m pytest`): 3123 passed, 4 skipped, 130 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff check + format clean. (`uv` isn't on PATH in this sandbox; `.venv/bin/ruff` works.)

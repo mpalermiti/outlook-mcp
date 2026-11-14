@@ -34,25 +34,13 @@ One repeating task shaped like #239's payload, with the Windows name: due `2026-
 - Docs (README, CHANGELOG, config description, code comments) say the zone is sent and some accounts store UTC; nothing says it is kept. Guarded by `test_docs_do_not_promise_a_repeating_tasks_zone_is_kept`.
 - Duplicate check rehearsed offline with a faked listing: one task passes; a second with the same title fails and is deleted.
 
-## The test to run
+## Reconciled with main's #242 (2026-11-14, checker-todo-dates-live-check)
 
-On this change's PR branch (the construct names it on the PR), before it merges:
+Main's #242 fix (b0acf56) refuses every due change on a repeating task, because Microsoft leaves a second copy; #243's commit records that PATCH leaving a duplicate on a personal account on 2026-11-14. That answers Michael's item 3, so the duplicate run is no longer needed:
 
-```
-git fetch origin && git switch --detach origin/<this PR's branch>
-uv sync
-OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write "tests/test_live_todo_write.py::TestDueIsAnchoredInTheConfiguredZone" -v
-git switch -
-```
-
-Five tests, each creating one throwaway task about a month out and deleting it (and any copy it finds). Not run by any worker.
-
-| Test | Pass means | A failure means |
-|---|---|---|
-| `test_a_plain_tasks_due_is_midnight_on_the_written_day_in_the_zone[America/Los_Angeles]` and `[Asia/Tokyo]` | Unchanged; already passed on Michael's account. | The zone was ignored or the hour kept. Paste the value. |
-| `test_a_repeating_task_keeps_the_zone_sent_or_utc` | Microsoft accepted the zone on the rule and stored either it or UTC, the same on the due and the rule. | A 400, a third zone, or the due and rule disagreeing. Paste the message: it prints the zones. |
-| `test_moving_a_repeating_tasks_due_keeps_its_stored_zone` | The move was accepted, the task kept its stored zones, and no copy was left. | A 400 or a changed zone: the stored-zone rule needs revisiting. "left 1 more task(s)": the duplicate happens on this branch. |
-| `test_mains_due_patch_on_a_repeating_task_leaves_one_task` | `main`'s due patch leaves one task: no duplicate bug there. | "left 1 more task(s)": the duplicate is a bug already on `main`, in `update_task`, separate from #72. |
+- `update_task` reads the task once (main's read), refuses a repeating task with #242's message before any zone handling, and sends a plain task's due in the config zone without a read for it. `_due_for_update` and its stored-zone branch are gone.
+- Deleted live tests: `test_moving_a_repeating_tasks_due_keeps_its_stored_zone` (head refuses the call on every account, and main's `test_moving_a_repeating_tasks_due_is_refused_and_leaves_one_task` asserts the opposite) and `test_mains_due_patch_on_a_repeating_task_leaves_one_task` (replays a PATCH main no longer sends; #243 already measured it). Main's #242 live test guards the duplicate.
+- The parked live-run card for those tests is withdrawn: nothing in it needs running now. What stays live-only on this branch is the three create tests in `TestDueIsAnchoredInTheConfiguredZone`, which `RELEASING.md`'s `live_write` tier runs before tagging.
 
 ## Checked offline (2026-11-11, todo-dates-live-check)
 
@@ -73,5 +61,4 @@ Five tests, each creating one throwaway task about a month out and deleting it (
 - VERIFIED: the new test is well-formed, by the plain suite importing it (127 deselected, up from 126).
 - VERIFIED by Michael's run (reported 2026-11-14): Microsoft honours `timeZone` on a plain task's `dueDateTime`, west and east of UTC.
 - VERIFIED by Michael's probe (2026-11-14): Microsoft accepts `recurrenceTimeZone` on a task; his account stored UTC on both the due and the rule. The #72 probe's account kept the zone.
-- ASSUMED: the update path is accepted when it sends the stored zone back; only the moving test shows it.
-- UNKNOWN: whether changing a repeating task's due leaves a duplicate, on this branch or on `main`.
+- VERIFIED by #243's commit message (b0acf56): changing a repeating task's due leaves a duplicate on a personal account, so `update_task` refuses it; no stored-zone update path remains.
