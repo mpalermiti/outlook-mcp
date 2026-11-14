@@ -6,6 +6,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.32.0] — 2026-11-14
+
+Calendar events take relative times and say plainly what `is_online` does on each account, and
+`outlook_update_event` can add an online meeting. Moving a repeating To Do task's due date is
+refused, because Microsoft would leave a copy. azure-identity is held below 1.27 so Macs stay
+signed in after upgrading.
+
 ### Fixed
 
 - **Upgrading no longer signs Mac users out (#244).** azure-identity 1.27.0 (2026-10-26) keeps a
@@ -23,7 +30,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   task that doesn't repeat, change as before; a due change now costs one extra read.
 
 - Missing attachment paths in `outlook_send_with_attachments` and `outlook_attach_to_draft`
-  return the file-not-found message to the client instead of a generic tool error.
+  return the file-not-found message to the client instead of a generic tool error (#232,
+  @benjamin-di).
 
 - **`is_online` is described as it behaves, and `outlook_update_event` takes it (#70).** Graph
   honours `isOnlineMeeting` on some personal accounts and ignores it on others, while
@@ -33,7 +41,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   and keeps the meeting, unchanged 90 seconds later, on a personal account. On an event with
   attendees, `is_online` needs `mail_send` under a policy that withholds it, as a subject, body
   or location change already does. That the join details reach them is assumed, not
-  observed: the live tests create no attendees.
+  observed: the live tests create no attendees. (#234, #240, @neilbrencode)
 
 - **`outlook_create_event` and `outlook_update_event` accept relative times for `start` and
   `end`** (`+2h`, `now`, or `7d` for seven days ago), as the server's other date arguments
@@ -44,7 +52,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   ("Pacific Standard Time", as Microsoft has returned repeating events), where the time has
   to be given as local time without a zone; a time in the interval a zone repeats when
   daylight saving ends, where it names two moments, so a time outside that interval has to
-  be given; and a relative time on an all-day event, which Microsoft needs at midnight. (#74)
+  be given; and a relative time on an all-day event, which Microsoft needs at midnight. (#74,
+  #237, @neilbrencode)
 
 ### Changed
 
@@ -59,6 +68,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the form the read tools use: `"start": "2026-11-04T17:00:00 (America/Los_Angeles)"`. So a
   `start="7d"` is seen to make an event in the past. An end given in ISO 8601 is not echoed,
   and a call with no relative time returns what it did before.
+
+### Security
+
+- `uv.lock` moves opentelemetry-api to 1.45.2 (GHSA-mf5v-w3w3-f6cg: quadratic-time `traceparent`
+  parsing). It arrives through the Graph SDK's tracing, and nothing here parses a `traceparent`
+  from outside.
 
 ## [1.31.4] — 2026-11-03
 

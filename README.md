@@ -61,6 +61,7 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md).
 
+- **Calendar and To Do** (1.32): events take relative times (`+2h`, `now`), `is_online` says it may do nothing on some personal accounts and can now add an online meeting to an existing event, and moving a repeating task's due date is refused because Microsoft would leave a copy. Macs stay signed in after upgrading.
 - **Safer by default** (1.31.3–1.31.4): downloads never overwrite a file, writing into a calendar or task list someone else owns needs send permission like an invitation, attachment text is read only in standard character sets, and a config that points the attachments folder at your home folder, under any of its names, is refused. A reply or forward that fails says whether anything was sent (1.31.4).
 - **Export an email** (1.31): get a message's original file exactly as it arrived, attachments included, up to 10 MB. Off unless you turn it on.
 - **Inbox rules** (1.30): list, create, change and delete server-side inbox rules, and see what each rule leaves out (1.30.2). Off unless you turn it on, and a rule that forwards mail also needs send permission.
