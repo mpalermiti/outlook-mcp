@@ -254,6 +254,53 @@ class TestCalendarWrite:
             '"dateTime": "2026-10-28T09:00:00"',
         )
 
+    async def test_relative_event_times_reach_the_wire_as_local_time(self, monkeypatch):
+        """``+2h`` goes out as the moment it names, in the event's zone (#74).
+
+        Not as the text "+2h", which Graph refused; and not as a ``Z`` instant,
+        which Graph stores but re-anchors a single event in UTC for (#236). A
+        mock accepts any of the three, so the serialized string is what is
+        asserted. Each needle carries its closing quote, so a trailing ``Z``
+        fails it. On update the zone is the event's own (Chicago here), not the
+        configured one.
+        """
+        from datetime import datetime, timezone
+
+        monkeypatch.setattr(
+            calendar_write, "_now", lambda: datetime(2026, 11, 12, 1, 0, tzinfo=timezone.utc)
+        )
+        client = MagicMock()
+        client.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="s"))
+        await calendar_write.create_event(
+            client, subject="s", start="+2h", end="+3h", timezone="America/New_York", config=_CFG
+        )
+        assert_on_wire(
+            client.me.events.post.call_args[0][0],
+            '"dateTime": "2026-11-11T22:00:00"',
+            '"dateTime": "2026-11-11T23:00:00"',
+            '"timeZone": "America/New_York"',
+        )
+
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
+        current = MagicMock(type=MagicMock(value="singleInstance"))
+        current.start = MagicMock(date_time="2026-11-12T17:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "America/Chicago"
+        current.original_end_time_zone = "America/Chicago"
+        current.is_all_day = False
+        builder.get = AsyncMock(return_value=current)
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+        await calendar_write.update_event(
+            client, event_id="AAMkAG123=", start="now", end="+30m", config=_CFG
+        )
+        assert_on_wire(
+            builder.patch.call_args[0][0],
+            '"dateTime": "2026-11-11T19:00:00"',
+            '"dateTime": "2026-11-11T19:30:00"',
+            '"timeZone": "America/Chicago"',
+        )
+
     async def test_update_event_every_argument_reaches_the_wire(self):
         builder = MagicMock()
         builder.patch = AsyncMock(return_value=MagicMock(id="E1"))

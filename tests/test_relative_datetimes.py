@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from outlook_mcp.validation import validate_datetime
+from outlook_mcp.validation import resolve_relative_datetime, validate_datetime
 
 NOW = datetime(2026, 9, 10, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -103,3 +103,54 @@ def test_now_defaults_to_the_current_clock():
         tzinfo=timezone.utc
     )
     assert resolved >= before
+
+
+# ── resolve_relative_datetime: the write paths (#74) ──────────────────
+#
+# The event write paths validated `start`/`end` and then sent the caller's own
+# string, so `+2h` passed our validator and reached Graph as the text "+2h" — a
+# 400 naming a parameter, 'DateTime', that appears nowhere in this API. They
+# cannot use `validate_datetime`'s return value instead: it normalizes *every*
+# input to UTC, and the event paths must pass ISO through as written (a naive
+# value has no instant until a zone resolves it, and an all-day event must
+# start on a midnight Graph can see). Only a relative form names an instant on
+# its own, so only those are resolved.
+
+
+@pytest.mark.parametrize(
+    ("value", "delta"),
+    [
+        ("+2h", timedelta(hours=2)),
+        ("7d", timedelta(days=-7)),  # bare still means ago, as everywhere else
+        ("-1w", timedelta(weeks=-1)),
+        ("+90M", timedelta(minutes=90)),
+        ("now", timedelta()),
+        ("NOW", timedelta()),
+    ],
+)
+def test_a_relative_form_resolves_to_a_utc_instant(value, delta):
+    assert resolve_relative_datetime(value, now=NOW) == _expect(delta)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-10-28T09:00:00",  # naive: wall-clock time in the event's zone
+        "2026-10-28T09:00:00Z",
+        "2026-10-28T09:00:00-07:00",
+        "2026-10-28T00:00:00",  # an all-day midnight
+        "2026-10-28",
+    ],
+)
+def test_iso_input_is_returned_exactly_as_written(value):
+    """Passing ISO through is the point; normalizing it is the bug #71 removed."""
+    assert resolve_relative_datetime(value, now=NOW) is value
+
+
+@pytest.mark.parametrize("value", ["7y", "last tuesday", "2026-13-01T00:00:00", "+"])
+def test_a_malformed_value_is_refused_as_validate_datetime_refuses_it(value):
+    with pytest.raises(ValueError) as ours:
+        resolve_relative_datetime(value, now=NOW)
+    with pytest.raises(ValueError) as theirs:
+        validate_datetime(value, now=NOW)
+    assert str(ours.value) == str(theirs.value)

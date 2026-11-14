@@ -1062,7 +1062,8 @@ async def outlook_create_event(
     end="2026-08-15T15:00:00Z", attendees=["alice@acme.com"])
     `is_online` adds an online meeting; it may have no effect on some personal accounts,
     so check `is_online` in the result (absent there: read it with outlook_get_event).
-    `start`/`end` are ISO 8601. Passing `recurrence` creates a series, not a single event.
+    `start`/`end` are ISO 8601 or a relative offset. Passing `recurrence` creates a series,
+    not a single event.
     It takes either a shorthand — "daily", "weekdays", "weekly", "monthly", "yearly", all
     anchored on `start` and open-ended — or a full Microsoft Graph recurrence object for
     anything else, e.g. every other Mon+Fri for 10 occurrences:

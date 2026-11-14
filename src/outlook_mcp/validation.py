@@ -404,6 +404,38 @@ def resolve_config_event_timezone(name: str) -> str:
     return name.strip()
 
 
+def _resolve_relative(value: str, reference: datetime) -> str | None:
+    """``value`` as a UTC instant if it is ``now`` or a relative offset, else None."""
+    if value.strip().lower() == "now":
+        return reference.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    relative = _RELATIVE_RE.match(value.strip())
+    if relative is None:
+        return None
+    sign, magnitude, unit = relative.groups()
+    offset = timedelta(**{_RELATIVE_UNITS[unit.lower()]: int(magnitude)})
+    # Bare and `-` look backwards; only `+` looks forward.
+    resolved = reference + offset if sign == "+" else reference - offset
+    return resolved.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def resolve_relative_datetime(value: str, *, now: datetime | None = None) -> str:
+    """Validate ``value``, resolving only the relative forms; ISO comes back as written.
+
+    For the write paths that must not normalize ISO 8601 input (#74): a naive
+    value has no instant until a zone resolves it, and an all-day event needs
+    the midnight the caller wrote, not that midnight converted to UTC. A
+    relative offset or ``now`` names an instant on its own, so it is resolved
+    to UTC exactly as ``validate_datetime`` resolves it. Anything else is
+    validated and returned unchanged — the same object, not a copy.
+    """
+    resolved = _resolve_relative(value, now or datetime.now(timezone.utc))
+    if resolved is not None:
+        return resolved
+    validate_datetime(value)
+    return value
+
+
 def validate_datetime(value: str, tz: str = "UTC", *, now: datetime | None = None) -> str:
     """Validate and re-serialize a datetime string to UTC.
 
@@ -428,18 +460,9 @@ def validate_datetime(value: str, tz: str = "UTC", *, now: datetime | None = Non
     a laptop in California, silently skewing every date filter and the send
     time of every scheduled message.
     """
-    reference = now or datetime.now(timezone.utc)
-
-    if value.strip().lower() == "now":
-        return reference.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    relative = _RELATIVE_RE.match(value.strip())
-    if relative:
-        sign, magnitude, unit = relative.groups()
-        offset = timedelta(**{_RELATIVE_UNITS[unit.lower()]: int(magnitude)})
-        # Bare and `-` look backwards; only `+` looks forward.
-        resolved = reference + offset if sign == "+" else reference - offset
-        return resolved.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    resolved = _resolve_relative(value, now or datetime.now(timezone.utc))
+    if resolved is not None:
+        return resolved
 
     # First pass: reject anything that doesn't look like a date
     if not _ISO_DATETIME_RE.match(value):
