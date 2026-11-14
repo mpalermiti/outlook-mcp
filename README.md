@@ -432,7 +432,7 @@ Creating, updating or deleting a rule also needs `MailboxSettings.ReadWrite` on 
 | `outlook_list_tasks` | List tasks with status filter and pagination. |
 | `outlook_get_task` | Get full task details: notes (`body`), checklist items (ordered unchecked-first), due and its zone, recurrence flag. |
 | `outlook_create_task` | Create task with due date, importance, recurrence. |
-| `outlook_update_task` | Update task fields. |
+| `outlook_update_task` | Update task fields. A repeating task's due date is refused, since Microsoft would leave a second copy of the task (#242). |
 | `outlook_complete_task` | Mark task as completed. |
 | `outlook_delete_task` | Delete a task. |
 | `outlook_add_checklist_item` | Add a checklist item (sub-step) to a task. |

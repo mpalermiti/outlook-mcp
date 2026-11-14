@@ -347,6 +347,31 @@ async def refuse_someone_elses_list(
         check_sends_mail(config, tool_name, SOMEONE_ELSES_LIST, emails=False)
 
 
+# #242, measured on a personal account (2026-11-14): a PATCH of a repeating task's
+# `dueDateTime` succeeds and leaves two tasks, the original and a copy Graph
+# creates during the PATCH, both carrying the new due. Moving the recurrence
+# range's start to the new due in the same PATCH still made the copy, so there
+# is no payload to fix; the move is refused before anything is sent.
+_REPEATING_DUE_REFUSAL = (
+    "Changing the due date of a repeating task is refused: Microsoft To Do makes "
+    "a second copy of the task when its due date changes this way, so the list "
+    "would end up with two. Nothing was modified. Change the date in the "
+    "Microsoft To Do app instead; the task's other fields can be updated here "
+    "without due."
+)
+
+
+async def _refuse_moving_a_repeating_task(graph_client: Any, list_id: str, task_id: str) -> None:
+    """Raise before a due change reaches a task that repeats (one read)."""
+    task = await (
+        graph_client.me.todo.lists.by_todo_task_list_id(list_id)
+        .tasks.by_todo_task_id(task_id)
+        .get()
+    )
+    if task is not None and task.recurrence is not None:
+        raise ValueError(_REPEATING_DUE_REFUSAL)
+
+
 def _format_task(task: Any) -> dict:
     """Convert a Graph SDK TodoTask to a clean dict."""
     status = "notStarted"
@@ -713,6 +738,8 @@ async def update_task(
         patch_body.importance = _importance_enum(importance)
 
     await refuse_someone_elses_list(graph_client, resolved_id, config, "outlook_update_task")
+    if due is not None:
+        await _refuse_moving_a_repeating_task(graph_client, resolved_id, task_id)
     await (
         graph_client.me.todo.lists.by_todo_task_list_id(resolved_id)
         .tasks.by_todo_task_id(task_id)

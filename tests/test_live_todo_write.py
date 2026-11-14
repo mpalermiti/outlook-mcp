@@ -324,6 +324,44 @@ class TestUpdateTaskRoundTrip:
             assert "keep me" in (got["body"] or "")
 
 
+class TestRepeatingTaskDueIsRefused:
+    async def test_moving_a_repeating_tasks_due_is_refused_and_leaves_one_task(
+        self, real_graph_client, live_write_config
+    ):
+        """Graph copies a repeating task when its due is patched, so the move is refused (#242).
+
+        Proves the read sees `recurrence` on a real repeating task: had it come
+        back empty, the PATCH would have gone out and the list would hold two
+        tasks with this title. `test_every_update_field_persists` covers the
+        other side, a task that does not repeat still moving.
+        """
+        due = (date.today() + timedelta(days=30)).isoformat()
+        moved = (date.today() + timedelta(days=32)).isoformat()
+        title = f"{LIVE_WRITE_NAME} repeating due"
+        async with _temporary_task(
+            real_graph_client,
+            live_write_config,
+            title=title,
+            due=f"{due}T17:00:00Z",
+            recurrence={
+                "pattern": {"type": "daily", "interval": 2},
+                "range": {"type": "noEnd", "startDate": due},
+            },
+        ) as task_id:
+            with pytest.raises(ValueError, match="repeating task"):
+                await update_task(
+                    real_graph_client.sdk_client,
+                    task_id=task_id,
+                    due=f"{moved}T17:00:00Z",
+                    config=live_write_config,
+                )
+
+            page = await list_tasks(real_graph_client.sdk_client, count=100)
+            same = [task for task in page["tasks"] if task["title"] == title]
+            assert [task["id"] for task in same] == [task_id]
+            assert due in (same[0]["due"] or "")
+
+
 class TestChecklistRoundTrip:
     async def test_checklist_items_survive_a_round_trip(self, real_graph_client, live_write_config):
         async with _temporary_task(

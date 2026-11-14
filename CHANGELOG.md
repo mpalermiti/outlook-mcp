@@ -8,6 +8,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **`outlook_update_task` refuses to move a repeating task's due date (#242).** Microsoft
+  accepted the change and the list then held two tasks, the original and a copy, both with the
+  new due date. Sending the repeat rule with its start moved, in the same request, still made the
+  copy. The tool now reads the task first and, if it repeats, refuses before anything is sent,
+  pointing to the Microsoft To Do app. A repeating task's other fields, and the due date of a
+  task that doesn't repeat, change as before; a due change now costs one extra read.
+
 - Missing attachment paths in `outlook_send_with_attachments` and `outlook_attach_to_draft`
   return the file-not-found message to the client instead of a generic tool error.
 
