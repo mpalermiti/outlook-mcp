@@ -10,17 +10,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 Event times can be relative (`+2h`, `now`), `outlook_update_event` can add an online meeting, and
 the docs say plainly that some personal accounts ignore `is_online`. Moving a repeating task's due
-date is refused, because Microsoft would leave a duplicate task. Macs stay signed in after
-upgrading: azure-identity is held below 1.27.
+date is refused, because Microsoft would leave a duplicate task. On a Mac, the "Not
+authenticated" that installs and upgrades have reported since Oct 26 is fixed.
 
 ### Fixed
 
-- **Upgrading no longer signs Mac users out (#244).** azure-identity 1.27.0 (2026-10-26) keeps a
-  named token cache under a new macOS Keychain entry, so an install that picked it up could not
-  find the existing sign-in and reported "Not authenticated" until `outlook-mcp auth` ran again.
-  azure-identity is now capped below 1.27, so a sign-in saved under 1.26 or earlier is found. If
-  you signed in again while on 1.27, run `outlook-mcp auth` once more after upgrading. Linux and
-  Windows were not affected.
+- **"Not authenticated" on a Mac after an install or upgrade since Oct 26 (#244).** outlook-mcp
+  keeps the sign-in in the Mac Keychain through azure-identity, Microsoft's sign-in library.
+  azure-identity 1.27.0, released 2026-10-26, saves it under a different Keychain entry, and
+  outlook-mcp accepted any newer azure-identity. So an install or upgrade from that day on
+  looked in the new entry, found nothing, and reported "Not authenticated", although the
+  sign-in was still there. azure-identity is now held below 1.27, so the original entry is read
+  again. After upgrading, run `outlook-mcp status`. If it still says not authenticated, run
+  `outlook-mcp auth` once: a sign-in made after Oct 26 went to the new entry, which this release
+  doesn't read. Only Macs were affected. #244 tracks reading either entry and moving the sign-in
+  across, so the cap can be lifted.
 
 - **`outlook_update_task` refuses to move a repeating task's due date (#242).** Microsoft
   accepted the change and the list then held two tasks, the original and a copy, both with the
