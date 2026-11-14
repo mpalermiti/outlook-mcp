@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 from weakref import WeakKeyDictionary
+from zoneinfo import ZoneInfo
 
 from outlook_mcp.config import Config
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
@@ -15,7 +16,14 @@ from outlook_mcp.permissions import (
     mail_send_withheld,
 )
 from outlook_mcp.tools._recurrence import build_patterned_recurrence as _build_recurrence
-from outlook_mcp.validation import sanitize_output, validate_datetime, validate_graph_id
+from outlook_mcp.tools._recurrence import maybe_zone
+from outlook_mcp.tools.calendar_write import _usable_zone
+from outlook_mcp.validation import (
+    resolve_config_event_timezone,
+    sanitize_output,
+    validate_datetime,
+    validate_graph_id,
+)
 
 _VALID_IMPORTANCES = {"low", "normal", "high"}
 
@@ -48,6 +56,93 @@ def _datetime_timezone(iso_dt: str, tz: str = "UTC") -> Any:
     dtz.date_time = iso_dt
     dtz.time_zone = tz
     return dtz
+
+
+def _due_in_zone(due: str, zone: str) -> Any:
+    """``due`` as a Graph DateTimeTimeZone anchored in ``zone`` (#72).
+
+    Zone-less input is already wall-clock time in ``zone``, so it goes out as
+    written. Anything naming an instant (a ``Z``, an offset, ``+7d``, ``now``) is
+    converted to wall-clock time there: the instant is unchanged, and Graph is
+    never handed a string whose offset disagrees with its ``timeZone`` label.
+    """
+    instant = validate_datetime(due, zone)
+    if _is_zone_less(due):
+        return _datetime_timezone(due, zone)
+    local = datetime.fromisoformat(instant.replace("Z", "+00:00")).astimezone(ZoneInfo(zone))
+    return _datetime_timezone(local.strftime("%Y-%m-%dT%H:%M:%S"), zone)
+
+
+def _is_zone_less(due: str) -> bool:
+    """Whether ``due`` is plain wall-clock time, naming no instant of its own."""
+    try:
+        return datetime.fromisoformat(due).tzinfo is None
+    except ValueError:
+        return False  # A `Z` before Python 3.11, or a relative offset.
+
+
+async def _due_for_update(
+    graph_client: Any, list_id: str, task_id: str, due: str, config: Config
+) -> Any:
+    """``due`` for a PATCH: a repeating task stays in the zone it is stored in (#72).
+
+    A repeating task's due is stored in a zone, and the series'
+    ``recurrenceTimeZone`` with it: the zone sent on some accounts, UTC on
+    others (seen live, #72). On calendar events a patch that disagrees
+    with that anchor is a 400 naming neither zone, and what To Do does with one
+    is unverified, so the stored zone is sent back, as ``update_event`` does.
+    Every series this server made before #72 is anchored in UTC.
+
+    A zone-less ``due`` is read in that stored zone, as on ``update_event``. A
+    task that does not repeat has no anchor to keep and takes the config zone.
+    """
+    config_zone = resolve_config_event_timezone(config.timezone)
+    validate_datetime(due, config_zone)  # A bad value costs no round trip.
+
+    task = await (
+        graph_client.me.todo.lists.by_todo_task_list_id(list_id)
+        .tasks.by_todo_task_id(task_id)
+        .get()
+    )
+    if task is None or task.id is None:
+        raise ValueError(
+            f"Graph returned no task for id {task_id}, so its time zone cannot be "
+            "read. Nothing was modified. Re-list with outlook_list_tasks for current ids."
+        )
+    stored = task.due_date_time
+    if task.recurrence is None or stored is None:
+        return _due_in_zone(due, config_zone)
+
+    zone = _usable_zone(stored.time_zone)
+    if zone is None:
+        raise ValueError(
+            "Could not read a zone this repeating task can be sent back in, so "
+            "changing its due date could move the series. Nothing was modified."
+        )
+    if maybe_zone(zone) is not None:
+        return _due_in_zone(due, zone)
+    # Graph's Windows spelling: accepted back as it is, but Python cannot
+    # convert into it, and carrying a Windows-to-IANA table is the wrong fix.
+    if _is_zone_less(due):
+        return _datetime_timezone(due, zone)
+    raise ValueError(
+        f"This repeating task is stored in {zone!r}, which this server cannot convert "
+        "a moment into. Nothing was modified. Pass `due` as local time without a zone "
+        "or offset (2026-11-10T09:00:00); it is read in the task's own zone."
+    )
+
+
+def _recurrence_in_zone(recurrence: dict, zone: str) -> dict:
+    """``recurrence`` with ``range.recurrenceTimeZone`` filled in from ``zone``.
+
+    A zone the caller named is theirs. A malformed shape is returned untouched
+    for ``build_patterned_recurrence`` to refuse; filling in an empty range
+    would make it look complete. On UTC the payload stays as it has always been.
+    """
+    rng = recurrence.get("range") if isinstance(recurrence, dict) else None
+    if zone == "UTC" or not isinstance(rng, dict) or not rng or "recurrenceTimeZone" in rng:
+        return recurrence
+    return {**recurrence, "range": {**rng, "recurrenceTimeZone": zone}}
 
 
 def _text_body(content: str) -> Any:
@@ -269,10 +364,15 @@ def _format_task(task: Any) -> dict:
         body_content = sanitize_output(task.body.content, multiline=True)
 
     due = None
+    due_time_zone = None
     if task.due_date_time:
         # Graph returns DateTimeTimeZone object for due
         if hasattr(task.due_date_time, "date_time"):
             due = task.due_date_time.date_time
+            # Not always UTC: some accounts keep a repeating task's due in its zone
+            # (#72), and the bare time above means nothing without this.
+            zone = getattr(task.due_date_time, "time_zone", None)
+            due_time_zone = zone if isinstance(zone, str) else None
         else:
             due = str(task.due_date_time)
 
@@ -289,6 +389,7 @@ def _format_task(task: Any) -> dict:
         "status": status,
         "importance": importance,
         "due": due,
+        "due_time_zone": due_time_zone,
         "completed": completed,
         "created": _iso_datetime(task.created_date_time),
         "is_reminder_on": bool(task.is_reminder_on),
@@ -522,9 +623,11 @@ async def create_task(
     task_body = TodoTask()
     task_body.title = title
 
+    # Only when something is dated: a task with neither never reads the zone.
+    zone = resolve_config_event_timezone(config.timezone) if due or recurrence else "UTC"
+
     if due:
-        validate_datetime(due)
-        task_body.due_date_time = _datetime_timezone(due)
+        task_body.due_date_time = _due_in_zone(due, zone)
 
     if importance:
         task_body.importance = _importance_enum(importance)
@@ -543,10 +646,10 @@ async def create_task(
             )
         task_body.is_reminder_on = reminder
         if reminder:
-            task_body.reminder_date_time = _datetime_timezone(due)
+            task_body.reminder_date_time = _due_in_zone(due, zone)
 
     if recurrence:
-        task_body.recurrence = _build_recurrence(recurrence)
+        task_body.recurrence = _build_recurrence(_recurrence_in_zone(recurrence, zone))
 
     await refuse_someone_elses_list(graph_client, resolved_id, config, "outlook_create_task")
     response = await graph_client.me.todo.lists.by_todo_task_list_id(resolved_id).tasks.post(
@@ -599,8 +702,9 @@ async def update_task(
         patch_body.title = title
 
     if due is not None:
-        validate_datetime(due)
-        patch_body.due_date_time = _datetime_timezone(due)
+        patch_body.due_date_time = await _due_for_update(
+            graph_client, resolved_id, task_id, due, config
+        )
 
     if body is not None:
         patch_body.body = _text_body(body)

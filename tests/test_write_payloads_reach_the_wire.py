@@ -1647,3 +1647,264 @@ def test_serializing_twice_would_report_a_clean_payload():
 
     assert '"country_or_region": null' in wire(contact)
     assert "country_or_region" not in wire(contact)
+
+
+_LA_CFG = Config(client_id="test", timezone="America/Los_Angeles")
+
+
+class TestTodoDatesUseTheConfiguredZone:
+    """#72: every To Do date went out labelled UTC whatever `config.timezone` said.
+
+    Asserted on the serialized payload, since the label is the whole bug.
+    """
+
+    @staticmethod
+    async def _created(config=_LA_CFG, **kwargs) -> dict:
+        from tests.test_todo import _build_mock_client
+
+        client = _build_mock_client()
+        await todo.create_task(client, title="T", config=config, **kwargs)
+        post = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.post
+        return json.loads(wire(post.call_args.args[0]))
+
+    @staticmethod
+    async def _updated(due: str, config=_LA_CFG, stored=None) -> dict:
+        from tests.test_todo import _build_mock_client
+
+        client = _build_mock_client(tasks=[stored] if stored is not None else None)
+        await todo.update_task(client, task_id="task1", due=due, config=config)
+        return json.loads(wire(_todo_task_request(client).patch.call_args.args[0]))
+
+    @staticmethod
+    def _stored(zone: str | None, recurring: bool = True):
+        """A task as Graph returns it: its due labelled `zone`, repeating or not."""
+        from tests.test_todo import _mock_task
+
+        due = MagicMock(date_time="2026-11-03T09:00:00.0000000", time_zone=zone)
+        return _mock_task(due=due, recurrence=MagicMock() if recurring else None)
+
+    async def test_a_zone_less_due_is_labelled_with_the_configured_zone(self):
+        body = await self._created(due="2026-11-10T09:00:00")
+        assert body["dueDateTime"] == {
+            "dateTime": "2026-11-10T09:00:00",
+            "timeZone": "America/Los_Angeles",
+        }
+
+    async def test_a_bare_date_is_labelled_with_the_configured_zone(self):
+        body = await self._created(due="2026-11-10")
+        assert body["dueDateTime"] == {
+            "dateTime": "2026-11-10",
+            "timeZone": "America/Los_Angeles",
+        }
+
+    async def test_a_z_due_becomes_wall_clock_in_the_configured_zone(self):
+        # 01:00Z on the 29th is 18:00 on the 28th in Los Angeles: same moment.
+        body = await self._created(due="2026-10-29T01:00:00Z")
+        assert body["dueDateTime"] == {
+            "dateTime": "2026-10-28T18:00:00",
+            "timeZone": "America/Los_Angeles",
+        }
+
+    async def test_an_offset_due_becomes_wall_clock_in_the_configured_zone(self):
+        body = await self._created(due="2026-11-10T09:00:00+09:00")
+        assert body["dueDateTime"] == {
+            "dateTime": "2026-11-09T16:00:00",
+            "timeZone": "America/Los_Angeles",
+        }
+
+    @pytest.mark.parametrize(
+        ("now", "wall_clock"),
+        [
+            pytest.param("2027-06-10T20:00:00+00:00", "2027-06-17T13:00:00", id="no-clock-change"),
+            # "+7d" is seven days of real time, so a clock change inside the week
+            # moves the local time it lands on.
+            pytest.param(
+                "2027-03-10T20:00:00+00:00", "2027-03-17T13:00:00", id="clocks-go-forward"
+            ),
+            pytest.param("2027-10-31T20:00:00+00:00", "2027-11-07T12:00:00", id="clocks-go-back"),
+            pytest.param(
+                "2027-10-31T09:30:00+00:00", "2027-11-07T01:30:00", id="the-repeated-hour"
+            ),
+        ],
+    )
+    async def test_a_relative_due_is_resolved_before_it_is_sent(self, now, wall_clock):
+        """The clock is set here: against the real one this failed around each clock change."""
+        from datetime import datetime
+        from unittest.mock import patch
+
+        from outlook_mcp import validation
+
+        frozen = datetime.fromisoformat(now)
+
+        class FrozenDatetime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return frozen.astimezone(tz)
+
+        with patch.object(validation, "datetime", FrozenDatetime):
+            body = await self._created(due="+7d")
+
+        assert body["dueDateTime"] == {
+            "dateTime": wall_clock,
+            "timeZone": "America/Los_Angeles",
+        }
+
+    async def test_a_reminder_matches_the_due_time_and_zone(self):
+        body = await self._created(due="2026-10-29T01:00:00Z", reminder=True)
+        assert body["reminderDateTime"] == body["dueDateTime"]
+        assert body["reminderDateTime"]["timeZone"] == "America/Los_Angeles"
+
+    async def test_update_task_labels_a_zone_less_due_with_the_configured_zone(self):
+        body = await self._updated("2026-11-10T09:00:00")
+        assert body["dueDateTime"] == {
+            "dateTime": "2026-11-10T09:00:00",
+            "timeZone": "America/Los_Angeles",
+        }
+
+    async def test_update_task_converts_a_z_due_to_the_configured_zone(self):
+        body = await self._updated("2026-10-29T01:00:00Z")
+        assert body["dueDateTime"] == {
+            "dateTime": "2026-10-28T18:00:00",
+            "timeZone": "America/Los_Angeles",
+        }
+
+    async def test_updating_a_repeating_tasks_due_keeps_its_stored_zone(self):
+        # A series this server made before #72 is anchored in UTC. Relabelling
+        # its due with the config zone is the mismatch `update_event` avoids.
+        body = await self._updated("2026-11-10T09:00:00", stored=self._stored("UTC"))
+        assert body["dueDateTime"] == {"dateTime": "2026-11-10T09:00:00", "timeZone": "UTC"}
+
+    async def test_an_instant_on_a_repeating_task_becomes_wall_clock_in_its_stored_zone(self):
+        body = await self._updated("2026-11-10T01:00:00Z", stored=self._stored("Asia/Tokyo"))
+        assert body["dueDateTime"] == {
+            "dateTime": "2026-11-10T10:00:00",
+            "timeZone": "Asia/Tokyo",
+        }
+
+    async def test_a_windows_stored_zone_is_echoed_for_a_zone_less_due(self):
+        body = await self._updated(
+            "2026-11-10T09:00:00", stored=self._stored("China Standard Time")
+        )
+        assert body["dueDateTime"] == {
+            "dateTime": "2026-11-10T09:00:00",
+            "timeZone": "China Standard Time",
+        }
+
+    @pytest.mark.parametrize("due", ["2026-11-10T01:00:00Z", "2026-11-10T09:00:00+09:00", "+7d"])
+    async def test_an_instant_on_a_windows_stored_zone_is_refused(self, due):
+        from tests.test_todo import _build_mock_client
+
+        client = _build_mock_client(tasks=[self._stored("China Standard Time")])
+        with pytest.raises(ValueError, match="China Standard Time.*without a zone"):
+            await todo.update_task(client, task_id="task1", due=due, config=_LA_CFG)
+        _todo_task_request(client).patch.assert_not_called()
+
+    async def test_a_custom_stored_zone_is_refused(self):
+        from tests.test_todo import _build_mock_client
+
+        client = _build_mock_client(tasks=[self._stored("tzone://Microsoft/Custom")])
+        with pytest.raises(ValueError, match="zone this repeating task"):
+            await todo.update_task(
+                client, task_id="task1", due="2026-11-10T09:00:00", config=_LA_CFG
+            )
+        _todo_task_request(client).patch.assert_not_called()
+
+    async def test_updating_a_plain_tasks_due_uses_the_configured_zone(self):
+        body = await self._updated(
+            "2026-11-10T09:00:00", stored=self._stored("UTC", recurring=False)
+        )
+        assert body["dueDateTime"] == {
+            "dateTime": "2026-11-10T09:00:00",
+            "timeZone": "America/Los_Angeles",
+        }
+
+    async def test_a_repeating_task_with_no_due_uses_the_configured_zone(self):
+        from tests.test_todo import _mock_task
+
+        body = await self._updated(
+            "2026-11-10T09:00:00", stored=_mock_task(due=None, recurrence=MagicMock())
+        )
+        assert body["dueDateTime"]["timeZone"] == "America/Los_Angeles"
+
+    async def test_a_due_update_on_a_task_graph_cannot_return_is_refused(self):
+        from tests.test_todo import _build_mock_client
+
+        client = _build_mock_client()
+        _todo_task_request(client).get = AsyncMock(return_value=None)
+        with pytest.raises(ValueError, match="(?i)no task"):
+            await todo.update_task(
+                client, task_id="task1", due="2026-11-10T09:00:00", config=_LA_CFG
+            )
+        _todo_task_request(client).patch.assert_not_called()
+
+    async def test_an_invalid_due_is_refused_before_any_read(self):
+        from tests.test_todo import _build_mock_client
+
+        client = _build_mock_client()
+        with pytest.raises(ValueError, match="(?i)invalid datetime"):
+            await todo.update_task(client, task_id="task1", due="not-a-date", config=_LA_CFG)
+        _todo_task_request(client).get.assert_not_called()
+        _todo_task_request(client).patch.assert_not_called()
+
+    async def test_an_update_without_a_due_reads_nothing(self):
+        from tests.test_todo import _build_mock_client
+
+        client = _build_mock_client()
+        await todo.update_task(client, task_id="task1", title="T", config=_LA_CFG)
+        _todo_task_request(client).get.assert_not_called()
+
+    _WEEKLY = {
+        "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["tuesday"]},
+        "range": {"type": "noEnd", "startDate": "2026-11-10"},
+    }
+
+    async def test_recurrence_carries_the_configured_zone(self):
+        body = await self._created(due="2026-11-10T09:00:00", recurrence=self._WEEKLY)
+        assert body["recurrence"]["range"]["recurrenceTimeZone"] == "America/Los_Angeles"
+
+    async def test_recurrence_without_a_due_carries_the_configured_zone(self):
+        body = await self._created(recurrence=self._WEEKLY)
+        assert body["recurrence"]["range"]["recurrenceTimeZone"] == "America/Los_Angeles"
+
+    async def test_a_recurrence_zone_the_caller_named_is_kept(self):
+        named = {
+            "pattern": self._WEEKLY["pattern"],
+            "range": {**self._WEEKLY["range"], "recurrenceTimeZone": "Asia/Tokyo"},
+        }
+        body = await self._created(recurrence=named)
+        assert body["recurrence"]["range"]["recurrenceTimeZone"] == "Asia/Tokyo"
+
+    async def test_a_utc_config_leaves_the_recurrence_as_it_was(self):
+        body = await self._created(config=_CFG, recurrence=self._WEEKLY)
+        assert "recurrenceTimeZone" not in body["recurrence"]["range"]
+
+    async def test_a_utc_config_sends_a_zone_less_due_as_written(self):
+        body = await self._created(config=_CFG, due="2026-11-10T09:00:00")
+        assert body["dueDateTime"] == {"dateTime": "2026-11-10T09:00:00", "timeZone": "UTC"}
+
+    async def test_a_utc_config_sends_an_offset_due_as_utc_wall_clock(self):
+        # Before #72 the string went out as written. Now even a UTC server sends
+        # the moment's UTC time, which here is the day before the written one.
+        body = await self._created(config=_CFG, due="2026-11-10T05:00:00+09:00")
+        assert body["dueDateTime"] == {"dateTime": "2026-11-09T20:00:00", "timeZone": "UTC"}
+
+    async def test_a_legacy_config_zone_falls_back_to_utc(self):
+        # Graph refuses `EST`; calendar events fall back to UTC for it too.
+        body = await self._created(
+            config=Config(client_id="test", timezone="EST"),
+            due="2026-11-10T09:00:00",
+        )
+        assert body["dueDateTime"] == {"dateTime": "2026-11-10T09:00:00", "timeZone": "UTC"}
+
+    async def test_a_config_zone_that_does_not_exist_is_refused_before_sending(self):
+        from tests.test_todo import _build_mock_client
+
+        client = _build_mock_client()
+        with pytest.raises(ValueError, match="(?i)timezone"):
+            await todo.create_task(
+                client,
+                title="T",
+                due="2026-11-10T09:00:00",
+                config=Config(client_id="test", timezone="Mars/Olympus_Mons"),
+            )
+        client.me.todo.lists.by_todo_task_list_id.return_value.tasks.post.assert_not_called()
