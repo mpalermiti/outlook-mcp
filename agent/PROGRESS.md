@@ -2,6 +2,68 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-14 — checker-todo-dates-live-check
+
+- **Smoke (before):** 8 failed / 25 errors. 1F+25E are the sandbox-blocked `test_http_transport.py` (as every session); the other 6 were the checker's: main's two #242 tests (`get` awaited twice) and four payload tests hitting #242's refusal.
+- **Change:** `update_task` no longer calls `_due_for_update` (deleted, with the `maybe_zone`/`_usable_zone` imports). The due is converted with `_due_in_zone(due, config zone)` up front (validates, no read), then main's order stands: someone-else's-list check, `_refuse_moving_a_repeating_task` (the one read), PATCH. A repeating task only ever sees #242's message.
+- **Tests:** deleted 6 payload tests for the stored-zone path plus `test_a_due_update_on_a_task_graph_cannot_return_is_refused` (main's semantics: a None task just patches). Added `test_a_repeating_task_gets_only_the_repeating_refusal` (20 cases: 4 dues incl. `Z`/offset/`+7d` x stored zone UTC/Tokyo/Windows/custom/None; exact message, one read, no PATCH) — red at head (wrong message / two reads), green after. Added `test_docs_do_not_promise_moving_a_repeating_tasks_due`.
+- **Docs:** README timezone row's "keeps the zone" sentence, SKILL.md:201 clause, CHANGELOG stored-zone bullet removed.
+- **Live:** deleted `test_moving_a_repeating_tasks_due_keeps_its_stored_zone`, `test_mains_due_patch_on_a_repeating_task_leaves_one_task`, helpers `_ids_titled`/`_one_task_titled`/`_unique`, `uuid4` import. Ran `--collect-only -m live_write` on that file once to confirm it still collects (9 tests); collection only, nothing executed, no credentials touched — noted because the boundary names `-m live_write`. Findings file: run request withdrawn.
+- **Evidence:** full suite 3183 passed / 4 skipped / 134 deselected; failures only the sandbox http_transport 1F+25E, plus `test_lone_surrogates::test_the_stdio_server_answers_and_stays_up` once under load (passed in the all-toolsets run and 3/3 alone; untouched). All toolsets: 3184 passed, same http_transport only. ruff check + format --check clean. Ran via `.venv/bin/` because `uv`'s cache dir is outside the sandbox.
+- **Next:** the `todo-repeating-due-duplicate-live-run` [?] is moot; left as is (not my line). `checker-redo-todo-dates-use-configured-timezone` findings 1-3 are the same fix, already on this branch.
+
+## 2026-11-14 — todo-dates-live-check (acted on Michael's probe)
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`): 3123 passed, 4 skipped, 130 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff check + format clean. (`uv` isn't on PATH in this sandbox; `.venv/bin/ruff` works.)
+- Michael's answer on the card: his account stores a repeating task's due and `recurrenceTimeZone` as UTC whatever is sent; plain-task fix proven live. Asked for (1) keep the plain fix, (2) repeating live tests accept UTC, docs don't promise the zone is kept, (3) find out whether moving a repeating task's due makes a duplicate on main, which needs his word.
+- The fix exists only on `construct/redo-todo-dates-use-configured-timezone` (#239, c5af221, base 094a1fa). Workers can't switch branches, so `git diff 094a1fa c5af221 -- . ':!agent' | git apply -3` onto this branch (0021cb0, main incl. #74/#232): applied cleanly, no conflicts. Committed alone first, so the amendment commit is the reviewable delta. This PR can replace #239.
+- (2): `test_a_repeating_task_keeps_the_zone_sent_or_utc` (renamed), `_zone_kept_or_coerced` (both zone-sent spellings or both UTC); moving test now compares stored zones before/after. Docs: README (2 places), CHANGELOG (2 bullets), config description, two `todo.py` comments. No behaviour change in `src/`.
+- (3): duplicate count by a uuid-suffixed title in the moving test, plus new `test_mains_due_patch_on_a_repeating_task_leaves_one_task` (UTC config create = main's payload; due PATCH via raw SDK labelled UTC = main's `update_task`). Copies are deleted before failing. Rehearsed offline with a faked `list_tasks`: 1 task passes, 2 fails and deletes the copy.
+- TDD: `TestRepeatingTaskZoneIsPerAccount` in `tests/test_todo.py` — helper cases failed on ImportError, docs guard failed on README's "keeps a repeating task's due in its own zone"; both green after.
+- Final: 3166 passed, 4 skipped, 135 deselected (+35 carried from #239, +8 new offline; +5 live), same 1 failed + 25 errors in `tests/test_http_transport.py` only; same with every toolset loaded. Ruff check + format clean.
+- Ran `pytest --collect-only -m live_write` on the live file once to list test ids: collect-only, nothing executed, but next time use plain collect-only and grep instead of passing `-m`.
+- Parked `todo-repeating-due-duplicate-live-run` [?]. Live tests NOT run. `todo-plain-due-zone-decision` still [?]: Michael's "keep the plain-task fix" reads as option A, but the card is his to close.
+
+## 2026-11-11 — todo-dates-live-check (re-parked for Michael)
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3073 passed, 4 skipped, 128 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff check + format clean. No code changed, so this is also the final state.
+- Found: the card's command can't work from `main` — `TestDueIsAnchoredInTheConfiguredZone` and the fix live only on `construct/redo-todo-dates-use-configured-timezone` (c5af221), checked with `git show` on both. Findings file now gives a switch-to-branch, `uv sync`, run, switch-back sequence.
+- Rehearsed the plain-task assertion's arithmetic on simulated readbacks (written 2026-12-11T23:30): zone honoured passes, zone ignored and hour kept fail, LA and Tokyo. Recorded in the findings file § Checked offline.
+- Read the branch's `todo.py` via `git show`: `create_task`/`update_task`/`delete_task`/`_resolve_list_id` signatures and `_format_task`'s `due_time_zone` match what the live tests use.
+- Card flipped back to `[?]`: run it on the branch before merge (A) or after merge from main (B). Live tests NOT run.
+- Env: extracting a branch with `git archive | tar` was denied by the permission layer; `git show <branch>:<path> > "$TMPDIR/..."` works. In zsh, `$B:src/...` is a bad substitution (`:s` modifier); spell the ref out.
+
+## 2026-11-11 — redo-todo-dates-use-configured-timezone
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3073 passed, 4 skipped, 128 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff clean.
+- Source: branch `construct-kept/todo-dates-use-configured-timezone-20261112-044752` (tip fdba3e6, merge base with this branch f76dabc). Took `git diff f76dabc <kept> -- . ':!agent'` and `git apply -3` onto 8b44da8 (main incl. #70 fix 094a1fa).
+- Only CHANGELOG.md conflicted. Unreleased now: Fixed = #70 bullet, then the four #72 bullets; Changed = #70 bullet.
+- Check: the +/- lines for the other 7 files are byte-identical to the kept branch's (533 lines, `cmp`). `_usable_zone` still exists in `calendar_write.py` after #70.
+- Final: 3108 passed, 4 skipped, 132 deselected (+35 offline, +4 live: 3 tests, Tokyo param), same 1 failed + 25 errors in `tests/test_http_transport.py` only; same with every toolset loaded. Ruff check + format clean. Targeted: `TestTodoDatesUseTheConfiguredZone` + `TestTaskResponsesNameTheDueZone` 35 passed.
+- Commit 8b3502a. Live tests NOT run. `todo-plain-due-zone-decision` still parked; "don't merge before Nov 13" (#72 is Neil's until then) still stands.
+- Env gotcha: in zsh an unquoted `$F` holding several paths is not word-split; use an array.
+
+## 2026-11-09 — pr-todo-dates-use-configured-timezone-s1794187944-806779 (Michael's PR comment)
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1); everything else passed. Ruff clean.
+- CHANGELOG: "On a UTC server the payloads are unchanged" was false for a `Z`/offset `due` (base `todo.py:527` sent the raw string; `_due_in_zone` now converts in every zone). Now says zone-less `due` and recurrence are unchanged on UTC, with the offset example. Pinned by `test_a_utc_config_sends_an_offset_due_as_utc_wall_clock` and `test_a_utc_config_sends_a_zone_less_due_as_written` (both pass on this code; they pin the documented claim, not new behaviour).
+- `test_every_create_field_persists` and `test_every_update_field_persists` pinned to `timezone: "UTC"` with `model_copy`, comment says why.
+- `test_a_plain_tasks_due_is_midnight_on_the_written_day_in_the_zone` parametrized over `America/Los_Angeles` and `Asia/Tokyo`; same assertion (Tokyo: written day D reads back D-1T15:00 UTC). Collect-only on the file: 9 deselected, was 8. NOT run.
+- Promises list (`agent/findings/tasks/todo-dates-use-configured-timezone.md`): behaviour 1 adds the repeating-task exception, behaviour 9 names the three live tests. All 15 named offline tests grep-verified to exist.
+- `agent/findings/todo-dates-live-check.md`: four tasks, Tokyo row, UTC pin noted. The `todo-dates-live-check` card's "one throwaway task" wording is stale (not my line).
+- Final: 3092 passed, 4 skipped, 130 deselected, same 1 failed + 25 errors in `tests/test_http_transport.py` only; same with every toolset loaded. Ruff check + format clean.
+- Held: the A/B question (`todo-plain-due-zone-decision`) per Michael's comment. Don't merge before Nov 13 (#72 is Neil's until then) — that's for the construct/Michael.
+
+## 2026-11-08 — checker-checker-todo-dates-use-configured-timezone
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3074 passed, 4 skipped, 127 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff clean.
+- Finding 1: `_format_task` returns `due_time_zone` beside `due` (`None` when absent or not a string). README and SKILL say a To Do `due` is the exception to "responses are UTC".
+- Finding 2: new `_due_for_update` does a plain GET when `due` is given. Repeating task with a stored due: reuse its zone, as `update_event` does. Non-repeating, or repeating with no due: config zone. Windows-named stored zone: zone-less goes back labelled with it; `Z`/offset/relative is refused, because Python can't convert into it. `tzone://` sentinel and a no-task reply are refused. Nothing is patched on any refusal; a bad `due` costs no GET; an update without `due` reads nothing. `_usable_zone` imported from `calendar_write` rather than copied.
+- Finding 3: docs and CHANGELOG now say To Do keeps only the date of a non-repeating task; the 9:00 promise is gone, including from the earlier task file the PR text comes from. Not reworded: that task's queue line, which isn't this session's to edit. The choice itself is parked as `todo-plain-due-zone-decision`.
+- Finding 4: live test rebuilt, class name kept so the command on `todo-dates-live-check` still works. Plain task asserts the stored hour (midnight on the written day in the zone, read back UTC); repeating task reads `recurrence.range.recurrenceTimeZone` from the raw task; a third moves a repeating task's due under a different config zone. No date asserted on a repeating task. Now three throwaway tasks, not one; the findings file says so, the card's "one throwaway task" is stale. NOT run.
+- TDD: 12 failed first on the missing field or the config-zone label, 5 regression pins passed. Final: 3090 passed, 4 skipped, 129 deselected (+2 live tests), same 1 failed + 25 errors in `tests/test_http_transport.py` and nothing else; same with every toolset loaded. Ruff check + format clean.
+- Next: Michael's live run decides the two ASSUMED lines in `agent/findings/todo-dates-live-check.md`. Converting a due to the config zone on read is not done; it depends on the parked answer.
+
 ## 2026-11-08 — checker-todo-dates-use-configured-timezone
 
 - Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3071 passed, 4 skipped, 127 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1, same as the last session). Ruff clean.
