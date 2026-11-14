@@ -46,6 +46,7 @@ from outlook_mcp.tools import (
     calendar_delta,
     calendar_read,
     calendar_write,
+    contact_photos,
     contacts,
     contacts_delta,
     digest,
@@ -1381,6 +1382,20 @@ async def outlook_delete_contact(ctx: Context, contact_id: str) -> dict:
     client = _get_graph_client(ctx)
     config = _get_config(ctx)
     return await contacts.delete_contact(client.sdk_client, contact_id, config=config)
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_set_contact_photo(ctx: Context, contact_id: str, file_path: str) -> dict:
+    """Set or replace a contact's photo from a JPEG, PNG or GIF file in attachments_dir.
+
+    Up to 20 MiB. Outlook may re-encode the image.
+    """
+    client = _get_graph_client(ctx)
+    config = _get_config(ctx)
+    return await contact_photos.set_contact_photo(
+        client.sdk_client, contact_id, file_path, config=config
+    )
 
 
 @mcp.tool()

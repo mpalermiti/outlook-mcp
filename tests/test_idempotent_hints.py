@@ -17,7 +17,16 @@ Deliberately excluded, each for a checked reason:
 * every ``delete`` — the second call finds nothing there
 * ``outlook_complete_task`` — writes ``completedDateTime = now``, so a repeat
   changes the stored value even though the status does not move
+
+``outlook_set_contact_photo`` is opt-in (``contact_photos``), so a default
+import does not register it; the two tests that read the registered surface
+check it in a process that loads the group.
 """
+
+import json
+import os
+import subprocess
+import sys
 
 import pytest
 from mcp.client import Client
@@ -37,6 +46,9 @@ EXPECTED_IDEMPOTENT = {
     # file: a repeat to the same path is refused and changes nothing.
     "outlook_download_task_attachment",
     "outlook_update_checklist_item",
+    # A PUT of the photo's bytes: the same file again replaces the photo with the
+    # same image (a second PUT over an existing photo was probed live on #121).
+    "outlook_set_contact_photo",
 }
 
 
@@ -76,9 +88,14 @@ def test_tools_that_repeat_badly_are_not_marked(name):
     assert name not in toolsets.IDEMPOTENT
 
 
-def test_every_idempotent_name_is_a_registered_tool():
-    registered = set(mcp._tool_manager._tools)
-    assert toolsets.IDEMPOTENT <= registered
+def test_every_idempotent_name_is_a_tool_name():
+    assert toolsets.IDEMPOTENT <= set(toolsets.TOOL_GROUPS)
+
+
+def test_every_idempotent_name_is_registered_unless_its_group_is_opt_in():
+    """A name missing from this process must be one an opt-in group left out."""
+    missing = toolsets.IDEMPOTENT - set(mcp._tool_manager._tools)
+    assert {toolsets.TOOL_GROUPS[name] for name in missing} <= toolsets.OFF_BY_DEFAULT, missing
 
 
 @pytest.mark.asyncio
@@ -86,10 +103,35 @@ async def test_the_hint_reaches_the_wire():
     async with Client(mcp) as client:
         tools = {t.name: t for t in (await client.list_tools()).tools}
 
-    for name in EXPECTED_IDEMPOTENT:
+    for name in EXPECTED_IDEMPOTENT & set(tools):
         assert tools[name].annotations.idempotent_hint is True, name
 
     assert tools["outlook_send_message"].annotations.idempotent_hint is not True
+
+
+def test_the_opt_in_photo_tool_registers_with_its_hint_when_its_group_is_loaded():
+    code = """import asyncio, json
+from mcp.client import Client
+from outlook_mcp.server import mcp
+async def main():
+    async with Client(mcp) as c:
+        tools = {t.name: t for t in (await c.list_tools()).tools}
+    print(json.dumps({n: t.annotations.idempotent_hint for n, t in tools.items()}))
+asyncio.run(main())
+"""
+    groups = (set(toolsets.TOOL_GROUPS.values()) - toolsets.OFF_BY_DEFAULT) | {"contact_photos"}
+    env = {**os.environ, "OUTLOOK_MCP_TOOLSETS": ",".join(sorted(groups))}
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    hints = json.loads(result.stdout.strip().splitlines()[-1])
+    assert hints["outlook_set_contact_photo"] is True
 
 
 def test_open_world_hint_is_left_to_the_default():
