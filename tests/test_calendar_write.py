@@ -1,12 +1,13 @@
 """Tests for calendar write tools."""
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from outlook_mcp.config import Config
 from outlook_mcp.errors import PermissionDeniedError, ReadOnlyError
+from outlook_mcp.tools import calendar_write
 from outlook_mcp.tools._recurrence import build_event_recurrence, serialize_recurrence
 from outlook_mcp.tools.calendar_write import (
     create_event,
@@ -3084,9 +3085,12 @@ class TestOnlineMeeting:
         refusal moved below the first network call would pass there."""
         builder, client = _client_with(_current_event())
 
-        with pytest.raises(ValueError, match="cannot remove an online meeting"):
+        with pytest.raises(ValueError, match="cannot remove an online meeting") as refused:
             await update_event(client, event_id="AAMkAG123=", is_online=False, config=config)
 
+        # Deleting comes first: an agent that only re-creates is left with two events,
+        # and the attendees get no cancellation.
+        assert "delete the event and create it again" in str(refused.value)
         builder.get.assert_not_called()
         builder.calendar.get.assert_not_called()
         builder.patch.assert_not_called()
@@ -3138,3 +3142,422 @@ class TestOnlineMeeting:
         )
 
         assert result == {"status": "created", "event_id": "AAMkAG123=", "subject": "Sync"}
+
+
+class TestRelativeEventTimes:
+    """`start="+2h"` is resolved before it is sent, not forwarded as text (#74).
+
+    Before, both tools validated the relative form and then sent the caller's
+    own string, which Graph refused with a 400 naming a `'DateTime'` parameter
+    this API does not have. The mock suite could not see it: a mock accepts
+    `date_time="+2h"` as happily as a real time.
+
+    The resolved moment goes out as wall-clock time in the event's anchor zone,
+    with no `Z` or offset: handed either, Graph anchors a single event in UTC
+    whatever `timeZone` says (#236). So these assert the local text and the
+    zone beside it, and rebuild the instant from the two to check the moment.
+    """
+
+    # Thursday 01:00 UTC, which is Wednesday 17:00 in Los Angeles and 20:00 in
+    # New York. The UTC and local dates differ, so a value converted in the
+    # wrong zone, or a recurrence derived from the UTC date, cannot pass.
+    NOW = datetime(2026, 11, 12, 1, 0, 0, tzinfo=timezone.utc)
+
+    @pytest.fixture
+    def clock(self, monkeypatch):
+        """Each read of the clock is one second later than the last.
+
+        So a tool that resolved `start` and `end` against two separate reads
+        would put an hour and a second between `+2h` and `+3h`.
+        """
+        reads = []
+
+        def ticking():
+            reads.append(self.NOW + timedelta(seconds=len(reads)))
+            return reads[-1]
+
+        monkeypatch.setattr(calendar_write, "_now", ticking)
+        return reads
+
+    @staticmethod
+    def _fixed(monkeypatch, moment):
+        monkeypatch.setattr(calendar_write, "_now", lambda: moment)
+
+    @staticmethod
+    def _instant(local: str, zone: str) -> datetime:
+        """The moment a naive `dateTime` names in `zone`, in UTC."""
+        from zoneinfo import ZoneInfo
+
+        return datetime.fromisoformat(local).replace(tzinfo=ZoneInfo(zone)).astimezone(timezone.utc)
+
+    @staticmethod
+    def _updatable(start_zone: str, end_zone: str | None = None):
+        builder = _make_event_builder()
+        builder.get = AsyncMock(
+            return_value=_current_event(start_zone=start_zone, end_zone=end_zone)
+        )
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+        return builder, mock_client
+
+    # ── create ────────────────────────────────────────────────────────
+
+    async def test_create_writes_local_time_from_one_clock_read(self, clock):
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
+
+        await create_event(mock_client, subject="Standup", start="+2h", end="+3h", config=_CFG_LA)
+
+        event = _posted(mock_client)
+        assert event.start.date_time == "2026-11-11T19:00:00"  # 03:00Z, Los Angeles
+        assert event.end.date_time == "2026-11-11T20:00:00"
+        assert event.start.time_zone == event.end.time_zone == "America/Los_Angeles"
+        assert self._instant(event.start.date_time, "America/Los_Angeles") == (
+            self.NOW + timedelta(hours=2)
+        )
+        assert len(clock) == 1
+
+    async def test_create_converts_across_a_daylight_saving_change(self, monkeypatch):
+        """Saturday 12:00 PST plus 24 hours is Sunday 13:00 PDT, not 12:00."""
+        self._fixed(monkeypatch, datetime(2027, 3, 13, 20, 0, tzinfo=timezone.utc))
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Brunch"))
+
+        await create_event(mock_client, subject="Brunch", start="+24h", end="+25h", config=_CFG_LA)
+
+        assert _posted(mock_client).start.date_time == "2027-03-14T13:00:00"
+
+    async def test_a_relative_start_anchors_a_new_series_on_its_local_day(self, clock):
+        """`+24h` is Friday 01:00 UTC: Thursday afternoon in Los Angeles."""
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Review"))
+
+        await create_event(
+            mock_client,
+            subject="Review",
+            start="+24h",
+            end="+25h",
+            recurrence="weekly",
+            config=_CFG_LA,
+        )
+
+        recurrence = _posted(mock_client).recurrence
+        assert [d.value for d in recurrence.pattern.days_of_week] == ["thursday"]
+        assert recurrence.range.start_date == date(2026, 11, 12)
+
+    # ── update ────────────────────────────────────────────────────────
+
+    async def test_update_writes_local_time_in_the_events_own_zone(self, clock):
+        """New York's wall clock, not the configured zone's (UTC here)."""
+        builder, mock_client = self._updatable("America/New_York")
+
+        await update_event(mock_client, event_id="AAMkAG123=", start="+2h", end="+3h", config=_CFG)
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.date_time == "2026-11-11T22:00:00"
+        assert patched.end.date_time == "2026-11-11T23:00:00"
+        assert patched.start.time_zone == "America/New_York"
+        assert len(clock) == 1
+
+    async def test_each_end_is_placed_in_its_own_zone(self, clock):
+        """A flight leaves New York and lands in Los Angeles; each end keeps its zone."""
+        builder, mock_client = self._updatable("America/New_York", "America/Los_Angeles")
+
+        await update_event(mock_client, event_id="AAMkAG123=", start="+2h", end="+8h", config=_CFG)
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.date_time == "2026-11-11T22:00:00"  # 03:00Z in New York
+        assert patched.end.date_time == "2026-11-12T01:00:00"  # 09:00Z in Los Angeles
+
+    @pytest.mark.parametrize(
+        ("start", "end", "sent_start", "sent_end"),
+        [
+            ("+2h", "2026-11-12T23:30:00", "2026-11-11T22:00:00", "2026-11-12T23:30:00"),
+            (
+                "2026-11-11T21:00:00-05:00",
+                "+3h",
+                "2026-11-11T21:00:00-05:00",
+                "2026-11-11T23:00:00",
+            ),
+        ],
+    )
+    async def test_a_typed_end_beside_a_relative_one_is_sent_as_written(
+        self, clock, start, end, sent_start, sent_end
+    ):
+        builder, mock_client = self._updatable("America/New_York")
+
+        await update_event(mock_client, event_id="AAMkAG123=", start=start, end=end, config=_CFG)
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.date_time == sent_start
+        assert patched.end.date_time == sent_end
+
+    async def test_the_same_series_change_in_an_iana_zone_is_sent_on_its_local_day(self, clock):
+        builder, mock_client = self._updatable("America/Los_Angeles")
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="+24h",
+            end="+25h",
+            recurrence="weekly",
+            config=_CFG,
+        )
+
+        recurrence = builder.patch.call_args[0][0].recurrence
+        assert [d.value for d in recurrence.pattern.days_of_week] == ["thursday"]
+
+    # ── refusals ──────────────────────────────────────────────────────
+
+    @pytest.mark.parametrize(("start", "end"), [("+2h", "+3h"), ("+2h", None), (None, "+3h")])
+    async def test_a_relative_time_on_a_windows_zoned_event_is_refused(self, clock, start, end):
+        """`zoneinfo` cannot convert into "Pacific Standard Time".
+
+        The series this server created came back named that way when measured
+        (2026-11-10, a consumer mailbox), so this is not rare. Sending `Z`
+        instead would re-anchor the event in UTC (#236), so it is refused before
+        anything is sent.
+        """
+        builder, mock_client = self._updatable("Pacific Standard Time")
+
+        with pytest.raises(ValueError, match="Pacific Standard Time") as exc:
+            await update_event(
+                mock_client, event_id="AAMkAG123=", start=start, end=end, config=_CFG
+            )
+
+        assert "Nothing was modified" in str(exc.value)
+        assert "without a zone or offset" in str(exc.value)
+        builder.patch.assert_not_called()
+
+    async def test_a_zone_less_time_on_a_windows_zoned_event_is_sent(self, clock):
+        """The remedy the refusal names really works: wall-clock time is already local."""
+        builder, mock_client = self._updatable("Pacific Standard Time")
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-12T17:00:00",
+            end="2026-11-12T18:00:00",
+            recurrence="weekly",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.date_time == "2026-11-12T17:00:00"
+        assert patched.start.time_zone == "Pacific Standard Time"
+        assert [d.value for d in patched.recurrence.pattern.days_of_week] == ["thursday"]
+
+    async def test_a_custom_zone_event_keeps_its_own_refusal(self, clock):
+        """Graph's custom-zone sentinel has no zone to place a time in; `_anchored` says so."""
+        builder, mock_client = self._updatable("tzone://Microsoft/Custom")
+
+        with pytest.raises(ValueError, match="Could not read the zone"):
+            await update_event(
+                mock_client, event_id="AAMkAG123=", start="+2h", end="+3h", config=_CFG
+            )
+
+        builder.patch.assert_not_called()
+
+    # Los Angeles leaves daylight saving at 02:00 on 2027-11-07, so 01:00-02:00
+    # happens twice: 08:00-09:00Z (PDT) and 09:00-10:00Z (PST). From 06:30Z,
+    # +2h is 01:30 the first time and +3h is 01:30 the second.
+    REPEAT = datetime(2027, 11, 7, 6, 30, tzinfo=timezone.utc)
+
+    def test_the_repeated_interval_really_is_repeated(self):
+        """Guard the premise: if tzdata drops this transition, the tests below prove nothing."""
+        from zoneinfo import ZoneInfo
+
+        first = (self.REPEAT + timedelta(hours=2)).astimezone(ZoneInfo("America/Los_Angeles"))
+        second = (self.REPEAT + timedelta(hours=3)).astimezone(ZoneInfo("America/Los_Angeles"))
+        assert first.strftime("%H:%M") == second.strftime("%H:%M") == "01:30"
+        assert first.utcoffset() != second.utcoffset()
+
+    @pytest.mark.parametrize(("start", "end"), [("+2h", "+5h"), ("+3h", "+5h"), ("+1h", "+2h")])
+    async def test_create_refuses_a_time_in_the_repeated_interval(self, monkeypatch, start, end):
+        self._fixed(monkeypatch, self.REPEAT)
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Late"))
+
+        with pytest.raises(ValueError, match="repeats when daylight saving ends") as exc:
+            await create_event(mock_client, subject="Late", start=start, end=end, config=_CFG_LA)
+
+        # It names the local time that happens twice, and offers no offset as
+        # the remedy: a typed one anchors a single event in UTC (#236).
+        message = str(exc.value)
+        assert "2027-11-07T01:30:00 happens twice" in message
+        assert "Pass a time outside that interval." in message
+        assert "-07:00" not in message and "-08:00" not in message
+        assert "offset" not in message
+        mock_client.me.events.post.assert_not_called()
+
+    async def test_create_refuses_it_with_a_recurrence_too(self, monkeypatch):
+        self._fixed(monkeypatch, self.REPEAT)
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Late"))
+
+        with pytest.raises(ValueError, match="repeats when daylight saving ends"):
+            await create_event(
+                mock_client,
+                subject="Late",
+                start="+2h",
+                end="+5h",
+                recurrence="weekly",
+                config=_CFG_LA,
+            )
+
+        mock_client.me.events.post.assert_not_called()
+
+    async def test_create_sends_times_either_side_of_the_repeated_interval(self, monkeypatch):
+        """00:30 PDT and 02:30 PST: a pair around the repeat, neither end inside it."""
+        self._fixed(monkeypatch, self.REPEAT)
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Late"))
+
+        await create_event(mock_client, subject="Late", start="+1h", end="+4h", config=_CFG_LA)
+
+        event = _posted(mock_client)
+        assert (event.start.date_time, event.end.date_time) == (
+            "2027-11-07T00:30:00",
+            "2027-11-07T02:30:00",
+        )
+
+    @pytest.mark.parametrize(("start", "end"), [("+2h", None), (None, "+3h")])
+    async def test_update_refuses_a_time_in_the_repeated_interval(self, monkeypatch, start, end):
+        self._fixed(monkeypatch, self.REPEAT)
+        builder, mock_client = self._updatable("America/Los_Angeles")
+
+        with pytest.raises(ValueError, match="repeats when daylight saving ends"):
+            await update_event(
+                mock_client, event_id="AAMkAG123=", start=start, end=end, config=_CFG
+            )
+
+        builder.patch.assert_not_called()
+
+    async def test_update_sends_times_either_side_of_the_repeated_interval(self, monkeypatch):
+        self._fixed(monkeypatch, self.REPEAT)
+        builder, mock_client = self._updatable("America/Los_Angeles")
+
+        await update_event(mock_client, event_id="AAMkAG123=", start="+1h", end="+4h", config=_CFG)
+
+        patched = builder.patch.call_args[0][0]
+        assert (patched.start.date_time, patched.end.date_time) == (
+            "2027-11-07T00:30:00",
+            "2027-11-07T02:30:00",
+        )
+
+    # ── what the result reports (#74) ─────────────────────────────────
+
+    async def test_create_reports_each_relative_end_as_written(self, clock):
+        """So an agent that passed `start="7d"` can see it made a past event."""
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
+
+        result = await create_event(
+            mock_client, subject="Standup", start="7d", end="+3h", config=_CFG_LA
+        )
+
+        assert result["start"] == "2026-11-04T17:00:00 (America/Los_Angeles)"
+        assert result["end"] == "2026-11-11T20:00:00 (America/Los_Angeles)"
+
+    async def test_update_reports_each_relative_end_in_its_own_zone(self, clock):
+        builder, mock_client = self._updatable("America/New_York", "America/Los_Angeles")
+
+        result = await update_event(
+            mock_client, event_id="AAMkAG123=", start="+2h", end="+8h", config=_CFG
+        )
+
+        assert result["start"] == "2026-11-11T22:00:00 (America/New_York)"
+        assert result["end"] == "2026-11-12T01:00:00 (America/Los_Angeles)"
+
+    async def test_a_typed_end_is_not_reported(self, clock):
+        """Only what the server worked out is echoed; typed input the caller knows."""
+        builder, mock_client = self._updatable("America/New_York")
+
+        result = await update_event(
+            mock_client, event_id="AAMkAG123=", start="+2h", end="2026-11-12T23:30:00", config=_CFG
+        )
+
+        assert result["start"] == "2026-11-11T22:00:00 (America/New_York)"
+        assert "end" not in result
+
+    async def test_iso_times_keep_the_old_results(self, clock):
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
+        created = await create_event(
+            mock_client,
+            subject="Standup",
+            start="2026-11-12T09:00:00",
+            end="2026-11-12T10:00:00",
+            config=_CFG_LA,
+        )
+        builder, update_client = self._updatable("America/New_York")
+        updated = await update_event(
+            update_client,
+            event_id="AAMkAG123=",
+            start="2026-11-12T09:00:00",
+            end="2026-11-12T10:00:00",
+            config=_CFG,
+        )
+
+        assert created == {"status": "created", "event_id": "AAMkAGnew=", "subject": "Standup"}
+        assert updated == {"status": "updated", "event_id": "AAMkAG123="}
+
+    # ── all-day events (#74) ──────────────────────────────────────────
+
+    @pytest.mark.parametrize(("start", "end"), [("+24h", "2026-11-14T00:00:00"), ("now", "+1d")])
+    async def test_create_refuses_a_relative_all_day_time_before_sending(self, clock, start, end):
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Off"))
+
+        with pytest.raises(ValueError, match="cannot place an all-day event"):
+            await create_event(
+                mock_client, subject="Off", start=start, end=end, is_all_day=True, config=_CFG_LA
+            )
+
+        mock_client.me.events.post.assert_not_called()
+
+    async def test_update_refuses_it_before_any_request_when_the_caller_says_all_day(self, clock):
+        builder, mock_client = self._updatable("America/New_York")
+
+        with pytest.raises(ValueError, match="cannot place an all-day event"):
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="+24h",
+                end="+48h",
+                is_all_day=True,
+                config=_CFG,
+            )
+
+        builder.get.assert_not_called()
+        builder.patch.assert_not_called()
+
+    async def test_update_refuses_it_when_only_the_stored_event_is_all_day(self, clock):
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=_current_event(is_all_day=True))
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        with pytest.raises(ValueError, match="cannot place an all-day event"):
+            await update_event(mock_client, event_id="AAMkAG123=", start="+24h", config=_CFG)
+
+        builder.patch.assert_not_called()
+
+    async def test_a_typed_midnight_on_an_all_day_event_is_still_sent(self, clock):
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=_current_event(is_all_day=True))
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-14T00:00:00",
+            end="2026-11-15T00:00:00",
+            config=_CFG,
+        )
+
+        builder.patch.assert_called_once()

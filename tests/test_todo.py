@@ -560,6 +560,56 @@ class TestUpdateTask:
         with pytest.raises(ValueError):
             await update_task(client, task_id="", title="Bad", config=_CFG)
 
+    async def test_update_task_refuses_due_on_a_repeating_task(self):
+        """Graph copies a repeating task when its due moves, so nothing is sent (#242).
+
+        Measured on a personal account: a PATCH of `dueDateTime` on a repeating
+        task left two tasks, both carrying the new due — with or without the
+        recurrence range moved in the same PATCH.
+        """
+        repeating = _mock_task(recurrence=MagicMock())
+        client = _build_mock_client(tasks=[repeating])
+
+        with pytest.raises(ValueError, match="repeating task") as refused:
+            await update_task(client, task_id="task1", due="2026-05-01", config=_CFG)
+
+        assert "Nothing was modified" in str(refused.value)
+        assert "To Do app" in str(refused.value)
+        mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        mock_item.return_value.get.assert_awaited_once()
+        mock_item.return_value.patch.assert_not_called()
+
+    async def test_update_task_refuses_due_on_a_repeating_task_with_other_fields(self):
+        """The refusal covers the whole call: no partial patch of the other fields."""
+        client = _build_mock_client(tasks=[_mock_task(recurrence=MagicMock())])
+
+        with pytest.raises(ValueError, match="repeating task"):
+            await update_task(client, task_id="task1", title="New", due="2026-05-01", config=_CFG)
+
+        mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        mock_item.return_value.patch.assert_not_called()
+
+    async def test_update_task_other_fields_on_a_repeating_task_still_patch(self):
+        """Only the due is refused; a title change needs no read and goes through."""
+        client = _build_mock_client(tasks=[_mock_task(recurrence=MagicMock())])
+
+        result = await update_task(client, task_id="task1", title="New", config=_CFG)
+
+        assert result["status"] == "updated"
+        mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        mock_item.return_value.get.assert_not_called()
+        mock_item.return_value.patch.assert_awaited_once()
+
+    async def test_update_task_due_on_a_plain_task_reads_then_patches(self):
+        """A task that does not repeat still moves; the read only decides."""
+        client = _build_mock_client(tasks=[_mock_task(recurrence=None)])
+
+        await update_task(client, task_id="task1", due="2026-05-01", config=_CFG)
+
+        mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        mock_item.return_value.get.assert_awaited_once()
+        mock_item.return_value.patch.assert_awaited_once()
+
 
 # --- complete_task ---
 

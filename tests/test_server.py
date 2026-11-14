@@ -565,6 +565,49 @@ class TestCalendarWriteArgumentOrder:
         assert event.recurrence is None
 
     @pytest.mark.asyncio
+    async def test_relative_times_are_resolved_through_the_registered_tool(self):
+        """`+2h` through the real handler and wrapper reaches Graph as that moment (#74).
+
+        Written as wall-clock time in the configured zone. Tokyo because it is
+        not UTC, so a `Z` or a value converted in the wrong zone fails, and has no
+        daylight saving, so a test reading the real clock has no repeated hour to
+        land in once a year.
+        """
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import AsyncMock
+        from zoneinfo import ZoneInfo
+
+        from outlook_mcp import server as server_mod
+        from outlook_mcp.config import Config
+
+        sdk = AsyncMock()
+        sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        client = MagicMock()
+        client.sdk_client = sdk
+        config = Config(client_id="test", timezone="Asia/Tokyo")
+
+        before = datetime.now(timezone.utc).replace(microsecond=0)
+        with (
+            patch.object(server_mod, "_get_graph_client", return_value=client),
+            patch.object(server_mod, "_get_config", return_value=config),
+        ):
+            result = await server_mod.outlook_create_event(
+                self._ctx(), subject="Review", start="+2h", end="+3h"
+            )
+        after = datetime.now(timezone.utc)
+
+        event = sdk.me.events.post.call_args[0][0]
+        assert event.start.time_zone == "Asia/Tokyo"
+        tokyo = ZoneInfo("Asia/Tokyo")
+        start = datetime.fromisoformat(event.start.date_time).replace(tzinfo=tokyo)
+        end = datetime.fromisoformat(event.end.date_time).replace(tzinfo=tokyo)
+        assert before + timedelta(hours=2) <= start <= after + timedelta(hours=2)
+        assert end - start == timedelta(hours=1)
+        # The result reaches the caller through the wrapper, naming what was sent.
+        assert result["start"] == f"{event.start.date_time} (Asia/Tokyo)"
+        assert result["end"] == f"{event.end.date_time} (Asia/Tokyo)"
+
+    @pytest.mark.asyncio
     async def test_show_as_alone_is_not_read_as_a_timezone(self):
         """The exact call the slot swap breaks, with `timezone` left out.
 

@@ -8,6 +8,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **`outlook_update_task` refuses to move a repeating task's due date (#242).** Microsoft
+  accepted the change and the list then held two tasks, the original and a copy, both with the
+  new due date. Sending the repeat rule with its start moved, in the same request, still made the
+  copy. The tool now reads the task first and, if it repeats, refuses before anything is sent,
+  pointing to the Microsoft To Do app. A repeating task's other fields, and the due date of a
+  task that doesn't repeat, change as before; a due change now costs one extra read.
+
+- Missing attachment paths in `outlook_send_with_attachments` and `outlook_attach_to_draft`
+  return the file-not-found message to the client instead of a generic tool error.
+
 - **`is_online` is described as it behaves, and `outlook_update_event` takes it (#70).** Graph
   honours `isOnlineMeeting` on some personal accounts and ignores it on others, while
   `outlook_create_event`'s description, the README and `SKILL.md` said it never works. They now
@@ -40,6 +50,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **A relative `due` is worked out before it is sent.** `due="+7d"` passed validation and then
   reached Graph as the literal text `+7d`.
 
+- **`outlook_create_event` and `outlook_update_event` accept relative times for `start` and
+  `end`** (`+2h`, `now`, or `7d` for seven days ago), as the server's other date arguments
+  do. They passed validation and were then sent to Microsoft as typed, which refused the
+  request. A relative time is now sent as local time in the event's own time zone, so the
+  event keeps that zone; ISO 8601 times are still sent exactly as written. Three cases are
+  refused instead, before the event is written: an event stored in a Windows-named time zone
+  ("Pacific Standard Time", as Microsoft has returned repeating events), where the time has
+  to be given as local time without a zone; a time in the interval a zone repeats when
+  daylight saving ends, where it names two moments, so a time outside that interval has to
+  be given; and a relative time on an all-day event, which Microsoft needs at midnight. (#74)
+
 ### Changed
 
 - **`outlook_create_event` and `outlook_update_event` report `is_online` (#70).** When the call
@@ -47,6 +68,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   result carries `is_online` as Graph's reply states it, so an account that ignored the request
   shows `false` on the call itself. It is omitted when the reply has no such field, and every
   other result is unchanged.
+
+- **`outlook_create_event` and `outlook_update_event` report a relative `start` or `end` as it
+  was written (#74).** Each end given as a relative time is in the result, with its zone, in
+  the form the read tools use: `"start": "2026-11-04T17:00:00 (America/Los_Angeles)"`. So a
+  `start="7d"` is seen to make an event in the past. An end given in ISO 8601 is not echoed,
+  and a call with no relative time returns what it did before.
 
 ## [1.31.4] — 2026-11-03
 
@@ -1172,6 +1199,7 @@ contributors' mailboxes Graph now honours it and creates a real Teams meeting. O
 maintainer's it is still ignored, re-checked on 2026-09-30. `outlook_create_event`'s description
 and the README say it has no effect, which is wrong for some users. Check `is_online` in the
 event you get back. The docs correction, and `is_online` on `outlook_update_event`, are in progress (#70).
+*Superseded — see #70: the docs are corrected, and `outlook_update_event` takes `is_online`.*
 
 ### Added
 

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+from datetime import timezone as dt_timezone
 from typing import Any
 
 from outlook_mcp.calendar_resolver import (
@@ -36,13 +37,62 @@ from outlook_mcp.tools._recurrence import (
 from outlook_mcp.tools.calendar_read import EVENT_KEY_PROPERTY_ID
 from outlook_mcp.validation import (
     resolve_config_event_timezone,
-    validate_datetime,
+    resolve_relative_datetime,
     validate_email,
     validate_event_key,
     validate_event_timezone,
     validate_graph_id,
     validate_header_zone,
 )
+
+
+def _now() -> datetime:
+    """The clock a call resolves its relative ``start``/``end`` against (#74).
+
+    Read once per call and shared by both ends, so ``+2h``/``+3h`` are exactly
+    an hour apart: two reads can straddle a second boundary, and the
+    seconds-precision result would then make the event a second longer.
+    """
+    return datetime.now(dt_timezone.utc)
+
+
+def _in_zone(instant: str, zone: str, given: str) -> str:
+    """A resolved relative time as wall-clock time in ``zone``, the event's anchor (#74).
+
+    Same moment, written without a zone or offset, because that is the only form
+    Graph keeps the zone for: handed a ``Z`` or an offset, it anchors a single
+    event in UTC whatever ``timeZone`` says (#236). Measured live on a consumer
+    mailbox, 2026-11-10; a naive time kept both an IANA and a Windows label.
+
+    Refused, rather than sent some other way, when that form cannot say which
+    moment is meant: in a zone ``zoneinfo`` cannot convert into (Graph's Windows
+    names — each series this server created in the 2026-11-10 measurement came
+    back named that way, though it was sent an IANA zone), and inside
+    the interval a zone repeats when daylight saving ends, where one wall-clock
+    time names two moments. ``given`` is the caller's own text, for the message.
+    """
+    tz = maybe_zone(zone)
+    if tz is None:
+        raise ValueError(
+            f"This event is anchored in {zone!r}, which this server cannot convert a "
+            "moment into, so a relative time cannot be placed in it. Nothing was "
+            "modified. Pass `start` and `end` as local time without a zone or offset "
+            "(2026-11-10T09:00:00); they are read in the event's own zone."
+        )
+    # `astimezone`, never timedelta arithmetic: it keeps `fold`, and cannot land
+    # in a spring-forward gap, so the one case left to catch is the repeat.
+    local = datetime.fromisoformat(instant.replace("Z", "+00:00")).astimezone(tz)
+    if local.replace(fold=0).astimezone(dt_timezone.utc) != local.replace(fold=1).astimezone(
+        dt_timezone.utc
+    ):
+        # No offset is offered as the remedy: a typed one anchors a single event
+        # in UTC (#236), so only a time outside the repeat is safe to suggest.
+        raise ValueError(
+            f"{given!r} falls in the interval {zone} repeats when daylight saving ends: "
+            f"{local:%Y-%m-%dT%H:%M:%S} happens twice there, so it names two different "
+            "times. Nothing was modified. Pass a time outside that interval."
+        )
+    return local.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _usable_zone(value: Any) -> str | None:
@@ -110,9 +160,9 @@ _ALL_DAY_ZONE_REFUSAL = (
 # success for nothing, so the argument is refused before anything is sent.
 _ONLINE_REMOVAL_REFUSAL = (
     "is_online=False cannot remove an online meeting: Graph accepts the request "
-    "and keeps the meeting (verified on a personal account). To drop it, create "
-    "the event again without is_online — on an event with attendees that sends "
-    "them a cancellation and a new invitation."
+    "and keeps the meeting (verified on a personal account). To drop it, delete "
+    "the event and create it again without is_online. On an event with attendees, "
+    "that sends them a cancellation and a new invitation."
 )
 
 
@@ -126,6 +176,26 @@ def _online_reply(response: Any) -> dict:
     """
     value = getattr(response, "is_online_meeting", None)
     return {"is_online": value} if isinstance(value, bool) else {}
+
+
+# Graph needs an all-day event's ends at midnight, which a relative time almost
+# never is; its 400 says so, but only after the round trip. One constant for
+# both tools and both paths through `update_event` (the caller said
+# `is_all_day=True`, or only the stored event knew).
+_ALL_DAY_RELATIVE_REFUSAL = (
+    "A relative time (+2h, now, 7d) cannot place an all-day event: Graph needs "
+    "both ends at midnight. Nothing was modified. Pass dates at midnight, e.g. "
+    "start=2026-10-22T00:00:00, end=2026-10-23T00:00:00."
+)
+
+
+def _placed(local: str, zone: str) -> str:
+    """A relative time as it was written, in the form the read tools show (#74).
+
+    Reported on the write result, so a caller who passed ``start="7d"`` can see
+    it made an event a week in the past.
+    """
+    return f"{local} ({zone})"
 
 
 def _key_property(key: str) -> Any:
@@ -517,6 +587,14 @@ async def create_event(
     event to start on a midnight boundary, which a UTC conversion of local
     midnight is not.
 
+    A relative ``start``/``end`` (``+2h``, ``now``) is the exception (#74). It
+    names a moment, so it is resolved before anything is sent, and then written
+    as wall-clock time in the anchor zone (``_in_zone``), the form Graph keeps
+    the zone for. Sent as typed, Graph refused it with a 400. The result
+    carries each end that was relative as written (``start``/``end``, in the
+    read tools' ``"<local> (<zone>)"`` form), so ``7d`` shows it is in the past.
+    A relative time on an all-day event is refused, since Graph needs midnight.
+
     ``show_as`` is Graph's ``showAs`` — the free/busy status Outlook labels
     "Show as". Omitted, Graph applies its own default (``busy``); we do not
     send one, so the default stays Graph's to change.
@@ -564,9 +642,10 @@ async def create_event(
         # Graph emails the subject and body to every attendee.
         check_sends_mail(config, "outlook_create_event", "invite attendees")
 
-    # Validate datetime inputs
-    validate_datetime(start)
-    validate_datetime(end)
+    # Validated, and only a relative form resolved; see the docstring.
+    moment = _now()
+    start_resolved = resolve_relative_datetime(start, now=moment)
+    end_resolved = resolve_relative_datetime(end, now=moment)
     # `is None`, not `or`: an explicitly empty timezone is a mistake to refuse,
     # not a synonym for "use the configured one". The two sources are held to
     # different standards on purpose — a stored config value can be legacy, a
@@ -585,6 +664,17 @@ async def create_event(
         # 17:00 the previous day, so the recurrence would be built for the
         # wrong date and weekday. Label it as Graph will store it.
         zone = "UTC"
+    # The resolver hands ISO input back as the same object, so identity says
+    # which ends were relative.
+    placed: dict[str, str] = {}
+    if is_all_day and (start_resolved is not start or end_resolved is not end):
+        raise ValueError(_ALL_DAY_RELATIVE_REFUSAL)
+    if start_resolved is not start:
+        start = _in_zone(start_resolved, zone, start)
+        placed["start"] = _placed(start, zone)
+    if end_resolved is not end:
+        end = _in_zone(end_resolved, zone, end)
+        placed["end"] = _placed(end, zone)
 
     # Validate attendee emails if provided
     validated_attendees = []
@@ -668,6 +758,7 @@ async def create_event(
         "status": "created",
         "event_id": response.id,
         "subject": response.subject,
+        **placed,
         **(_online_reply(response) if is_online else {}),
     }
 
@@ -722,6 +813,14 @@ async def update_event(
     this change, and not ``config.timezone`` as everywhere else in this server.
     Patching a colleague's New York meeting to ``"2026-11-03T09:00:00"`` means
     09:00 in New York, not 09:00 where this server is configured.
+
+    A relative ``start``/``end`` (``+2h``) is written as wall-clock time in the
+    zone that end is anchored in, as in ``create_event``, so it is placed only
+    once that zone has been read. It is refused on an event Graph names in
+    Windows terms ("Pacific Standard Time", as the series this server created
+    came back when measured), and inside the interval a zone repeats when
+    daylight saving ends; see ``_in_zone``. As on create, the result carries
+    each end that was relative as written, and an all-day event refuses one.
 
     ``timezone`` re-anchors the event into a *different* zone, and requires
     ``start`` and ``end`` in the same call for the reason above: Graph rejects a
@@ -805,10 +904,12 @@ async def update_event(
     # two costs: a stale id plus a malformed time surfaced as
     # `404 ErrorItemNotFound` instead of the input error, and every rejected
     # patch paid for a full-event round trip.
-    if start is not None:
-        validate_datetime(start)
-    if end is not None:
-        validate_datetime(end)
+    # Validated, and only a relative form resolved, as in `create_event`.
+    # Each resolved instant is placed in its zone once that zone has been read,
+    # below; the resolver hands ISO input back as the same object.
+    moment = _now()
+    start_resolved = start if start is None else resolve_relative_datetime(start, now=moment)
+    end_resolved = end if end is None else resolve_relative_datetime(end, now=moment)
     if is_all_day is not None and (start is None or end is None):
         raise ValueError(
             "is_all_day requires start and end in the same call; Graph rejects a lone "
@@ -833,6 +934,9 @@ async def update_event(
     # ahead of the actionable input error.
     if timezone is not None and is_all_day:
         raise ValueError(_ALL_DAY_ZONE_REFUSAL)
+    relative = start_resolved is not start or end_resolved is not end
+    if relative and is_all_day:
+        raise ValueError(_ALL_DAY_RELATIVE_REFUSAL)
     requested_zone = validate_event_timezone(timezone) if timezone is not None else None
 
     validated_attendees = None
@@ -931,7 +1035,23 @@ async def update_event(
                 # stored event turns out to be all-day; the same refusal as
                 # above, one round trip later because nothing knew sooner.
                 raise ValueError(_ALL_DAY_ZONE_REFUSAL)
+            if relative:
+                # The stored event is all-day and the caller did not say so;
+                # the same refusal as above, one read later.
+                raise ValueError(_ALL_DAY_RELATIVE_REFUSAL)
             start_zone = end_zone = "UTC"
+
+    # A relative end is placed in the zone that end is anchored in, which is
+    # only known now. Before the occurrence read below, since nothing it finds
+    # could rescue a time `_in_zone` refuses. A zone of None (Graph's custom-zone
+    # sentinel) is left for `_anchored` to refuse with its own message.
+    placed: dict[str, str] = {}
+    if start_resolved is not start and start_zone is not None:
+        start = _in_zone(start_resolved, start_zone, start)
+        placed["start"] = _placed(start, start_zone)
+    if end_resolved is not end and end_zone is not None:
+        end = _in_zone(end_resolved, end_zone, end)
+        placed["end"] = _placed(end, end_zone)
 
     # Last of the checks, because it is the only one that costs a second read,
     # and only a master can have occurrences to lose. `remove_recurrence` is left
@@ -1092,6 +1212,7 @@ async def update_event(
     return {
         "status": "updated",
         "event_id": response.id,
+        **placed,
         **(_online_reply(response) if is_online is not None else {}),
     }
 

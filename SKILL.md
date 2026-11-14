@@ -148,7 +148,7 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
 - `outlook_list_tasks` — List tasks with status filter and pagination
 - `outlook_get_task` — Get one task's details: notes (body), checklist items (unchecked first), recurrence flag
 - `outlook_create_task` — Create with due date, importance, recurrence
-- `outlook_update_task` — Update
+- `outlook_update_task` — Update; a repeating task's due date can't be moved here (Microsoft would copy the task), so change it in the To Do app
 - `outlook_complete_task` — Mark completed
 - `outlook_delete_task` — Delete
 - `outlook_add_checklist_item` — Add a sub-step (checklist item) to a task
