@@ -13,6 +13,8 @@ MCP server for Microsoft Outlook personal accounts via Microsoft Graph API.
 
 > **Disclaimer:** Independent open-source project. Not affiliated with, endorsed by, or supported by Microsoft Corporation. "Outlook" and "Microsoft Graph" are trademarks of Microsoft.
 
+> **On a Mac and seeing "Not authenticated"?** Upgrade to 1.32.0, then run `outlook-mcp status`. On Oct 26, 2026, an update to the Microsoft sign-in library outlook-mcp uses changed where your sign-in is kept in the Keychain, so installs and upgrades from that day couldn't find it. 1.32.0 looks in the original place again. [What happened and what to do](#not-authenticated-after-upgrading-macos).
+
 ---
 
 ## Who this is for
@@ -64,7 +66,7 @@ The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md
 - **Relative event times** (1.32): an event's `start` and `end` take `+2h`, `now` or `7d`, like every other date, and the reply shows the time each became.
 - **Online meetings** (1.32): `outlook_update_event` can add an online meeting to an existing event. Some personal accounts ignore `is_online`, so the reply says whether it took.
 - **Repeating tasks** (1.32): moving a repeating task's due date is refused, because Microsoft would leave a duplicate task. Change it in the To Do app.
-- **Stay signed in on a Mac** (1.32): upgrading no longer signs you out. If you had to sign in again since late October, run `outlook-mcp auth` once more after upgrading ([details](#not-authenticated-after-upgrading-macos)).
+- **Mac sign-in fixed** (1.32): from Oct 26, a Microsoft library update made outlook-mcp look for your sign-in in the wrong Keychain entry and report "Not authenticated". 1.32 reads the original entry again. After upgrading, run `outlook-mcp status`, and if it still says not authenticated, run `outlook-mcp auth` once ([what happened](#not-authenticated-after-upgrading-macos)).
 - **Safer by default** (1.31.3–1.31.4): downloads never overwrite a file, writing into a calendar or task list someone else owns needs send permission like an invitation, attachment text is read only in standard character sets, and a config that points the attachments folder at your home folder, under any of its names, is refused. A reply or forward that fails says whether anything was sent (1.31.4).
 - **Export an email** (1.31): get a message's original file exactly as it arrived, attachments included, up to 10 MB. Off unless you turn it on.
 - **Inbox rules** (1.30): list, create, change and delete server-side inbox rules, and see what each rule leaves out (1.30.2). Off unless you turn it on, and a rule that forwards mail also needs send permission.
@@ -266,14 +268,20 @@ outlook-mcp serve    # Start MCP server (default; stdio, or HTTP with OUTLOOK_MC
 
 ### "Not authenticated" after upgrading (macOS)
 
-azure-identity 1.27 (released 2026-10-26) keeps the sign-in under a different Keychain entry, so an install that picked it up could not find the one saved before. 1.32.0 holds azure-identity below 1.27 ([#244](https://github.com/mpalermiti/outlook-mcp/issues/244)), so upgrading finds your earlier sign-in again:
+**What happened.** outlook-mcp keeps your Microsoft sign-in in the Mac Keychain, through azure-identity, Microsoft's sign-in library. Version 1.27 of that library, released on Oct 26, 2026, saves sign-ins under a different Keychain entry. outlook-mcp 1.31.4 and earlier accepted any newer version of the library, so an install or upgrade from Oct 26 on picked up 1.27. It then looked in the new entry, found nothing, and reported "Not authenticated", although your sign-in was still in the Keychain.
+
+**The fix.** 1.32.0 keeps the library below 1.27, so outlook-mcp reads the original entry again. Only Macs were affected.
+
+**What to do.**
 
 ```bash
-uv tool upgrade outlook-graph-mcp
-# or: pipx upgrade outlook-graph-mcp
+uv tool upgrade outlook-graph-mcp    # or: pipx upgrade outlook-graph-mcp
+outlook-mcp status
 ```
 
-If you signed in again while on 1.27, that sign-in sits in the newer entry: run `outlook-mcp auth` once more after upgrading.
+If it says `authenticated`, you're done. If it says `not authenticated`, run `outlook-mcp auth` once. That happens when you signed in again after Oct 26, often to get past this problem: that sign-in went to the new entry, which 1.32.0 doesn't read.
+
+**Next.** [#244](https://github.com/mpalermiti/outlook-mcp/issues/244) tracks reading a sign-in from either entry and moving it across, so the library can be updated again without signing anyone out.
 
 ### `me-token-to-replace is invalid` on every call
 
