@@ -6,6 +6,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security
+
+- **The release check sends the sign-in token only to Microsoft Graph.** `scripts/preflight.py`
+  followed a paging link (`@odata.nextLink`) from a Graph reply as given, with the token
+  attached, so a link naming another host would have been sent the token. Every request it makes
+  now goes through one check, and a URL outside `https://graph.microsoft.com/v1.0/` is refused
+  before anything is sent. The script runs only before a release and isn't part of the installed
+  package. ClawHub's scan of 1.32.0 named it.
+
 ## [1.32.0] — 2026-11-14
 
 Event times can be relative (`+2h`, `now`), `outlook_update_event` can add an online meeting, and

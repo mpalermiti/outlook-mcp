@@ -96,9 +96,29 @@ ENDPOINTS: list[tuple[str, str]] = [
 ]
 
 
-def _get_json(path_or_url: str, headers: dict[str, str], timeout: int = 20):
-    """GET and return (status_code, parsed_json_or_None)."""
+def _graph_url(path_or_url: str) -> str:
+    """The absolute Graph URL for a path or a paging link; anything else raises.
+
+    Every request here carries the user's Graph token. Most paths are fixed,
+    but a paging link (``@odata.nextLink``) is read from a response and
+    followed as given, so the token would go wherever it pointed. A URL is
+    sent only if it starts with ``GRAPH_BASE``: the prefix runs to the first
+    ``/`` after the host, so it fixes the scheme, the host and the version.
+    """
     url = path_or_url if path_or_url.startswith("http") else urljoin(GRAPH_BASE, path_or_url)
+    if not url.startswith(GRAPH_BASE):
+        raise ValueError(
+            f"not Microsoft Graph: refusing to send the token to {url} (only under {GRAPH_BASE})"
+        )
+    return url
+
+
+def _get_json(path_or_url: str, headers: dict[str, str], timeout: int = 20):
+    """GET and return (status_code, parsed_json_or_None).
+
+    Raises ``ValueError`` before sending if the URL is not Graph's (``_graph_url``).
+    """
+    url = _graph_url(path_or_url)
     try:
         r = httpx.get(url, headers=headers, timeout=timeout)
     except Exception as exc:
@@ -252,7 +272,7 @@ def _mime_export_probe(headers: dict[str, str]) -> tuple[str | None, list[str], 
     try:
         with httpx.stream(
             "GET",
-            urljoin(GRAPH_BASE, path),
+            _graph_url(path),
             headers=probe_headers,
             timeout=20,
             follow_redirects=False,
@@ -310,9 +330,8 @@ def run() -> int:
     reachable = 0
 
     for path, label in endpoints:
-        url = urljoin(GRAPH_BASE, path)
         try:
-            r = httpx.get(url, headers=headers, timeout=20)
+            r = httpx.get(_graph_url(path), headers=headers, timeout=20)
         except Exception as exc:
             print(f"FAIL  {label:30s} {path}  exception: {exc}")
             failures.append(label)
