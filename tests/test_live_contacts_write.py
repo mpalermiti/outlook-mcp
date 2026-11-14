@@ -626,3 +626,54 @@ class TestEmailAddressRoundTrip:
                 f"Graph kept all four addresses ({sent.status_code}); the three-address "
                 "refusal in update_contact is no longer needed."
             )
+
+
+class TestContactPhotoRoundTrip:
+    """``outlook_set_contact_photo`` (#121): a photo exists afterwards, and a second replaces it.
+
+    Graph re-encodes the upload (PNG and GIF came back as JPEG on a personal
+    account, 2026-11-14), so nothing here compares our bytes with Graph's or
+    assumes a format or size. The replace check compares two of Graph's own
+    reads, of two images with different pixels, so two encodings of one picture
+    can't make it pass.
+    """
+
+    async def test_a_photo_is_set_then_replaced(self, real_graph_client, live_write_config):
+        import os
+
+        from kiota_abstractions.api_error import APIError
+
+        from outlook_mcp.tools.contact_photos import set_contact_photo
+        from tests.test_contact_photos import png
+
+        folder = live_write_config.attachments_dir
+        os.makedirs(folder, exist_ok=True)
+        for name, rgb in (("red.png", (220, 20, 20)), ("blue.png", (20, 20, 220))):
+            with open(os.path.join(folder, name), "wb") as f:
+                f.write(png(rgb, side=8))
+
+        async with _temporary_contact(
+            real_graph_client, live_write_config, first_name=LIVE_WRITE_NAME, last_name="Photo"
+        ) as contact_id:
+            photo = real_graph_client.sdk_client.me.contacts.by_contact_id(contact_id).photo
+
+            # Premise: a new contact has no photo, so "exists afterwards" is not already true.
+            with pytest.raises(APIError) as missing:
+                await photo.get()
+            assert missing.value.response_status_code == 404
+
+            result = await set_contact_photo(
+                real_graph_client.sdk_client, contact_id, "red.png", config=live_write_config
+            )
+            assert result["status"] == "updated"
+            meta = await photo.get()
+            media = (meta.additional_data or {}).get("@odata.mediaContentType", "")
+            assert media.startswith("image/"), media
+            first = await photo.content.get()
+            assert first
+
+            await set_contact_photo(
+                real_graph_client.sdk_client, contact_id, "blue.png", config=live_write_config
+            )
+            second = await photo.content.get()
+            assert second and second != first, "the second photo did not replace the first"

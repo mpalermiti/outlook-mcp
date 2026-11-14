@@ -26,7 +26,7 @@ You'll like this if you're:
 - Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
 - Security-conscious: tokens in the OS keyring (Keychain on macOS, libsecret on Linux -- never cleartext unless you opt in), granular `allow_categories`, optional `read_only` mode, zero telemetry
 
-This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 77 tools — way more than you need for "read my inbox").
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 78 tools — way more than you need for "read my inbox").
 
 ### How it differs from other Outlook tools you'll find
 
@@ -46,7 +46,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 77 discrete tools (71 load by default; the four rule tools, document reader and MIME export are [opt-in](#toolset-selection-optional--outlook_mcp_toolsets)) so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 78 discrete tools (71 load by default; the four rule tools, document reader, MIME export and contact photo tool are [opt-in](#toolset-selection-optional--outlook_mcp_toolsets)) so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -82,8 +82,8 @@ The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md
 
 ## Features
 
-**77 tools** across 14 categories. 71 load by default; the four rule tools,
-document reader and MIME export are opt-in groups (see [Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets)).
+**78 tools** across 14 categories. 71 load by default; the four rule tools,
+document reader, MIME export and contact photo tool are opt-in groups (see [Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets)).
 
 - **Auth (1)** -- auth status check (login is via CLI)
 - **Mail Read (8)** -- list inbox (with Focused Inbox and uncategorized filters), read message, opt-in original MIME export, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
@@ -92,7 +92,7 @@ document reader and MIME export are opt-in groups (see [Toolset selection](#tool
 - **Mail Rules (4)** -- list rules in execution order, create from sender/subject/body conditions, update (reads the rule first, so other actions survive a re-point), delete — opt-in toolset group
 - **Calendar Read (4)** -- list events (with recurring expansion), get event details, find events by key, delta-sync event changes
 - **Calendar Write (6)** -- create, update, delete, RSVP (accept/decline/tentative), attach and remove event files
-- **Contacts (7)** -- list, search, get, create, update, delete, delta-sync changes
+- **Contacts (8)** -- list, search, get, create, update, delete, delta-sync changes, set a contact's photo (opt-in)
 - **To Do (14)** -- task lists, tasks (list/get/create/update/complete/delete), checklist items (add/update/delete), task attachments (list/download/upload/delete)
 - **Drafts (5)** -- list, create (new, or a reply, reply-all or forward in the message's thread), update, send, delete
 - **Attachments (6)** -- list, download, read document text (opt-in), send-with-attachments, attach-to-draft, remove-draft-attachment
@@ -443,6 +443,7 @@ Creating, updating or deleting a rule also needs `MailboxSettings.ReadWrite` on 
 | `outlook_create_contact` | Create a new contact. `title` is the name prefix ("Dr.", "Ms."), which Outlook shows in the display name; the job goes in `job_title`. `phone_type` (`mobile`, the default, `business` or `home`) says which kind of number `phone` is. `birthday` is a date (`YYYY-MM-DD`), stored at 11:59 UTC so that it is the same date in every time zone from UTC−11 to UTC+12; `outlook_get_contact` returns that timestamp. `middle_name`, `personal_notes` and `categories` are set as given. |
 | `outlook_update_contact` | Update contact fields, including `middle_name`, `company`, `title`, `job_title` and `personal_notes`. A text field passed as `""` is cleared. `categories` **replaces** the contact's whole list, as `outlook_categorize_message` does a message's, so `[]` removes every category; read the contact first to add one. `phone_type` works as on create; a `business` or `home` number **replaces** that list of numbers with the one given. `clear_phones` empties the types it names, so `phone_type="business", clear_phones=["mobile"]` moves a number saved as mobile to business in one update. `home_address`, `business_address` and `other_address` take the shape `outlook_get_contact` returns — any subset of `street`, `city`, `state`, `postal_code`, `country_or_region` — and **replace** that whole address, so pass back every part you want to keep. Omit one to leave it untouched. `birthday` sets or replaces the date, as on create. `email` **replaces** every address with the one given; `add_emails` and `remove_emails` change only the addresses they name, keeping the rest (a contact holds three at most). They are merged with what the contact holds now, and the update is pinned to that read with `If-Match`, so an edit made in between is refused with `412` rather than overwritten. Removing an address the contact doesn't have is refused. |
 | `outlook_delete_contact` | Delete a contact. |
+| `outlook_set_contact_photo` | **Opt-in** (`contact_photos` group). Set or replace a contact's photo from a JPEG, PNG or GIF file. `file_path` resolves inside `attachments_dir`, as for `outlook_attach_to_draft`. The type is read from the file's bytes, not its name. A file over this server's 20 MiB limit, an empty one or another format is refused before anything is sent. Outlook may re-encode the image (it kept PNG and GIF uploads as JPEG), and Graph's own size limit still applies. Returns `uploaded_bytes`. Needs `contacts_write`. |
 | `outlook_list_contacts_delta` | List only contact changes since the last call. Deletes come back as `{id, is_deleted: True}`. Cursor is stateless. |
 
 ### To Do
@@ -669,11 +670,11 @@ anyone who controls it can also retarget the settings file with `OUTLOOK_MCP_CON
 ### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`
 
 The 71 default tool schemas load into the client's context every turn (the chars/4 proxy `test_tool_surface_budget.py` measures with; a different yardstick than the ~8.6k o200k figure in ROADMAP for the 62-tool surface). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
-Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`, `documents`, `rules`, and `mime`. Unset loads every group except the opt-in ones — `documents`, `rules`, and `mime` — so a stock install gets 71 of the 77 tools. Name `rules` here, or set `mailbox_settings_write: true` with `OUTLOOK_MCP_TOOLSETS` unset, to get the four rule tools; that setting is itself the request for rule management. A selection here always wins: the flag does not add `rules` to a narrower list. For example, `OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"` loads 31 tools instead of 71, cutting the per-turn schema cost to about 40% of the default.
+Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`, `documents`, `rules`, `mime`, and `contact_photos`. Unset loads every group except the opt-in ones — `documents`, `rules`, `mime`, and `contact_photos` — so a stock install gets 71 of the 78 tools. Name `rules` here, or set `mailbox_settings_write: true` with `OUTLOOK_MCP_TOOLSETS` unset, to get the four rule tools; that setting is itself the request for rule management. A selection here always wins: the flag does not add `rules` to a narrower list. For example, `OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"` loads 31 tools instead of 71, cutting the per-turn schema cost to about 40% of the default.
 
-Naming any group loads only the groups named, plus `account`, and a name that is not a group matches nothing. To add all opt-in groups to the default set, name the default groups and the opt-ins: `OUTLOOK_MCP_TOOLSETS=mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime`.
+Naming any group loads only the groups named, plus `account`, and a name that is not a group matches nothing. To add all opt-in groups to the default set, name the default groups and the opt-ins: `OUTLOOK_MCP_TOOLSETS=mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime,contact_photos`.
 
-The groups are not the headings of the Tool Reference. `mail` holds the mail read, write and triage tools, `outlook_list_thread`, `outlook_copy_message` and `outlook_batch_triage`, but `outlook_list_folders` is in `folders`; the Focused Inbox tools (`outlook_reclassify_message` and the three override tools) are in `admin`, with categories and mail tips; the three `*_delta` tools are in `delta` and `outlook_changes_since` in `digest`; `outlook_list_calendars` is in `calendar`; the two draft-attachment tools are in `drafts`, `outlook_read_attachment` in `documents`, and the four rule tools in `rules`, and MIME export in `mime`; and `account` is `outlook_auth_status` and `outlook_whoami`.
+The groups are not the headings of the Tool Reference. `mail` holds the mail read, write and triage tools, `outlook_list_thread`, `outlook_copy_message` and `outlook_batch_triage`, but `outlook_list_folders` is in `folders`; the Focused Inbox tools (`outlook_reclassify_message` and the three override tools) are in `admin`, with categories and mail tips; the three `*_delta` tools are in `delta` and `outlook_changes_since` in `digest`; `outlook_list_calendars` is in `calendar`; the two draft-attachment tools are in `drafts`, `outlook_read_attachment` in `documents`, and the four rule tools in `rules`, MIME export in `mime`, and `outlook_set_contact_photo` in `contact_photos`; and `account` is `outlook_auth_status` and `outlook_whoami`.
 
 ### Two accounts, two instances (optional) — `OUTLOOK_MCP_CONFIG_DIR`
 
@@ -805,7 +806,7 @@ By default, `read_only: false` unlocks **all** write tools. For finer control, s
 | `mail_rules` | create/update/delete inbox rule | **Dangerous** — rules run server-side, so one keeps moving, forwarding or deleting mail with every client closed |
 | `mail_send` | send, reply, forward, send_draft, send_with_attachments | **Dangerous** — sends email on your behalf |
 | `calendar_write` | create/update/delete event, RSVP, attach/remove event files | Moderate — your own calendar, but `outlook_attach_to_event` reads local files from `attachments_dir` and pushes their bytes to Graph. The parts that email other people text the agent wrote need `mail_send` as well: writing into a calendar someone else owns (events there are shown to its owner), inviting attendees, rewording (subject, body, location) any event that already has them, attaching a file to such an event (they get it with its next update), and adding a message to an RSVP. A bare RSVP, a time change and a cancellation still notify the people involved, but carry nothing the agent wrote |
-| `contacts_write` | create/update/delete contact | Moderate |
+| `contacts_write` | create/update/delete contact, set contact photo | Moderate — your own contacts, but with the opt-in `contact_photos` group loaded, `outlook_set_contact_photo` reads a local image from `attachments_dir` and pushes its bytes to Graph |
 | `todo_write` | create/update/complete/delete task, checklist items; upload/delete task attachments | Moderate — your own task list (writing into a list someone else owns also needs `mail_send`, like an invitation; `outlook_list_task_lists` shows `is_owner` and `is_shared`), but `outlook_upload_task_attachment` reads local files from `attachments_dir` and pushes their bytes to Graph, and task/checklist/attachment deletes are irreversible. Listing and downloading attachments are plain reads, gated like every other read (not at all) and fenced to `attachments_dir` |
 
 **Example policies:**
