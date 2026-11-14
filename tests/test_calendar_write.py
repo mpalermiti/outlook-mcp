@@ -3085,9 +3085,12 @@ class TestOnlineMeeting:
         refusal moved below the first network call would pass there."""
         builder, client = _client_with(_current_event())
 
-        with pytest.raises(ValueError, match="cannot remove an online meeting"):
+        with pytest.raises(ValueError, match="cannot remove an online meeting") as refused:
             await update_event(client, event_id="AAMkAG123=", is_online=False, config=config)
 
+        # Deleting comes first: an agent that only re-creates is left with two events,
+        # and the attendees get no cancellation.
+        assert "delete the event and create it again" in str(refused.value)
         builder.get.assert_not_called()
         builder.calendar.get.assert_not_called()
         builder.patch.assert_not_called()

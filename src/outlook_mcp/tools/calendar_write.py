@@ -160,9 +160,9 @@ _ALL_DAY_ZONE_REFUSAL = (
 # success for nothing, so the argument is refused before anything is sent.
 _ONLINE_REMOVAL_REFUSAL = (
     "is_online=False cannot remove an online meeting: Graph accepts the request "
-    "and keeps the meeting (verified on a personal account). To drop it, create "
-    "the event again without is_online — on an event with attendees that sends "
-    "them a cancellation and a new invitation."
+    "and keeps the meeting (verified on a personal account). To drop it, delete "
+    "the event and create it again without is_online. On an event with attendees, "
+    "that sends them a cancellation and a new invitation."
 )
 
 
