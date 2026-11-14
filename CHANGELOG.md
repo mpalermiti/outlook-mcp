@@ -8,6 +8,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- Missing attachment paths in `outlook_send_with_attachments` and `outlook_attach_to_draft`
+  return the file-not-found message to the client instead of a generic tool error.
+
 - **`is_online` is described as it behaves, and `outlook_update_event` takes it (#70).** Graph
   honours `isOnlineMeeting` on some personal accounts and ignores it on others, while
   `outlook_create_event`'s description, the README and `SKILL.md` said it never works. They now

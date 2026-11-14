@@ -24,7 +24,11 @@ from mcp.types import (
 )
 
 from outlook_mcp.config import Config
-from outlook_mcp.errors import LEAVE_SETTINGS_TO_THE_USER, MESSAGE_MAY_HAVE_BEEN_SENT
+from outlook_mcp.errors import (
+    LEAVE_SETTINGS_TO_THE_USER,
+    MESSAGE_MAY_HAVE_BEEN_SENT,
+    ToolInputError,
+)
 from outlook_mcp.pagination import build_request_config
 from outlook_mcp.permissions import (
     CATEGORY_MAIL_DRAFTS,
@@ -917,7 +921,7 @@ async def send_with_attachments(
     ]
     for path in attachment_paths:
         if not os.path.isfile(path):
-            raise FileNotFoundError(f"Attachment file not found: {path}")
+            raise ToolInputError(f"Attachment file not found: {path}")
     inline = _inline_attachments(attachments)
 
     # Partition files into small (inline) and large (upload session)
@@ -1071,7 +1075,7 @@ async def attach_to_draft(
     ]
     for path in attachment_paths:
         if not os.path.isfile(path):
-            raise FileNotFoundError(f"Attachment file not found: {path}")
+            raise ToolInputError(f"Attachment file not found: {path}")
     inline = _inline_attachments(attachments)
 
     # Partition files into small (inline) and large (upload session)

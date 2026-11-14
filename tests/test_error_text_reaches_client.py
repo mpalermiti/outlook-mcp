@@ -24,6 +24,7 @@ from mcp.client import Client
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from outlook_mcp.config import Config
 from outlook_mcp.errors import (
     AccountMismatchError,
     AuthRequiredError,
@@ -451,3 +452,28 @@ async def test_a_refresh_that_fails_mid_session_says_to_sign_in_again(refusal, e
     assert is_error is True
     for fragment in expected:
         assert fragment in text, f"{fragment!r} missing from client-visible text: {text!r}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["send_with_attachments", "attach_to_draft"])
+async def test_missing_attachment_path_reaches_the_client(tool, tmp_path):
+    from outlook_mcp.tools import mail_attachments
+
+    client = MagicMock()
+    config = Config(client_id="test", attachments_dir=str(tmp_path))
+    arguments = (
+        {"to": ["recipient@example.com"], "subject": "Test", "body": "Test"}
+        if tool == "send_with_attachments"
+        else {"draft_id": "AAMk123="}
+    )
+
+    async def call():
+        return await getattr(mail_attachments, tool)(
+            client, attachment_paths=["missing.txt"], config=config, **arguments
+        )
+
+    is_error, text = await _text_the_model_sees_from(call)
+
+    assert is_error is True
+    assert f"Attachment file not found: {tmp_path / 'missing.txt'}" in text
+    assert client.mock_calls == []
