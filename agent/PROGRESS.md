@@ -2,6 +2,18 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-14 — todo-dates-live-check (acted on Michael's probe)
+
+- Smoke (sandboxed, `.venv/bin/python -m pytest`): 3123 passed, 4 skipped, 130 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff check + format clean. (`uv` isn't on PATH in this sandbox; `.venv/bin/ruff` works.)
+- Michael's answer on the card: his account stores a repeating task's due and `recurrenceTimeZone` as UTC whatever is sent; plain-task fix proven live. Asked for (1) keep the plain fix, (2) repeating live tests accept UTC, docs don't promise the zone is kept, (3) find out whether moving a repeating task's due makes a duplicate on main, which needs his word.
+- The fix exists only on `construct/redo-todo-dates-use-configured-timezone` (#239, c5af221, base 094a1fa). Workers can't switch branches, so `git diff 094a1fa c5af221 -- . ':!agent' | git apply -3` onto this branch (0021cb0, main incl. #74/#232): applied cleanly, no conflicts. Committed alone first, so the amendment commit is the reviewable delta. This PR can replace #239.
+- (2): `test_a_repeating_task_keeps_the_zone_sent_or_utc` (renamed), `_zone_kept_or_coerced` (both zone-sent spellings or both UTC); moving test now compares stored zones before/after. Docs: README (2 places), CHANGELOG (2 bullets), config description, two `todo.py` comments. No behaviour change in `src/`.
+- (3): duplicate count by a uuid-suffixed title in the moving test, plus new `test_mains_due_patch_on_a_repeating_task_leaves_one_task` (UTC config create = main's payload; due PATCH via raw SDK labelled UTC = main's `update_task`). Copies are deleted before failing. Rehearsed offline with a faked `list_tasks`: 1 task passes, 2 fails and deletes the copy.
+- TDD: `TestRepeatingTaskZoneIsPerAccount` in `tests/test_todo.py` — helper cases failed on ImportError, docs guard failed on README's "keeps a repeating task's due in its own zone"; both green after.
+- Final: 3166 passed, 4 skipped, 135 deselected (+35 carried from #239, +8 new offline; +5 live), same 1 failed + 25 errors in `tests/test_http_transport.py` only; same with every toolset loaded. Ruff check + format clean.
+- Ran `pytest --collect-only -m live_write` on the live file once to list test ids: collect-only, nothing executed, but next time use plain collect-only and grep instead of passing `-m`.
+- Parked `todo-repeating-due-duplicate-live-run` [?]. Live tests NOT run. `todo-plain-due-zone-decision` still [?]: Michael's "keep the plain-task fix" reads as option A, but the card is his to close.
+
 ## 2026-11-11 — todo-dates-live-check (re-parked for Michael)
 
 - Smoke (sandboxed, `.venv/bin/python -m pytest`, never passed `-m`): 3073 passed, 4 skipped, 128 deselected; 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox EPERM binding 127.0.0.1). Ruff check + format clean. No code changed, so this is also the final state.
