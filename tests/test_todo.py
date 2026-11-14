@@ -1140,3 +1140,25 @@ class TestRepeatingTaskZoneIsPerAccount:
             assert "some accounts store" in flat and "UTC" in flat, (
                 f"{name} does not say some accounts store a repeating task's zone as UTC"
             )
+
+    def test_docs_do_not_promise_moving_a_repeating_tasks_due(self):
+        # #242 refuses every due change on a repeating task; no doc may describe
+        # one going through, in its stored zone or any other.
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        texts = {
+            "README.md": (root / "README.md").read_text(encoding="utf-8"),
+            "SKILL.md": (root / "SKILL.md").read_text(encoding="utf-8"),
+            "CHANGELOG.md [Unreleased]": changelog.split("\n## [", 2)[1],
+        }
+        promises = (
+            "Changing the due date of a repeating task keeps",
+            "Changing a repeating task's `due` keeps",
+            "`outlook_update_task` for a repeating task",
+        )
+        for name, text in texts.items():
+            flat = " ".join(text.split())
+            for promise in promises:
+                assert promise not in flat, f"{name} still says: {promise!r}"

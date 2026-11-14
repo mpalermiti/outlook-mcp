@@ -16,8 +16,6 @@ from outlook_mcp.permissions import (
     mail_send_withheld,
 )
 from outlook_mcp.tools._recurrence import build_patterned_recurrence as _build_recurrence
-from outlook_mcp.tools._recurrence import maybe_zone
-from outlook_mcp.tools.calendar_write import _usable_zone
 from outlook_mcp.validation import (
     resolve_config_event_timezone,
     sanitize_output,
@@ -79,57 +77,6 @@ def _is_zone_less(due: str) -> bool:
         return datetime.fromisoformat(due).tzinfo is None
     except ValueError:
         return False  # A `Z` before Python 3.11, or a relative offset.
-
-
-async def _due_for_update(
-    graph_client: Any, list_id: str, task_id: str, due: str, config: Config
-) -> Any:
-    """``due`` for a PATCH: a repeating task stays in the zone it is stored in (#72).
-
-    A repeating task's due is stored in a zone, and the series'
-    ``recurrenceTimeZone`` with it: the zone sent on some accounts, UTC on
-    others (seen live, #72). On calendar events a patch that disagrees
-    with that anchor is a 400 naming neither zone, and what To Do does with one
-    is unverified, so the stored zone is sent back, as ``update_event`` does.
-    Every series this server made before #72 is anchored in UTC.
-
-    A zone-less ``due`` is read in that stored zone, as on ``update_event``. A
-    task that does not repeat has no anchor to keep and takes the config zone.
-    """
-    config_zone = resolve_config_event_timezone(config.timezone)
-    validate_datetime(due, config_zone)  # A bad value costs no round trip.
-
-    task = await (
-        graph_client.me.todo.lists.by_todo_task_list_id(list_id)
-        .tasks.by_todo_task_id(task_id)
-        .get()
-    )
-    if task is None or task.id is None:
-        raise ValueError(
-            f"Graph returned no task for id {task_id}, so its time zone cannot be "
-            "read. Nothing was modified. Re-list with outlook_list_tasks for current ids."
-        )
-    stored = task.due_date_time
-    if task.recurrence is None or stored is None:
-        return _due_in_zone(due, config_zone)
-
-    zone = _usable_zone(stored.time_zone)
-    if zone is None:
-        raise ValueError(
-            "Could not read a zone this repeating task can be sent back in, so "
-            "changing its due date could move the series. Nothing was modified."
-        )
-    if maybe_zone(zone) is not None:
-        return _due_in_zone(due, zone)
-    # Graph's Windows spelling: accepted back as it is, but Python cannot
-    # convert into it, and carrying a Windows-to-IANA table is the wrong fix.
-    if _is_zone_less(due):
-        return _datetime_timezone(due, zone)
-    raise ValueError(
-        f"This repeating task is stored in {zone!r}, which this server cannot convert "
-        "a moment into. Nothing was modified. Pass `due` as local time without a zone "
-        "or offset (2026-11-10T09:00:00); it is read in the task's own zone."
-    )
 
 
 def _recurrence_in_zone(recurrence: dict, zone: str) -> dict:
@@ -727,9 +674,10 @@ async def update_task(
         patch_body.title = title
 
     if due is not None:
-        patch_body.due_date_time = await _due_for_update(
-            graph_client, resolved_id, task_id, due, config
-        )
+        # No read needed for the zone: a task that repeats is refused below
+        # (#242), so the due only ever reaches one that doesn't, which takes
+        # the config zone as a new task does (#72).
+        patch_body.due_date_time = _due_in_zone(due, resolve_config_event_timezone(config.timezone))
 
     if body is not None:
         patch_body.body = _text_body(body)

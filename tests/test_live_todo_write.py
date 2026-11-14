@@ -15,7 +15,6 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -118,26 +117,6 @@ def _stored_zones(task) -> tuple:
     return task.due_date_time.time_zone, task.recurrence.range.recurrence_time_zone
 
 
-async def _ids_titled(client, title: str) -> list[str]:
-    page = await list_tasks(client.sdk_client, count=100)
-    return [t["id"] for t in page["tasks"] if t["title"] == title]
-
-
-async def _one_task_titled(client, config, title: str, task_id: str) -> None:
-    """Fail if moving a due left a second task with ``title``; delete any copy first."""
-    copies = [i for i in await _ids_titled(client, title) if i != task_id]
-    for copy in copies:
-        await delete_task(client.sdk_client, copy, config=config)
-    assert not copies, (
-        f"changing a repeating task's due left {len(copies)} more task(s) titled "
-        f"{title!r} (deleted): a bug in update_task, separate from #72"
-    )
-
-
-def _unique(label: str) -> str:
-    return f"{LIVE_WRITE_NAME} {label} {uuid4().hex[:8]}"
-
-
 class TestDueIsAnchoredInTheConfiguredZone:
     """#72: what Graph does with the zone, on a plain task and on a repeating one.
 
@@ -201,75 +180,6 @@ class TestDueIsAnchoredInTheConfiguredZone:
             assert _zone_kept_or_coerced(*zones, _LA_SPELLINGS), (
                 f"stored (due, rule) zones {zones}: neither the zone sent nor UTC on both"
             )
-
-    async def test_moving_a_repeating_tasks_due_keeps_its_stored_zone(
-        self, real_graph_client, live_write_config
-    ):
-        """The update sends the task's own zone, not this server's: a 400 fails here.
-
-        Also counts the tasks with this title afterwards: moving a repeating
-        task's due must not leave a second one behind.
-        """
-        created_in = live_write_config.model_copy(update={"timezone": _LA})
-        updated_in = live_write_config.model_copy(update={"timezone": "Asia/Tokyo"})
-        written = date.today() + timedelta(days=30)
-        title = _unique("zone update")
-
-        async with _temporary_task(
-            real_graph_client,
-            created_in,
-            title=title,
-            due=f"{written.isoformat()}T09:00:00",
-            recurrence=self._recurrence(written),
-        ) as task_id:
-            before = _stored_zones(await _raw_task(real_graph_client, task_id))
-            assert _zone_kept_or_coerced(*before, _LA_SPELLINGS), before
-
-            await update_task(
-                real_graph_client.sdk_client,
-                task_id=task_id,
-                due=f"{(written + timedelta(days=2)).isoformat()}T09:00:00",
-                config=updated_in,
-            )
-
-            after = _stored_zones(await _raw_task(real_graph_client, task_id))
-            await _one_task_titled(real_graph_client, created_in, title, task_id)
-            assert after == before, f"stored zones moved from {before} to {after}"
-
-    async def test_mains_due_patch_on_a_repeating_task_leaves_one_task(
-        self, real_graph_client, live_write_config
-    ):
-        """The payload `main` sends, bypassing the tools: is a duplicate a bug there too?
-
-        Before #72, `create_task` sent a UTC-labelled due and no rule zone (as it
-        still does on a UTC config) and `update_task` patched the due labelled
-        UTC. This sends that patch through the SDK directly, so the answer does
-        not depend on this branch's `update_task`.
-        """
-        from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
-        from msgraph.generated.models.todo_task import TodoTask
-
-        config = live_write_config.model_copy(update={"timezone": "UTC"})
-        written = date.today() + timedelta(days=30)
-        title = _unique("main due patch")
-
-        async with _temporary_task(
-            real_graph_client,
-            config,
-            title=title,
-            due=f"{written.isoformat()}T09:00:00",
-            recurrence=self._recurrence(written),
-        ) as task_id:
-            patch = TodoTask()
-            patch.due_date_time = DateTimeTimeZone(
-                date_time=f"{(written + timedelta(days=2)).isoformat()}T09:00:00",
-                time_zone="UTC",
-            )
-            list_id = await _resolve_list_id(real_graph_client.sdk_client, None)
-            tasks = real_graph_client.sdk_client.me.todo.lists.by_todo_task_list_id(list_id)
-            await tasks.tasks.by_todo_task_id(task_id).patch(patch)
-
-            await _one_task_titled(real_graph_client, config, title, task_id)
 
 
 class TestUpdateTaskRoundTrip:

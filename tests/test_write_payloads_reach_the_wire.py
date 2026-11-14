@@ -1768,45 +1768,22 @@ class TestTodoDatesUseTheConfiguredZone:
             "timeZone": "America/Los_Angeles",
         }
 
-    async def test_updating_a_repeating_tasks_due_keeps_its_stored_zone(self):
-        # A series this server made before #72 is anchored in UTC. Relabelling
-        # its due with the config zone is the mismatch `update_event` avoids.
-        body = await self._updated("2026-11-10T09:00:00", stored=self._stored("UTC"))
-        assert body["dueDateTime"] == {"dateTime": "2026-11-10T09:00:00", "timeZone": "UTC"}
-
-    async def test_an_instant_on_a_repeating_task_becomes_wall_clock_in_its_stored_zone(self):
-        body = await self._updated("2026-11-10T01:00:00Z", stored=self._stored("Asia/Tokyo"))
-        assert body["dueDateTime"] == {
-            "dateTime": "2026-11-10T10:00:00",
-            "timeZone": "Asia/Tokyo",
-        }
-
-    async def test_a_windows_stored_zone_is_echoed_for_a_zone_less_due(self):
-        body = await self._updated(
-            "2026-11-10T09:00:00", stored=self._stored("China Standard Time")
-        )
-        assert body["dueDateTime"] == {
-            "dateTime": "2026-11-10T09:00:00",
-            "timeZone": "China Standard Time",
-        }
-
-    @pytest.mark.parametrize("due", ["2026-11-10T01:00:00Z", "2026-11-10T09:00:00+09:00", "+7d"])
-    async def test_an_instant_on_a_windows_stored_zone_is_refused(self, due):
+    @pytest.mark.parametrize(
+        "zone", ["UTC", "Asia/Tokyo", "China Standard Time", "tzone://Microsoft/Custom", None]
+    )
+    @pytest.mark.parametrize(
+        "due", ["2026-11-10T09:00:00", "2026-11-10T01:00:00Z", "2026-11-10T09:00:00+09:00", "+7d"]
+    )
+    async def test_a_repeating_task_gets_only_the_repeating_refusal(self, zone, due):
+        # #242 refuses every due change on a repeating task, so no zone advice
+        # may reach the agent first: it would retry and be refused again.
         from tests.test_todo import _build_mock_client
 
-        client = _build_mock_client(tasks=[self._stored("China Standard Time")])
-        with pytest.raises(ValueError, match="China Standard Time.*without a zone"):
+        client = _build_mock_client(tasks=[self._stored(zone)])
+        with pytest.raises(ValueError) as refused:
             await todo.update_task(client, task_id="task1", due=due, config=_LA_CFG)
-        _todo_task_request(client).patch.assert_not_called()
-
-    async def test_a_custom_stored_zone_is_refused(self):
-        from tests.test_todo import _build_mock_client
-
-        client = _build_mock_client(tasks=[self._stored("tzone://Microsoft/Custom")])
-        with pytest.raises(ValueError, match="zone this repeating task"):
-            await todo.update_task(
-                client, task_id="task1", due="2026-11-10T09:00:00", config=_LA_CFG
-            )
+        assert str(refused.value) == todo._REPEATING_DUE_REFUSAL
+        _todo_task_request(client).get.assert_awaited_once()
         _todo_task_request(client).patch.assert_not_called()
 
     async def test_updating_a_plain_tasks_due_uses_the_configured_zone(self):
@@ -1817,25 +1794,6 @@ class TestTodoDatesUseTheConfiguredZone:
             "dateTime": "2026-11-10T09:00:00",
             "timeZone": "America/Los_Angeles",
         }
-
-    async def test_a_repeating_task_with_no_due_uses_the_configured_zone(self):
-        from tests.test_todo import _mock_task
-
-        body = await self._updated(
-            "2026-11-10T09:00:00", stored=_mock_task(due=None, recurrence=MagicMock())
-        )
-        assert body["dueDateTime"]["timeZone"] == "America/Los_Angeles"
-
-    async def test_a_due_update_on_a_task_graph_cannot_return_is_refused(self):
-        from tests.test_todo import _build_mock_client
-
-        client = _build_mock_client()
-        _todo_task_request(client).get = AsyncMock(return_value=None)
-        with pytest.raises(ValueError, match="(?i)no task"):
-            await todo.update_task(
-                client, task_id="task1", due="2026-11-10T09:00:00", config=_LA_CFG
-            )
-        _todo_task_request(client).patch.assert_not_called()
 
     async def test_an_invalid_due_is_refused_before_any_read(self):
         from tests.test_todo import _build_mock_client

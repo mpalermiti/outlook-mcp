@@ -39,11 +39,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   went out as written, is now sent as that instant's UTC time, so `2026-11-10T05:00:00+09:00`
   is sent as `2026-11-09T20:00:00`. A `config.timezone` Graph refuses (`EST` and five others) falls
   back to UTC, as calendar events do.
-- **Changing a repeating task's `due` keeps the zone it is stored in**, as `outlook_update_event`
-  does for a series, instead of relabelling it with `config.timezone`. `outlook_update_task` now
-  reads the task first when `due` is given. A `due` with a `Z`, an offset or a relative value is
-  refused, with nothing modified, on a task stored under a Windows zone name this server cannot
-  convert into; pass local time without a zone.
 - **`outlook_list_tasks` and `outlook_get_task` return `due_time_zone` beside `due`.** On some
   accounts Microsoft keeps a repeating task's due in the zone it was sent in, so a bare time could
   be read as UTC and reported on the wrong day; some accounts store it as UTC.

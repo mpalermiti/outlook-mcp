@@ -198,7 +198,7 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
 
 ## Notes
 - IDs are opaque Graph strings — get them from list/search tools, never guess
-- Dates take ISO 8601 or a relative offset (`7d` ago, `+7d` from now, `now`); responses are UTC, except a To Do task's `due`, whose zone is in `due_time_zone`. A zone-less date is read in the config timezone — except on `outlook_update_event`, and `outlook_update_task` for a repeating task, where it is read in the zone the event or task is anchored in, so patching a colleague's New York meeting to `09:00` means 09:00 *there*. To Do keeps only the date of a non-repeating task's `due`, not its hour
+- Dates take ISO 8601 or a relative offset (`7d` ago, `+7d` from now, `now`); responses are UTC, except a To Do task's `due`, whose zone is in `due_time_zone`. A zone-less date is read in the config timezone — except on `outlook_update_event`, where it is read in the zone the event is anchored in, so patching a colleague's New York meeting to `09:00` means 09:00 *there*. To Do keeps only the date of a non-repeating task's `due`, not its hour
 - A recurring event is expanded in the zone it is anchored in, so pass `timezone` (or set the config one) when creating a series that crosses a daylight-saving change — anchored in UTC, a 09:00 weekly meeting becomes 08:00 when the clocks go back. Use a zone name (`America/Los_Angeles`), never an abbreviation (`PDT`)
 - Attachment paths may only be read from or written to `attachments_dir` — put a file there before asking for it to be sent. A client that cannot see that directory passes files inline in `attachments` and downloads with `as_content=True`
 - Three workflow prompts ship with the server: `morning_brief`, `triage_folder`, `catch_up`
