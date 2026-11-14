@@ -8,10 +8,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [1.32.0] — 2026-11-14
 
-Calendar events take relative times and say plainly what `is_online` does on each account, and
-`outlook_update_event` can add an online meeting. Moving a repeating To Do task's due date is
-refused, because Microsoft would leave a copy. azure-identity is held below 1.27 so Macs stay
-signed in after upgrading.
+Event times can be relative (`+2h`, `now`), `outlook_update_event` can add an online meeting, and
+the docs say plainly that some personal accounts ignore `is_online`. Moving a repeating task's due
+date is refused, because Microsoft would leave a duplicate task. Macs stay signed in after
+upgrading: azure-identity is held below 1.27.
 
 ### Fixed
 
