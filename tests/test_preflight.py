@@ -15,6 +15,8 @@ import io
 import pathlib
 from urllib.parse import urljoin
 
+import pytest
+
 _PREFLIGHT_PATH = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "preflight.py"
 _spec = importlib.util.spec_from_file_location("preflight", _PREFLIGHT_PATH)
 preflight = importlib.util.module_from_spec(_spec)
@@ -254,6 +256,83 @@ class TestTodoTaskFamilies:
         assert failures == []
         assert len(not_probed) == 3  # checklist, attachments listing, entity GET
         assert all("could not provision" in n for n in not_probed)
+
+
+class TestTokenOnlyGoesToGraph:
+    """Every request the preflight makes carries the signed-in user's Graph
+    token. Most paths are fixed, but a paging link (``@odata.nextLink``) is
+    read from a response and followed as given, so without a check a link
+    naming another host would be sent the token."""
+
+    def _record(self, monkeypatch):
+        sent = []
+
+        def fake_get(url, headers=None, timeout=None):
+            sent.append(url)
+            return _Resp(200, {"value": []})
+
+        monkeypatch.setattr(preflight.httpx, "get", fake_get)
+        return sent
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://attacker.example/v1.0/me",
+            "https://graph.microsoft.com.attacker.example/v1.0/me",  # lookalike host
+            "https://graph.microsoft.com@attacker.example/v1.0/me",  # host after userinfo
+            "http://graph.microsoft.com/v1.0/me",  # no TLS
+            "https://graph.microsoft.com/beta/me",  # outside v1.0
+            "//attacker.example/v1.0/me",  # scheme-relative: urljoin keeps the host
+        ],
+    )
+    def test_a_url_outside_graph_is_refused_before_sending(self, monkeypatch, url):
+        sent = self._record(monkeypatch)
+
+        with pytest.raises(ValueError, match="not Microsoft Graph"):
+            preflight._get_json(url, {"Authorization": "Bearer x"})
+
+        assert sent == []
+
+    def test_a_graph_paging_link_is_followed(self, monkeypatch):
+        sent = self._record(monkeypatch)
+        url = "https://graph.microsoft.com/v1.0/me/todo/lists?$skiptoken=abc"
+
+        status, _ = preflight._get_json(url, {"Authorization": "Bearer x"})
+
+        assert status == 200
+        assert sent == [url]
+
+    def test_a_paging_link_to_another_host_stops_provisioning(self, monkeypatch):
+        """Through ``_todo_task_rows``: the first page of lists names another
+        host as its next page. Nothing goes there, and the To Do families are
+        reported as not probed, with the reason."""
+        first = "https://graph.microsoft.com/v1.0/me/todo/lists?$top=100"
+        sent = []
+
+        def fake_get(url, headers=None, timeout=None):
+            sent.append(url)
+            return _Resp(
+                200,
+                {
+                    "value": [{"id": "SHARED", "isOwner": False, "wellknownListName": "none"}],
+                    "@odata.nextLink": "https://attacker.example/v1.0/me/todo/lists?page=2",
+                },
+            )
+
+        monkeypatch.setattr(preflight.httpx, "get", fake_get)
+
+        rows, not_probed, failures = preflight._todo_task_rows({"Authorization": "Bearer x"})
+
+        assert sent == [first]
+        assert rows == []
+        assert failures == []
+        assert len(not_probed) == 3
+        assert all("not Microsoft Graph" in n for n in not_probed)
+
+    def test_every_probe_row_is_a_graph_url(self, monkeypatch):
+        """The fixed rows and the run loop go through the same check."""
+        for path, _ in preflight.ENDPOINTS:
+            assert preflight._graph_url(path).startswith(preflight.GRAPH_BASE)
 
 
 class _Stream:
