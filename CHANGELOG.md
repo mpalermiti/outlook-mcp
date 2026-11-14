@@ -8,6 +8,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Upgrading no longer signs Mac users out (#244).** azure-identity 1.27.0 (2026-10-26) keeps a
+  named token cache under a new macOS Keychain entry, so an install that picked it up could not
+  find the existing sign-in and reported "Not authenticated" until `outlook-mcp auth` ran again.
+  azure-identity is now capped below 1.27, so a sign-in saved under 1.26 or earlier is found. If
+  you signed in again while on 1.27, run `outlook-mcp auth` once more after upgrading. Linux and
+  Windows were not affected.
+
 - **`outlook_update_task` refuses to move a repeating task's due date (#242).** Microsoft
   accepted the change and the list then held two tasks, the original and a copy, both with the
   new due date. Sending the repeat rule with its start moved, in the same request, still made the

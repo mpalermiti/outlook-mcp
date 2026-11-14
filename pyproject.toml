@@ -36,7 +36,12 @@ dependencies = [
     # pair the new kiota with the broken core. tests/test_me_rewrite_reaches_the_wire.py
     # checks the rewrite against whatever an install resolves.
     "msgraph-core>=1.5.2",
-    "azure-identity>=1.25",
+    # Capped below 1.27 (#244). On macOS, 1.27.0 keeps a named token cache under
+    # a Keychain account named after the cache; 1.26 and earlier used one shared
+    # account. So under 1.27 the sign-in saved before is not found, and an
+    # upgraded install reports "Not authenticated" until `outlook-mcp auth`
+    # runs again. Lift once auth.py moves an existing sign-in across.
+    "azure-identity>=1.25,<1.27",
     "pydantic>=2.0",
     # zoneinfo reads the host's IANA time zone database. Windows ships none at
     # all and slim Linux images (python:*-slim, Alpine) routinely omit
