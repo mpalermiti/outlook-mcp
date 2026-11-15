@@ -2,6 +2,13 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-15 — checker-redo-todo-dates-live-check
+- Smoke at start (f1aeb61): 3193 passed; only the sandbox-blocked `test_http_transport.py` (1F + 25E, bind EPERM) red. Ruff clean.
+- Fix: `TestRepeatingTaskDueIsRefused::test_moving_a_repeating_tasks_due_is_refused_and_leaves_one_task` pinned to `live_write_config.model_copy(update={"timezone": "UTC"})` for both the create and the refused update, with a comment matching its siblings.
+- TDD: new offline guard `TestRepeatingTaskZoneIsPerAccount::test_live_tests_pin_the_zone_of_every_due_they_write` in `tests/test_todo.py` AST-scans `test_live_todo_write.py`: any call with a `due=` keyword whose config (keyword `config`, or `_temporary_task`'s 2nd positional) is the bare name `live_write_config` fails. Red at lines 251 and 262 before the pin, green after; asserts it found at least one due write so it can't pass vacuously.
+- After: 3194 passed, 4 skipped, same 1F + 25E http_transport only; with http_transport deselected 3089 passed, 0 failed; every toolset loaded same; ruff check + format clean. Live file still collects 9 (collect-only, no `-m`). Live test NOT run.
+- Notes for next worker: this also settles finding 1 of `checker-checker-todo-dates-live-check`; its finding 2 (stale behaviours 4–6 in `agent/findings/tasks/todo-dates-live-check.md` and the parked `todo-repeating-due-duplicate-live-run` card) is still open.
+
 ## 2026-11-15 — redo-todo-dates-live-check
 - Smoke at start (02e82ec): 3138 passed; only the sandbox-blocked `test_http_transport.py` (1F + 25E, bind EPERM) red.
 - Cause: the kept branch's delta (b0acf56..construct-kept/todo-dates-live-check-20261114-094157, `agent/` excluded) conflicted only in CHANGELOG.md, because release 1.32.0 moved the old Unreleased entries into its own section. The other seven files applied cleanly.
