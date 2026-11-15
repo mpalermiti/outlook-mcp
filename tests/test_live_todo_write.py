@@ -245,12 +245,16 @@ class TestRepeatingTaskDueIsRefused:
         tasks with this title. `test_every_update_field_persists` covers the
         other side, a task that does not repeat still moving.
         """
+        # Pinned to UTC: the written day is asserted on a repeating task, and at
+        # or east of UTC+7 17:00Z goes out as the next day, which an account
+        # that keeps the zone stores (see TestDueIsAnchoredInTheConfiguredZone).
+        config = live_write_config.model_copy(update={"timezone": "UTC"})
         due = (date.today() + timedelta(days=30)).isoformat()
         moved = (date.today() + timedelta(days=32)).isoformat()
         title = f"{LIVE_WRITE_NAME} repeating due"
         async with _temporary_task(
             real_graph_client,
-            live_write_config,
+            config,
             title=title,
             due=f"{due}T17:00:00Z",
             recurrence={
@@ -263,7 +267,7 @@ class TestRepeatingTaskDueIsRefused:
                     real_graph_client.sdk_client,
                     task_id=task_id,
                     due=f"{moved}T17:00:00Z",
-                    config=live_write_config,
+                    config=config,
                 )
 
             page = await list_tasks(real_graph_client.sdk_client, count=100)

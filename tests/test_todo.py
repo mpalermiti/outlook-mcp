@@ -1162,3 +1162,39 @@ class TestRepeatingTaskZoneIsPerAccount:
             flat = " ".join(text.split())
             for promise in promises:
                 assert promise not in flat, f"{name} still says: {promise!r}"
+
+    def test_live_tests_pin_the_zone_of_every_due_they_write(self):
+        # A due goes out as wall-clock time in the configured zone, so a live
+        # test that writes one under the runner's own config asserts a day that
+        # depends on where the runner is: at or east of UTC+7, 17:00Z is
+        # tomorrow. Every such write names its zone with a `model_copy`.
+        import ast
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parent / "test_live_todo_write.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+
+        def config_of(call):
+            for keyword in call.keywords:
+                if keyword.arg == "config":
+                    return keyword.value
+            name = getattr(call.func, "id", None)
+            if name == "_temporary_task" and len(call.args) > 1:
+                return call.args[1]
+            return None
+
+        writes = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and any(k.arg == "due" for k in node.keywords)
+        ]
+        assert writes, "no live To Do test writes a due; the guard would check nothing"
+        unpinned = [
+            node.lineno
+            for node in writes
+            if isinstance(config_of(node), ast.Name) and config_of(node).id == "live_write_config"
+        ]
+        assert not unpinned, (
+            f"test_live_todo_write.py writes a due under the runner's own zone at lines "
+            f"{unpinned}; use live_write_config.model_copy(update={{'timezone': ...}})"
+        )
