@@ -13,12 +13,14 @@ list_tasks (overview shape). The default list is scanned up to 100 entries.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from outlook_mcp.tools.todo import (
+    _resolve_list_id,
     add_checklist_item,
     create_task,
     delete_checklist_item,
@@ -59,11 +61,14 @@ async def _temporary_task(client, config, **kwargs):
 
 class TestCreateTaskRoundTrip:
     async def test_every_create_field_persists(self, real_graph_client, live_write_config):
+        # Pinned to UTC: the written date is asserted on a repeating task, and
+        # under another zone Graph can move it (see TestDueIsAnchoredInTheConfiguredZone).
+        config = live_write_config.model_copy(update={"timezone": "UTC"})
         due = (date.today() + timedelta(days=30)).isoformat()
 
         async with _temporary_task(
             real_graph_client,
-            live_write_config,
+            config,
             title=f"{LIVE_WRITE_NAME} create",
             due=f"{due}T17:00:00Z",
             importance="high",
@@ -84,13 +89,109 @@ class TestCreateTaskRoundTrip:
             assert got["has_recurrence"] is True
 
 
+_LA = "America/Los_Angeles"
+# The #72 probe sent a Windows name and got it back; which spelling Graph
+# returns for an IANA name has not been seen, so either one counts.
+_LA_SPELLINGS = (_LA, "Pacific Standard Time")
+
+
+def _zone_kept_or_coerced(due_zone, rule_zone, sent) -> bool:
+    """Whether a repeating task's stored zones are one of the two seen live.
+
+    The zone sent (in any spelling in ``sent``) or UTC, on the due and the rule
+    alike. Michael's account (2026-11-14) stored UTC on both whatever was sent;
+    the account in the #72 probe (2026-09-25) kept the zone. Per account, like
+    `is_online` (#70), so either passes; a third zone, or the two disagreeing, fails.
+    """
+    return due_zone == rule_zone == "UTC" or (due_zone in sent and rule_zone in sent)
+
+
+async def _raw_task(client, task_id: str):
+    """The task as Graph holds it: `recurrenceTimeZone` is not in the tool's output."""
+    list_id = await _resolve_list_id(client.sdk_client, None)
+    tasks = client.sdk_client.me.todo.lists.by_todo_task_list_id(list_id).tasks
+    return await tasks.by_todo_task_id(task_id).get()
+
+
+def _stored_zones(task) -> tuple:
+    return task.due_date_time.time_zone, task.recurrence.range.recurrence_time_zone
+
+
+class TestDueIsAnchoredInTheConfiguredZone:
+    """#72: what Graph does with the zone, on a plain task and on a repeating one.
+
+    The probe on #72 sent 09:00 on 10-15 as China Standard Time. A plain task
+    came back as 16:00 UTC on 10-14, midnight on the 15th in that zone: the
+    date survived, the hour did not. Michael's run (2026-11-14) confirmed that
+    west and east of UTC.
+
+    A repeating task's zone is per account: the #72 probe got its zone back,
+    Michael's account stored UTC on the due and the rule whatever was sent.
+    These tests accept either (see `_zone_kept_or_coerced`) and assert no date
+    on a repeating task, whose due the #72 probe saw move a day.
+    """
+
+    @staticmethod
+    def _recurrence(start: date) -> dict:
+        return {
+            "pattern": {"type": "daily", "interval": 2},
+            "range": {"type": "noEnd", "startDate": start.isoformat()},
+        }
+
+    # Each case sets its own zone, so the machine running it makes no difference.
+    # West of UTC midnight there is the written day in UTC; east of it, the day before.
+    @pytest.mark.parametrize("zone", [_LA, "Asia/Tokyo"])
+    async def test_a_plain_tasks_due_is_midnight_on_the_written_day_in_the_zone(
+        self, real_graph_client, live_write_config, zone
+    ):
+        """A zone Graph ignored would come back at midnight UTC: same day, other hour."""
+        config = live_write_config.model_copy(update={"timezone": zone})
+        written = date.today() + timedelta(days=30)
+        midnight = datetime(written.year, written.month, written.day, tzinfo=ZoneInfo(zone))
+
+        async with _temporary_task(
+            real_graph_client,
+            config,
+            title=f"{LIVE_WRITE_NAME} zone plain",
+            due=f"{written.isoformat()}T23:30:00",
+        ) as task_id:
+            got = await _find_task(real_graph_client, task_id)
+
+            assert got["due_time_zone"] == "UTC"
+            stored = datetime.fromisoformat((got["due"] or "").split(".")[0])
+            assert stored.replace(tzinfo=timezone.utc) == midnight.astimezone(timezone.utc)
+
+    async def test_a_repeating_task_keeps_the_zone_sent_or_utc(
+        self, real_graph_client, live_write_config
+    ):
+        """Graph accepts `recurrenceTimeZone` on a task; the account decides what it stores."""
+        config = live_write_config.model_copy(update={"timezone": _LA})
+        written = date.today() + timedelta(days=30)
+
+        async with _temporary_task(
+            real_graph_client,
+            config,
+            title=f"{LIVE_WRITE_NAME} zone repeating",
+            due=f"{written.isoformat()}T09:00:00",
+            recurrence=self._recurrence(written),
+        ) as task_id:
+            zones = _stored_zones(await _raw_task(real_graph_client, task_id))
+
+            assert _zone_kept_or_coerced(*zones, _LA_SPELLINGS), (
+                f"stored (due, rule) zones {zones}: neither the zone sent nor UTC on both"
+            )
+
+
 class TestUpdateTaskRoundTrip:
     async def test_every_update_field_persists(self, real_graph_client, live_write_config):
+        # Pinned to UTC: a plain task keeps only the date, picked in the
+        # configured zone, so east of UTC 09:00Z would be stored the day before.
+        config = live_write_config.model_copy(update={"timezone": "UTC"})
         due = (date.today() + timedelta(days=31)).isoformat()
 
         async with _temporary_task(
             real_graph_client,
-            live_write_config,
+            config,
             title=f"{LIVE_WRITE_NAME} before",
             importance="low",
         ) as task_id:
@@ -101,7 +202,7 @@ class TestUpdateTaskRoundTrip:
                 due=f"{due}T09:00:00Z",
                 body="updated body",
                 importance="high",
-                config=live_write_config,
+                config=config,
             )
 
             got = await _find_task(real_graph_client, task_id)

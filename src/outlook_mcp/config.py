@@ -302,7 +302,10 @@ class Config(BaseModel):
         description=(
             "IANA timezone. Interprets zone-less dates, and anchors every event "
             "created — a recurring event is expanded in this zone, so the UTC "
-            "default makes one shift an hour across a daylight-saving change."
+            "default makes one shift an hour across a daylight-saving change. To Do "
+            "due dates, reminders and recurrences are sent in it too, but To Do "
+            "keeps only the date of a non-repeating task, and some accounts store "
+            "a repeating task's zone as UTC whatever is sent."
         ),
     )
     attachments_dir: str = Field(
