@@ -2,6 +2,14 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-15 — redo-todo-dates-live-check
+- Smoke at start (02e82ec): 3138 passed; only the sandbox-blocked `test_http_transport.py` (1F + 25E, bind EPERM) red.
+- Cause: the kept branch's delta (b0acf56..construct-kept/todo-dates-live-check-20261114-094157, `agent/` excluded) conflicted only in CHANGELOG.md, because release 1.32.0 moved the old Unreleased entries into its own section. The other seven files applied cleanly.
+- Applied with `git apply -3`; resolved CHANGELOG by keeping 1.32.0 exactly as released and putting the four #72 bullets (zone on due/reminder/recurrence, `due_time_zone`, relative `due`) under a new Unreleased `### Fixed` after `### Security`.
+- Evidence: per-file +/- lines identical to the kept delta for README, SKILL, config.py, todo.py and the three test files; the five code/test files are `cmp`-identical to the kept branch tip.
+- After: 3193 passed, 4 skipped, same 1F + 25E sandbox http_transport only; with every toolset loaded the same; ruff check and format clean. Live tests not run.
+- Notes for next worker: this branch carries the whole #72 fix, so `redo-redo-todo-dates-use-configured-timezone` is redundant once this merges (left on the queue; noted in suggestions). `checker-checker-todo-dates-live-check` (UTC pin on main's #242 live test; stale behaviours 4–6 in the old task file) is still open and applies on top of this.
+
 ## 2026-11-14 — checker-todo-dates-live-check
 
 - **Smoke (before):** 8 failed / 25 errors. 1F+25E are the sandbox-blocked `test_http_transport.py` (as every session); the other 6 were the checker's: main's two #242 tests (`get` awaited twice) and four payload tests hitting #242's refusal.
