@@ -2,6 +2,13 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-16 — checker-checker-todo-dates-live-check
+
+- Smoke (cd91d03, `.venv/bin/python -m pytest -q`): 3231 passed, 4 skipped, 135 deselected; failures only sandbox `test_http_transport.py` (1F + 25E, bind EPERM) — first run showed one more failure, not reproduced on the second. Ruff check + format clean.
+- Finding 1: already on main via #252 (`test_live_todo_write.py` #242 test runs under a UTC copy of the config); guard `test_live_tests_pin_the_zone_of_every_due_they_write` green. No code change.
+- Finding 2: `agent/findings/tasks/todo-dates-live-check.md` What-it-does and behaviours 4–6 rewritten as the refusal; every test it names grepped present, the two deleted names absent. Parked `todo-repeating-due-duplicate-live-run` retired ([x] with reason).
+- Notes: `todo-plain-due-zone-decision` [?] and `checker-redo-todo-dates-use-configured-timezone` look settled by #252 — in suggestions, not touched.
+
 ## 2026-11-15 — redo-redo-todo-dates-use-configured-timezone
 
 - Outcome: closed as superseded, no code change. `construct/redo-todo-dates-live-check` (f3a0319) sits on origin/main 62c3fc0 and already carries the whole #72 fix, reconciled with #242. Rebuilding the kept branch (1b0a8a4) onto main would either reintroduce the six #242 failures the checker found (queue: `checker-redo-todo-dates-use-configured-timezone`) or, once fixed, duplicate the live-check PR line for line and conflict with it on `todo.py`.
