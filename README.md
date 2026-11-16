@@ -63,6 +63,8 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md).
 
+- **To Do time zones** (1.33): a task's due date, reminder and repeat rule use your configured time zone instead of UTC, so a task lands on the day you meant. `due` also takes `+7d` or `now`.
+- **Contact photos** (1.33): set or replace a contact's photo from a JPEG, PNG or GIF file. Off unless you turn it on.
 - **Relative event times** (1.32): an event's `start` and `end` take `+2h`, `now` or `7d`, like every other date, and the reply shows the time each became.
 - **Online meetings** (1.32): `outlook_update_event` can add an online meeting to an existing event. Some personal accounts ignore `is_online`, so the reply says whether it took.
 - **Repeating tasks** (1.32): moving a repeating task's due date is refused, because Microsoft would leave a duplicate task. Change it in the To Do app.
@@ -70,9 +72,7 @@ The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md
 - **Safer by default** (1.31.3–1.31.4): downloads never overwrite a file, writing into a calendar or task list someone else owns needs send permission like an invitation, attachment text is read only in standard character sets, and a config that points the attachments folder at your home folder, under any of its names, is refused. A reply or forward that fails says whether anything was sent (1.31.4).
 - **Export an email** (1.31): get a message's original file exactly as it arrived, attachments included, up to 10 MB. Off unless you turn it on.
 - **Inbox rules** (1.30): list, create, change and delete server-side inbox rules, and see what each rule leaves out (1.30.2). Off unless you turn it on, and a rule that forwards mail also needs send permission.
-- **Attachments as text** (1.28): PDFs, spreadsheets and text files come back as readable text, parsed in a separate process with memory and time limits. Off unless you turn it on. Since 1.31.2 it requires pypdf 6.21.4, which fixes seven ways a crafted PDF could hang a read or use too much memory.
 - **Calendar** (1.27–1.29): turn a meeting invitation into its calendar event, attach files to events, tag an event so you can find it again, create events in any of your calendars, and see who owns each calendar.
-- **Mail** (1.27–1.28): write in Markdown, and replies keep their formatting and the quoted original. Start a draft as a reply or forward, name folders by path (`Inbox/Travel/Flights`), and see whether Microsoft verified a sender. Reading a message as text returns plain text, not the HTML behind it (1.31.1).
 - **Remote clients** (1.27–1.28): an optional HTTP mode serves a client on another machine and refuses to start without a token. Downloads can come back in the reply instead of as a file on the server.
 - **Safer sends** (1.27–1.28): a send that times out is never sent twice on its own, and a large attachment that fails to upload no longer lets the mail go without it.
 - **Accounts and settings** (1.29): pin a server to one sign-in, and set options from environment variables, which can only tighten security.
