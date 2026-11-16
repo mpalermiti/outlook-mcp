@@ -47,7 +47,9 @@ ALWAYS_ON_GROUPS = {"account"}
 # the two disagreed about what a stock install gets and `rules` leaked through
 # the second path.
 # Original MIME export also stays off by default; it adds no write scope.
-OFF_BY_DEFAULT = {"documents", "rules", "mime"}
+# `contact_photos` too: accepted on #121 as an opt-in tool only, so the default
+# surface and its ceiling do not move for a tool most clients never call.
+OFF_BY_DEFAULT = {"documents", "rules", "mime", "contact_photos"}
 
 # What `mailbox_settings_write: true` adds when nothing was named. Not every
 # off-by-default group: that key asks for rule writes, not for the document
@@ -114,6 +116,8 @@ TOOL_GROUPS: dict[str, str] = {
     "outlook_create_contact": "contacts",
     "outlook_update_contact": "contacts",
     "outlook_delete_contact": "contacts",
+    # A local file uploaded to Graph; opt-in (#121).
+    "outlook_set_contact_photo": "contact_photos",
     "outlook_search_contacts": "contacts",
     # todo
     "outlook_list_task_lists": "todo",
@@ -294,6 +298,8 @@ IDEMPOTENT: set[str] = {
     "outlook_download_attachment",
     "outlook_download_task_attachment",
     "outlook_update_checklist_item",
+    # A PUT of the photo bytes: a repeat replaces the photo with the same image.
+    "outlook_set_contact_photo",
 }
 
 

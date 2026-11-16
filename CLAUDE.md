@@ -48,6 +48,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   - `calendar_read.py`, `calendar_write.py` — Tier 1
   - `calendar_attachments.py` — Event attachments (attach from `attachments_dir`, with the mail tools' upload session for >3MB; remove one)
   - `contacts.py` — Contact CRUD
+  - `contact_photos.py` — `outlook_set_contact_photo` (opt-in `contact_photos` group): a JPEG, PNG or GIF from `attachments_dir`, type read from the bytes, capped at 20 MiB by a bounded read, PUT through the SDK's `photo.content`; set only
   - `todo.py` — To Do task management
   - `todo_attachments.py` — To Do task attachments (inline base64 uploads ≤20 MiB, contentBytes downloads)
   - `mail_drafts.py` — Draft management

@@ -6,6 +6,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in `contact_photos` toolset adds `outlook_set_contact_photo` (#121).** Sets or replaces a
+  contact's photo from a JPEG, PNG or GIF file in `attachments_dir`, so a contact made from a
+  business card can get its picture without a trip to Outlook on the web. The type is read from the
+  file's bytes, and the file must be 20 MiB or less (this server's limit; Graph's own store limit
+  still applies). Anything else is refused before it is sent. Outlook may re-encode the image: on a
+  personal account it kept PNG and GIF uploads as JPEG. Needs `contacts_write`, which with this
+  group loaded can upload a local file to Graph. The default tool list is unchanged.
+
 ### Security
 
 - **The release check sends the sign-in token only to Microsoft Graph.** `scripts/preflight.py`

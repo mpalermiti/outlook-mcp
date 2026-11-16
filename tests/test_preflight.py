@@ -422,14 +422,79 @@ class TestMimeExportProbe:
         assert calls == []
 
 
+class TestContactPhotoProbe:
+    """``outlook_set_contact_photo`` PUTs under a real contact id, so the probe
+    harvests one and reads that contact's photo. No photo is a 404 that still
+    shows the family is served; a 403 is the v1.7.0 signal."""
+
+    LIST = "https://graph.microsoft.com/v1.0/me/contacts?$top=1&$select=id"
+
+    def _wire(self, monkeypatch, listing, photo):
+        calls = []
+
+        def fake_get(url, headers=None, timeout=None):
+            calls.append(url)
+            return listing if url == self.LIST else photo
+
+        monkeypatch.setattr(preflight.httpx, "get", fake_get)
+        return calls
+
+    def test_reads_the_first_contacts_photo(self, monkeypatch, capsys):
+        calls = self._wire(monkeypatch, _Resp(200, {"value": [{"id": "AA/b+c="}]}), _Resp(200))
+
+        result = preflight._contact_photo_probe({"Authorization": "Bearer x"})
+
+        assert result == ("OK", [], [])
+        assert calls == [
+            self.LIST,
+            "https://graph.microsoft.com/v1.0/me/contacts/AA%2Fb%2Bc%3D/photo",
+        ]
+        assert "Contact photos" in capsys.readouterr().out
+
+    def test_a_contact_without_a_photo_still_counts_as_reachable(self, monkeypatch, capsys):
+        no_photo = _Resp(404, {"error": {"code": "ErrorItemNotFound"}})
+        self._wire(monkeypatch, _Resp(200, {"value": [{"id": "C1"}]}), no_photo)
+
+        assert preflight._contact_photo_probe({}) == ("OK", [], [])
+        assert "no photo yet" in capsys.readouterr().out
+
+    def test_another_404_is_not_waved_through(self, monkeypatch):
+        self._wire(monkeypatch, _Resp(200, {"value": [{"id": "C1"}]}), _Resp(404, {}))
+
+        assert preflight._contact_photo_probe({}) == ("SKIP", [], [])
+
+    def test_a_refused_photo_family_blocks_the_release(self, monkeypatch):
+        denied = _Resp(403, {"error": {"code": "ErrorAccessDenied"}})
+        self._wire(monkeypatch, _Resp(200, {"value": [{"id": "C1"}]}), denied)
+
+        assert preflight._contact_photo_probe({}) == ("FAIL", [], ["Contact photos"])
+
+    def test_no_contact_is_reported_not_probed(self, monkeypatch):
+        calls = self._wire(monkeypatch, _Resp(200, {"value": []}), _Resp(200))
+
+        verdict, not_probed, failures = preflight._contact_photo_probe({})
+
+        assert (verdict, failures) == (None, [])
+        assert len(not_probed) == 1 and "Contact photos" in not_probed[0]
+        assert calls == [self.LIST]
+
+
 class TestRunSummary:
     """The v1.7.0 lesson applied to gaps: "All endpoints reachable. Safe to
     tag." printed over families the run never probed is how an unsupported
     endpoint ships. The summary now counts reachable vs not-probed."""
 
-    def _run_with(self, monkeypatch, responses, todo_result, mime_result=("OK", [], [])):
+    def _run_with(
+        self,
+        monkeypatch,
+        responses,
+        todo_result,
+        mime_result=("OK", [], []),
+        photo_result=("OK", [], []),
+    ):
         monkeypatch.setattr(preflight, "fetch_token", lambda: "tok")
         monkeypatch.setattr(preflight, "_mime_export_probe", lambda headers: mime_result)
+        monkeypatch.setattr(preflight, "_contact_photo_probe", lambda headers: photo_result)
 
         def fake_get(url, headers=None, timeout=None):
             return responses[url]
@@ -471,8 +536,8 @@ class TestRunSummary:
 
         assert code == 0
         assert "Safe to tag" not in out
-        # The MIME export probe is one more probed endpoint.
-        assert f"{len(preflight.ENDPOINTS) + len(rows) + 1} probed endpoints reachable" in out
+        # The MIME export and contact photo probes are two more probed endpoints.
+        assert f"{len(preflight.ENDPOINTS) + len(rows) + 2} probed endpoints reachable" in out
         assert "1 NOT probed" in out
         assert "no attachment" in out
 
@@ -498,6 +563,18 @@ class TestRunSummary:
 
         assert code == 0
         assert "Safe to tag" not in out
-        n = len(preflight.ENDPOINTS)
+        n = len(preflight.ENDPOINTS) + 1  # the contact photo probe ran
         assert f"{n} of {n} probed endpoints reachable" in out
         assert "1 NOT probed" in out
+
+    def test_a_refused_contact_photo_family_fails_the_run(self, monkeypatch):
+        code, out = self._run_with(
+            monkeypatch,
+            {urljoin(preflight.GRAPH_BASE, p): _Resp(200, {}) for p, _ in preflight.ENDPOINTS},
+            ([], [], []),
+            photo_result=("FAIL", [], ["Contact photos"]),
+        )
+
+        assert code == 1
+        assert "Contact photos" in out
+        assert "Safe to tag" not in out

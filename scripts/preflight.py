@@ -67,7 +67,8 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0/"
 # reads) and event attachments (``me/events/{id}/attachments``). The live
 # tier reads event attachments; neither has a provisioned row yet. The
 # original-MIME export (``me/messages/{id}/$value``) does have one, in
-# ``_mime_export_probe``.
+# ``_mime_export_probe``, and contact photos (``me/contacts/{id}/photo``) in
+# ``_contact_photo_probe``.
 ENDPOINTS: list[tuple[str, str]] = [
     ("me", "Auth / whoami"),
     ("me/messages?$top=1", "Mail read / search"),
@@ -288,6 +289,38 @@ def _mime_export_probe(headers: dict[str, str]) -> tuple[str | None, list[str], 
     return verdict, [], [label] if verdict == "FAIL" else []
 
 
+def _contact_photo_probe(headers: dict[str, str]) -> tuple[str | None, list[str], list[str]]:
+    """Probe contact photos (``outlook_set_contact_photo``, opt-in ``contact_photos`` group).
+
+    The tool PUTs ``me/contacts/{id}/photo/$value``. A PUT would change a real
+    contact, so this reads the same family instead: the photo metadata of the
+    first contact. A contact with no photo answers ``404 ErrorItemNotFound``
+    (probed on a personal account, 2026-11-14), which still shows the family is
+    served, so it counts as reachable; 403/501 block the release as elsewhere.
+
+    Returns ``(verdict, not_probed, failures)``; ``verdict`` is None when no
+    contact could be provisioned, which the summary reports as not probed.
+    """
+    label = "Contact photos"
+    status, body = _get_json("me/contacts?$top=1&$select=id", headers)
+    contacts = body.get("value") if status == 200 and isinstance(body, dict) else None
+    if not contacts or not contacts[0].get("id"):
+        reason = f"GET me/contacts -> {status}" if status != 200 else "there is no contact"
+        return None, [f"{label} (could not provision a contact: {reason})"], []
+
+    path = f"me/contacts/{quote(contacts[0]['id'], safe='')}/photo"
+    status, body = _get_json(path, headers)
+    if status is None:
+        print(f"FAIL  {label:30s} {path}  {body}")
+        return "FAIL", [], [label]
+    code = (body.get("error") or {}).get("code", "") if isinstance(body, dict) else ""
+    verdict = "OK" if status == 404 and code == "ErrorItemNotFound" else classify(status)
+    suffix = " (non-blocking)" if verdict == "SKIP" else ""
+    note = " (no photo yet)" if status == 404 and verdict == "OK" else ""
+    print(f"{verdict:5s} {label:30s} {path}  {status} {code}{note}{suffix}".rstrip())
+    return verdict, [], [label] if verdict == "FAIL" else []
+
+
 def classify(status_code: int) -> str:
     """Map an HTTP status from Graph to a preflight verdict.
 
@@ -352,11 +385,15 @@ def run() -> int:
         else:
             print(f"SKIP  {label:30s} {path}  {r.status_code} (non-blocking)")
 
-    mime_verdict, mime_not_probed, mime_failures = _mime_export_probe(headers)
-    not_probed = not_probed + mime_not_probed
-    failures.extend(mime_failures)
-    probed = len(endpoints) + (mime_verdict is not None)
-    reachable += mime_verdict == "OK"
+    probed = len(endpoints)
+    # Families under a real resource id, each provisioning its own. Looked up by
+    # name at call time, so a test can stand either one in.
+    for probe in (_mime_export_probe, _contact_photo_probe):
+        verdict, probe_not_probed, probe_failures = probe(headers)
+        not_probed = not_probed + probe_not_probed
+        failures.extend(probe_failures)
+        probed += verdict is not None
+        reachable += verdict == "OK"
 
     print()
     if failures:

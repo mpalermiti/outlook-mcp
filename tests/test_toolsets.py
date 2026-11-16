@@ -243,3 +243,21 @@ def test_mime_export_requires_its_own_explicit_selection():
         "outlook_auth_status",
     }
     assert toolsets.annotation_for("outlook_export_message").read_only_hint is True
+
+
+def test_contact_photos_require_their_own_explicit_selection():
+    """Accepted on #121 as opt-in only: neither a stock install nor the rules flag loads it."""
+    names = ["outlook_set_contact_photo", "outlook_list_contacts", "outlook_auth_status"]
+    assert "outlook_set_contact_photo" not in toolsets.select_kept_tools(names, None)
+    for settings_write in (False, True):
+        assert "contact_photos" not in toolsets.resolve_groups(None, settings_write)
+    assert toolsets.select_kept_tools(names, {"contact_photos"}) == {
+        "outlook_set_contact_photo",
+        "outlook_auth_status",
+    }
+    hint = toolsets.annotation_for("outlook_set_contact_photo")
+    assert (hint.read_only_hint, hint.destructive_hint, hint.idempotent_hint) == (
+        False,
+        False,
+        True,
+    )

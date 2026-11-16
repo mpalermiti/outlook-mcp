@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 77 typed Graph tools across mail, inbox rules, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 78 typed Graph tools across mail, inbox rules, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -76,11 +76,11 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `triage_folder(folder="inbox", count=50)` — one scan, sorted, applied in a single batch call
 - `catch_up(since="24h")` — what changed, via the delta path
 
-## Tools (77)
+## Tools (78)
 
-71 load by default. Three groups are opt-in and load only when named in
+71 load by default. Four groups are opt-in and load only when named in
 `OUTLOOK_MCP_TOOLSETS`: `documents` (`outlook_read_attachment`, the PDF/XLSX reader),
-`rules` (the four inbox-rule tools), and `mime` (original MIME export). The `rules` group also loads when
+`rules` (the four inbox-rule tools), `mime` (original MIME export), and `contact_photos` (`outlook_set_contact_photo`). The `rules` group also loads when
 `mailbox_settings_write: true`, because the setting is itself the request (see Notes).
 
 ### Auth
@@ -138,6 +138,7 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
 - `outlook_create_contact` — Create (no address: add one with `outlook_update_contact` afterwards). `title` is the name prefix ("Dr."), shown in the display name; a job goes in `job_title`. `phone_type` is `mobile` (default), `business` or `home`; `birthday` is a date, `YYYY-MM-DD` (stored at 11:59 UTC); also `middle_name`, `personal_notes`, `categories`
 - `outlook_update_contact` — Update fields, including `middle_name`, `company`, `title`, `job_title` and `personal_notes`; a text field passed as `""` is cleared; `categories` **replaces** the whole list (`[]` clears it; read first to add one); `phone_type` as on create, and a `business`/`home` number **replaces** that list; `clear_phones` empties the types it names (`["mobile"]` beside `phone_type="business"` moves a number out of mobile); `home_address`/`business_address`/`other_address` take `{street, city, state, postal_code, country_or_region}` (the shape `outlook_get_contact` returns) and **replace** that whole address, so pass back every part you want to keep; `birthday` (`YYYY-MM-DD`) sets or replaces the date; `email` **replaces** every address, while `add_emails`/`remove_emails` change only the ones they name (three at most, pinned to the version read)
 - `outlook_delete_contact` — Delete
+- `outlook_set_contact_photo` — Set or replace a contact's photo from a JPEG, PNG or GIF file in `attachments_dir` (type read from the bytes, at most 20 MiB; Outlook may re-encode it); needs `contacts_write`, opt-in `contact_photos` group
 - `outlook_list_contacts_delta` — List only contact changes since last call (massive token savings for recurring agent jobs)
 
 ### Digest
@@ -206,7 +207,7 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
 - **"Not authenticated" on a Mac after an install or upgrade since Oct 26, 2026:** an update to azure-identity, Microsoft's sign-in library, moved where the sign-in is kept in the Keychain. 1.32.0 reads the original place again. Upgrade, then run `outlook-mcp status` on the host; if it still says not authenticated, run `outlook-mcp auth` once. See README "Troubleshooting"
 - Start with `read_only: true`, flip when comfortable
 - **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 8 categories and example policies.
-- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context. Unset loads every group except the opt-in ones — 71 of the 77 tools; `documents`, `rules`, and `mime` are off until named, except that `mailbox_settings_write: true` turns `rules` on without naming it. Naming groups loads only those (plus auth/identity), so to add all opt-in groups to the default set, name the default groups and opt-ins: `mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime`. Tools carry read-only / destructive annotations so clients can auto-approve reads.
+- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context. Unset loads every group except the opt-in ones — 71 of the 78 tools; `documents`, `rules`, `mime`, and `contact_photos` are off until named, except that `mailbox_settings_write: true` turns `rules` on without naming it. Naming groups loads only those (plus auth/identity), so to add all opt-in groups to the default set, name the default groups and opt-ins: `mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime,contact_photos`. Tools carry read-only / destructive annotations so clients can auto-approve reads.
 - **Two accounts:** One server serves one mailbox. Register a second server entry with its own `OUTLOOK_MCP_CONFIG_DIR` (e.g. `~/.outlook-mcp-work`) and run `outlook-mcp auth` once with that variable set. Move only the config directory, never `HOME` — see README "Two accounts, two instances".
 - **Remote / HTTP:** stdio is the default. `OUTLOOK_MCP_TRANSPORT=streamable-http` serves `/mcp` over HTTP for a client that cannot spawn a local process. It never starts without a token (`OUTLOOK_MCP_HTTP_TOKEN`, or a file named by `OUTLOOK_MCP_HTTP_TOKEN_FILE`), loopback included, and every request sends it as `Authorization: Bearer <token>`. It binds loopback by default, and plain HTTP sends the token in the clear, so put a TLS-terminating proxy in front of any other bind — see README "Remote / HTTP transport".
 - **Environment configuration:** `OUTLOOK_MCP_CLIENT_ID`, `OUTLOOK_MCP_TENANT_ID` and

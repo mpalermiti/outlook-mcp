@@ -416,8 +416,7 @@ asyncio.run(main())
 MIME_SURFACE_CEILING = 11_350
 
 
-def test_mime_surface_has_its_own_budget_and_preserves_default_schemas():
-    code = """import asyncio,json
+_LIST_TOOLS = """import asyncio,json
 from mcp.client import Client
 from outlook_mcp.server import mcp
 async def main():
@@ -426,28 +425,55 @@ async def main():
     print(json.dumps([t.model_dump(exclude_none=True,by_alias=True) for t in tools]))
 asyncio.run(main())
 """
-    default_groups = set(toolsets.TOOL_GROUPS.values()) - toolsets.OFF_BY_DEFAULT
 
-    def measure(groups):
-        env = {**os.environ, "OUTLOOK_MCP_TOOLSETS": ",".join(sorted(groups))}
-        env.pop("PYTHONPATH", None)
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=True,
-        )
-        return json.loads(result.stdout.strip().splitlines()[-1])
+_DEFAULT_GROUPS = set(toolsets.TOOL_GROUPS.values()) - toolsets.OFF_BY_DEFAULT
 
-    default = measure(default_groups)
-    enabled = measure(default_groups | {"mime"})
-    mime = [tool for tool in enabled if tool["name"] == "outlook_export_message"]
+
+def _advertised_tools(groups: set[str]) -> list[dict]:
+    """The ``tools/list`` a fresh process advertises with exactly ``groups`` loaded."""
+    env = {**os.environ, "OUTLOOK_MCP_TOOLSETS": ",".join(sorted(groups))}
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-c", _LIST_TOOLS],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+def _assert_one_opt_in_tool_on_an_unchanged_default(group: str, tool: str) -> tuple[list, dict]:
+    """Default + ``group`` is the default surface byte for byte, plus ``tool`` alone."""
+    default = _advertised_tools(_DEFAULT_GROUPS)
+    enabled = _advertised_tools(_DEFAULT_GROUPS | {group})
+    added = [entry for entry in enabled if entry["name"] == tool]
     assert len(default) == 71
     assert len(enabled) == 72
-    assert len(mime) == 1
-    assert mime[0]["annotations"]["readOnlyHint"] is True
-    assert [tool for tool in enabled if tool["name"] != "outlook_export_message"] == default
+    assert len(added) == 1
+    assert [entry for entry in enabled if entry["name"] != tool] == default
     assert _proxy_tokens(default) <= DEFAULT_SURFACE_CEILING
+    return enabled, added[0]
+
+
+def test_mime_surface_has_its_own_budget_and_preserves_default_schemas():
+    enabled, mime = _assert_one_opt_in_tool_on_an_unchanged_default(
+        "mime", "outlook_export_message"
+    )
+    assert mime["annotations"]["readOnlyHint"] is True
     assert _proxy_tokens(enabled) <= MIME_SURFACE_CEILING
+
+
+# Contact photos (#121): default stays 71 / 11,178; default + contact_photos is
+# 72 / 11,288 (+110 proxy tokens). All groups: 78 / 12,333. Its own ceiling gives
+# about 1% headroom, without raising the default or any other group's ceiling.
+CONTACT_PHOTOS_SURFACE_CEILING = 11_400
+
+
+def test_contact_photos_surface_has_its_own_budget_and_preserves_default_schemas():
+    enabled, photo = _assert_one_opt_in_tool_on_an_unchanged_default(
+        "contact_photos", "outlook_set_contact_photo"
+    )
+    assert photo["annotations"]["idempotentHint"] is True
+    assert _proxy_tokens(enabled) <= CONTACT_PHOTOS_SURFACE_CEILING
