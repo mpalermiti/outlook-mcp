@@ -6,6 +6,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.33.0] — 2026-11-16
+
+To Do due dates, reminders and repeat rules are sent in the configured time zone, and a relative
+`due` such as `+7d` is worked out before it is sent. A new opt-in tool sets a contact's photo. The
+release check sends its sign-in token only to Microsoft Graph. 78 tools, 71 by default.
+
 ### Added
 
 - **Opt-in `contact_photos` toolset adds `outlook_set_contact_photo` (#121).** Sets or replaces a
@@ -15,6 +21,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   still applies). Anything else is refused before it is sent. Outlook may re-encode the image: on a
   personal account it kept PNG and GIF uploads as JPEG. Needs `contacts_write`, which with this
   group loaded can upload a local file to Graph. The default tool list is unchanged.
+  (#249, @neilbrencode)
 
 ### Security
 
@@ -27,23 +34,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- **To Do due dates, reminders and recurrence are sent in the configured time zone** (#72).
-  `outlook_create_task` and `outlook_update_task` labelled every date `UTC` and sent no zone
-  with a recurrence, whatever `config.timezone` said. A zone-less `due` now goes out as written,
+- **To Do due dates, reminders and recurrence are sent in the configured time zone** (#72, #252).
+  `outlook_create_task` and `outlook_update_task` labelled every date `UTC` and sent no zone with
+  a recurrence, whatever `config.timezone` said. A zone-less `due` now goes out as written,
   labelled with `config.timezone`. A `due` with a `Z` or an offset keeps its instant, sent as
   wall-clock time in that zone. A recurrence is sent with that zone as `range.recurrenceTimeZone`
-  unless it already names one; some accounts store it as UTC whatever is sent, as seen live. To Do keeps only the date of a non-repeating task's `due`, so there the
-  zone decides which day is stored and the hour is not kept. **Behaviour change:** on a non-UTC
-  server a zone-less `due` now means local time, as the docs have always said. On a UTC server
-  a zone-less `due` and a recurrence go out as before; a `due` with a `Z` or an offset, which
-  went out as written, is now sent as that instant's UTC time, so `2026-11-10T05:00:00+09:00`
-  is sent as `2026-11-09T20:00:00`. A `config.timezone` Graph refuses (`EST` and five others) falls
-  back to UTC, as calendar events do.
+  unless it already names one; some accounts store it as UTC whatever is sent, as seen live. To Do
+  keeps only the date of a non-repeating task's `due`, so there the zone decides which day is
+  stored and the hour is not kept. **Behaviour change:** on a non-UTC server a zone-less `due` now
+  means local time, as the docs have always said. On a UTC server a zone-less `due` and a
+  recurrence go out as before; a `due` with a `Z` or an offset, which went out as written, is now
+  sent as that instant's UTC time, so `2026-11-10T05:00:00+09:00` is sent as
+  `2026-11-09T20:00:00`. A `config.timezone` Graph refuses (`EST` and five others) falls back to
+  UTC, as calendar events do.
 - **`outlook_list_tasks` and `outlook_get_task` return `due_time_zone` beside `due`.** On some
   accounts Microsoft keeps a repeating task's due in the zone it was sent in, so a bare time could
   be read as UTC and reported on the wrong day; some accounts store it as UTC.
 - **A relative `due` is worked out before it is sent.** `due="+7d"` passed validation and then
-  reached Graph as the literal text `+7d`.
+  reached Graph as the literal text `+7d` (#74).
 
 ## [1.32.0] — 2026-11-14
 
