@@ -2,6 +2,13 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-15 — redo-redo-todo-dates-use-configured-timezone
+
+- Outcome: closed as superseded, no code change. `construct/redo-todo-dates-live-check` (f3a0319) sits on origin/main 62c3fc0 and already carries the whole #72 fix, reconciled with #242. Rebuilding the kept branch (1b0a8a4) onto main would either reintroduce the six #242 failures the checker found (queue: `checker-redo-todo-dates-use-configured-timezone`) or, once fixed, duplicate the live-check PR line for line and conflict with it on `todo.py`.
+- Evidence: 21/24 proof tests of `redo-todo-dates-use-configured-timezone.md` present by `def` name on the live-check branch; the 3 missing were retired (#242 refusal) or renamed (`..._sent_or_utc`). `git diff` kept→live-check on `todo.py`: only `_due_for_update` removed. `git grep` finds none of the README/SKILL/CHANGELOG contradictions on the live-check branch.
+- Smoke: `.venv/bin/python -m pytest -q`: 3138 passed, 4 skipped, 131 deselected; 1F + 25E all `tests/test_http_transport.py` (sandbox EPERM), same as before. Ruff check/format clean. `uv` not on PATH in the sandbox; `.venv/bin/*` works. Local `main` is stale (1.25.1); use `origin/main`.
+- Next: `checker-redo-todo-dates-use-configured-timezone` is moot once the live-check change merges (its findings are fixed there); `checker-checker-todo-dates-live-check` finding 1 is already done, finding 2 (stale task file + parked duplicate-run card) still open.
+
 ## 2026-11-15 — checker-redo-todo-dates-live-check
 - Smoke at start (f1aeb61): 3193 passed; only the sandbox-blocked `test_http_transport.py` (1F + 25E, bind EPERM) red. Ruff clean.
 - Fix: `TestRepeatingTaskDueIsRefused::test_moving_a_repeating_tasks_due_is_refused_and_leaves_one_task` pinned to `live_write_config.model_copy(update={"timezone": "UTC"})` for both the create and the refused update, with a comment matching its siblings.
