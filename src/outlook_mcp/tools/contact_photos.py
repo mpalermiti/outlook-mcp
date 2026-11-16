@@ -14,7 +14,11 @@ The PUT goes through the SDK's own ``photo.content.put``, which labels the body
 ``application/octet-stream``. Graph accepts that: on a personal account on
 2026-11-14 a PNG and a GIF each stored a photo sent that way, and both came back
 as ``image/jpeg``. A second PUT over an existing photo replaced it, so a repeat
-lands on the same state and the SDK's normal retry stays on.
+lands on the same state.
+
+The SDK does not retry this request: kiota's retry handler skips any
+``application/octet-stream`` body, so a 429 or 503 reaches the agent as an error
+at once rather than after a wait. Calling again is safe, for the same reason.
 """
 
 from __future__ import annotations

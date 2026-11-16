@@ -503,7 +503,8 @@ Creating, updating or deleting a rule also needs `MailboxSettings.ReadWrite` on 
 > `[{name, content_base64, content_type?}]`, up to 3 MB each (Graph's simple-attachment
 > size). The fence still governs every path argument. An inline file is bytes the agent
 > already holds and could already put in a message body, so it widens nothing.
-> `outlook_attach_to_event` and `outlook_upload_task_attachment` take paths only.
+> `outlook_attach_to_event`, `outlook_upload_task_attachment` and `outlook_set_contact_photo`
+> take paths only.
 
 | Tool | Description |
 |------|-------------|
