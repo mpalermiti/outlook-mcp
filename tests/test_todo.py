@@ -1055,3 +1055,146 @@ class TestDeleteChecklistItem:
             await delete_checklist_item(
                 client, task_id="task1", checklist_item_id="ci1", config=_CFG_RO
             )
+
+
+class TestTaskResponsesNameTheDueZone:
+    """Graph can keep a repeating task's due in its own zone; a bare time reads as UTC."""
+
+    @staticmethod
+    def _due(zone):
+        return MagicMock(date_time="2026-10-16T00:00:00.0000000", time_zone=zone)
+
+    async def test_list_tasks_reports_the_zone_beside_due(self):
+        client = _build_mock_client(tasks=[_mock_task(due=self._due("China Standard Time"))])
+        task = (await list_tasks(client))["tasks"][0]
+        assert task["due"] == "2026-10-16T00:00:00.0000000"
+        assert task["due_time_zone"] == "China Standard Time"
+
+    async def test_get_task_reports_the_zone_beside_due(self):
+        client = _build_mock_client(tasks=[_mock_task(due=self._due("UTC"))])
+        assert (await get_task(client, task_id="task1"))["due_time_zone"] == "UTC"
+
+    async def test_a_task_without_a_due_reports_no_zone(self):
+        client = _build_mock_client(tasks=[_mock_task(due=None)])
+        assert (await list_tasks(client))["tasks"][0]["due_time_zone"] is None
+
+    async def test_a_due_without_a_zone_reports_no_zone(self):
+        client = _build_mock_client(tasks=[_mock_task(due=self._due(None))])
+        assert (await list_tasks(client))["tasks"][0]["due_time_zone"] is None
+
+
+class TestRepeatingTaskZoneIsPerAccount:
+    """#72: one account kept the zone sent on a repeating task, another stored UTC.
+
+    Michael's probe (2026-11-14) sent "Pacific Standard Time" on a repeating
+    task's due and rule and got both back as UTC; the 2026-09-25 probe on #72,
+    another account, got its Windows zone back. Like `is_online` (#70), it is
+    per account, so the live tests accept either and the docs promise neither.
+    """
+
+    @pytest.mark.parametrize(
+        ("due_zone", "rule_zone", "ok"),
+        [
+            ("Pacific Standard Time", "Pacific Standard Time", True),
+            ("America/Los_Angeles", "America/Los_Angeles", True),
+            ("UTC", "UTC", True),  # Michael's account, 2026-11-14.
+            ("UTC", "Pacific Standard Time", False),  # The two disagree.
+            ("Pacific Standard Time", "UTC", False),
+            ("Tokyo Standard Time", "Tokyo Standard Time", False),  # A third zone.
+            (None, None, False),
+        ],
+    )
+    def test_live_zone_rule_accepts_the_zone_sent_or_utc(self, due_zone, rule_zone, ok):
+        from tests.test_live_todo_write import _LA_SPELLINGS, _zone_kept_or_coerced
+
+        assert _zone_kept_or_coerced(due_zone, rule_zone, _LA_SPELLINGS) is ok
+
+    def test_docs_do_not_promise_a_repeating_tasks_zone_is_kept(self):
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        texts = {
+            name: (root / name).read_text(encoding="utf-8")
+            for name in (
+                "README.md",
+                "SKILL.md",
+                "src/outlook_mcp/config.py",
+                "src/outlook_mcp/tools/todo.py",
+            )
+        }
+        # The changelog's released sections are history; only Unreleased is checked.
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        texts["CHANGELOG.md [Unreleased]"] = changelog.split("\n## [", 2)[1]
+
+        promises = (
+            "keeps a repeating task's due in its own zone",
+            "Graph keeps a repeating task",
+            "every new To Do recurrence",
+        )
+        for name, text in texts.items():
+            flat = " ".join(text.split())
+            for promise in promises:
+                assert promise not in flat, f"{name} still says: {promise!r}"
+        for name in ("README.md", "CHANGELOG.md [Unreleased]", "src/outlook_mcp/config.py"):
+            flat = " ".join(texts[name].split())
+            assert "some accounts store" in flat and "UTC" in flat, (
+                f"{name} does not say some accounts store a repeating task's zone as UTC"
+            )
+
+    def test_docs_do_not_promise_moving_a_repeating_tasks_due(self):
+        # #242 refuses every due change on a repeating task; no doc may describe
+        # one going through, in its stored zone or any other.
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parent.parent
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+        texts = {
+            "README.md": (root / "README.md").read_text(encoding="utf-8"),
+            "SKILL.md": (root / "SKILL.md").read_text(encoding="utf-8"),
+            "CHANGELOG.md [Unreleased]": changelog.split("\n## [", 2)[1],
+        }
+        promises = (
+            "Changing the due date of a repeating task keeps",
+            "Changing a repeating task's `due` keeps",
+            "`outlook_update_task` for a repeating task",
+        )
+        for name, text in texts.items():
+            flat = " ".join(text.split())
+            for promise in promises:
+                assert promise not in flat, f"{name} still says: {promise!r}"
+
+    def test_live_tests_pin_the_zone_of_every_due_they_write(self):
+        # A due goes out as wall-clock time in the configured zone, so a live
+        # test that writes one under the runner's own config asserts a day that
+        # depends on where the runner is: at or east of UTC+7, 17:00Z is
+        # tomorrow. Every such write names its zone with a `model_copy`.
+        import ast
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parent / "test_live_todo_write.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+
+        def config_of(call):
+            for keyword in call.keywords:
+                if keyword.arg == "config":
+                    return keyword.value
+            name = getattr(call.func, "id", None)
+            if name == "_temporary_task" and len(call.args) > 1:
+                return call.args[1]
+            return None
+
+        writes = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and any(k.arg == "due" for k in node.keywords)
+        ]
+        assert writes, "no live To Do test writes a due; the guard would check nothing"
+        unpinned = [
+            node.lineno
+            for node in writes
+            if isinstance(config_of(node), ast.Name) and config_of(node).id == "live_write_config"
+        ]
+        assert not unpinned, (
+            f"test_live_todo_write.py writes a due under the runner's own zone at lines "
+            f"{unpinned}; use live_write_config.model_copy(update={{'timezone': ...}})"
+        )
