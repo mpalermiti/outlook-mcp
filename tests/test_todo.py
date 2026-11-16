@@ -1122,9 +1122,11 @@ class TestRepeatingTaskZoneIsPerAccount:
                 "src/outlook_mcp/tools/todo.py",
             )
         }
-        # The changelog's released sections are history; only Unreleased is checked.
+        # Only the changelog section that carries this fix (#72) is checked: the others
+        # are history. It is [Unreleased] until a release moves it under that version.
         changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
-        texts["CHANGELOG.md [Unreleased]"] = changelog.split("\n## [", 2)[1]
+        sections = changelog.split("\n## [")[1:]
+        texts["CHANGELOG.md (#72 entry)"] = next(s for s in sections if "(#72" in s)
 
         promises = (
             "keeps a repeating task's due in its own zone",
@@ -1135,7 +1137,7 @@ class TestRepeatingTaskZoneIsPerAccount:
             flat = " ".join(text.split())
             for promise in promises:
                 assert promise not in flat, f"{name} still says: {promise!r}"
-        for name in ("README.md", "CHANGELOG.md [Unreleased]", "src/outlook_mcp/config.py"):
+        for name in ("README.md", "CHANGELOG.md (#72 entry)", "src/outlook_mcp/config.py"):
             flat = " ".join(texts[name].split())
             assert "some accounts store" in flat and "UTC" in flat, (
                 f"{name} does not say some accounts store a repeating task's zone as UTC"
