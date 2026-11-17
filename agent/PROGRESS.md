@@ -2,6 +2,13 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-16 — checker-checker-redo-todo-dates-use-configured-timezone
+
+- **Smoke:** 3240 passed, only sandbox `tests/test_http_transport.py` 1F+25E (port binding). Ran `.venv/bin/python -m pytest` / `.venv/bin/ruff` directly.
+- **Outcome:** checker was right. The previous session's `test_todo.py::test_update_task_a_repeating_task_only_gets_the_repeating_refusal` (8 cases) is a strict subset of main's `test_write_payloads_reach_the_wire.py::TestTodoDatesUseTheConfiguredZone::test_a_repeating_task_gets_only_the_repeating_refusal` (#252: 4 due shapes × 5 stored zones incl. both of its zones, same `_LA_CFG`, same exact-text / one-GET / no-PATCH checks). Restored `tests/test_todo.py` to base 21f7151; `git diff 21f7151 -- src/ tests/` is empty.
+- **Correction:** the entry below says finding 2 had no named offline test; it did, on main since #252. Its task file's Behaviour 2 now names main's test.
+- **Verify:** 3232 passed (−8, the dropped cases), same sandbox 1F+25E; ruff check + format clean.
+
 ## 2026-11-16 — checker-redo-todo-dates-use-configured-timezone
 
 - **Smoke:** 3232 passed, 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox forbids binding a local port: `[Errno 1] operation not permitted`). Ruff clean. `uv` can't open its cache in this sandbox; ran `.venv/bin/python -m pytest` and `.venv/bin/ruff` directly.
