@@ -2,6 +2,14 @@
 
 Newest first. Every worker session prepends: date, task, key outcomes, files/test evidence, notes for the next worker.
 
+## 2026-11-16 — checker-redo-todo-dates-use-configured-timezone
+
+- **Smoke:** 3232 passed, 1 failed + 25 errors, all `tests/test_http_transport.py` (sandbox forbids binding a local port: `[Errno 1] operation not permitted`). Ruff clean. `uv` can't open its cache in this sandbox; ran `.venv/bin/python -m pytest` and `.venv/bin/ruff` directly.
+- **Outcome:** no product code. The four findings reviewed the kept branch 1b0a8a4, which #252 (e7deac7) superseded on main and 1.33.0 shipped. Checked each against HEAD 21f7151: (1) one read per due change — existing `get.assert_awaited_once()` tests green; (2) no stored-zone branch remains (`git diff 1b0a8a4 HEAD -- src/outlook_mcp/tools/todo.py`: +5/-56); (3) README/SKILL/CHANGELOG describe only the refusal; (4) live repeating-task test accepts UTC, docs say the zone is sent.
+- **Added:** `tests/test_todo.py::TestUpdateTask::test_update_task_a_repeating_task_only_gets_the_repeating_refusal` — 8 cases (Windows `China Standard Time` / custom `tzone://` stored zone × `Z` / offset / `+7d` / zone-less due, `America/Los_Angeles` config): the error text equals `_REPEATING_DUE_REFUSAL`, one GET, no PATCH. Red 8/8 with 1b0a8a4's `todo.py` swapped in, green on HEAD. Guards finding 2, the only one without a named offline test.
+- **Verify:** 3240 passed, same sandbox http_transport 1F+25E; ruff check + format clean.
+- **Next worker:** the `construct-kept/redo-todo-dates-use-configured-timezone-*` and `construct-kept/todo-dates-*` branches are all superseded by #252; nothing on them needs rebuilding.
+
 ## 2026-11-16 — checker-checker-todo-dates-live-check
 
 - Smoke (cd91d03, `.venv/bin/python -m pytest -q`): 3231 passed, 4 skipped, 135 deselected; failures only sandbox `test_http_transport.py` (1F + 25E, bind EPERM) — first run showed one more failure, not reproduced on the second. Ruff check + format clean.
