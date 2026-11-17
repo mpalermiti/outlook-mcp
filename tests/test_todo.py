@@ -13,6 +13,7 @@ from msgraph.generated.models.todo_task import TodoTask
 from outlook_mcp.config import Config
 from outlook_mcp.errors import ReadOnlyError
 from outlook_mcp.tools.todo import (
+    _REPEATING_DUE_REFUSAL,
     _build_recurrence,
     add_checklist_item,
     complete_task,
@@ -587,6 +588,33 @@ class TestUpdateTask:
             await update_task(client, task_id="task1", title="New", due="2026-05-01", config=_CFG)
 
         mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        mock_item.return_value.patch.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "due", ["2026-05-01T09:00:00Z", "2026-05-01T09:00:00+08:00", "+7d", "2026-05-01T09:00:00"]
+    )
+    @pytest.mark.parametrize("stored_zone", ["China Standard Time", "tzone://Microsoft/Custom"])
+    async def test_update_task_a_repeating_task_only_gets_the_repeating_refusal(
+        self, due, stored_zone
+    ):
+        """No zone message reaches a repeating task ahead of #242's refusal.
+
+        A branch that worked out the task's stored zone before refusing told
+        the agent to retry in local time (Windows zone) or that the zone could
+        not be read (custom zone); the retry was then refused for the real
+        reason. The refusal must be the only answer, whatever the due's shape.
+        """
+        stored_due = MagicMock(date_time="2026-04-24T09:00:00.0000000", time_zone=stored_zone)
+        repeating = _mock_task(due=stored_due, recurrence=MagicMock())
+        client = _build_mock_client(tasks=[repeating])
+        config = Config(client_id="test", timezone="America/Los_Angeles")
+
+        with pytest.raises(ValueError) as refused:
+            await update_task(client, task_id="task1", due=due, config=config)
+
+        assert str(refused.value) == _REPEATING_DUE_REFUSAL
+        mock_item = client.me.todo.lists.by_todo_task_list_id.return_value.tasks.by_todo_task_id
+        mock_item.return_value.get.assert_awaited_once()
         mock_item.return_value.patch.assert_not_called()
 
     async def test_update_task_other_fields_on_a_repeating_task_still_patch(self):
