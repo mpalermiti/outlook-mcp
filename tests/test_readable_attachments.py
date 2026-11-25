@@ -470,22 +470,31 @@ async def test_timeout_and_cancellation_kill_descendant_holding_stdout(
 
     worker = tmp_path / "parent.py"
     pidfile = tmp_path / "descendant.pid"
+    partial = tmp_path / "descendant.pid.partial"
+    # write_text creates the file and then writes it, so a poll between the two
+    # reads "" (#238). The pid is written under another name and renamed into
+    # place: os.replace is atomic, so pidfile only ever exists with the whole
+    # pid in it, and waiting for it to exist is enough.
     worker.write_text(
-        "import subprocess,sys,time\n"
+        "import os,subprocess,sys\n"
         "from pathlib import Path\n"
         "sys.stdin.buffer.read()\n"
         'p=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"])\n'
-        "Path(" + repr(str(pidfile)) + ").write_text(str(p.pid))\n"
+        "Path(" + repr(str(partial)) + ").write_text(str(p.pid))\n"
+        "os.replace(" + repr(str(partial)) + "," + repr(str(pidfile)) + ")\n"
     )
     monkeypatch.setattr(mail_attachment_read, "WORKER", worker)
     monkeypatch.setattr(mail_attachment_read, "WALL_SECONDS", 0.6)
     task = asyncio.create_task(mail_attachment_read.extract(b"abc", "pdf"))
-    deadline = time.monotonic() + 5
-    while not pidfile.exists():
-        assert time.monotonic() < deadline
-        await asyncio.sleep(0.01)
-    descendant = psutil.Process(int(pidfile.read_text()))
+    # Assigned inside the try, so a failed wait or read still reaches the
+    # finally: the task is cancelled, which kills the worker's process group.
+    descendant = None
     try:
+        deadline = time.monotonic() + 5
+        while not pidfile.exists():
+            assert time.monotonic() < deadline, "the worker never wrote its descendant's pid"
+            await asyncio.sleep(0.01)
+        descendant = psutil.Process(int(pidfile.read_text()))
         if cancel:
             task.cancel()
         with pytest.raises(asyncio.CancelledError if cancel else asyncio.TimeoutError):
@@ -505,10 +514,11 @@ async def test_timeout_and_cancellation_kill_descendant_holding_stdout(
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-        try:
-            descendant.kill()
-        except psutil.NoSuchProcess:
-            pass
+        if descendant is not None:
+            try:
+                descendant.kill()
+            except psutil.NoSuchProcess:
+                pass
 
 
 def test_macos_does_not_attempt_unsupported_address_space_limit(monkeypatch):
