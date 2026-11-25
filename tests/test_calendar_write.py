@@ -4151,6 +4151,17 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
     # ── only a single event is checked ────────────────────────────────
 
     @pytest.mark.parametrize(
+        "reply",
+        [
+            # Monday's first occurrence, two days on: what a weekday series may echo.
+            ("2026-12-14T17:00:00", "2026-12-14T17:30:00"),
+            # An hour late: what a zone-rule disagreement looks like, and what a
+            # single event would be corrected for.
+            ("2026-12-12T18:00:00", "2026-12-12T18:30:00"),
+        ],
+        ids=["first occurrence", "an hour late"],
+    )
+    @pytest.mark.parametrize(
         ("event_type", "checked"),
         [
             ("singleInstance", True),
@@ -4159,21 +4170,20 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
             ("exception", False),
         ],
     )
-    async def test_only_an_update_to_a_single_event_is_checked(self, event_type, checked):
+    async def test_only_an_update_to_a_single_event_is_checked(self, event_type, checked, reply):
         """A master's reply can carry its first occurrence, not the start sent (S1).
 
         Saturday 17:00Z sent to a weekday series can come back as Monday's. That
         is no zone rule's doing, and a corrective patch would file the series in
         UTC, or be refused because it carries no recurrence. So only an event
         that stands alone is checked; the others are sent as converted, as before
-        the check existed, with no `Prefer` and no second write.
+        the check existed, with no `Prefer`, no second write and no `note`,
+        whatever the reply says.
         """
         from tests.test_write_payloads_reach_the_wire import wire
 
         builder, mock_client = self._updatable(
-            "America/Los_Angeles",
-            _utc_reply("2026-12-14T17:00:00", "2026-12-14T17:30:00"),
-            event_type=event_type,
+            "America/Los_Angeles", _utc_reply(*reply), event_type=event_type
         )
 
         result = await update_event(
@@ -4190,10 +4200,15 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
         assert '"dateTime": "2026-12-12T09:00:00"' in body
         assert '"timeZone": "America/Los_Angeles"' in body
         assert _prefer(first) == ({self.UTC_REPLY} if checked else set())
-        # Two days is no zone rule either, so even the single event is not
-        # rewritten; what matters here is that only it was asked.
-        assert builder.patch.call_count == 1
-        assert "note" not in result
+        if not checked:
+            assert builder.patch.call_count == 1
+            assert "note" not in result
+        else:
+            # An hour is put back; two days is no zone rule's doing, so it is
+            # only reported.
+            corrected = reply[0].endswith("T18:00:00")
+            assert builder.patch.call_count == (2 if corrected else 1)
+            assert "note" in result
 
     async def test_a_single_event_typed_by_the_sdk_enum_is_checked(self):
         """Graph's reply is parsed into `EventType`, not a string; both must read as single."""
@@ -4233,6 +4248,27 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
         assert builder.patch.call_count == 1
         assert "note" not in result
 
+    async def test_an_update_that_removes_a_recurrence_is_not_checked(self):
+        """`remove_recurrence` sends an explicit null recurrence; that request is not checked."""
+        builder, mock_client = self._updatable(
+            "America/Havana", _utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00")
+        )
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            remove_recurrence=True,
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args
+        assert patched.args[0].additional_data == {"recurrence": None}
+        assert _prefer(patched) == set()
+        assert builder.patch.call_count == 1
+        assert "note" not in result
+
     async def test_an_update_that_makes_a_series_is_not_checked(self):
         """A single event given a recurrence becomes a master in the same request."""
         builder, mock_client = self._updatable(
@@ -4266,11 +4302,14 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
         ],
         ids=["a day", "over three hours", "half a minute", "one end too far"],
     )
-    async def test_a_difference_no_zone_rule_explains_is_left_alone(self, start_utc, end_utc):
+    async def test_a_difference_no_zone_rule_explains_is_reported_not_changed(
+        self, start_utc, end_utc
+    ):
         """Zone offsets are whole minutes, and two rule sets disagree by at most a few hours.
 
         Anything else did not come from the conversion, so a corrective write
-        would be a guess: the event is left as Graph placed it, with no `note`.
+        would be a guess: the event is left as Graph placed it, and the `note`
+        says where that is, so the caller can check it with the user.
         """
         builder, mock_client = self._updatable("America/Havana", _utc_reply(start_utc, end_utc))
 
@@ -4283,7 +4322,10 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
         )
 
         assert builder.patch.call_count == 1
-        assert "note" not in result
+        note = result["note"]
+        assert f"start at {start_utc} UTC instead of 2026-12-13T02:00:00 UTC" in note
+        assert "not changed" in note and "outlook_get_event" in note
+        assert "filed in UTC" not in note
 
     @pytest.mark.parametrize(
         ("start_utc", "end_utc"),
@@ -4329,6 +4371,31 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
 
         assert builder.patch.call_count == (2 if corrected else 1)
         assert ("note" in result) is corrected
+
+    @pytest.mark.parametrize(
+        ("typed", "reply", "corrected"),
+        [
+            # Three hours early with the fraction dropped: 3 h 0.9 s from the
+            # time typed, exactly three hours from its whole second.
+            ("2026-12-13T02:00:00.900Z", "2026-12-12T23:00:00.0000000", True),
+            ("2026-12-13T02:00:00.900Z", "2026-12-13T05:00:00.0000000", True),
+            # Not a whole minute from either, though within a second of one.
+            ("2026-12-13T02:00:00Z", "2026-12-13T02:00:59.6000000", False),
+            # An hour and a fraction no dropped digit accounts for.
+            ("2026-12-13T02:00:00.400Z", "2026-12-13T03:00:00.7000000", False),
+        ],
+        ids=["3h early", "3h late", "59.6 seconds", "an hour and a fraction"],
+    )
+    async def test_the_edges_are_the_same_either_side(self, typed, reply, corrected):
+        answer = MagicMock(id="AAMkAG123=")
+        answer.start = MagicMock(date_time=reply, time_zone="UTC")
+        answer.end = None
+        builder, mock_client = self._updatable("America/Havana", answer)
+
+        result = await update_event(mock_client, event_id="AAMkAG123=", start=typed, config=_CFG)
+
+        assert builder.patch.call_count == (2 if corrected else 1)
+        assert ("not changed" in result["note"]) is not corrected
 
     async def test_the_note_names_the_end_that_moved_and_where(self):
         builder, mock_client = self._updatable(
@@ -4437,6 +4504,14 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
         fixer.patch.assert_not_called()
 
     @pytest.mark.parametrize(
+        "reply",
+        [
+            ("2026-12-14T17:00:00", "2026-12-14T17:30:00"),
+            ("2026-12-12T18:00:00", "2026-12-12T18:30:00"),
+        ],
+        ids=["first occurrence", "an hour late"],
+    )
+    @pytest.mark.parametrize(
         "recurrence",
         [
             "weekdays",
@@ -4447,18 +4522,19 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
         ],
         ids=["weekdays", "thursdays"],
     )
-    async def test_a_series_create_is_not_checked(self, recurrence):
+    async def test_a_series_create_is_not_checked(self, recurrence, reply):
         """Saturday 17:00Z for a series that never meets on a Saturday (S1).
 
         Graph accepts a start off the pattern and puts the occurrences on the
         pattern's days, so its reply may carry the first occurrence (Monday or
         Thursday), days from the start typed. Corrected, the series would be
         filed in UTC, or refused because the patch carries no recurrence. The
-        series is converted as before (#236) and not checked.
+        series is converted as before (#236) and not checked, even when the reply
+        is an hour off, which on a single event would be corrected.
         """
         from tests.test_write_payloads_reach_the_wire import wire
 
-        mock_client, fixer = self._poster(_utc_reply("2026-12-14T17:00:00", "2026-12-14T17:30:00"))
+        mock_client, fixer = self._poster(_utc_reply(*reply))
 
         result = await create_event(
             mock_client,

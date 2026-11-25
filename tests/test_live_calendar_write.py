@@ -50,13 +50,36 @@ async def _temporary_event(
     event again in a calendar listing; the shared prefix still makes anything a
     crash leaks greppable in the UI. ``with_result`` hands back
     ``(id, create_event's result)`` for a test that reads what create reported.
+
+    ``create_event`` can fail after its POST succeeded: a refused corrective
+    PATCH raises with the event already on the calendar (#264 review). So the id
+    of each event a write inside it answers with is recorded as it arrives, and
+    those are deleted before the failure is passed on.
     """
-    created = await create_event(
-        client.sdk_client,
-        subject=LIVE_WRITE_SUBJECT + subject_suffix,
-        config=config,
-        **kwargs,
-    )
+    from outlook_mcp.tools import calendar_write
+
+    posted: list[str] = []
+    write = calendar_write.call_without_replay
+
+    async def recording(call, **kwargs):
+        response = await write(call, **kwargs)
+        if isinstance(getattr(response, "id", None), str):
+            posted.append(response.id)
+        return response
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(calendar_write, "call_without_replay", recording)
+        try:
+            created = await create_event(
+                client.sdk_client,
+                subject=LIVE_WRITE_SUBJECT + subject_suffix,
+                config=config,
+                **kwargs,
+            )
+        except BaseException:
+            for leaked in dict.fromkeys(posted):
+                await delete_event(client.sdk_client, leaked, config=config)
+            raise
     event_id = created["event_id"]
     try:
         yield (event_id, created) if with_result else event_id

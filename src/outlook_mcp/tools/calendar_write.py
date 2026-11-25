@@ -175,7 +175,7 @@ _REPLY_IN_UTC = 'outlook.timezone="UTC"'
 # hour at Lord Howe, two at Troll, or a change to the standard offset (Magadan
 # moved two hours in 2014). Three hours covers any of these with room to spare.
 # A larger difference is something else (a series' first occurrence days from its
-# typed start, a date-line jump like Samoa's in 2011), and is left alone.
+# typed start, a date-line jump like Samoa's in 2011): it is reported, not changed.
 _MOST_A_ZONE_RULE_MOVES = timedelta(hours=3)
 
 
@@ -211,38 +211,39 @@ def _reply_instant(reply: Any, which: str) -> datetime | None:
     return moment.replace(tzinfo=dt_timezone.utc) if moment.tzinfo is None else moment
 
 
-def _a_zone_rule_could_move(gap: timedelta) -> bool:
-    """Whether two sets of rules for one zone could put a time ``gap`` from where it was meant.
+def _a_zone_rule_could_move(got: datetime, wanted: datetime) -> bool:
+    """Whether two sets of rules for one zone could put the time ``wanted`` at ``got``.
 
-    Offsets are whole minutes, so such a gap is too (to within the second a
-    dropped fraction can take), and it is at most ``_MOST_A_ZONE_RULE_MOVES``.
+    Offsets are whole minutes, so the gap is an exact number of minutes, at most
+    ``_MOST_A_ZONE_RULE_MOVES``: measured from the time typed, or from it without
+    its fraction of a second, which Graph may drop.
     """
-    seconds = abs(gap.total_seconds())
-    minutes = round(seconds / 60)
-    return seconds <= _MOST_A_ZONE_RULE_MOVES.total_seconds() and abs(seconds - minutes * 60) < 1
+    for meant in (wanted, wanted.replace(microsecond=0)):
+        gap = abs(got - meant)
+        if gap <= _MOST_A_ZONE_RULE_MOVES and gap % timedelta(minutes=1) == timedelta(0):
+            return True
+    return False
 
 
-def _moved_ends(reply: Any, converted: dict) -> list[str]:
-    """Each converted end Graph's reply puts at another moment than typed, described.
+def _moved_ends(reply: Any, converted: dict) -> tuple[list[str], bool]:
+    """Each converted end Graph's reply puts at another moment than typed, described,
+    and whether a zone rule could explain every one of those gaps.
 
-    Empty when the reply cannot say for every converted end, or puts one further
-    off than a zone rule could: not knowing, or a gap with another cause, is not
-    a move to put back.
+    Empty when the reply cannot say for every converted end: not knowing is not a move.
     """
-    moved = []
+    moved, explained = [], True
     for which, (typed, _) in converted.items():
         got, wanted = _reply_instant(reply, which), _parse_iso(typed)
         if got is None or wanted is None:
-            return []
+            return [], True
         if abs(got - wanted) < timedelta(seconds=1):
             continue
-        if not _a_zone_rule_could_move(got - wanted):
-            return []
+        explained = explained and _a_zone_rule_could_move(got, wanted)
         moved.append(
             f"the {which} at {got.astimezone(dt_timezone.utc):%Y-%m-%dT%H:%M:%S} UTC "
             f"instead of {wanted.astimezone(dt_timezone.utc):%Y-%m-%dT%H:%M:%S} UTC"
         )
-    return moved
+    return moved, explained
 
 
 def _zone_not_kept(moved: list[str], converted: dict) -> str:
@@ -265,8 +266,9 @@ async def _keep_typed_instants(target: Any, reply: Any, converted: dict, done: s
     they disagree for that zone and date, or this host's tz data is out of date,
     the event lands at another moment. Then each converted end is sent again as
     typed: the old behaviour, the right moment, the zone lost. ``{"note": ...}``
-    says so; ``{}`` when nothing moved, the reply cannot say, or the gap is not
-    one a zone rule makes (``_a_zone_rule_could_move``).
+    says so; ``{}`` when nothing moved or the reply cannot say. A gap no zone
+    rule makes (``_a_zone_rule_could_move``) is not the conversion's doing, so
+    nothing is written and the ``note`` reports it for the caller to check.
 
     Callers pass ``converted`` only for a single event. A series' reply can
     carry its first occurrence rather than the start typed, days away, and
@@ -278,9 +280,15 @@ async def _keep_typed_instants(target: Any, reply: Any, converted: dict, done: s
     ``If-Match``: it follows the write it corrects at once, and sends only the
     two times.
     """
-    moved = _moved_ends(reply, converted) if converted else []
+    moved, explained = _moved_ends(reply, converted) if converted else ([], True)
     if not moved:
         return {}
+    if not explained:
+        return {
+            "note": f"Graph placed {' and '.join(moved)}. No time zone rule explains a "
+            "difference like that, so it was not changed. Read the event with "
+            "outlook_get_event and check the time with the user."
+        }
 
     from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
     from msgraph.generated.models.event import Event
