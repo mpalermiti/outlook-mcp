@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from outlook_mcp.config import Config
@@ -659,8 +660,8 @@ async def update_contact(
     into the addresses the contact has now: the contact is read, the merge is
     computed from that read, and the PATCH is pinned to it with ``If-Match``.
     That is #87's rule for a write that sends back something it read: an edit
-    made in between is refused with ``412`` rather than overwritten, and a read
-    with no change key goes out unpinned. Every argument is checked before the
+    made in between is never overwritten (a ``412`` is read and merged once
+    more), and a read with no change key goes out unpinned. Every argument is checked before the
     read; the checks that need the stored addresses (a remove the contact does
     not have, more than three in all) come after it and before any write.
     """
@@ -732,24 +733,60 @@ async def update_contact(
         patch_body.other_address = _build_address("other", other_address)
 
     request_builder = graph_client.me.contacts.by_contact_id(contact_id)
-    if_match: str | None = None
-    if adding is not None or removing is not None:
-        # Last, so every check above has run before anything is read. No
-        # $select, as in get_contact: the whole contact, change key included.
-        current = await request_builder.get()
+    if adding is None and removing is None:
+        # Nothing was read, so nothing is pinned or retried: last writer wins.
+        await request_builder.patch(patch_body)
+        return {"status": "updated"}
+
+    # Last, so every check above has run before anything is read. A contact
+    # created moments ago can be 404'd by the read, or its fresh change key
+    # 412'd by the PATCH (#259), so each gets one more read after a short wait.
+    # The retry rebuilds the merge from that read and pins to its key, so an
+    # address added elsewhere in between is kept, as #87 requires.
+    for attempt in range(2):
+        last = attempt == 1
+        try:
+            # No $select, as in get_contact: the whole contact, change key included.
+            current = await request_builder.get()
+        except Exception as exc:
+            if last or _status(exc) != 404:
+                raise
+            await asyncio.sleep(_REREAD_WAIT_SECONDS)
+            continue
         patch_body.email_addresses = _merged_emails(current, adding or [], removing or [])
         if_match = (getattr(current, "additional_data", None) or {}).get("@odata.etag")
-
-    if if_match:
-        from kiota_abstractions.base_request_configuration import RequestConfiguration
-
-        patch_config = RequestConfiguration()
-        patch_config.headers.add("If-Match", if_match)
-        await request_builder.patch(patch_body, request_configuration=patch_config)
-    else:
-        await request_builder.patch(patch_body)
+        try:
+            await _patch_pinned(request_builder, patch_body, if_match)
+        except Exception as exc:
+            if last or not if_match or _status(exc) != 412:
+                raise
+            await asyncio.sleep(_REREAD_WAIT_SECONDS)
+            continue
+        break
 
     return {"status": "updated"}
+
+
+# How long update_contact waits before its one re-read (#259). Graph's lag on a
+# just-created contact is short; a test sets this to 0.
+_REREAD_WAIT_SECONDS = 1.0
+
+
+def _status(exc: BaseException) -> int | None:
+    """The HTTP status a Graph SDK error carries, or None for anything else."""
+    return getattr(exc, "response_status_code", None)
+
+
+async def _patch_pinned(request_builder: Any, patch_body: Any, if_match: str | None) -> None:
+    """PATCH with ``If-Match`` when the read carried a change key, unpinned when not (#87)."""
+    if not if_match:
+        await request_builder.patch(patch_body)
+        return
+    from kiota_abstractions.base_request_configuration import RequestConfiguration
+
+    patch_config = RequestConfiguration()
+    patch_config.headers.add("If-Match", if_match)
+    await request_builder.patch(patch_body, request_configuration=patch_config)
 
 
 async def delete_contact(

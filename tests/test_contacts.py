@@ -1348,6 +1348,122 @@ class TestAddAndRemoveEmails:
         self._builder(mock_client).get.assert_not_called()
 
 
+def _graph_status(code):
+    """A Graph SDK error carrying this HTTP status, as kiota raises it."""
+    from msgraph.generated.models.o_data_errors.o_data_error import ODataError
+
+    err = ODataError()
+    err.response_status_code = code
+    return err
+
+
+class TestTheMergeRetriesOnceRightAfterCreation:
+    """#259: Graph can 404 a just-created contact, or 412 the change key it just issued.
+
+    An agent that creates a contact and then adds an address does exactly that.
+    One more read, after a short wait, gets past both; the merge is rebuilt from
+    that read and pinned to its change key, so #87's rule still holds: an address
+    added elsewhere is in the new read and stays.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_wait(self, monkeypatch):
+        from outlook_mcp.tools import contacts
+
+        monkeypatch.setattr(contacts, "_REREAD_WAIT_SECONDS", 0)
+
+    @staticmethod
+    def _builder(mock_client):
+        return mock_client.me.contacts.by_contact_id.return_value
+
+    async def test_a_404_on_the_read_is_read_again(self):
+        mock_client = _make_contact_by_id_mock(None)
+        builder = self._builder(mock_client)
+        builder.get.side_effect = [
+            _graph_status(404),
+            _contact_holding(("jane@contoso.com", "Jane")),
+        ]
+        await update_contact(
+            mock_client, contact_id="contact123", add_emails=["jane@example.com"], config=_CFG
+        )
+        assert builder.get.call_count == 2
+        sent = builder.patch.call_args[0][0].email_addresses
+        assert [e.address for e in sent] == ["jane@contoso.com", "jane@example.com"]
+
+    async def test_a_412_rebuilds_the_merge_from_a_new_read_and_pins_to_it(self):
+        mock_client = _make_contact_by_id_mock(None)
+        builder = self._builder(mock_client)
+        fresh_tag = 'W/"EQAAABYAAAA9sMfE2cIhRb3f6CTJkTSZAAD0dvmc"'
+        builder.get.side_effect = [
+            _contact_holding(("jane@contoso.com", "Jane")),
+            # Edited elsewhere in between: the new read holds an address the
+            # first did not, and the rebuilt merge must keep it.
+            _contact_holding(
+                ("jane@contoso.com", "Jane"), ("elsewhere@example.com", None), etag=fresh_tag
+            ),
+        ]
+        builder.patch.side_effect = [_graph_status(412), None]
+        await update_contact(
+            mock_client, contact_id="contact123", add_emails=["jane@example.com"], config=_CFG
+        )
+        assert builder.patch.call_count == 2
+        second = builder.patch.call_args_list[1]
+        assert [e.address for e in second[0][0].email_addresses] == [
+            "jane@contoso.com",
+            "elsewhere@example.com",
+            "jane@example.com",
+        ]
+        assert second.kwargs["request_configuration"].headers.get("If-Match") == {fresh_tag}
+
+    async def test_a_second_404_is_reported(self):
+        mock_client = _make_contact_by_id_mock(None)
+        builder = self._builder(mock_client)
+        builder.get.side_effect = [_graph_status(404), _graph_status(404)]
+        with pytest.raises(Exception) as caught:
+            await update_contact(
+                mock_client, contact_id="contact123", add_emails=["a@example.com"], config=_CFG
+            )
+        assert caught.value.response_status_code == 404
+        assert builder.get.call_count == 2
+        builder.patch.assert_not_called()
+
+    async def test_a_second_412_is_reported(self):
+        mock_client = _make_contact_by_id_mock(_contact_holding(("jane@contoso.com", "Jane")))
+        builder = self._builder(mock_client)
+        builder.patch.side_effect = [_graph_status(412), _graph_status(412)]
+        with pytest.raises(Exception) as caught:
+            await update_contact(
+                mock_client, contact_id="contact123", add_emails=["a@example.com"], config=_CFG
+            )
+        assert caught.value.response_status_code == 412
+        assert builder.get.call_count == 2
+        assert builder.patch.call_count == 2
+
+    @pytest.mark.parametrize("code", [400, 403, 500])
+    async def test_other_failures_on_the_read_are_not_retried(self, code):
+        mock_client = _make_contact_by_id_mock(None)
+        builder = self._builder(mock_client)
+        builder.get.side_effect = [_graph_status(code)]
+        with pytest.raises(Exception) as caught:
+            await update_contact(
+                mock_client, contact_id="contact123", add_emails=["a@example.com"], config=_CFG
+            )
+        assert caught.value.response_status_code == code
+        assert builder.get.call_count == 1
+
+    async def test_an_unpinned_patch_is_never_retried(self):
+        """Without add/remove nothing was read, so a failed PATCH has nothing to rebuild."""
+        mock_client = _make_contact_by_id_mock(None)
+        builder = self._builder(mock_client)
+        builder.patch.side_effect = [_graph_status(404)]
+        with pytest.raises(Exception):
+            await update_contact(
+                mock_client, contact_id="contact123", first_name="Janet", config=_CFG
+            )
+        assert builder.patch.call_count == 1
+        builder.get.assert_not_called()
+
+
 class TestAddAndRemoveEmailsThroughTheServer:
     """`server.py` hands `update_contact` its arguments positionally, and the two
     lists have the same type, so a swap would add what was meant to be removed.
