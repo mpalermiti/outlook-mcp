@@ -35,6 +35,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
 - `src/outlook_mcp/config.py` — Config file management (`~/.outlook-mcp/`, or `OUTLOOK_MCP_CONFIG_DIR` — one directory per server instance, one instance per account)
 - `src/outlook_mcp/_config_env.py` — Optional `OUTLOOK_MCP_*` environment input over the config file (#180): `client_id` only when the file has none, `tenant_id` and `timezone` as overrides; the security settings only tighten the file's policy, and a value that would loosen it is refused at startup (README "Environment configuration")
 - `src/outlook_mcp/validation.py` — Input validation (OData, KQL, IDs, datetimes, time zones)
+- `src/outlook_mcp/_windows_zones.py` — Generated Windows zone name → IANA key table (CLDR `windowsZones.xml`, territory `001`), used only to convert a `Z`/offset event time into a zone Graph names in Windows terms (#236); the name sent back stays Graph's. Regenerate with `scripts/generate_windows_zones.py` (its docstring has the steps); never edit by hand
 - `src/outlook_mcp/errors.py` — Exception hierarchy. `OutlookMCPError` inherits the SDK's `ToolError`; this is load-bearing, not cosmetic (see Conventions)
 - `src/outlook_mcp/pagination.py` — Cursor-based pagination
 - `src/outlook_mcp/cli.py` — `outlook-mcp` entry point: `serve` (default), `auth`, `status`, `logout`

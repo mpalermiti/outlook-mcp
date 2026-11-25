@@ -3831,9 +3831,9 @@ class TestATypedInstantKeepsItsZone:
             "2027-11-07T08:30:00Z",
         )
 
-    async def test_an_end_in_a_windows_zone_keeps_the_start_as_written_too(self):
-        """Start in Los Angeles, end in "Pacific Standard Time": the end cannot convert."""
-        builder, mock_client = self._updatable(self.LA, "Pacific Standard Time")
+    async def test_an_end_in_an_unknown_zone_keeps_the_start_as_written_too(self):
+        """Start in Los Angeles, end in a zone no table names: the end cannot convert."""
+        builder, mock_client = self._updatable(self.LA, "Nowhere Standard Time")
 
         await update_event(
             mock_client,
@@ -3879,9 +3879,9 @@ class TestATypedInstantKeepsItsZone:
         assert patched.start.date_time == "2027-01-01T13:00:00"
         assert patched.end.date_time == "2027-01-01T14:00:00"
 
-    async def test_a_windows_zoned_event_is_sent_as_written(self):
-        """`zoneinfo` cannot convert into "Pacific Standard Time", so the old behaviour stays."""
-        builder, mock_client = self._updatable("Pacific Standard Time")
+    async def test_an_unknown_zone_name_is_sent_as_written(self):
+        """Neither `zoneinfo` nor the Windows table knows it, so the old behaviour stays."""
+        builder, mock_client = self._updatable("Nowhere Standard Time")
 
         await update_event(
             mock_client,
@@ -3893,7 +3893,51 @@ class TestATypedInstantKeepsItsZone:
 
         patched = builder.patch.call_args[0][0]
         assert patched.start.date_time == "2026-12-13T02:00:00Z"
-        assert patched.start.time_zone == "Pacific Standard Time"
+        assert patched.start.time_zone == "Nowhere Standard Time"
+
+    @pytest.mark.parametrize(
+        ("windows", "iana"),
+        [
+            ("Pacific Standard Time", "America/Los_Angeles"),
+            ("W. Europe Standard Time", "Europe/Berlin"),
+            ("Tokyo Standard Time", "Asia/Tokyo"),
+        ],
+    )
+    async def test_a_windows_named_zone_converts_like_its_iana_equivalent(self, windows, iana):
+        """Graph names an Outlook-made event's zone in Windows terms; it is sent back as is."""
+        sent = {}
+        for zone in (windows, iana):
+            builder, mock_client = self._updatable(zone)
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-12-13T02:00:00Z",
+                end="2026-12-13T03:00:00Z",
+                config=_CFG,
+            )
+            patched = builder.patch.call_args[0][0]
+            sent[zone] = (patched.start.date_time, patched.end.date_time)
+            assert (patched.start.time_zone, patched.end.time_zone) == (zone, zone)
+
+        assert sent[windows] == sent[iana]
+        assert not sent[windows][0].endswith("Z")
+
+    async def test_a_z_start_and_recurrence_on_a_windows_event_use_its_local_day(self):
+        """#235: Thursday 01:00Z is Wednesday 17:00 Pacific, so the series is Wednesday's."""
+        builder, mock_client = self._updatable("Pacific Standard Time")
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-12T01:00:00Z",
+            recurrence="weekly",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.date_time == "2026-11-11T17:00:00"
+        assert [d.value for d in patched.recurrence.pattern.days_of_week] == ["wednesday"]
+        assert patched.recurrence.range.start_date == date(2026, 11, 11)
 
     async def test_a_stored_all_day_event_is_sent_as_written(self):
         builder, mock_client = self._updatable(self.LA, is_all_day=True)
@@ -3922,3 +3966,290 @@ class TestATypedInstantKeepsItsZone:
         )
 
         assert result == {"status": "updated", "event_id": "AAMkAG123="}
+
+
+def _utc_reply(start_utc: str | None, end_utc: str | None, *, zone: str | None = "UTC"):
+    """A write reply as Graph returns it under `Prefer: outlook.timezone="UTC"`.
+
+    Seven fractional digits, Graph's own spelling. `None` leaves that end out.
+    """
+    reply = MagicMock(id="AAMkAG123=", subject="Dinner")
+    reply.start = (
+        None if start_utc is None else MagicMock(date_time=f"{start_utc}.0000000", time_zone=zone)
+    )
+    reply.end = (
+        None if end_utc is None else MagicMock(date_time=f"{end_utc}.0000000", time_zone=zone)
+    )
+    return reply
+
+
+def _prefer(call) -> set:
+    """The `Prefer` values a mocked SDK write was sent with."""
+    return set(call.kwargs["request_configuration"].headers.get("Prefer") or set())
+
+
+class TestAConvertedTimeIsCheckedAgainstGraph:
+    """A converted `Z`/offset time is checked against where Graph put it (#262 review).
+
+    The conversion uses this host's zone rules (IANA, through the Windows table
+    for a Windows name); Graph reads the local time back with its own. Where the
+    two disagree for a zone and date, the event would land at another moment and
+    the tool would still say `created`/`updated`. So a write that converted asks
+    Graph to state its reply in UTC, and when the reply puts an end elsewhere, the
+    typed values are sent again as written: the moment is right, the zone is lost,
+    and the result says so.
+    """
+
+    UTC_REPLY = 'outlook.timezone="UTC"'
+
+    @staticmethod
+    def _updatable(zone: str, reply):
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=_current_event(start_zone=zone))
+        builder.patch = AsyncMock(return_value=reply)
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+        return builder, mock_client
+
+    # ── update ────────────────────────────────────────────────────────
+
+    @pytest.mark.parametrize("zone", ["America/Los_Angeles", "Pacific Standard Time"])
+    async def test_a_reply_at_the_typed_moment_needs_nothing_more(self, zone):
+        builder, mock_client = self._updatable(
+            zone, _utc_reply("2026-12-13T02:00:00", "2026-12-13T03:00:00")
+        )
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        assert builder.patch.call_count == 1
+        assert _prefer(builder.patch.call_args) == {self.UTC_REPLY}
+        assert result == {"status": "updated", "event_id": "AAMkAG123="}
+
+    @pytest.mark.parametrize(
+        ("zone", "label"),
+        [("America/Havana", "America/Havana"), ("Cuba Standard Time", "Cuba Standard Time")],
+    )
+    async def test_a_reply_an_hour_off_is_put_back_as_typed(self, zone, label):
+        """Graph's rules for the zone are an hour from this host's: the event landed late."""
+        builder, mock_client = self._updatable(
+            zone, _utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00")
+        )
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-12T22:00:00-05:00",
+            config=_CFG,
+        )
+
+        assert builder.patch.call_count == 2
+        first, fix = (call.args[0] for call in builder.patch.call_args_list)
+        assert not first.start.date_time.endswith("Z")
+        # The corrective patch carries the times exactly as typed, beside the same
+        # zone name, and nothing else.
+        assert (fix.start.date_time, fix.start.time_zone) == ("2026-12-13T02:00:00Z", label)
+        assert (fix.end.date_time, fix.end.time_zone) == ("2026-12-12T22:00:00-05:00", label)
+        assert fix.subject is None and fix.recurrence is None
+        assert _prefer(builder.patch.call_args_list[1]) == set()
+        assert result["status"] == "updated"
+        assert "time zone" in result["note"] and "UTC" in result["note"]
+
+    async def test_only_the_converted_end_is_put_back(self):
+        builder, mock_client = self._updatable(
+            "America/Los_Angeles", _utc_reply("2026-12-13T03:00:00", None)
+        )
+
+        result = await update_event(
+            mock_client, event_id="AAMkAG123=", start="2026-12-13T02:00:00Z", config=_CFG
+        )
+
+        fix = builder.patch.call_args_list[1].args[0]
+        assert fix.start.date_time == "2026-12-13T02:00:00Z"
+        assert fix.end is None
+        assert "note" in result
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            _utc_reply(None, None),
+            _utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00", zone="Pacific Standard Time"),
+            MagicMock(id="AAMkAG123="),
+        ],
+        ids=["no start or end", "not in UTC", "no usable fields"],
+    )
+    async def test_a_reply_that_cannot_say_is_not_guessed_at(self, reply):
+        builder, mock_client = self._updatable("America/Los_Angeles", reply)
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        assert builder.patch.call_count == 1
+        assert "note" not in result
+
+    @pytest.mark.parametrize(
+        ("start", "end"),
+        [
+            ("2026-12-12T18:00:00", "2026-12-12T19:00:00"),  # zone-less: nothing converted
+            ("2027-11-07T07:30:00Z", "2027-11-07T08:30:00Z"),  # repeated hour: sent as typed
+        ],
+    )
+    async def test_a_write_that_converted_nothing_asks_nothing(self, start, end):
+        builder, mock_client = self._updatable(
+            "America/Los_Angeles", _utc_reply("2001-01-01T00:00:00", "2001-01-01T01:00:00")
+        )
+
+        result = await update_event(
+            mock_client, event_id="AAMkAG123=", start=start, end=end, config=_CFG
+        )
+
+        assert builder.patch.call_count == 1
+        assert _prefer(builder.patch.call_args) == set()
+        assert "note" not in result
+
+    async def test_a_failed_correction_says_where_the_event_is(self):
+        from outlook_mcp.errors import GraphAPIError, OutlookMCPError
+
+        builder, mock_client = self._updatable(
+            "Cuba Standard Time", _utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00")
+        )
+        builder.patch.side_effect = [
+            _utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00"),
+            GraphAPIError(400, "ErrorInvalidRequest", "nope", action=None),
+        ]
+
+        with pytest.raises(OutlookMCPError) as exc:
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-12-13T02:00:00Z",
+                end="2026-12-13T03:00:00Z",
+                config=_CFG,
+            )
+
+        message = str(exc.value)
+        assert "2026-12-13T03:00:00" in message  # where Graph put it
+        assert "2026-12-13T02:00:00" in message  # where it was asked to go
+        assert "nope" in message
+        assert "outlook_get_event" in message
+
+    # ── create ────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _poster(reply):
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=reply)
+        fixer = MagicMock()
+        fixer.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client.me.events.by_event_id = MagicMock(return_value=fixer)
+        return mock_client, fixer
+
+    @pytest.mark.parametrize(
+        ("reply", "corrected"),
+        [
+            (_utc_reply("2026-12-13T02:00:00", "2026-12-13T03:00:00"), False),
+            (_utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00"), True),
+        ],
+        ids=["kept", "moved"],
+    )
+    async def test_create_checks_the_reply_and_puts_a_moved_event_back(self, reply, corrected):
+        mock_client, fixer = self._poster(reply)
+
+        result = await create_event(
+            mock_client,
+            subject="Dinner",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            timezone="America/Havana",
+            config=_CFG,
+        )
+
+        assert _prefer(mock_client.me.events.post.call_args) == {self.UTC_REPLY}
+        assert fixer.patch.call_count == (1 if corrected else 0)
+        assert ("note" in result) is corrected
+        if corrected:
+            mock_client.me.events.by_event_id.assert_called_with("AAMkAG123=")
+            fix = fixer.patch.call_args.args[0]
+            assert (fix.start.date_time, fix.end.date_time) == (
+                "2026-12-13T02:00:00Z",
+                "2026-12-13T03:00:00Z",
+            )
+            assert fix.start.time_zone == "America/Havana"
+
+    async def test_create_without_a_typed_instant_sends_no_prefer(self):
+        mock_client, fixer = self._poster(_utc_reply("2001-01-01T00:00:00", "2001-01-01T01:00:00"))
+
+        await create_event(
+            mock_client,
+            subject="Dinner",
+            start="2026-12-12T18:00:00",
+            end="2026-12-12T19:00:00",
+            timezone="America/Los_Angeles",
+            config=_CFG,
+        )
+
+        assert _prefer(mock_client.me.events.post.call_args) == set()
+        fixer.patch.assert_not_called()
+
+
+class TestWindowsNameLookupIsExact:
+    """The table is read with the name exactly as Graph gave it (#262 review).
+
+    Graph returns its own spelling; a case-folded or trimmed match would convert
+    into a zone for a name Graph never used. So anything else falls back and is
+    sent as written, the behaviour before the table.
+    """
+
+    @pytest.mark.parametrize(
+        "zone",
+        ["pacific standard time", " Pacific Standard Time ", "Mid-Atlantic Standard Time"],
+    )
+    async def test_a_name_not_spelled_as_graph_spells_it_is_sent_as_written(self, zone):
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=_current_event(start_zone=zone))
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args.args[0]
+        assert (patched.start.date_time, patched.start.time_zone) == ("2026-12-13T02:00:00Z", zone)
+
+    @pytest.mark.parametrize(
+        ("zone", "local"),
+        [
+            ("UTC", "2026-12-13T02:00:00"),
+            ("India Standard Time", "2026-12-13T07:30:00"),
+            ("AUS Eastern Standard Time", "2026-12-13T13:00:00"),
+        ],
+    )
+    async def test_a_pinned_local_time_for_zones_outside_the_us(self, zone, local):
+        builder = _make_event_builder()
+        builder.get = AsyncMock(return_value=_current_event(start_zone=zone))
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await update_event(
+            mock_client, event_id="AAMkAG123=", start="2026-12-13T02:00:00Z", config=_CFG
+        )
+
+        assert builder.patch.call_args.args[0].start.date_time == local
