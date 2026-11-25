@@ -63,8 +63,8 @@ from outlook_mcp.tools import (
 _CFG = Config(client_id="test")
 
 
-def wire(model) -> str:
-    """The JSON the Graph request adapter would actually send for this model.
+def adapter_json(model) -> str:
+    """What the Graph request adapter's writer produces for this model, unchecked.
 
     Deliberately not a bare ``JsonSerializationWriter``. ``BaseGraphServiceClient``
     routes the adapter's writer factory through
@@ -72,6 +72,9 @@ def wire(model) -> str:
     always serializes through the backing-store proxy — and only that path emits
     a field that was explicitly assigned ``None``. The bare writer drops those,
     which is the whole difference between this guard seeing a leak and not.
+
+    Tests call ``wire()``. This is the kiota half of it, for the tests that pin
+    what kiota itself does with a field assigned ``None``.
 
     **Destructive: build a fresh model for every call.** Serializing marks the
     entire object graph clean — the proxy's ``on_after`` sets
@@ -82,21 +85,42 @@ def wire(model) -> str:
     factory = BackingStoreSerializationWriterProxyFactory(JsonSerializationWriterFactory())
     writer = factory.get_serialization_writer("application/json")
     writer.write_object_value(None, model)
-    try:
-        return writer.get_serialized_content().decode()
-    except ValueError as exc:
-        if "Invalid Json output" not in str(exc):
-            raise
-        # kiota writes a top-level null beside the object body rather than
-        # inside it, and then refuses to serialize the mixed document at all.
-        # Reported as an assertion because it is a bug in the caller, not here.
+    return writer.get_serialized_content().decode()
+
+
+def wire(model) -> str:
+    """The JSON the Graph request adapter would actually send for this model.
+
+    A top-level field explicitly assigned ``None`` is refused here, before
+    serializing, because what kiota does with it depends on the version
+    installed (#233). kiota-serialization-json before 1.15 writes the null
+    beside the object body and then refuses the whole document
+    (``ValueError("Invalid Json output")``), so the request never leaves the
+    process. 1.15 and later write it inside the body under the **Python**
+    attribute name: ``"mobile_phone": null``, a key Graph does not have, or for
+    a one-word field such as ``location``, a null that clears it. Both are bugs
+    in the caller, and this guard has to catch them under whichever kiota a
+    lock or a fresh install resolved. Checking the backing store does that, and
+    keeps catching it when ``assert_on_wire`` is told to allow a null.
+
+    A field assigned ``None`` on a *nested* model is left to the serializer:
+    every kiota emits it under its Python name, only in a different place, and
+    ``assert_on_wire``'s Python-name and null checks report it.
+
+    **Destructive** — see ``adapter_json``.
+    """
+    store = getattr(model, "backing_store", None)
+    assigned_none = sorted(store.enumerate_keys_for_values_changed_to_null()) if store else []
+    if assigned_none:
         raise AssertionError(
-            "A top-level field was explicitly assigned None, so this payload "
-            "cannot be serialized and the request would fail before leaving the "
-            "process. Leave the field unset instead — or, if Graph genuinely "
-            "needs an explicit null, send it through additional_data (see "
-            "calendar_write.update_event's remove_recurrence)."
-        ) from exc
+            f"A top-level field was explicitly assigned None: {assigned_none}. kiota "
+            "before 1.15 cannot serialize this payload, so the request would fail "
+            "before leaving the process; 1.15 and later send each one as a null "
+            "under its Python attribute name. Leave the field unset instead — or, "
+            "if Graph genuinely needs an explicit null, send it through "
+            "additional_data (see calendar_write.update_event's remove_recurrence)."
+        )
+    return adapter_json(model)
 
 
 def _walk_keys(body: str):
@@ -119,7 +143,8 @@ def assert_on_wire(model, *needles: str, allow_null: bool = False) -> None:
 
     ``allow_null`` opts out of the null check for the one shape that wants an
     explicit null on the wire — ``remove_recurrence``, which sends it through
-    ``additional_data`` on purpose.
+    ``additional_data`` on purpose. It never excuses a top-level field assigned
+    ``None``: ``wire()`` refuses that first, whichever kiota is installed.
     """
     body = wire(model)
 
@@ -1655,16 +1680,17 @@ def test_wire_helper_detects_a_dropped_field():
         assert_on_wire(Event(subject="kept"), '"location"')
 
 
-def test_a_nested_none_is_emitted_onto_the_parent_under_its_python_name():
+def test_a_nested_none_is_emitted_under_its_python_name():
     """The mechanism this file was blind to until #63.
 
-    A field assigned ``None`` on a *nested* model does not vanish and does not
-    stay nested — the backing store emits it on the **parent**, keyed by the
-    Python attribute name. ``country_or_region`` is not a Graph property, so
-    Graph answered 400; had the name been single-word it would have matched a
-    real property and Graph would have cleared it instead.
+    A field assigned ``None`` on a *nested* model does not vanish — the backing
+    store emits it keyed by the Python attribute name. kiota-serialization-json
+    before 1.15 puts it on the **parent**; 1.15 and later keep it inside the
+    nested object (#233). Either way ``country_or_region`` is not a Graph
+    property, so Graph answered 400; had the name been single-word it would
+    have matched a real property and Graph would have cleared it instead.
 
-    If kiota ever stops doing this, this test fails and the adapter-fidelity
+    If kiota ever stops emitting it, this test fails and the adapter-fidelity
     serializer in ``wire()`` can go back to being a bare writer.
     """
     from msgraph.generated.models.contact import Contact
@@ -1686,23 +1712,52 @@ def test_a_nested_none_is_emitted_onto_the_parent_under_its_python_name():
 
 
 def test_a_top_level_none_is_reported_as_an_assertion_not_a_kiota_error():
-    """``event.recurrence = None`` cannot be serialized at all.
+    """A top-level field assigned ``None`` fails the guard on every kiota (#233).
 
-    kiota writes the null beside the object body rather than inside it, then
-    refuses the mixed document with ``ValueError("Invalid Json output")``. That
-    is why ``update_event(remove_recurrence=True)`` routes the null through
-    ``additional_data`` — the plain assignment does not produce a null, it
-    produces an unsendable request. The bare writer showed neither, which is
-    how the workaround's comment came to describe the wrong mechanism.
+    What kiota does with it changed in kiota-serialization-json 1.15: before,
+    the adapter refuses the document (``ValueError("Invalid Json output")``);
+    from 1.15 it sends the null under the Python attribute name. The lock and a
+    fresh install can resolve either side, so ``wire()`` reports it from the
+    backing store, the same way on both, before kiota sees it. One-word and
+    multi-word names are both covered: only the multi-word one would also trip
+    ``assert_on_wire``'s Python-name check.
     """
+    from msgraph.generated.models.contact import Contact
     from msgraph.generated.models.event import Event
 
     event = Event()
     event.subject = "kept"
     event.recurrence = None
 
-    with pytest.raises(AssertionError, match="top-level field"):
+    with pytest.raises(AssertionError, match=r"top-level field .*\['recurrence'\]"):
         wire(event)
+
+    contact = Contact()
+    contact.given_name = "kept"
+    contact.mobile_phone = None
+
+    with pytest.raises(AssertionError, match=r"top-level field .*\['mobile_phone'\]"):
+        wire(contact)
+
+
+def test_allowing_a_null_does_not_excuse_a_field_assigned_none():
+    """``allow_null`` is for a null sent on purpose, not for one assigned by mistake.
+
+    ``update_event(remove_recurrence=True)`` puts ``"recurrence": null`` in
+    ``additional_data`` and asserts with ``allow_null=True``. Under kiota 1.15+
+    a stray ``event.location = None`` beside it would serialize as
+    ``"location": null`` (one word, so no Python-name leak) and clear the
+    event's location. Under older kiota the guard caught it only because
+    serializing failed. ``wire()`` catches it on both.
+    """
+    from msgraph.generated.models.event import Event
+
+    event = Event()
+    event.additional_data = {"recurrence": None}
+    event.location = None
+
+    with pytest.raises(AssertionError, match=r"top-level field .*\['location'\]"):
+        assert_on_wire(event, '"recurrence": null', allow_null=True)
 
 
 def test_serializing_twice_would_report_a_clean_payload():

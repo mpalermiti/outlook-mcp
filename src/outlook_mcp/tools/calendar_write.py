@@ -1134,13 +1134,14 @@ async def update_event(
 
     It has to go through ``additional_data``: Graph clears a series with an
     explicit ``"recurrence": null``, and ``event.recurrence = None`` does not
-    produce one. The adapter serializes through the backing store, which writes
-    a top-level null *beside* the object body rather than inside it, and then
-    refuses the mixed document with ``ValueError("Invalid Json output")`` — so
-    the plain assignment is not a silent no-op, it is an unsendable request.
-    ``test_setting_event_recurrence_none_is_unsendable`` pins that; if kiota
-    ever starts emitting a usable top-level null, it fails and this can be
-    simplified.
+    produce one on every kiota this package accepts. The adapter serializes
+    through the backing store. Before kiota-serialization-json 1.15 that writes
+    a top-level null *beside* the object body and then refuses the mixed
+    document with ``ValueError("Invalid Json output")``, an unsendable request;
+    from 1.15 it writes the null inside the body under the Python attribute
+    name, which for ``recurrence`` happens to be Graph's (#233).
+    ``test_setting_event_recurrence_none_is_not_sendable_on_every_supported_kiota``
+    pins both. This can be simplified only once the kiota floor is 1.15.
 
     ``show_as`` patches Graph's ``showAs`` and needs nothing else resent — it is
     not ``is_all_day``. Graph honours all six values on PATCH for a consumer
@@ -1388,8 +1389,9 @@ async def update_event(
         event.is_all_day = is_all_day
 
     if remove_recurrence:
-        # `event.recurrence = None` does not serialize (see the docstring);
-        # additional_data survives as the explicit JSON null Graph needs.
+        # `event.recurrence = None` does not serialize before kiota 1.15 (see
+        # the docstring); additional_data is the explicit JSON null Graph needs
+        # on every version.
         event.additional_data = {**(event.additional_data or {}), "recurrence": None}
 
     if recurrence is not None:
