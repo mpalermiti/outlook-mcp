@@ -616,6 +616,31 @@ class TestTimeZoneAnchoring:
             # rather than as UTC.
             assert "T09:00:00" not in detail["start"]
 
+    async def test_a_z_start_keeps_the_zone_of_a_single_event(
+        self, real_graph_client, live_write_config
+    ):
+        """#236: Graph files a single event sent a `Z` start in UTC, whatever `timeZone` says.
+
+        `create_event` now sends that moment as wall-clock time in the zone, and
+        only Graph can say whether it kept the zone. The UTC instant is asserted
+        too, so a conversion that kept the zone but moved the event fails.
+        """
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" tz-z-start",
+            start=f"{monday.isoformat()}T17:00:00Z",
+            end=f"{monday.isoformat()}T17:30:00Z",
+            timezone="America/Los_Angeles",
+        ) as event_id:
+            detail = await get_event(real_graph_client.sdk_client, event_id)
+
+            assert detail["original_start_time_zone"] == "America/Los_Angeles"
+            assert detail["original_end_time_zone"] == "America/Los_Angeles"
+            assert _utc_instant(detail["start"]) == "17:00:00"
+
     async def test_patching_a_time_keeps_the_zone_the_event_is_anchored_in(
         self, real_graph_client, live_write_config
     ):

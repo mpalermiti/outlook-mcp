@@ -3274,15 +3274,16 @@ class TestRelativeEventTimes:
         ("start", "end", "sent_start", "sent_end"),
         [
             ("+2h", "2026-11-12T23:30:00", "2026-11-11T22:00:00", "2026-11-12T23:30:00"),
+            # A typed offset loses only the offset: the same local time (#236).
             (
                 "2026-11-11T21:00:00-05:00",
                 "+3h",
-                "2026-11-11T21:00:00-05:00",
+                "2026-11-11T21:00:00",
                 "2026-11-11T23:00:00",
             ),
         ],
     )
-    async def test_a_typed_end_beside_a_relative_one_is_sent_as_written(
+    async def test_a_typed_end_beside_a_relative_one_keeps_its_own_time(
         self, clock, start, end, sent_start, sent_end
     ):
         builder, mock_client = self._updatable("America/New_York")
@@ -3561,3 +3562,272 @@ class TestRelativeEventTimes:
         )
 
         builder.patch.assert_called_once()
+
+
+class TestATypedInstantKeepsItsZone:
+    """A `Z` or offset `start`/`end` goes out as wall-clock time in the anchor zone (#236).
+
+    Handed a `Z` or an offset, Graph keeps the instant and anchors a *single*
+    event in UTC whatever `timeZone` says; handed the same moment as wall-clock
+    time, it keeps the zone. Measured live on a consumer mailbox, 2026-11-10. A
+    mock stores either, so these assert the text sent and rebuild the instant
+    from it, and the live tier asks Graph which zone it kept.
+    """
+
+    LA = "America/Los_Angeles"
+
+    @staticmethod
+    def _instant(local: str, zone: str) -> datetime:
+        from zoneinfo import ZoneInfo
+
+        return datetime.fromisoformat(local).replace(tzinfo=ZoneInfo(zone)).astimezone(timezone.utc)
+
+    @staticmethod
+    def _poster():
+        mock_client = MagicMock()
+        mock_client.me.events.post = AsyncMock(return_value=_created("Dinner"))
+        return mock_client
+
+    @staticmethod
+    def _updatable(start_zone: str, end_zone: str | None = None, **kwargs):
+        builder = _make_event_builder()
+        builder.get = AsyncMock(
+            return_value=_current_event(start_zone=start_zone, end_zone=end_zone, **kwargs)
+        )
+        builder.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        mock_client = MagicMock()
+        mock_client.me.events.by_event_id = MagicMock(return_value=builder)
+        return builder, mock_client
+
+    # ── create ────────────────────────────────────────────────────────
+
+    @pytest.mark.parametrize(
+        ("start", "end"),
+        [
+            ("2026-12-13T02:00:00Z", "2026-12-13T03:00:00Z"),
+            ("2026-12-12T18:00:00-08:00", "2026-12-12T22:00:00-05:00"),
+            ("2026-12-13T07:30:00+05:30", "2026-12-13T03:00:00+00:00"),
+        ],
+    )
+    async def test_create_sends_the_same_moment_as_local_time(self, start, end):
+        mock_client = self._poster()
+
+        await create_event(
+            mock_client, subject="Dinner", start=start, end=end, timezone=self.LA, config=_CFG
+        )
+
+        event = _posted(mock_client)
+        assert event.start.date_time == "2026-12-12T18:00:00"
+        assert event.end.date_time == "2026-12-12T19:00:00"
+        assert event.start.time_zone == event.end.time_zone == self.LA
+        assert self._instant(event.start.date_time, self.LA) == datetime.fromisoformat(
+            start.replace("Z", "+00:00")
+        )
+
+    async def test_create_converts_into_the_configured_zone_by_default(self):
+        mock_client = self._poster()
+
+        await create_event(
+            mock_client,
+            subject="Dinner",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG_LA,
+        )
+
+        event = _posted(mock_client)
+        assert (event.start.date_time, event.start.time_zone) == ("2026-12-12T18:00:00", self.LA)
+
+    async def test_create_keeps_a_fraction_of_a_second(self):
+        """The moment is kept to the microsecond. (Graph's own seven digits are
+        refused by input validation on Python 3.10, so six are used here.)"""
+        mock_client = self._poster()
+
+        await create_event(
+            mock_client,
+            subject="Dinner",
+            start="2026-12-13T02:00:00.123456Z",
+            end="2026-12-13T03:00:00.500Z",
+            timezone=self.LA,
+            config=_CFG,
+        )
+
+        event = _posted(mock_client)
+        assert event.start.date_time == "2026-12-12T18:00:00.123456"
+        assert event.end.date_time == "2026-12-12T19:00:00.500000"
+
+    async def test_a_zone_less_time_is_sent_as_written(self):
+        mock_client = self._poster()
+
+        await create_event(
+            mock_client,
+            subject="Dinner",
+            start="2026-12-12T18:00:00",
+            end="2026-12-12T19:00:00",
+            timezone=self.LA,
+            config=_CFG,
+        )
+
+        assert _posted(mock_client).start.date_time == "2026-12-12T18:00:00"
+
+    async def test_a_series_from_a_z_start_lands_on_its_local_day(self):
+        """Thursday 02:00Z is Wednesday 18:00 in Los Angeles; the pattern says Wednesday."""
+        mock_client = self._poster()
+
+        await create_event(
+            mock_client,
+            subject="Dinner",
+            start="2026-12-17T02:00:00Z",
+            end="2026-12-17T03:00:00Z",
+            recurrence="weekly",
+            timezone=self.LA,
+            config=_CFG,
+        )
+
+        event = _posted(mock_client)
+        assert event.start.date_time == "2026-12-16T18:00:00"
+        assert [d.value for d in event.recurrence.pattern.days_of_week] == ["wednesday"]
+        assert event.recurrence.range.start_date == date(2026, 12, 16)
+
+    async def test_an_all_day_event_is_sent_as_written(self):
+        """Graph stores an all-day event in UTC whatever it is sent, so nothing is converted."""
+        mock_client = self._poster()
+
+        await create_event(
+            mock_client,
+            subject="Off",
+            start="2026-12-13T00:00:00Z",
+            end="2026-12-14T00:00:00Z",
+            is_all_day=True,
+            config=_CFG_LA,
+        )
+
+        event = _posted(mock_client)
+        assert (event.start.date_time, event.start.time_zone) == ("2026-12-13T00:00:00Z", "UTC")
+
+    async def test_a_moment_in_the_repeated_hour_is_sent_as_written(self):
+        """01:30 happens twice in Los Angeles on 2027-11-07, so local time cannot say which.
+
+        Sent as typed, the moment is exact and the event is anchored in UTC, as
+        before this change; refusing it would break input that works today.
+        """
+        mock_client = self._poster()
+
+        await create_event(
+            mock_client,
+            subject="Late",
+            start="2027-11-07T09:30:00Z",
+            end="2027-11-07T11:00:00Z",
+            timezone=self.LA,
+            config=_CFG,
+        )
+
+        event = _posted(mock_client)
+        assert event.start.date_time == "2027-11-07T09:30:00Z"
+        assert event.end.date_time == "2027-11-07T03:00:00"
+
+    # ── update ────────────────────────────────────────────────────────
+
+    async def test_update_converts_into_the_events_own_zone(self):
+        builder, mock_client = self._updatable(self.LA)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.date_time == "2026-12-12T18:00:00"
+        assert patched.end.date_time == "2026-12-12T19:00:00"
+        assert patched.start.time_zone == self.LA
+
+    async def test_update_converts_into_a_requested_zone(self):
+        builder, mock_client = self._updatable(self.LA)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-12T18:00:00-08:00",
+            end="2026-12-12T19:00:00-08:00",
+            timezone="America/New_York",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.date_time == "2026-12-12T21:00:00"
+        assert patched.start.time_zone == "America/New_York"
+
+    async def test_each_end_is_converted_into_its_own_zone(self):
+        """A flight leaves New York and lands in Los Angeles."""
+        builder, mock_client = self._updatable("America/New_York", self.LA)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T13:00:00Z",
+            end="2026-12-13T19:00:00Z",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert (patched.start.date_time, patched.start.time_zone) == (
+            "2026-12-13T08:00:00",
+            "America/New_York",
+        )
+        assert (patched.end.date_time, patched.end.time_zone) == ("2026-12-13T11:00:00", self.LA)
+
+    async def test_update_converts_an_end_patched_alone(self):
+        builder, mock_client = self._updatable(self.LA)
+
+        await update_event(
+            mock_client, event_id="AAMkAG123=", end="2026-12-13T03:00:00Z", config=_CFG
+        )
+
+        assert builder.patch.call_args[0][0].end.date_time == "2026-12-12T19:00:00"
+
+    async def test_a_windows_zoned_event_is_sent_as_written(self):
+        """`zoneinfo` cannot convert into "Pacific Standard Time", so the old behaviour stays."""
+        builder, mock_client = self._updatable("Pacific Standard Time")
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.date_time == "2026-12-13T02:00:00Z"
+        assert patched.start.time_zone == "Pacific Standard Time"
+
+    async def test_a_stored_all_day_event_is_sent_as_written(self):
+        builder, mock_client = self._updatable(self.LA, is_all_day=True)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T00:00:00Z",
+            end="2026-12-14T00:00:00Z",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert (patched.start.date_time, patched.start.time_zone) == ("2026-12-13T00:00:00Z", "UTC")
+
+    async def test_a_typed_instant_is_not_reported(self):
+        """Only what the server worked out is echoed; the caller typed this moment."""
+        builder, mock_client = self._updatable(self.LA)
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        assert result == {"status": "updated", "event_id": "AAMkAG123="}
