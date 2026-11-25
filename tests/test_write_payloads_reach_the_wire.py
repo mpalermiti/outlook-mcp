@@ -349,6 +349,35 @@ class TestCalendarWrite:
             '"timeZone": "America/Chicago"',
         )
 
+    async def test_a_windows_zoned_event_gets_local_time_and_its_own_zone_name(self):
+        """A `Z` time on an event Graph names "Pacific Standard Time" (#262).
+
+        Converted through the Windows table, and sent beside the name Graph gave,
+        not the IANA one the conversion used.
+        """
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
+        current = MagicMock(type=MagicMock(value="singleInstance"))
+        current.start = MagicMock(date_time="2026-12-13T02:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "Pacific Standard Time"
+        current.original_end_time_zone = "Pacific Standard Time"
+        current.is_all_day = False
+        builder.get = AsyncMock(return_value=current)
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+        await calendar_write.update_event(
+            client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+        body = wire(builder.patch.call_args[0][0])
+        assert '"dateTime": "2026-12-12T18:00:00"' in body
+        assert '"dateTime": "2026-12-12T19:00:00"' in body
+        assert '"timeZone": "Pacific Standard Time"' in body
+        assert "America/Los_Angeles" not in body
+
     async def test_update_event_every_argument_reaches_the_wire(self):
         builder = MagicMock()
         builder.patch = AsyncMock(return_value=MagicMock(id="E1"))

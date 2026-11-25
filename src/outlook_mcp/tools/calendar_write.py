@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from datetime import timezone as dt_timezone
 from typing import Any
 
+from outlook_mcp._windows_zones import WINDOWS_TO_IANA
 from outlook_mcp.calendar_resolver import (
     event_calendar_belongs_to_someone_else,
     resolve_calendar_for_write,
@@ -16,6 +17,7 @@ from outlook_mcp.errors import (
     INVITATIONS_MAY_HAVE_BEEN_SENT,
     RESPONSE_MAY_HAVE_BEEN_SENT,
     UPDATE_MAY_HAVE_BEEN_SENT,
+    OutlookMCPError,
 )
 from outlook_mcp.permissions import (
     CATEGORY_CALENDAR_WRITE,
@@ -75,8 +77,8 @@ def _in_zone(instant: str, zone: str, given: str) -> str:
     tz = maybe_zone(zone)
     if tz is None:
         raise ValueError(
-            f"This event is anchored in {zone!r}, which this server cannot convert a "
-            "moment into, so a relative time cannot be placed in it. Nothing was "
+            f"This event is anchored in {zone!r}, which is not an IANA zone name, so a "
+            "relative time is not placed in it. Nothing was "
             "modified. Pass `start` and `end` as local time without a zone or offset "
             "(2026-11-10T09:00:00); they are read in the event's own zone."
         )
@@ -118,19 +120,31 @@ def _typed_in_zone(value: str, zone: str | None) -> str | None:
     Graph keeps the instant of a ``Z`` or offset but anchors a single event in
     UTC whatever ``timeZone`` says; the same moment written as local time keeps
     the zone. Measured live on a consumer mailbox, 2026-11-10. A zone-less value
-    is already local and comes back as is. ``None`` when there is no safe way to
-    convert: a zone ``zoneinfo`` cannot resolve (Graph's Windows names), a value
-    this Python cannot parse, a moment past the years it can hold (``9999-12-31``
-    east of UTC), or one in the repeated hour (``_wall_clock``).
+    is already local and comes back as is. A Windows name Graph gave
+    ("Pacific Standard Time") converts through CLDR's default IANA zone for it
+    (``_windows_zones``); the name sent stays Graph's own. ``None`` when there is
+    no safe way to convert: a zone neither knows, a value this Python cannot
+    parse, a moment past the years it can hold (``9999-12-31`` east of UTC), or
+    one in the repeated hour (``_wall_clock``).
     """
+    moment = _parse_iso(value)
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        return value
+    tz = maybe_zone(zone) or maybe_zone(WINDOWS_TO_IANA.get(zone or ""))
+    try:
+        return None if tz is None else _wall_clock(moment, tz)
+    except OverflowError:
+        return None
+
+
+def _parse_iso(value: str) -> datetime | None:
+    """``value`` parsed, a ``Z`` read as UTC and Graph's seven fractional digits cut to six."""
     text = _OVERLONG_FRACTION.sub(r"\1", value.strip())
     try:
-        moment = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
-        if moment.tzinfo is None:
-            return value
-        tz = maybe_zone(zone)
-        return None if tz is None else _wall_clock(moment, tz)
-    except (ValueError, OverflowError):
+        return datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
         return None
 
 
@@ -145,6 +159,167 @@ def _typed_in_zones(ends: dict[str, tuple[str, str | None]]) -> dict[str, str]:
     if any(v is None for v in converted.values()):
         return {name: value for name, (value, _) in ends.items()}
     return {name: v for name, v in converted.items() if v is not None}
+
+
+# Asks Graph to state a write's reply ``start``/``end`` in UTC. It governs the
+# reply only: each end's own ``timeZone`` in the body decides how the time sent
+# is read. Microsoft's create-event reference uses it "to specify the time zone
+# for the start and end times in the response", beside a body that names its
+# own zone; ``_start_in_its_own_zone`` relies on the same header for a GET.
+# UTC is also Graph's default for the reply; it is asked for anyway, so the
+# check below rests on a request rather than on a default.
+_REPLY_IN_UTC = 'outlook.timezone="UTC"'
+
+# The furthest a converted time is put back. Two sets of rules for one zone
+# disagree by a whole step of its offset: an hour for daylight saving, half an
+# hour at Lord Howe, two at Troll, or a change to the standard offset (Magadan
+# moved two hours in 2014). Three hours covers any of these with room to spare.
+# A larger difference is something else (a series' first occurrence days from its
+# typed start, a date-line jump like Samoa's in 2011): it is reported, not changed.
+_MOST_A_ZONE_RULE_MOVES = timedelta(hours=3)
+
+
+def _converted(ends: dict[str, tuple[str, str | None]], sent: dict[str, str]) -> dict:
+    """``{name: (typed value, zone)}`` for each end ``_typed_in_zones`` actually changed."""
+    return {name: ends[name] for name, value in sent.items() if value != ends[name][0]}
+
+
+def _is_single_instance(event: Any) -> bool:
+    """Whether Graph says this event stands alone: no series' master, occurrence or exception.
+
+    ``False`` when the stored event's ``type`` cannot be read: not knowing is not single.
+    """
+    event_type = getattr(event, "type", None)
+    if event_type is None:
+        return False
+    return (getattr(event_type, "value", None) or str(event_type)) == "singleInstance"
+
+
+def _reply_instant(reply: Any, which: str) -> datetime | None:
+    """The UTC moment Graph's write reply gives for ``start`` or ``end``, or ``None``.
+
+    ``None`` unless the reply carries that end as text in ``UTC``, the zone
+    ``_REPLY_IN_UTC`` asked for: anything else would be a guess.
+    """
+    side = getattr(reply, "start", None) if which == "start" else getattr(reply, "end", None)
+    text = getattr(side, "date_time", None)
+    if not isinstance(text, str) or getattr(side, "time_zone", None) != "UTC":
+        return None
+    moment = _parse_iso(text)
+    if moment is None:
+        return None
+    return moment.replace(tzinfo=dt_timezone.utc) if moment.tzinfo is None else moment
+
+
+def _a_zone_rule_could_move(got: datetime, wanted: datetime) -> bool:
+    """Whether two sets of rules for one zone could put the time ``wanted`` at ``got``.
+
+    Offsets are whole minutes, so the gap is an exact number of minutes, at most
+    ``_MOST_A_ZONE_RULE_MOVES``: measured from the time typed, or from it without
+    its fraction of a second, which Graph may drop.
+    """
+    for meant in (wanted, wanted.replace(microsecond=0)):
+        gap = abs(got - meant)
+        if gap <= _MOST_A_ZONE_RULE_MOVES and gap % timedelta(minutes=1) == timedelta(0):
+            return True
+    return False
+
+
+def _moved_ends(reply: Any, converted: dict) -> tuple[list[str], bool]:
+    """Each converted end Graph's reply puts at another moment than typed, described,
+    and whether a zone rule could explain every one of those gaps.
+
+    Empty when the reply cannot say for every converted end: not knowing is not a move.
+    """
+    moved, explained = [], True
+    for which, (typed, _) in converted.items():
+        got, wanted = _reply_instant(reply, which), _parse_iso(typed)
+        if got is None or wanted is None:
+            return [], True
+        if abs(got - wanted) < timedelta(seconds=1):
+            continue
+        explained = explained and _a_zone_rule_could_move(got, wanted)
+        moved.append(
+            f"the {which} at {got.astimezone(dt_timezone.utc):%Y-%m-%dT%H:%M:%S} UTC "
+            f"instead of {wanted.astimezone(dt_timezone.utc):%Y-%m-%dT%H:%M:%S} UTC"
+        )
+    return moved, explained
+
+
+def _zone_not_kept(moved: list[str], converted: dict) -> str:
+    """The ``note`` for a corrected write: what moved, how far, and which ends are now in UTC."""
+    ends = " and ".join(converted)
+    both = len(converted) > 1
+    return (
+        f"Graph placed {' and '.join(moved)}: its rules for the event's time zone differ "
+        f"from this server's. The {ends} {'were' if both else 'was'} saved again as "
+        f"typed, so the time is right, but {'they are' if both else 'it is'} filed in "
+        f"UTC rather than in the event's own time zone."
+    )
+
+
+async def _keep_typed_instants(target: Any, reply: Any, converted: dict, done: str) -> dict:
+    """Check a write that converted a typed time against Graph's reply (#262 review).
+
+    The conversion uses this host's zone rules (IANA, through ``_windows_zones``
+    for a Windows name) and Graph reads the local time back with its own. Where
+    they disagree for that zone and date, or this host's tz data is out of date,
+    the event lands at another moment. Then each converted end is sent again as
+    typed: the old behaviour, the right moment, the zone lost. ``{"note": ...}``
+    says so; ``{}`` when nothing moved or the reply cannot say. A gap no zone
+    rule makes (``_a_zone_rule_could_move``) is not the conversion's doing, so
+    nothing is written and the ``note`` reports it for the caller to check.
+
+    Callers pass ``converted`` only for a single event. A series' reply can
+    carry its first occurrence rather than the start typed, days away, and
+    a patch without its recurrence would file the series in UTC or be refused.
+
+    ``target`` makes the request builder, called only when there is something to
+    send. Through ``call_without_replay``: an idempotent patch, but on an event
+    with attendees each one is mailed as an update. Not pinned with
+    ``If-Match``: it follows the write it corrects at once, and sends only the
+    two times.
+    """
+    moved, explained = _moved_ends(reply, converted) if converted else ([], True)
+    if not moved:
+        return {}
+    if not explained:
+        return {
+            "note": f"Graph placed {' and '.join(moved)}. No time zone rule explains a "
+            "difference like that, so it was not changed. Read the event with "
+            "outlook_get_event and check the time with the user."
+        }
+
+    from msgraph.generated.models.date_time_time_zone import DateTimeTimeZone
+    from msgraph.generated.models.event import Event
+
+    fix = Event()
+    if "start" in converted:
+        fix.start = DateTimeTimeZone()
+        fix.start.date_time, fix.start.time_zone = converted["start"]
+    if "end" in converted:
+        fix.end = DateTimeTimeZone()
+        fix.end.date_time, fix.end.time_zone = converted["end"]
+    builder = target()
+    try:
+        await call_without_replay(
+            lambda once: builder.patch(fix, request_configuration=once),
+            outcome_unknown=UPDATE_MAY_HAVE_BEEN_SENT,
+        )
+    except Exception as exc:
+        # Graph's own text without its hint: the action below is the one that
+        # fits, and on a 5xx it already covers "it may have been saved".
+        detail = exc.message if isinstance(exc, OutlookMCPError) else type(exc).__name__
+        raise OutlookMCPError(
+            "event_time_not_restored",
+            f"The event was {done}, but Graph placed {' and '.join(moved)}. Sending "
+            f"the time again as typed ended in an error: {detail}",
+            "Read the event with outlook_get_event to see where it is now. If it is "
+            "still at the wrong time, move it with outlook_update_event, not by "
+            "creating it again: pass `start` and `end` as local time without a zone or "
+            "offset, which needs no conversion.",
+        ) from exc
+    return {"note": _zone_not_kept(moved, converted)}
 
 
 def _usable_zone(value: Any) -> str | None:
@@ -625,8 +800,8 @@ async def create_event(
     the zone decides what the second occurrence of a weekly series does when
     daylight saving ends. Graph anchors a single event sent a ``Z`` or offset in
     UTC whatever ``timeZone`` says, so such a value is sent as the same moment
-    in wall-clock time in the zone (``_typed_in_zones``, #236), converted with
-    the host's zone rules: a host with outdated tz data can shift it. Anchored in
+    in wall-clock time in the zone (``_typed_in_zones``, #236), then, for a
+    single event, checked against Graph's reply (``_keep_typed_instants``). Anchored in
     ``UTC`` — which is what this tool sent unconditionally before 1.23.0 — a
     09:00 series silently becomes 08:00 the week the clocks go back.
 
@@ -731,9 +906,12 @@ async def create_event(
         placed["end"] = _placed(end, zone)
     # A typed `Z` or offset goes out as local time in the zone (#236). An all-day
     # event is stored in UTC whatever it is sent, so it has no zone to keep.
+    converted: dict = {}
     if not is_all_day:
         typed = {"start": (start, start_resolved), "end": (end, end_resolved)}
-        sent = _typed_in_zones({k: (v, zone) for k, (v, r) in typed.items() if r is v})
+        ends = {k: (v, zone) for k, (v, r) in typed.items() if r is v}
+        sent = _typed_in_zones(ends)
+        converted = _converted(ends, sent)
         start, end = sent.get("start", start), sent.get("end", end)
 
     # Validate attendee emails if provided
@@ -807,11 +985,26 @@ async def create_event(
         if calendar_id is None
         else graph_client.me.calendars.by_calendar_id(calendar_id).events
     )
+
+    # Only a single event is checked against the reply; see `_keep_typed_instants`.
+    checked = converted if event.recurrence is None else {}
+
+    def _post(once: Any) -> Any:
+        if checked:
+            once.headers.try_add("Prefer", _REPLY_IN_UTC)
+        return events.post(event, request_configuration=once)
+
     response = await call_without_replay(
-        lambda once: events.post(event, request_configuration=once),
+        _post,
         outcome_unknown=(
             INVITATIONS_MAY_HAVE_BEEN_SENT if validated_attendees else EVENT_MAY_HAVE_BEEN_CREATED
         ),
+    )
+    note = await _keep_typed_instants(
+        lambda: events.by_event_id(response.id),
+        response,
+        checked,
+        f"created (id {response.id})",
     )
 
     return {
@@ -820,6 +1013,7 @@ async def create_event(
         "subject": response.subject,
         **placed,
         **(_online_reply(response) if is_online else {}),
+        **note,
     }
 
 
@@ -876,8 +1070,9 @@ async def update_event(
 
     A ``Z`` or offset ``start``/``end`` is sent as wall-clock time in the zone
     that end is anchored in, as in ``create_event`` (#236), when ``zoneinfo``
-    can convert into it. If either end cannot be converted (a Windows-named zone
-    such as "Pacific Standard Time"), both are sent as written, as before.
+    or the Windows-name table can convert into it. If either end cannot be
+    converted, both are sent as written, as before. On an event that stands
+    alone, with no ``recurrence`` in the call, the reply is checked as on create.
 
     A relative ``start``/``end`` (``+2h``) is written as wall-clock time in the
     zone that end is anchored in, as in ``create_event``, so it is placed only
@@ -1120,11 +1315,12 @@ async def update_event(
         placed["end"] = _placed(end, end_zone)
     # A typed `Z` or offset goes out as local time in its zone, as on create
     # (#236). An all-day event is anchored in UTC, so it has nothing to keep.
+    converted: dict = {}
     if not all_day:
         typed = {"start": (start, start_resolved, start_zone), "end": (end, end_resolved, end_zone)}
-        sent = _typed_in_zones(
-            {k: (v, z) for k, (v, r, z) in typed.items() if v is not None and r is v}
-        )
+        ends = {k: (v, z) for k, (v, r, z) in typed.items() if v is not None and r is v}
+        sent = _typed_in_zones(ends)
+        converted = _converted(ends, sent)
         start, end = sent.get("start", start), sent.get("end", end)
 
     # Last of the checks, because it is the only one that costs a second read,
@@ -1271,23 +1467,39 @@ async def update_event(
     if is_online is not None:
         event.is_online_meeting = is_online
 
+    # Only a single event is checked against the reply; see `_keep_typed_instants`.
+    # A converted time means the event was already read for its zone, so this
+    # costs no request.
+    checked = (
+        converted
+        if converted
+        and event.recurrence is None
+        and "recurrence" not in (event.additional_data or {})
+        and _is_single_instance(await current_event())
+        else {}
+    )
+
     request_builder = graph_client.me.events.by_event_id(event_id)
 
     def _patch(once: Any) -> Any:
         if if_match:
             once.headers.try_add("If-Match", if_match)
+        if checked:
+            once.headers.try_add("Prefer", _REPLY_IN_UTC)
         return request_builder.patch(event, request_configuration=once)
 
     # Not replayed after a 5xx either: on an event with attendees the patch is
     # mailed to them as an update, and a pinned replay would only be refused
     # with a 412 for the change key this very patch moved (#131).
     response = await call_without_replay(_patch, outcome_unknown=UPDATE_MAY_HAVE_BEEN_SENT)
+    note = await _keep_typed_instants(lambda: request_builder, response, checked, "updated")
 
     return {
         "status": "updated",
         "event_id": response.id,
         **placed,
         **(_online_reply(response) if is_online is not None else {}),
+        **note,
     }
 
 
