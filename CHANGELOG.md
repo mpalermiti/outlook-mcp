@@ -14,6 +14,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   wait. The merge is rebuilt from that read and pinned to its change key, so an address added
   elsewhere in between is still kept. A second `404` or `412` is reported as before.
 
+- **Moving a repeating event to another day moves every occurrence (#98).** Given a new `start`
+  on a different day for a series, in the same time zone and without `recurrence`,
+  `outlook_update_event` answered `updated` while Graph put the series back on its old day, so
+  nothing moved. The series' own repeat rule now goes with the change, its days and start date
+  moved as far as the start: a weekly Monday series moved to a Tuesday becomes a weekly Tuesday
+  series. A `timezone` change already worked this way. A rule with no exact equivalent on the new
+  day ("the first Monday of the month", or a monthly date pushed into another month) is refused
+  instead of reported as `updated`. So is a `Z` or offset `start` this server could not convert
+  into the series' zone, since the day it falls on there cannot be worked out (a local time without
+  a zone works), and moving a series whose rule skips the first day of its range, such as weekdays
+  begun on a Saturday. A new time on the same day is sent as before.
+
 - **An event created from a `Z` or offset time keeps its time zone (#236).** Graph kept the
   moment of a `start`/`end` such as `2026-12-13T02:00:00Z` but filed a single event in UTC,
   whatever `timezone` said. A later local-time edit was then read in UTC, a series made from the

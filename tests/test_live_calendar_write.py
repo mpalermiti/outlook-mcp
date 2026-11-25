@@ -1799,47 +1799,26 @@ class TestOccurrenceChangesAreNotDiscardedSilently:
             )
 
 
-class _SeriesDidNotMoveError(AssertionError):
-    """#98's exact signature: `updated`, and every occurrence still on the old day.
-
-    Its own type so the `xfail` below absorbs this and nothing else. A failed
-    premise or a series that lands somewhere new is a plain `AssertionError`
-    and fails red.
-    """
-
-
 class TestMovingAMastersDateMovesItsOccurrences:
     """#98: a same-zone date move of a series master, with no `recurrence`.
 
-    `update_event` sends the new start alone, Graph answers `updated`, and it
-    snaps the master back onto its pattern: every occurrence stays on the old
-    weekday. The mocks see the new start in the patch and pass. The tests
-    before this one assert the master's start or type after a date move, never
-    where its occurrences land.
-
-    Strict `xfail` while #98 is open: XFAIL is the bug reproduced. XPASS fails
-    the run, which means a fix landed or Graph changed: delete the marker and
-    this is the regression guard.
+    Before the fix `update_event` sent the new start alone, Graph answered
+    `updated`, and it snapped the master back onto its pattern: every occurrence
+    stayed on the old weekday (XFAIL here, run live 2026-11-02). The mocks saw
+    the new start in the patch and passed. It now re-sends the series' own
+    recurrence with its days and `startDate` moved, and this is the guard that
+    the occurrences, not just the master, land on the new day.
     """
-
-    _XFAIL_98 = pytest.mark.xfail(
-        strict=True,
-        raises=_SeriesDidNotMoveError,
-        reason="#98: a same-zone date move of a series master leaves its occurrences",
-    )
 
     @staticmethod
     def _assert_moved(occurrences, monday: date, *, time_of_day: str) -> None:
-        """Three occurrences on consecutive Tuesdays, or #98's no-op, or a plain failure."""
+        """Three occurrences on consecutive Tuesdays, at the original time of day."""
         starts = [o.start.date_time for o in occurrences]
         days = [date.fromisoformat(s[:10]) for s in starts]
         same_time = all(s[11:19] == time_of_day for s in starts)
-        # Only the untouched series is #98. Mondays at another time, or other
-        # Mondays, are a different defect and must not hide behind the xfail.
-        if days == [monday + timedelta(weeks=n) for n in range(3)] and same_time:
-            raise _SeriesDidNotMoveError(
-                f"moved to Tuesday, answered `updated`, still on Mondays: {starts}"
-            )
+        assert not (days == [monday + timedelta(weeks=n) for n in range(3)] and same_time), (
+            f"#98 is back: moved to Tuesday, answered `updated`, still on Mondays: {starts}"
+        )
         tuesday = monday + timedelta(days=1)
         assert days == [tuesday + timedelta(weeks=n) for n in range(3)], (
             f"expected three Tuesdays from {tuesday.isoformat()}; got {starts}"
@@ -1848,7 +1827,6 @@ class TestMovingAMastersDateMovesItsOccurrences:
             f"the move changed the time of day; got {starts}"
         )
 
-    @_XFAIL_98
     async def test_a_timed_weekly_series_moved_a_day_lands_on_the_new_day(
         self, real_graph_client, live_write_config
     ):
@@ -1874,8 +1852,8 @@ class TestMovingAMastersDateMovesItsOccurrences:
                 (monday + timedelta(weeks=n)).isoformat() for n in range(3)
             ], "premise: the series should start as three Mondays"
 
-            # No `timezone`, no `recurrence`: the call the issue makes, so the
-            # zone-change re-send from #83 does not fire.
+            # No `timezone`, no `recurrence`: the call the issue makes. The
+            # zone is unchanged, so only the date move can send the recurrence.
             result = await update_event(
                 sdk,
                 event_id=event_id,
@@ -1889,15 +1867,14 @@ class TestMovingAMastersDateMovesItsOccurrences:
                 await _instances(sdk, event_id, monday, _EAST), monday, time_of_day="09:00:00"
             )
 
-    @_XFAIL_98
     async def test_an_all_day_weekly_series_moved_a_day_lands_on_the_new_day(
         self, real_graph_client, live_write_config
     ):
         """The issue's all-day variant, `numbered` only: this tier never writes `noEnd`.
 
         Graph anchors an all-day series in UTC whatever it is sent, so the
-        occurrences are read in UTC and the move compares UTC with UTC: the
-        same no-re-send path as the timed case.
+        occurrences are read in UTC and the move compares UTC with UTC: no zone
+        change, so as in the timed case only the date move re-sends.
         """
         sdk = real_graph_client.sdk_client
         monday = _anchor_monday()

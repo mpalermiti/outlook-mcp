@@ -32,6 +32,7 @@ from outlook_mcp.tools._recurrence import (
     check_recurrence_shape,
     event_recurrence_payload,
     event_start_date,
+    lands_on,
     maybe_zone,
     move_pattern,
     same_pattern,
@@ -413,8 +414,8 @@ async def refuse_someone_elses_calendar(
 def _is_series_master(event: Any) -> bool:
     """Whether Graph considers this event the master of a recurring series.
 
-    Only a master's zone change needs its recurrence re-sent; a single instance
-    and an occurrence both patch cleanly without one.
+    Only a master's zone or date change needs its recurrence re-sent; a single
+    instance and an occurrence both patch cleanly without one.
     """
     event_type = getattr(event, "type", None)
     if event_type is None:
@@ -626,6 +627,68 @@ def _resend_recurrence(event: Any, *, anchor: str | None, zone: str | None) -> A
     # place that knows why (see `drop_range_timezone`).
     payload = _follow_new_start(payload, event, start=start, zone=zone)
     return build_event_recurrence(payload, start=start, zone=zone, drop_range_timezone=True)
+
+
+async def _moves_to_another_day(
+    graph_client: Any, event_id: str, master: Any, start: str | None, zone: str
+) -> bool:
+    """Whether ``start`` puts series ``master`` on a different day in ``zone`` (#98).
+
+    Graph answers that patch ``updated`` and snaps the master back onto its
+    pattern unless the recurrence travels with it: every occurrence stays where
+    it was. Measured live, a timed and an all-day weekly series.
+
+    The day it is on now is its ``range.startDate`` when the pattern lands
+    there. Otherwise (a "weekdays" series begun on a Saturday) it is read off
+    the master's own start, since Graph may have put that later, and a move
+    is refused: ``_follow_new_start`` measures one from ``startDate``, so the
+    days would land wrong. Refused too where the day is unknowable: no
+    ``startDate``, or a ``Z``/offset ``start`` not converted into its zone.
+    """
+    if start is None:
+        return False
+    stored = serialize_recurrence(getattr(master, "recurrence", None)) or {}
+    first = (stored.get("range") or {}).get("startDate")
+    if not first:
+        raise ValueError(
+            "Could not read the date this series currently starts on, so there is no "
+            "telling whether the new start moves it to another day. Nothing was "
+            "modified. Pass `recurrence` with the pattern you want alongside `start`."
+        )
+    # Still a `Z`/offset here only when `_typed_in_zones` could not convert it.
+    typed = _parse_iso(start)
+    if typed is not None and typed.tzinfo is not None and maybe_zone(zone) is None:
+        raise ValueError(
+            f"{start!r} could not be converted into this series' zone, {zone!r}, so the "
+            "day it falls on there is unknown, and a series moved to another day has to "
+            "take its pattern along. Nothing was modified. Pass `start` and `end` as "
+            "local time without a zone or offset (2026-11-10T09:00:00); they are read in "
+            "the event's own zone."
+        )
+    first = date.fromisoformat(str(first))
+    current = first
+    if not lands_on(stored.get("pattern"), first):
+        now = getattr(getattr(master, "start", None), "date_time", None)
+        if not now:
+            raise ValueError(
+                "Could not read the day this series currently starts on. Nothing was "
+                "modified. Pass `recurrence` with the pattern you want alongside `start`."
+            )
+        if maybe_zone(zone) is None:
+            now = await _start_in_its_own_zone(graph_client, event_id, zone)
+        else:
+            now = _as_instant(str(now), getattr(master.start, "time_zone", None))
+        current = event_start_date(now, zone)
+    new = event_start_date(start, zone)
+    if new != current and current != first:
+        raise ValueError(
+            f"This series' pattern does not land on {first.isoformat()}, the day its "
+            f"range starts, and its first occurrence is {current.isoformat()}, so there "
+            f"is no telling how far its days should move to start on {new.isoformat()}. "
+            "Nothing was modified. Pass `recurrence` with the days you want alongside "
+            "`start`."
+        )
+    return new != current
 
 
 def _as_instant(date_time: str, projected_zone: str | None) -> str:
@@ -1030,6 +1093,17 @@ async def update_event(
     Its days move with the start's local date (``_follow_new_start``): a
     Thursday 02:00Z series re-anchored to Los Angeles becomes a Wednesday one.
 
+    Moving a series master's start to another **day** needs the same, zone or
+    not (#98). Without it Graph answers ``updated`` and snaps the master back
+    onto its pattern, every occurrence where it was — measured live, timed and
+    all-day. So the existing recurrence is re-sent with its days and
+    ``startDate`` moved, exactly as if ``outlook_get_event``'s had been handed
+    back beside the new start; a pattern with no exact move is refused
+    (``move_pattern``). The day is the start's own in the event's zone, so a
+    ``Z`` or offset start that could not be converted into it is refused, as
+    is moving a series whose pattern skips its range's first day
+    (``_moves_to_another_day``). A time moved within the day sends no recurrence.
+
     Any ``start``, ``end`` or ``recurrence`` patch to a series master that has
     edited or deleted occurrences is refused, naming them. Graph restores every
     one of them when a master's times or pattern change — zone or not — and
@@ -1055,7 +1129,7 @@ async def update_event(
     a pattern equal to the stored one moves with it — so ``outlook_get_event``'s
     recurrence can be handed back beside a new start and zone.
     Passing ``None`` leaves any existing recurrence untouched — this is a
-    partial patch.
+    partial patch — except that its days follow a start moved to another day.
 
     ``remove_recurrence=True`` turns a series master back into a single event,
     keeping the first occurrence's time. It is a separate flag rather than a
@@ -1383,7 +1457,13 @@ async def update_event(
         # zone *change*, and skipping the re-send for it hands the caller the
         # opaque 400 this branch exists to prevent, so None compares as different
         # rather than being filtered out by a truthiness check.
-        if stored_zone != start_zone and _is_series_master(existing):
+        #
+        # A start moved to another day needs it too, zone or not (#98): without
+        # it Graph answers `updated` and leaves every occurrence where it was.
+        if _is_series_master(existing) and (
+            stored_zone != start_zone
+            or await _moves_to_another_day(graph_client, event_id, existing, start, start_zone)
+        ):
             # Echoes state read above, so the patch is pinned; see the
             # occurrence check, which set `if_match` for every master reshape.
             event.recurrence = _resend_recurrence(existing, anchor=start, zone=start_zone)

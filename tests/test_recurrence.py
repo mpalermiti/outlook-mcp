@@ -461,6 +461,44 @@ class TestMovePattern:
             )
 
 
+class TestLandsOn:
+    """Whether a series' first day is one its pattern schedules (#98).
+
+    Where it is, that day is the series' first occurrence; where it is not, Graph
+    may have put the first occurrence later, so `update_event` reads it instead.
+    """
+
+    @pytest.mark.parametrize(
+        ("pattern", "day", "expected"),
+        [
+            ({"type": "daily", "interval": 3}, date(2026, 10, 31), True),
+            ({"type": "weekly", "daysOfWeek": ["monday"]}, date(2026, 11, 2), True),
+            ({"type": "Weekly", "daysOfWeek": ["Monday"]}, date(2026, 11, 2), True),
+            # A weekday pattern begun on a Saturday: its first occurrence is later.
+            (
+                {"type": "weekly", "daysOfWeek": ["monday", "tuesday", "friday"]},
+                date(2026, 10, 31),
+                False,
+            ),
+            ({"type": "absoluteMonthly", "dayOfMonth": "15"}, date(2026, 11, 15), True),
+            ({"type": "absoluteMonthly", "dayOfMonth": 15}, date(2026, 11, 16), False),
+            ({"type": "absoluteYearly", "dayOfMonth": 15, "month": 11}, date(2026, 11, 15), True),
+            ({"type": "absoluteYearly", "dayOfMonth": 15, "month": 12}, date(2026, 11, 15), False),
+            # Not judged from the fields alone, so unknown.
+            (
+                {"type": "relativeMonthly", "daysOfWeek": ["monday"], "index": "first"},
+                date(2026, 11, 2),
+                False,
+            ),
+            (None, date(2026, 11, 2), False),
+        ],
+    )
+    def test_it_answers_from_the_patterns_own_fields(self, pattern, day, expected):
+        from outlook_mcp.tools._recurrence import lands_on
+
+        assert lands_on(pattern, day) is expected
+
+
 class TestSamePattern:
     def test_graph_defaults_do_not_make_a_pattern_different(self):
         """Graph fills in `month: 0`, `dayOfMonth: 0` and `index` on a weekly read.

@@ -529,6 +529,27 @@ def move_pattern(payload: dict, *, old: date, new: date) -> dict:
     return {**payload, "pattern": pattern}
 
 
+def lands_on(pattern: Any, day: date) -> bool:
+    """Whether ``pattern`` surely schedules ``day``, judged from its own fields alone.
+
+    Every day for daily, the weekday for weekly, the day (and month) for an
+    absolute pattern. A relative pattern answers ``False``, meaning unknown.
+    """
+    if not isinstance(pattern, dict):
+        return False
+    kind = _pattern_type(pattern)
+    if kind == "daily":
+        return True
+    if kind == "weekly":
+        days = {str(d).lower() for d in pattern.get("daysOfWeek") or ()}
+        return _WEEKDAYS[day.weekday()] in days
+    if kind in ("absoluteMonthly", "absoluteYearly"):
+        return _whole(pattern, "dayOfMonth") == day.day and (
+            kind == "absoluteMonthly" or _whole(pattern, "month") == day.month
+        )
+    return False
+
+
 def build_event_recurrence(
     recurrence: dict | str,
     *,
