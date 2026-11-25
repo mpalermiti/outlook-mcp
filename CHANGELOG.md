@@ -14,6 +14,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   wait. The merge is rebuilt from that read and pinned to its change key, so an address added
   elsewhere in between is still kept. A second `404` or `412` is reported as before.
 
+- **An event created from a `Z` or offset time keeps its time zone (#236).** Graph kept the
+  moment of a `start`/`end` such as `2026-12-13T02:00:00Z` but filed a single event in UTC,
+  whatever `timezone` said. A later local-time edit was then read in UTC, a series made from the
+  event later shifted an hour at each daylight-saving change, and `outlook_get_event` reported
+  `UTC`. `outlook_create_event` now sends such a time as the same moment in local time in the
+  event's zone, which is the form Graph keeps the zone for. `outlook_update_event` does the same
+  when the event is filed under a zone name like `America/Los_Angeles`; one Graph filed under a
+  Windows name such as `Pacific Standard Time` is sent as before. All-day events and local times
+  without a zone are sent as written. So is an event with either end in the hour that repeats when
+  clocks go back, or outside the years Python can hold (such as `9999-12-31`): both ends are sent as
+  written, and that event is still filed in UTC. The conversion uses the host's time zone rules, so
+  a host with outdated time zone data can shift such a time.
+
 ## [1.33.0] — 2026-11-16
 
 To Do due dates, reminders and repeat rules are sent in the configured time zone, and a relative

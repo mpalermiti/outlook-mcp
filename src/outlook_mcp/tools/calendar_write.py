@@ -25,6 +25,7 @@ from outlook_mcp.permissions import (
 )
 from outlook_mcp.throttle import call_without_replay
 from outlook_mcp.tools._recurrence import (
+    _OVERLONG_FRACTION,
     build_event_recurrence,
     check_recurrence_shape,
     event_recurrence_payload,
@@ -79,20 +80,71 @@ def _in_zone(instant: str, zone: str, given: str) -> str:
             "modified. Pass `start` and `end` as local time without a zone or offset "
             "(2026-11-10T09:00:00); they are read in the event's own zone."
         )
-    # `astimezone`, never timedelta arithmetic: it keeps `fold`, and cannot land
-    # in a spring-forward gap, so the one case left to catch is the repeat.
-    local = datetime.fromisoformat(instant.replace("Z", "+00:00")).astimezone(tz)
-    if local.replace(fold=0).astimezone(dt_timezone.utc) != local.replace(fold=1).astimezone(
-        dt_timezone.utc
-    ):
+    moment = datetime.fromisoformat(instant.replace("Z", "+00:00"))
+    local = _wall_clock(moment, tz)
+    if local is None:
         # No offset is offered as the remedy: a typed one anchors a single event
         # in UTC (#236), so only a time outside the repeat is safe to suggest.
         raise ValueError(
             f"{given!r} falls in the interval {zone} repeats when daylight saving ends: "
-            f"{local:%Y-%m-%dT%H:%M:%S} happens twice there, so it names two different "
-            "times. Nothing was modified. Pass a time outside that interval."
+            f"{moment.astimezone(tz):%Y-%m-%dT%H:%M:%S} happens twice there, so it names "
+            "two different times. Nothing was modified. Pass a time outside that interval."
         )
-    return local.strftime("%Y-%m-%dT%H:%M:%S")
+    return local
+
+
+def _wall_clock(moment: datetime, tz: Any) -> str | None:
+    """``moment`` as naive wall-clock time in ``tz``, or ``None`` if that names two moments.
+
+    The one conversion behind both ``_in_zone`` (relative times, #74) and
+    ``_typed_in_zone`` (a typed ``Z`` or offset, #236). ``None`` inside the
+    interval a zone repeats when daylight saving ends, where the wall-clock
+    text alone cannot say which of the two moments is meant.
+    """
+    # `astimezone`, never timedelta arithmetic: it keeps `fold`, and cannot land
+    # in a spring-forward gap, so the one case left to catch is the repeat.
+    local = moment.astimezone(tz)
+    if local.replace(fold=0).astimezone(dt_timezone.utc) != local.replace(fold=1).astimezone(
+        dt_timezone.utc
+    ):
+        return None
+    # `isoformat` writes no fraction for a whole second and six digits otherwise.
+    return local.replace(tzinfo=None, fold=0).isoformat()
+
+
+def _typed_in_zone(value: str, zone: str | None) -> str | None:
+    """A typed ``Z``/offset ``value`` as wall-clock time in ``zone`` (#236).
+
+    Graph keeps the instant of a ``Z`` or offset but anchors a single event in
+    UTC whatever ``timeZone`` says; the same moment written as local time keeps
+    the zone. Measured live on a consumer mailbox, 2026-11-10. A zone-less value
+    is already local and comes back as is. ``None`` when there is no safe way to
+    convert: a zone ``zoneinfo`` cannot resolve (Graph's Windows names), a value
+    this Python cannot parse, a moment past the years it can hold (``9999-12-31``
+    east of UTC), or one in the repeated hour (``_wall_clock``).
+    """
+    text = _OVERLONG_FRACTION.sub(r"\1", value.strip())
+    try:
+        moment = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+        if moment.tzinfo is None:
+            return value
+        tz = maybe_zone(zone)
+        return None if tz is None else _wall_clock(moment, tz)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _typed_in_zones(ends: dict[str, tuple[str, str | None]]) -> dict[str, str]:
+    """Each typed end, ``{name: (value, zone)}``, through ``_typed_in_zone``: all or none.
+
+    If any end cannot be converted, every end is sent as written, which is the
+    behaviour before #236: both ends filed in UTC. Converting only the other
+    would file the two ends in different zones, a state nothing made before.
+    """
+    converted = {name: _typed_in_zone(value, zone) for name, (value, zone) in ends.items()}
+    if any(v is None for v in converted.values()):
+        return {name: value for name, (value, _) in ends.items()}
+    return {name: v for name, v in converted.items() if v is not None}
 
 
 def _usable_zone(value: Any) -> str | None:
@@ -569,10 +621,12 @@ async def create_event(
     it makes the created event a series master rather than a single occurrence.
 
     ``timezone`` is the IANA zone the event is *anchored* in, defaulting to
-    ``config.timezone``. It is the zone that governs the series, not a
-    conversion applied to ``start``: an offset or ``Z`` in the datetime still
-    pins the instant (Graph honours it), while the zone decides what the second
-    occurrence of a weekly series does when daylight saving ends. Anchored in
+    ``config.timezone``. An offset or ``Z`` in the datetime pins the instant;
+    the zone decides what the second occurrence of a weekly series does when
+    daylight saving ends. Graph anchors a single event sent a ``Z`` or offset in
+    UTC whatever ``timeZone`` says, so such a value is sent as the same moment
+    in wall-clock time in the zone (``_typed_in_zones``, #236), converted with
+    the host's zone rules: a host with outdated tz data can shift it. Anchored in
     ``UTC`` — which is what this tool sent unconditionally before 1.23.0 — a
     09:00 series silently becomes 08:00 the week the clocks go back.
 
@@ -580,12 +634,12 @@ async def create_event(
     wall-clock time *in that zone*, which is what ``config.timezone`` has
     always meant for input interpretation everywhere else in this server.
 
-    The datetime string is passed through as the caller wrote it rather than
-    normalized to UTC first. That is load-bearing twice over: normalizing a
-    naive value needs a zone to resolve it against, and resolving it against
-    the host's clock is the bug 1.15.0 removed; and Graph requires an all-day
-    event to start on a midnight boundary, which a UTC conversion of local
-    midnight is not.
+    Otherwise the datetime string is passed through as the caller wrote it
+    rather than normalized to UTC first. That is load-bearing twice over:
+    normalizing a naive value needs a zone to resolve it against, and resolving
+    it against the host's clock is the bug 1.15.0 removed; and Graph requires an
+    all-day event to start on a midnight boundary, which a UTC conversion of
+    local midnight is not.
 
     A relative ``start``/``end`` (``+2h``, ``now``) is the exception (#74). It
     names a moment, so it is resolved before anything is sent, and then written
@@ -675,6 +729,12 @@ async def create_event(
     if end_resolved is not end:
         end = _in_zone(end_resolved, zone, end)
         placed["end"] = _placed(end, zone)
+    # A typed `Z` or offset goes out as local time in the zone (#236). An all-day
+    # event is stored in UTC whatever it is sent, so it has no zone to keep.
+    if not is_all_day:
+        typed = {"start": (start, start_resolved), "end": (end, end_resolved)}
+        sent = _typed_in_zones({k: (v, zone) for k, (v, r) in typed.items() if r is v})
+        start, end = sent.get("start", start), sent.get("end", end)
 
     # Validate attendee emails if provided
     validated_attendees = []
@@ -813,6 +873,11 @@ async def update_event(
     this change, and not ``config.timezone`` as everywhere else in this server.
     Patching a colleague's New York meeting to ``"2026-11-03T09:00:00"`` means
     09:00 in New York, not 09:00 where this server is configured.
+
+    A ``Z`` or offset ``start``/``end`` is sent as wall-clock time in the zone
+    that end is anchored in, as in ``create_event`` (#236), when ``zoneinfo``
+    can convert into it. If either end cannot be converted (a Windows-named zone
+    such as "Pacific Standard Time"), both are sent as written, as before.
 
     A relative ``start``/``end`` (``+2h``) is written as wall-clock time in the
     zone that end is anchored in, as in ``create_event``, so it is placed only
@@ -1008,6 +1073,7 @@ async def update_event(
     # Set only when the patch reshapes a series master; see the occurrence check
     # below for why that patch gets pinned.
     if_match: str | None = None
+    all_day = False
     if start is not None or end is not None:
         existing_event = await current_event()
         if requested_zone is not None:
@@ -1052,6 +1118,14 @@ async def update_event(
     if end_resolved is not end and end_zone is not None:
         end = _in_zone(end_resolved, end_zone, end)
         placed["end"] = _placed(end, end_zone)
+    # A typed `Z` or offset goes out as local time in its zone, as on create
+    # (#236). An all-day event is anchored in UTC, so it has nothing to keep.
+    if not all_day:
+        typed = {"start": (start, start_resolved, start_zone), "end": (end, end_resolved, end_zone)}
+        sent = _typed_in_zones(
+            {k: (v, z) for k, (v, r, z) in typed.items() if v is not None and r is v}
+        )
+        start, end = sent.get("start", start), sent.get("end", end)
 
     # Last of the checks, because it is the only one that costs a second read,
     # and only a master can have occurrences to lose. `remove_recurrence` is left
