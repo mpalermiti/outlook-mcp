@@ -1911,6 +1911,54 @@ class TestMovingAMastersDateMovesItsOccurrences:
                 await _instances(sdk, event_id, monday, "UTC"), monday, time_of_day="00:00:00"
             )
 
+    async def test_weekdays_started_on_a_wednesday_stay_weekdays(
+        self, real_graph_client, live_write_config
+    ):
+        """The #98 review's case: five weekdays from Monday, started on Wednesday instead.
+
+        The days are kept and only the range moves, so the five occurrences are
+        Wednesday to Friday and then Monday and Tuesday of the next week, at
+        09:00. Shifting every day by two put them on Wednesday to Sunday.
+        """
+        sdk = real_graph_client.sdk_client
+        monday = _anchor_monday()
+        wednesday = monday + timedelta(days=2)
+        weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" issue98-weekdays",
+            start=f"{monday.isoformat()}T09:00:00",
+            end=f"{monday.isoformat()}T09:30:00",
+            timezone=_EAST,
+            recurrence={
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": weekdays},
+                "range": {"type": "numbered", "numberOfOccurrences": 5},
+            },
+        ) as event_id:
+            before = await _instances(sdk, event_id, monday, _EAST)
+            assert [o.start.date_time[:10] for o in before] == [
+                (monday + timedelta(days=n)).isoformat() for n in range(5)
+            ], "premise: the series should start as Monday to Friday"
+
+            result = await update_event(
+                sdk,
+                event_id=event_id,
+                start=f"{wednesday.isoformat()}T09:00:00",
+                end=f"{wednesday.isoformat()}T09:30:00",
+                config=live_write_config,
+            )
+            assert result["status"] == "updated"
+            assert "Monday, Tuesday, Wednesday, Thursday, Friday" in result["note"]
+
+            starts = [o.start.date_time for o in await _instances(sdk, event_id, monday, _EAST)]
+            expected = [monday + timedelta(days=n) for n in (2, 3, 4, 7, 8)]
+            assert [date.fromisoformat(s[:10]) for s in starts] == expected, (
+                f"expected Wednesday to Friday, then Monday and Tuesday; got {starts}"
+            )
+            assert all(s[11:19] == "09:00:00" for s in starts), starts
+
 
 class TestCreatingInAnotherCalendar:
     """`calendar` on create, and the claim that lets every other tool ignore it.

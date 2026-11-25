@@ -1124,9 +1124,10 @@ async def outlook_update_event(
     """Update fields on an existing event (partial patch — only provided fields change).
 
     `recurrence` takes the same shapes as outlook_create_event and converts a single
-    event into a series, or replaces an existing series' pattern. Omit it to leave any
-    recurrence alone; pass remove_recurrence=True to turn a series back into a single
-    event, keeping the first occurrence's time (the two are mutually exclusive).
+    event into a series, or replaces an existing series' pattern. Omit it to keep the
+    pattern; a series moved to another day takes it along, and `note` says how. Pass
+    remove_recurrence=True to turn a series back into a single event, keeping the first
+    occurrence's time (the two are mutually exclusive).
     `attendees` REPLACES the whole guest list (Graph has no add-one operation) and sends
     invitations to everyone on it plus cancellations to anyone dropped — pass the full
     intended list; [] removes everyone. `is_all_day` REQUIRES start and end in the same

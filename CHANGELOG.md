@@ -14,17 +14,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   wait. The merge is rebuilt from that read and pinned to its change key, so an address added
   elsewhere in between is still kept. A second `404` or `412` is reported as before.
 
-- **Moving a repeating event to another day moves every occurrence (#98).** Given a new `start`
-  on a different day for a series, in the same time zone and without `recurrence`,
+- **Moving a repeating event to another day moves its occurrences (#98).** Given a new `start` on a
+  different day for a series, in the same time zone and without `recurrence`,
   `outlook_update_event` answered `updated` while Graph put the series back on its old day, so
-  nothing moved. The series' own repeat rule now goes with the change, its days and start date
-  moved as far as the start: a weekly Monday series moved to a Tuesday becomes a weekly Tuesday
-  series. A `timezone` change already worked this way. A rule with no exact equivalent on the new
-  day ("the first Monday of the month", or a monthly date pushed into another month) is refused
-  instead of reported as `updated`. So is a `Z` or offset `start` this server could not convert
-  into the series' zone, since the day it falls on there cannot be worked out (a local time without
-  a zone works), and moving a series whose rule skips the first day of its range, such as weekdays
-  begun on a Saturday. A new time on the same day is sent as before.
+  nothing moved. The series' repeat rule now goes with the change, and the result's `note` says
+  what it now reads (as it does when a `timezone` change puts the series on other days). A rule
+  that already repeats on the new day is kept and only its start date moves: weekdays started on
+  a Wednesday stay weekdays. A rule naming one day moves to the new day: a weekly Monday series
+  moved to a Tuesday becomes a weekly Tuesday series. An end date moves by as many days as the
+  start, so the series keeps its length. A start moved later also starts the series later:
+  occurrences before it are dropped, and a numbered series counts from the new start. A new time
+  on the same day is sent as before. Refused instead of reported as `updated`, with nothing sent:
+  several weekdays moved to a day they skip, and a rule with no exact equivalent on the new day
+  ("the first Monday of the month" moved to a Tuesday), where `recurrence` with the days wanted
+  says what is meant; a series whose rule skips the first day of its range, such as weekdays
+  begun on a Saturday, where `recurrence` passed with the days wanted is now sent as written
+  rather than shifted; and a `Z` or offset `start` that could not be converted into the series'
+  zone, where a local time without a zone works. A monthly series moved to the same day of a
+  later month is no longer refused.
 
 - **An event created from a `Z` or offset time keeps its time zone (#236).** Graph kept the
   moment of a `start`/`end` such as `2026-12-13T02:00:00Z` but filed a single event in UTC,

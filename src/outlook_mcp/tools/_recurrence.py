@@ -24,10 +24,13 @@ Three layers, deliberately separate:
 
 from __future__ import annotations
 
+import calendar
 import json
 import re
 from datetime import date, datetime
 from typing import Any
+
+from outlook_mcp.errors import OutlookMCPError
 
 # Graph's camelCase day names, Monday-first to match date.weekday().
 _WEEKDAYS = (
@@ -453,8 +456,8 @@ def _refuse_move(kind: str, old: date, new: date, why: str) -> ValueError:
     return ValueError(
         f"This series' {kind} pattern was set up for a series starting "
         f"{old.isoformat()}, and the new start falls on {new.isoformat()} in the "
-        f"event's zone. {why} Pass `recurrence` with the pattern you want alongside "
-        f"`start`, and it is sent as given."
+        f"event's zone. {why} Nothing was modified. Pass `recurrence` with the pattern "
+        f"you want alongside `start`, and it is sent as given."
     )
 
 
@@ -479,8 +482,9 @@ def move_pattern(payload: dict, *, old: date, new: date) -> dict:
 
     Refused, rather than approximated, where the moved series has no exact
     expression: a relative pattern ("the first Thursday") whose day moves, and a
-    monthly one pushed into a neighbouring month — the day before "the 1st" is
-    not any one ``dayOfMonth``.
+    monthly one pushed to another day of a neighbouring month — the day before
+    "the 1st" is not any one ``dayOfMonth``. The same day of a later month needs
+    no move and is not refused.
     """
     delta = (new - old).days
     pattern = dict(payload.get("pattern") or {})
@@ -508,6 +512,8 @@ def move_pattern(payload: dict, *, old: date, new: date) -> dict:
                 "Its day does not match that start date, so there is no telling what "
                 "moving it should mean.",
             )
+        if new.day == old.day and (kind == "absoluteMonthly" or new.month == old.month):
+            return payload  # the 15th from the 15th of a later month: the same pattern
         if kind == "absoluteMonthly" and (new.year, new.month) != (old.year, old.month):
             raise _refuse_move(
                 kind,
@@ -529,25 +535,106 @@ def move_pattern(payload: dict, *, old: date, new: date) -> dict:
     return {**payload, "pattern": pattern}
 
 
-def lands_on(pattern: Any, day: date) -> bool:
-    """Whether ``pattern`` surely schedules ``day``, judged from its own fields alone.
+_INDEXES = ("first", "second", "third", "fourth")
+
+
+def lands_on(pattern: Any, day: date) -> bool | None:
+    """Whether ``pattern`` schedules ``day``, judged from its own fields alone.
 
     Every day for daily, the weekday for weekly, the day (and month) for an
-    absolute pattern. A relative pattern answers ``False``, meaning unknown.
+    absolute pattern, and "the first Monday" (one weekday, an index, and the
+    month for yearly) for a relative one. ``None`` where the fields cannot
+    say: a relative pattern naming several weekdays, or no pattern at all.
     """
     if not isinstance(pattern, dict):
-        return False
+        return None
     kind = _pattern_type(pattern)
+    days = {str(d).lower() for d in pattern.get("daysOfWeek") or ()}
     if kind == "daily":
         return True
     if kind == "weekly":
-        days = {str(d).lower() for d in pattern.get("daysOfWeek") or ()}
         return _WEEKDAYS[day.weekday()] in days
     if kind in ("absoluteMonthly", "absoluteYearly"):
         return _whole(pattern, "dayOfMonth") == day.day and (
             kind == "absoluteMonthly" or _whole(pattern, "month") == day.month
         )
-    return False
+    if kind in ("relativeMonthly", "relativeYearly") and len(days) == 1:
+        if _WEEKDAYS[day.weekday()] not in days:
+            return False
+        if kind == "relativeYearly" and _whole(pattern, "month") != day.month:
+            return False
+        index = str(pattern.get("index") or "first").lower()
+        if index == "last":
+            return day.day + 7 > calendar.monthrange(day.year, day.month)[1]
+        return index in _INDEXES and _INDEXES.index(index) == (day.day - 1) // 7
+    return None
+
+
+def describe_recurrence(payload: dict) -> str:
+    """A recurrence payload in plain words, for a result's ``note``.
+
+    "every week on Monday, Friday, from 2026-11-02, 6 times". Only the fields
+    that decide which days it lands on, so two that schedule alike read alike.
+    """
+    pattern, rng = payload.get("pattern") or {}, payload.get("range") or {}
+    kind = _pattern_type(pattern)
+    unit = {"daily": "day", "weekly": "week"}.get(kind) or (
+        "month" if kind.endswith("Monthly") else "year" if kind.endswith("Yearly") else kind
+    )
+    every = _whole(pattern, "interval") or 1
+    words = f"every {every} {unit}s" if every > 1 else f"every {unit}"
+    days = {str(d).lower() for d in pattern.get("daysOfWeek") or ()}
+    named = ", ".join(d.capitalize() for d in _WEEKDAYS if d in days)
+    month = _whole(pattern, "month")
+    month_name = calendar.month_name[month] if month and 1 <= month <= 12 else str(month)
+    if kind == "weekly":
+        words += f" on {named}"
+    elif kind == "absoluteMonthly":
+        words += f" on day {_whole(pattern, 'dayOfMonth')}"
+    elif kind == "absoluteYearly":
+        words += f" on {month_name} {_whole(pattern, 'dayOfMonth')}"
+    elif kind.startswith("relative"):
+        words += f" on the {str(pattern.get('index') or 'first').lower()} {named}"
+        words += f" of {month_name}" if kind == "relativeYearly" else ""
+    words += f", from {rng.get('startDate')}"
+    ends = _range_type(rng)
+    if ends == "endDate":
+        return f"{words} until {rng.get('endDate')}"
+    if ends == "numbered":
+        return f"{words}, {_whole(rng, 'numberOfOccurrences')} times"
+    return f"{words}, with no end"
+
+
+def move_series(payload: dict, *, old: date, new: date) -> dict:
+    """A series' own recurrence for its start moved from ``old`` to ``new``, zone unchanged (#98).
+
+    Where the pattern already schedules ``new`` it is kept: the series starts on
+    a day it already repeats on, so weekdays started on a Wednesday stay
+    weekdays. Otherwise a pattern naming one day moves to the new one
+    (``move_pattern``), and one naming several weekdays is refused: nothing says
+    which of them the move was meant for. ``startDate`` is dropped for the
+    builder to re-derive, and an ``endDate`` moves as far as the start, so a
+    moved series keeps its length as a numbered one does.
+    """
+    rng = {k: v for k, v in (payload.get("range") or {}).items() if k != "startDate"}
+    if _range_type(rng) == "endDate" and rng.get("endDate"):
+        rng["endDate"] = (_iso_date(rng["endDate"], "range.endDate") + (new - old)).isoformat()
+    moved = {**payload, "range": rng}
+    pattern = payload.get("pattern") or {}
+    if lands_on(pattern, new):
+        return moved
+    days = {str(d).lower() for d in pattern.get("daysOfWeek") or ()}
+    if _pattern_type(pattern) == "weekly" and len(days) > 1:
+        listed = ", ".join(d for d in _WEEKDAYS if d in days)
+        raise OutlookMCPError(
+            "series_days_ambiguous",
+            f"This series repeats on {listed}, and the new start, {new.isoformat()}, is "
+            "not one of those days, so there is no telling which days it should repeat "
+            "on from there. Nothing was modified.",
+            "Pass `recurrence` alongside `start`, with the days you want in "
+            "pattern.daysOfWeek; it is sent as given.",
+        )
+    return move_pattern(moved, old=old, new=new)
 
 
 def build_event_recurrence(

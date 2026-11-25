@@ -2592,6 +2592,325 @@ class TestASeriesWhosePatternSkipsItsFirstDay:
         assert prefers[-1] == {'outlook.timezone="Eastern Standard Time"'}
         assert builder.patch.call_args[0][0].recurrence is None
 
+    @pytest.mark.parametrize(
+        "given",
+        [
+            "weekdays",
+            {
+                "pattern": {
+                    "type": "weekly",
+                    "daysOfWeek": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+                },
+                "range": {"type": "numbered", "numberOfOccurrences": 10},
+            },
+        ],
+        ids=["shorthand", "the-same-days-written-out"],
+    )
+    async def test_the_refusals_remedy_sends_the_days_given(self, given):
+        """What the refusal says to do, done: `recurrence` with the days wanted, beside `start`.
+
+        The days equal the stored ones, so the echo path took them for the
+        series' own and moved them three days from the Saturday: Thu–Mon,
+        `updated`. They are the caller's now, sent as written.
+        """
+        from msgraph.generated.models.day_of_week import DayOfWeek
+
+        builder, mock_client = _series_master_builder(
+            None, current=_weekdays_begun_on_a_saturday("America/New_York")
+        )
+        with pytest.raises(ValueError, match="Pass `recurrence` with the days you want"):
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-11-03T09:00:00",
+                end="2026-11-03T09:30:00",
+                config=_CFG_LA,
+            )
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-03T09:00:00",
+            end="2026-11-03T09:30:00",
+            recurrence=given,
+            config=_CFG_LA,
+        )
+
+        sent = builder.patch.call_args[0][0].recurrence
+        assert sent.pattern.days_of_week == [
+            DayOfWeek.Monday,
+            DayOfWeek.Tuesday,
+            DayOfWeek.Wednesday,
+            DayOfWeek.Thursday,
+            DayOfWeek.Friday,
+        ]
+        assert sent.range.start_date == date(2026, 11, 3)
+
+    async def test_a_zone_change_refuses_rather_than_measure_from_the_saturday(self):
+        """The zone change's own re-send measured from `startDate` too; it is refused alike."""
+        builder, mock_client = _series_master_builder(
+            None, current=_weekdays_begun_on_a_saturday("America/New_York")
+        )
+
+        with pytest.raises(ValueError, match="Pass `recurrence` with the days you want"):
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-11-02T08:00:00",
+                end="2026-11-02T08:30:00",
+                timezone="America/Chicago",
+                config=_CFG_LA,
+            )
+        builder.patch.assert_not_called()
+
+
+def _a_series(pattern: dict, first: date, *, rng: dict | None = None, zone="America/New_York"):
+    """A clean series master whose range starts ``first`` at 09:00 in ``zone``.
+
+    The plain GET reports its start projected into UTC, as Graph does.
+    """
+    from zoneinfo import ZoneInfo
+
+    local = datetime(first.year, first.month, first.day, 9, tzinfo=ZoneInfo(zone))
+    recurrence = build_event_recurrence(
+        {"pattern": pattern, "range": rng or {"type": "numbered", "numberOfOccurrences": 3}},
+        start=f"{first.isoformat()}T09:00:00",
+        zone=zone,
+    )
+    current = _current_event(
+        date_time=f"{local.astimezone(timezone.utc):%Y-%m-%dT%H:%M:%S}.0000000",
+        start_zone=zone,
+        event_type="seriesMaster",
+        recurrence=recurrence,
+    )
+    return _series_master_builder(recurrence, current=current)
+
+
+_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+
+
+class TestWhatAMovedSeriesRepeatsOn:
+    """#98 review: a series moved to another day keeps its days where it can.
+
+    A day the pattern already repeats on keeps the pattern and moves only the
+    range: weekdays started on a Wednesday stay weekdays. One day moves to the
+    new one. Several weekdays moved to a day they skip are refused, since
+    nothing says which days were meant; shifting them all put weekdays onto
+    the weekend, `updated`. The reply's `note` says what was sent.
+    """
+
+    @pytest.mark.parametrize(
+        ("days", "start"),
+        [
+            (_WEEKDAYS, "2026-11-04T09:00:00"),
+            (_WEEKDAYS, "2026-11-18T10:00:00"),
+            (["monday", "thursday"], "2026-11-05T09:00:00"),
+        ],
+        ids=["weekdays-to-wednesday", "weekdays-later-and-new-time", "mon-thu-to-thursday"],
+    )
+    async def test_a_day_it_already_repeats_on_keeps_its_days(self, days, start):
+        builder, mock_client = _a_series({"type": "weekly", "daysOfWeek": days}, date(2026, 11, 2))
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start=start,
+            end=start[:11] + "11:00:00",
+            config=_CFG_LA,
+        )
+
+        sent = serialize_recurrence(builder.patch.call_args[0][0].recurrence)
+        assert sent["pattern"]["daysOfWeek"] == days
+        assert sent["range"]["startDate"] == start[:10]
+        named = ", ".join(d.capitalize() for d in days)
+        assert f"every week on {named}, from {start[:10]}, 3 times" in result["note"]
+
+    @pytest.mark.parametrize(
+        ("days", "start"),
+        [(["monday", "thursday"], "2026-11-03T09:00:00"), (_WEEKDAYS, "2026-11-07T09:00:00")],
+        ids=["mon-thu-to-tuesday", "weekdays-to-saturday"],
+    )
+    async def test_several_days_moved_to_one_they_skip_are_refused(self, days, start):
+        from outlook_mcp.errors import OutlookMCPError
+
+        builder, mock_client = _a_series({"type": "weekly", "daysOfWeek": days}, date(2026, 11, 2))
+
+        with pytest.raises(OutlookMCPError) as excinfo:
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start=start,
+                end=start[:11] + "09:30:00",
+                config=_CFG_LA,
+            )
+
+        assert excinfo.value.code == "series_days_ambiguous"
+        assert "Pass `recurrence`" in str(excinfo.value)
+        builder.patch.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("pattern", "first", "start", "expected"),
+        [
+            ({"type": "daily", "interval": 1}, "2026-11-02", "2026-11-05", {}),
+            # N1: the same day of the next month was refused as "a different month".
+            ({"type": "absoluteMonthly", "dayOfMonth": 15}, "2026-11-15", "2026-12-15", {}),
+            (
+                {"type": "absoluteMonthly", "dayOfMonth": 15},
+                "2026-11-15",
+                "2026-11-20",
+                {"dayOfMonth": 20},
+            ),
+            (
+                {"type": "relativeMonthly", "daysOfWeek": ["monday"], "index": "first"},
+                "2026-11-02",
+                "2026-12-07",
+                {},
+            ),
+        ],
+        ids=["daily", "monthly-next-month", "monthly-another-day", "first-monday-next-month"],
+    )
+    async def test_other_patterns_keep_or_move_their_day(self, pattern, first, start, expected):
+        builder, mock_client = _a_series(pattern, date.fromisoformat(first))
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start=f"{start}T09:00:00",
+            end=f"{start}T09:30:00",
+            config=_CFG_LA,
+        )
+
+        sent = serialize_recurrence(builder.patch.call_args[0][0].recurrence)
+        stored = serialize_recurrence(builder.get.return_value.recurrence)
+        assert sent["pattern"] == {**stored["pattern"], **expected}
+        assert sent["range"]["startDate"] == start
+
+    async def test_an_end_date_moves_as_far_as_the_start(self):
+        """Three Mondays to 2026-11-16, moved to Tuesday: three Tuesdays to the 17th."""
+        builder, mock_client = _a_series(
+            {"type": "weekly", "daysOfWeek": ["monday"]},
+            date(2026, 11, 2),
+            rng={"type": "endDate", "endDate": "2026-11-16"},
+        )
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-03T09:00:00",
+            end="2026-11-03T09:30:00",
+            config=_CFG_LA,
+        )
+
+        sent = serialize_recurrence(builder.patch.call_args[0][0].recurrence)
+        assert sent["pattern"]["daysOfWeek"] == ["tuesday"]
+        assert (sent["range"]["startDate"], sent["range"]["endDate"]) == (
+            "2026-11-03",
+            "2026-11-17",
+        )
+        assert "every week on Tuesday, from 2026-11-03 until 2026-11-17" in result["note"]
+
+    async def test_a_change_within_the_day_carries_no_note(self):
+        builder, mock_client = _a_series(
+            {"type": "weekly", "daysOfWeek": _WEEKDAYS}, date(2026, 11, 2)
+        )
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-02T10:00:00",
+            end="2026-11-02T10:30:00",
+            config=_CFG_LA,
+        )
+
+        assert builder.patch.call_args[0][0].recurrence is None
+        assert "note" not in result
+
+    async def test_a_zone_change_that_moves_the_days_says_so_and_one_that_does_not_is_quiet(self):
+        """The zone change's own re-send reports only a rule that schedules other days."""
+        builder, mock_client = _series_master_builder(_thursday_utc_series())
+        moved = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-04T18:00:00",
+            end="2026-11-04T18:30:00",
+            timezone="America/Los_Angeles",
+            config=_CFG_LA,
+        )
+        builder, mock_client = _series_master_builder(_thursday_utc_series())
+        kept = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-05T02:00:00",
+            end="2026-11-05T02:30:00",
+            timezone="Europe/London",
+            config=_CFG_LA,
+        )
+
+        assert "every week on Wednesday, from 2026-11-04, 3 times" in moved["note"]
+        assert "note" not in kept
+
+    async def test_a_moved_master_gets_no_times_only_correction(self):
+        """#262's read-back sends the times alone when Graph places one elsewhere.
+
+        On a master that is #98's shape again. A patch that carried the
+        recurrence is not checked, so Graph's reply here, an hour off, changes
+        nothing: one PATCH, the recurrence on it, no `Prefer` for the check.
+        """
+        builder, mock_client = _a_series(
+            {"type": "weekly", "daysOfWeek": ["monday"]}, date(2026, 11, 2)
+        )
+        builder.patch = AsyncMock(
+            return_value=MagicMock(
+                id="AAMkAG123=",
+                start=MagicMock(date_time="2026-11-03T15:00:00.0000000", time_zone="UTC"),
+                end=MagicMock(date_time="2026-11-03T15:30:00.0000000", time_zone="UTC"),
+            )
+        )
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-03T14:00:00Z",
+            end="2026-11-03T14:30:00Z",
+            config=_CFG_LA,
+        )
+
+        assert builder.patch.await_count == 1
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.date_time == "2026-11-03T09:00:00"
+        assert patched.recurrence is not None
+        assert not builder.patch.call_args.kwargs["request_configuration"].headers.get("Prefer")
+
+    @pytest.mark.parametrize(
+        ("first", "moves"),
+        [("2027-03-28", True), ("2027-04-04", False)],
+        ids=["to-another-day", "within-the-day"],
+    )
+    async def test_a_z_start_left_as_typed_cannot_move_a_series(self, first, moves):
+        """N2: 15:30Z on 2027-04-03 is 02:30 on Sunday the 4th in Sydney, in the repeated hour.
+
+        `_typed_in_zones` leaves it as typed, and Graph files a typed `Z` in UTC,
+        where that is Saturday: a range moved to the Sunday would disagree with
+        its start. So a move is refused; a change within the day goes out as
+        before, with no recurrence.
+        """
+        builder, mock_client = _a_series(
+            {"type": "weekly", "daysOfWeek": ["sunday"]},
+            date.fromisoformat(first),
+            zone="Australia/Sydney",
+        )
+        times = {"start": "2027-04-03T15:30:00Z", "end": "2027-04-03T16:30:00Z"}
+
+        if moves:
+            with pytest.raises(ValueError, match="could not be converted into local time"):
+                await update_event(mock_client, event_id="AAMkAG123=", config=_CFG_LA, **times)
+            builder.patch.assert_not_called()
+        else:
+            await update_event(mock_client, event_id="AAMkAG123=", config=_CFG_LA, **times)
+            patched = builder.patch.call_args[0][0]
+            assert patched.start.date_time == "2027-04-03T15:30:00Z"
+            assert patched.recurrence is None
+
 
 class TestShowAs:
     """``show_as`` is Graph's ``freeBusyStatus`` — Outlook's "Show as" field.
