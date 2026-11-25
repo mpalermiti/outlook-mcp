@@ -4003,9 +4003,9 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
     UTC_REPLY = 'outlook.timezone="UTC"'
 
     @staticmethod
-    def _updatable(zone: str, reply):
+    def _updatable(zone: str, reply, **current):
         builder = _make_event_builder()
-        builder.get = AsyncMock(return_value=_current_event(start_zone=zone))
+        builder.get = AsyncMock(return_value=_current_event(start_zone=zone, **current))
         builder.patch = AsyncMock(return_value=reply)
         mock_client = MagicMock()
         mock_client.me.events.by_event_id = MagicMock(return_value=builder)
@@ -4143,6 +4143,303 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
         assert "2026-12-13T02:00:00" in message  # where it was asked to go
         assert "nope" in message
         assert "outlook_get_event" in message
+        # The way to put it right names the tool that moves an event, and the
+        # input that needs no conversion at all.
+        assert "outlook_update_event" in message
+        assert "without a zone or offset" in message
+
+    # ── only a single event is checked ────────────────────────────────
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            # Monday's first occurrence, two days on: what a weekday series may echo.
+            ("2026-12-14T17:00:00", "2026-12-14T17:30:00"),
+            # An hour late: what a zone-rule disagreement looks like, and what a
+            # single event would be corrected for.
+            ("2026-12-12T18:00:00", "2026-12-12T18:30:00"),
+        ],
+        ids=["first occurrence", "an hour late"],
+    )
+    @pytest.mark.parametrize(
+        ("event_type", "checked"),
+        [
+            ("singleInstance", True),
+            ("seriesMaster", False),
+            ("occurrence", False),
+            ("exception", False),
+        ],
+    )
+    async def test_only_an_update_to_a_single_event_is_checked(self, event_type, checked, reply):
+        """A master's reply can carry its first occurrence, not the start sent (S1).
+
+        Saturday 17:00Z sent to a weekday series can come back as Monday's. That
+        is no zone rule's doing, and a corrective patch would file the series in
+        UTC, or be refused because it carries no recurrence. So only an event
+        that stands alone is checked; the others are sent as converted, as before
+        the check existed, with no `Prefer`, no second write and no `note`,
+        whatever the reply says.
+        """
+        from tests.test_write_payloads_reach_the_wire import wire
+
+        builder, mock_client = self._updatable(
+            "America/Los_Angeles", _utc_reply(*reply), event_type=event_type
+        )
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-12T17:00:00Z",
+            end="2026-12-12T17:30:00Z",
+            config=_CFG,
+        )
+
+        first = builder.patch.call_args_list[0]
+        body = wire(first.args[0])
+        # Converted either way (#236): the check is what differs.
+        assert '"dateTime": "2026-12-12T09:00:00"' in body
+        assert '"timeZone": "America/Los_Angeles"' in body
+        assert _prefer(first) == ({self.UTC_REPLY} if checked else set())
+        if not checked:
+            assert builder.patch.call_count == 1
+            assert "note" not in result
+        else:
+            # An hour is put back; two days is no zone rule's doing, so it is
+            # only reported.
+            corrected = reply[0].endswith("T18:00:00")
+            assert builder.patch.call_count == (2 if corrected else 1)
+            assert "note" in result
+
+    async def test_a_single_event_typed_by_the_sdk_enum_is_checked(self):
+        """Graph's reply is parsed into `EventType`, not a string; both must read as single."""
+        from msgraph.generated.models.event_type import EventType
+
+        builder, mock_client = self._updatable(
+            "America/Havana", _utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00")
+        )
+        builder.get.return_value.type = EventType.SingleInstance
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        assert builder.patch.call_count == 2
+        assert "note" in result
+
+    async def test_an_event_whose_type_cannot_be_read_is_not_checked(self):
+        builder, mock_client = self._updatable(
+            "America/Havana", _utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00")
+        )
+        builder.get.return_value.type = None
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        assert _prefer(builder.patch.call_args) == set()
+        assert builder.patch.call_count == 1
+        assert "note" not in result
+
+    async def test_an_update_that_removes_a_recurrence_is_not_checked(self):
+        """`remove_recurrence` sends an explicit null recurrence; that request is not checked."""
+        builder, mock_client = self._updatable(
+            "America/Havana", _utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00")
+        )
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            remove_recurrence=True,
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args
+        assert patched.args[0].additional_data == {"recurrence": None}
+        assert _prefer(patched) == set()
+        assert builder.patch.call_count == 1
+        assert "note" not in result
+
+    async def test_an_update_that_makes_a_series_is_not_checked(self):
+        """A single event given a recurrence becomes a master in the same request."""
+        builder, mock_client = self._updatable(
+            "America/Los_Angeles", _utc_reply("2026-12-14T17:00:00", "2026-12-14T17:30:00")
+        )
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-12T17:00:00Z",
+            end="2026-12-12T17:30:00Z",
+            recurrence="weekdays",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args
+        assert patched.args[0].recurrence is not None
+        assert _prefer(patched) == set()
+        assert builder.patch.call_count == 1
+        assert "note" not in result
+
+    # ── only a difference a zone rule can make is corrected ───────────
+
+    @pytest.mark.parametrize(
+        ("start_utc", "end_utc"),
+        [
+            ("2026-12-14T02:00:00", "2026-12-14T03:00:00"),  # a whole day
+            ("2026-12-13T05:00:01", "2026-12-13T06:00:01"),  # just past three hours
+            ("2026-12-13T02:00:30", "2026-12-13T03:00:30"),  # not a whole minute
+            ("2026-12-13T03:00:00", "2026-12-15T03:00:00"),  # one end fits, the other does not
+        ],
+        ids=["a day", "over three hours", "half a minute", "one end too far"],
+    )
+    async def test_a_difference_no_zone_rule_explains_is_reported_not_changed(
+        self, start_utc, end_utc
+    ):
+        """Zone offsets are whole minutes, and two rule sets disagree by at most a few hours.
+
+        Anything else did not come from the conversion, so a corrective write
+        would be a guess: the event is left as Graph placed it, and the `note`
+        says where that is, so the caller can check it with the user.
+        """
+        builder, mock_client = self._updatable("America/Havana", _utc_reply(start_utc, end_utc))
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        assert builder.patch.call_count == 1
+        note = result["note"]
+        assert f"start at {start_utc} UTC instead of 2026-12-13T02:00:00 UTC" in note
+        assert "not changed" in note and "outlook_get_event" in note
+        assert "filed in UTC" not in note
+
+    @pytest.mark.parametrize(
+        ("start_utc", "end_utc"),
+        [
+            ("2026-12-13T05:00:00", "2026-12-13T06:00:00"),  # three hours late
+            ("2026-12-12T23:00:00", "2026-12-13T00:00:00"),  # three hours early
+            ("2026-12-13T02:30:00", "2026-12-13T03:30:00"),  # Lord Howe's half hour
+            ("2026-12-13T02:15:00", "2026-12-13T03:15:00"),  # a quarter-hour zone
+        ],
+    )
+    async def test_a_difference_a_zone_rule_can_make_is_put_back(self, start_utc, end_utc):
+        builder, mock_client = self._updatable("America/Havana", _utc_reply(start_utc, end_utc))
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        assert builder.patch.call_count == 2
+        assert "note" in result
+
+    @pytest.mark.parametrize(
+        ("typed", "reply", "corrected"),
+        [
+            ("2026-12-13T02:00:00.900Z", "2026-12-13T02:00:00.0000000", False),
+            ("2026-12-13T02:00:00.900Z", "2026-12-13T03:00:00.0000000", True),
+            ("2026-12-13T02:00:00Z", "2026-12-13T03:00:00", True),
+            ("2026-12-13T02:00:00Z", "2026-12-13T03:00:00Z", True),
+        ],
+        ids=["under a second", "an hour less a fraction", "no fraction", "trailing Z"],
+    )
+    async def test_a_fraction_of_a_second_and_graphs_spellings(self, typed, reply, corrected):
+        """Graph may drop a fraction it was sent; its reply may or may not carry digits."""
+        answer = MagicMock(id="AAMkAG123=")
+        answer.start = MagicMock(date_time=reply, time_zone="UTC")
+        answer.end = None
+        builder, mock_client = self._updatable("America/Havana", answer)
+
+        result = await update_event(mock_client, event_id="AAMkAG123=", start=typed, config=_CFG)
+
+        assert builder.patch.call_count == (2 if corrected else 1)
+        assert ("note" in result) is corrected
+
+    @pytest.mark.parametrize(
+        ("typed", "reply", "corrected"),
+        [
+            # Three hours early with the fraction dropped: 3 h 0.9 s from the
+            # time typed, exactly three hours from its whole second.
+            ("2026-12-13T02:00:00.900Z", "2026-12-12T23:00:00.0000000", True),
+            ("2026-12-13T02:00:00.900Z", "2026-12-13T05:00:00.0000000", True),
+            # Not a whole minute from either, though within a second of one.
+            ("2026-12-13T02:00:00Z", "2026-12-13T02:00:59.6000000", False),
+            # An hour and a fraction no dropped digit accounts for.
+            ("2026-12-13T02:00:00.400Z", "2026-12-13T03:00:00.7000000", False),
+        ],
+        ids=["3h early", "3h late", "59.6 seconds", "an hour and a fraction"],
+    )
+    async def test_the_edges_are_the_same_either_side(self, typed, reply, corrected):
+        answer = MagicMock(id="AAMkAG123=")
+        answer.start = MagicMock(date_time=reply, time_zone="UTC")
+        answer.end = None
+        builder, mock_client = self._updatable("America/Havana", answer)
+
+        result = await update_event(mock_client, event_id="AAMkAG123=", start=typed, config=_CFG)
+
+        assert builder.patch.call_count == (2 if corrected else 1)
+        assert ("not changed" in result["note"]) is not corrected
+
+    async def test_the_note_names_the_end_that_moved_and_where(self):
+        builder, mock_client = self._updatable(
+            "America/Havana", _utc_reply("2026-12-13T03:00:00", None)
+        )
+
+        result = await update_event(
+            mock_client, event_id="AAMkAG123=", start="2026-12-13T02:00:00Z", config=_CFG
+        )
+
+        note = result["note"]
+        assert "start at 2026-12-13T03:00:00 UTC instead of 2026-12-13T02:00:00 UTC" in note
+        # Only the start was sent again, so only the start is filed in UTC.
+        assert "The start was saved again" in note
+        assert "start and end" not in note
+
+    async def test_the_corrective_patch_on_the_wire(self):
+        """Only the times, as typed, beside each end's own zone; no `Prefer`, no pin."""
+        import json
+
+        from tests.test_write_payloads_reach_the_wire import wire
+
+        builder, mock_client = self._updatable(
+            "America/Havana", _utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00")
+        )
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        fix = builder.patch.call_args_list[1]
+        # `wire` marks the model clean, so it is serialized once and read twice.
+        body = wire(fix.args[0])
+        assert json.loads(body) == {
+            "@odata.type": "#microsoft.graph.event",
+            "start": {"dateTime": "2026-12-13T02:00:00Z", "timeZone": "America/Havana"},
+            "end": {"dateTime": "2026-12-13T03:00:00Z", "timeZone": "America/Havana"},
+        }
+        headers = fix.kwargs["request_configuration"].headers
+        assert not headers.get("Prefer") and not headers.get("If-Match")
 
     # ── create ────────────────────────────────────────────────────────
 
@@ -4186,6 +4483,10 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
                 "2026-12-13T03:00:00Z",
             )
             assert fix.start.time_zone == "America/Havana"
+        else:
+            # Nothing to send, so no request builder either: the SDK refuses to
+            # build one for an id it was not given.
+            mock_client.me.events.by_event_id.assert_not_called()
 
     async def test_create_without_a_typed_instant_sends_no_prefer(self):
         mock_client, fixer = self._poster(_utc_reply("2001-01-01T00:00:00", "2001-01-01T01:00:00"))
@@ -4201,6 +4502,107 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
 
         assert _prefer(mock_client.me.events.post.call_args) == set()
         fixer.patch.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            ("2026-12-14T17:00:00", "2026-12-14T17:30:00"),
+            ("2026-12-12T18:00:00", "2026-12-12T18:30:00"),
+        ],
+        ids=["first occurrence", "an hour late"],
+    )
+    @pytest.mark.parametrize(
+        "recurrence",
+        [
+            "weekdays",
+            {
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["thursday"]},
+                "range": {"type": "numbered", "numberOfOccurrences": 2},
+            },
+        ],
+        ids=["weekdays", "thursdays"],
+    )
+    async def test_a_series_create_is_not_checked(self, recurrence, reply):
+        """Saturday 17:00Z for a series that never meets on a Saturday (S1).
+
+        Graph accepts a start off the pattern and puts the occurrences on the
+        pattern's days, so its reply may carry the first occurrence (Monday or
+        Thursday), days from the start typed. Corrected, the series would be
+        filed in UTC, or refused because the patch carries no recurrence. The
+        series is converted as before (#236) and not checked, even when the reply
+        is an hour off, which on a single event would be corrected.
+        """
+        from tests.test_write_payloads_reach_the_wire import wire
+
+        mock_client, fixer = self._poster(_utc_reply(*reply))
+
+        result = await create_event(
+            mock_client,
+            subject="Standup",
+            start="2026-12-12T17:00:00Z",
+            end="2026-12-12T17:30:00Z",
+            timezone="America/Los_Angeles",
+            recurrence=recurrence,
+            config=_CFG,
+        )
+
+        post = mock_client.me.events.post.call_args
+        body = wire(post.args[0])
+        assert '"dateTime": "2026-12-12T09:00:00"' in body
+        assert '"timeZone": "America/Los_Angeles"' in body
+        assert '"recurrence"' in body
+        assert _prefer(post) == set()
+        mock_client.me.events.by_event_id.assert_not_called()
+        fixer.patch.assert_not_called()
+        assert "note" not in result
+
+    async def test_a_failed_correction_on_create_names_the_new_event(self):
+        """The event exists; creating it again would make a second one and mail it again."""
+        from outlook_mcp.errors import GraphAPIError, OutlookMCPError
+
+        mock_client, fixer = self._poster(_utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00"))
+        fixer.patch.side_effect = GraphAPIError(400, "ErrorInvalidRequest", "nope", action=None)
+
+        with pytest.raises(OutlookMCPError) as exc:
+            await create_event(
+                mock_client,
+                subject="Dinner",
+                start="2026-12-13T02:00:00Z",
+                end="2026-12-13T03:00:00Z",
+                timezone="America/Havana",
+                config=_CFG,
+            )
+
+        message = str(exc.value)
+        assert exc.value.code == "event_time_not_restored"
+        assert "created (id AAMkAG123=)" in message
+        assert "outlook_update_event" in message
+        assert "not by creating it again" in message
+
+    async def test_create_in_a_named_calendar_corrects_it_there(self):
+        """The corrective patch goes to the collection the event was posted to."""
+        client, secondary = _client_with_calendars()
+        secondary.events.post = AsyncMock(
+            return_value=_utc_reply("2026-12-13T03:00:00", "2026-12-13T04:00:00")
+        )
+        fixer = MagicMock()
+        fixer.patch = AsyncMock(return_value=MagicMock(id="AAMkAG123="))
+        secondary.events.by_event_id = MagicMock(return_value=fixer)
+
+        result = await create_event(
+            client,
+            subject="Dentist",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            timezone="America/Havana",
+            calendar="Kids + School",
+            config=_CFG,
+        )
+
+        client.me.calendars.by_calendar_id.assert_called_with("KIDS77=")
+        secondary.events.by_event_id.assert_called_once_with("AAMkAG123=")
+        assert fixer.patch.call_count == 1
+        assert "note" in result
 
 
 class TestWindowsNameLookupIsExact:
