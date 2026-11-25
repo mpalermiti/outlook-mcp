@@ -19,13 +19,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   whatever `timezone` said. A later local-time edit was then read in UTC, a series made from the
   event later shifted an hour at each daylight-saving change, and `outlook_get_event` reported
   `UTC`. `outlook_create_event` now sends such a time as the same moment in local time in the
-  event's zone, which is the form Graph keeps the zone for. `outlook_update_event` does the same
-  when the event is filed under a zone name like `America/Los_Angeles`; one Graph filed under a
-  Windows name such as `Pacific Standard Time` is sent as before. All-day events and local times
-  without a zone are sent as written. So is an event with either end in the hour that repeats when
-  clocks go back, or outside the years Python can hold (such as `9999-12-31`): both ends are sent as
-  written, and that event is still filed in UTC. The conversion uses the host's time zone rules, so
-  a host with outdated time zone data can shift such a time.
+  event's zone, which is the form Graph keeps the zone for. `outlook_update_event` does the same,
+  including for an event Graph files under a Windows name such as `Pacific Standard Time` (as it
+  does for events made in Outlook): the time is converted through CLDR's usual zone for that name,
+  and the name sent back stays Graph's own. That also starts a series moved with a `Z` start on its
+  local day for such an event (#235). A zone name neither Python nor that list knows is sent as
+  before. All-day events and local times without a zone are sent as written. So is an event with
+  either end in the hour that repeats when clocks go back, or outside the years Python can hold
+  (such as `9999-12-31`): both ends are sent as written, and that event is still filed in UTC. The
+  conversion uses the host's time zone rules, so a host with outdated time zone data can shift
+  such a time.
 
 ## [1.33.0] — 2026-11-16
 

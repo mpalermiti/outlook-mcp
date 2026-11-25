@@ -3831,9 +3831,9 @@ class TestATypedInstantKeepsItsZone:
             "2027-11-07T08:30:00Z",
         )
 
-    async def test_an_end_in_a_windows_zone_keeps_the_start_as_written_too(self):
-        """Start in Los Angeles, end in "Pacific Standard Time": the end cannot convert."""
-        builder, mock_client = self._updatable(self.LA, "Pacific Standard Time")
+    async def test_an_end_in_an_unknown_zone_keeps_the_start_as_written_too(self):
+        """Start in Los Angeles, end in a zone no table names: the end cannot convert."""
+        builder, mock_client = self._updatable(self.LA, "Nowhere Standard Time")
 
         await update_event(
             mock_client,
@@ -3879,9 +3879,9 @@ class TestATypedInstantKeepsItsZone:
         assert patched.start.date_time == "2027-01-01T13:00:00"
         assert patched.end.date_time == "2027-01-01T14:00:00"
 
-    async def test_a_windows_zoned_event_is_sent_as_written(self):
-        """`zoneinfo` cannot convert into "Pacific Standard Time", so the old behaviour stays."""
-        builder, mock_client = self._updatable("Pacific Standard Time")
+    async def test_an_unknown_zone_name_is_sent_as_written(self):
+        """Neither `zoneinfo` nor the Windows table knows it, so the old behaviour stays."""
+        builder, mock_client = self._updatable("Nowhere Standard Time")
 
         await update_event(
             mock_client,
@@ -3893,7 +3893,51 @@ class TestATypedInstantKeepsItsZone:
 
         patched = builder.patch.call_args[0][0]
         assert patched.start.date_time == "2026-12-13T02:00:00Z"
-        assert patched.start.time_zone == "Pacific Standard Time"
+        assert patched.start.time_zone == "Nowhere Standard Time"
+
+    @pytest.mark.parametrize(
+        ("windows", "iana"),
+        [
+            ("Pacific Standard Time", "America/Los_Angeles"),
+            ("W. Europe Standard Time", "Europe/Berlin"),
+            ("Tokyo Standard Time", "Asia/Tokyo"),
+        ],
+    )
+    async def test_a_windows_named_zone_converts_like_its_iana_equivalent(self, windows, iana):
+        """Graph names an Outlook-made event's zone in Windows terms; it is sent back as is."""
+        sent = {}
+        for zone in (windows, iana):
+            builder, mock_client = self._updatable(zone)
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-12-13T02:00:00Z",
+                end="2026-12-13T03:00:00Z",
+                config=_CFG,
+            )
+            patched = builder.patch.call_args[0][0]
+            sent[zone] = (patched.start.date_time, patched.end.date_time)
+            assert (patched.start.time_zone, patched.end.time_zone) == (zone, zone)
+
+        assert sent[windows] == sent[iana]
+        assert not sent[windows][0].endswith("Z")
+
+    async def test_a_z_start_and_recurrence_on_a_windows_event_use_its_local_day(self):
+        """#235: Thursday 01:00Z is Wednesday 17:00 Pacific, so the series is Wednesday's."""
+        builder, mock_client = self._updatable("Pacific Standard Time")
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-12T01:00:00Z",
+            recurrence="weekly",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.date_time == "2026-11-11T17:00:00"
+        assert [d.value for d in patched.recurrence.pattern.days_of_week] == ["wednesday"]
+        assert patched.recurrence.range.start_date == date(2026, 11, 11)
 
     async def test_a_stored_all_day_event_is_sent_as_written(self):
         builder, mock_client = self._updatable(self.LA, is_all_day=True)

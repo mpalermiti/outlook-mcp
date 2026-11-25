@@ -689,6 +689,77 @@ class TestTimeZoneAnchoring:
             assert _utc_date_time(after["start"]) == new_start.isoformat()
             assert _utc_date_time(after["end"]) == end_utc.isoformat()
 
+    async def test_moving_a_windows_zoned_start_with_a_z_time_keeps_the_zone(
+        self, real_graph_client, live_write_config
+    ):
+        """#236 for an Outlook-style event: Graph names its zone "Pacific Standard Time".
+
+        The `Z` start is converted through the Windows-name table and sent as
+        local time beside the zone name Graph gave. Created through raw Graph
+        with a Windows name, as in
+        `test_a_windows_anchored_evening_series_uses_its_local_day`. The new
+        start, 17:00 Pacific, is the next day in UTC.
+        """
+        import httpx
+
+        day = _anchor_monday() + timedelta(days=2)
+        zone = ZoneInfo(_DST_ZONE)
+        new_start = (
+            datetime.combine(day, dt_time(17, 0), tzinfo=zone)
+            .astimezone(dt_timezone.utc)
+            .replace(tzinfo=None)
+        )
+        end_utc = (
+            datetime.combine(day, dt_time(19, 0), tzinfo=zone)
+            .astimezone(dt_timezone.utc)
+            .replace(tzinfo=None)
+        )
+        token = real_graph_client.credential.get_token("https://graph.microsoft.com/.default").token
+        created = httpx.post(
+            "https://graph.microsoft.com/v1.0/me/events",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={
+                "subject": LIVE_WRITE_SUBJECT + " tz-z-windows",
+                "start": {
+                    "dateTime": f"{day.isoformat()}T18:00:00",
+                    "timeZone": "Pacific Standard Time",
+                },
+                "end": {
+                    "dateTime": f"{day.isoformat()}T19:00:00",
+                    "timeZone": "Pacific Standard Time",
+                },
+            },
+            timeout=30,
+        )
+        created.raise_for_status()
+        event_id = created.json()["id"]
+        sdk = real_graph_client.sdk_client
+
+        try:
+            before = await get_event(sdk, event_id)
+            stored = before["original_start_time_zone"]
+            if maybe_zone(stored) is not None:
+                pytest.skip(
+                    f"this mailbox returned an IANA anchor ({stored}), so there is no "
+                    "Windows-named event here to convert into"
+                )
+
+            await update_event(
+                sdk,
+                event_id=event_id,
+                start=f"{new_start.isoformat()}Z",
+                config=live_write_config,
+            )
+
+            after = await get_event(sdk, event_id)
+            assert after["original_start_time_zone"] == stored, (
+                "the Z start re-anchored the event out of its Windows-named zone"
+            )
+            assert _utc_date_time(after["start"]) == new_start.isoformat()
+            assert _utc_date_time(after["end"]) == end_utc.isoformat()
+        finally:
+            await delete_event(sdk, event_id, config=live_write_config)
+
     async def test_patching_a_time_keeps_the_zone_the_event_is_anchored_in(
         self, real_graph_client, live_write_config
     ):

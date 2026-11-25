@@ -6,6 +6,7 @@ from datetime import date, datetime
 from datetime import timezone as dt_timezone
 from typing import Any
 
+from outlook_mcp._windows_zones import WINDOWS_TO_IANA
 from outlook_mcp.calendar_resolver import (
     event_calendar_belongs_to_someone_else,
     resolve_calendar_for_write,
@@ -118,17 +119,19 @@ def _typed_in_zone(value: str, zone: str | None) -> str | None:
     Graph keeps the instant of a ``Z`` or offset but anchors a single event in
     UTC whatever ``timeZone`` says; the same moment written as local time keeps
     the zone. Measured live on a consumer mailbox, 2026-11-10. A zone-less value
-    is already local and comes back as is. ``None`` when there is no safe way to
-    convert: a zone ``zoneinfo`` cannot resolve (Graph's Windows names), a value
-    this Python cannot parse, a moment past the years it can hold (``9999-12-31``
-    east of UTC), or one in the repeated hour (``_wall_clock``).
+    is already local and comes back as is. A Windows name Graph gave
+    ("Pacific Standard Time") converts through CLDR's default IANA zone for it
+    (``_windows_zones``); the name sent stays Graph's own. ``None`` when there is
+    no safe way to convert: a zone neither knows, a value this Python cannot
+    parse, a moment past the years it can hold (``9999-12-31`` east of UTC), or
+    one in the repeated hour (``_wall_clock``).
     """
     text = _OVERLONG_FRACTION.sub(r"\1", value.strip())
     try:
         moment = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
         if moment.tzinfo is None:
             return value
-        tz = maybe_zone(zone)
+        tz = maybe_zone(zone) or maybe_zone(WINDOWS_TO_IANA.get(zone or ""))
         return None if tz is None else _wall_clock(moment, tz)
     except (ValueError, OverflowError):
         return None
@@ -876,8 +879,8 @@ async def update_event(
 
     A ``Z`` or offset ``start``/``end`` is sent as wall-clock time in the zone
     that end is anchored in, as in ``create_event`` (#236), when ``zoneinfo``
-    can convert into it. If either end cannot be converted (a Windows-named zone
-    such as "Pacific Standard Time"), both are sent as written, as before.
+    or the Windows-name table can convert into it. If either end cannot be
+    converted, both are sent as written, as before.
 
     A relative ``start``/``end`` (``+2h``) is written as wall-clock time in the
     zone that end is anchored in, as in ``create_event``, so it is placed only
