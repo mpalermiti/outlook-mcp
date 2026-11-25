@@ -6,6 +6,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **`outlook_update_contact` with `add_emails` or `remove_emails` no longer fails right after the
+  contact is created (#259).** Graph can answer the read of a just-created contact with `404`, or
+  refuse the change key it has just issued with `412`. Each now gets one more read after a short
+  wait. The merge is rebuilt from that read and pinned to its change key, so an address added
+  elsewhere in between is still kept. A second `404` or `412` is reported as before.
+
 ## [1.33.0] — 2026-11-16
 
 To Do due dates, reminders and repeat rules are sent in the configured time zone, and a relative
