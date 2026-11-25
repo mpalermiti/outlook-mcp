@@ -627,30 +627,49 @@ class TestUpdateEvent:
         builder.patch.call_args[0][0].serialize(writer)
         assert '"recurrence": null' in writer.get_serialized_content().decode()
 
-    async def test_setting_event_recurrence_none_is_unsendable(self):
-        """Pins why additional_data is used.
+    async def test_setting_event_recurrence_none_is_not_sendable_on_every_supported_kiota(self):
+        """Pins why additional_data is used, on whichever kiota is installed (#233).
 
-        The previous version of this test serialized with a bare
-        ``JsonSerializationWriter`` and asserted the field was omitted. The
-        adapter does not use that writer — it goes through the backing-store
-        proxy, which emits the null — so the assertion described a serializer
-        this code never touches and the "if kiota ever changes" escape hatch
-        could never fire. Through the real path the plain assignment does not
-        silently drop the field; it makes the whole payload unserializable.
+        Through the adapter's real path (the backing-store proxy, not a bare
+        ``JsonSerializationWriter``) the plain assignment ``event.recurrence =
+        None`` does one of two things, by kiota-serialization-json version:
 
-        If kiota ever starts emitting a usable top-level null, this fails and
-        the additional_data workaround can be simplified.
+        - before 1.15 the null is written beside the object body and the whole
+          payload is refused (``ValueError("Invalid Json output")``): the
+          request never leaves the process;
+        - from 1.15 it is written inside the body under the Python attribute
+          name. ``recurrence`` happens to be Graph's name too, so this one
+          works; a multi-word field such as ``mobile_phone`` does not.
+
+        The package accepts kiota from 1.13 (``msgraph-core>=1.5.2``), so the
+        plain assignment would break ``remove_recurrence`` on some supported
+        installs. ``additional_data`` is sent as written on every version. The
+        workaround can only go once the floor guarantees 1.15 — not because
+        this test fails, which it should not on either side.
         """
+        import json
+        from importlib.metadata import version
+
         from msgraph.generated.models.event import Event
 
-        from tests.test_write_payloads_reach_the_wire import wire
+        from tests.test_write_payloads_reach_the_wire import adapter_json
 
         event = Event()
         event.subject = "x"
         event.recurrence = None
 
-        with pytest.raises(AssertionError, match="top-level field"):
-            wire(event)
+        installed = tuple(
+            int(n) for n in version("microsoft-kiota-serialization-json").split(".")[:2]
+        )
+        if installed < (1, 15):
+            with pytest.raises(ValueError, match="Invalid Json output"):
+                adapter_json(event)
+        else:
+            assert json.loads(adapter_json(event)) == {
+                "@odata.type": "#microsoft.graph.event",
+                "subject": "x",
+                "recurrence": None,
+            }
 
     async def test_omitting_remove_recurrence_sends_no_recurrence_key(self):
         """A partial patch must not blank a series just because it edited the subject."""
