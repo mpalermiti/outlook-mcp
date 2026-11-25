@@ -643,10 +643,14 @@ class TestTimeZoneAnchoring:
             real_graph_client,
             live_write_config,
             subject_suffix=" tz-z-start",
+            with_result=True,
             start=f"{monday.isoformat()}T02:00:00Z",
             end=f"{monday.isoformat()}T03:00:00Z",
             timezone=_DST_ZONE,
-        ) as event_id:
+        ) as (event_id, created):
+            # No `note`: Graph's reply agreed with the conversion, so no
+            # corrective patch was sent (#262).
+            assert "note" not in created, created
             detail = await get_event(real_graph_client.sdk_client, event_id)
 
             assert detail["original_start_time_zone"] == _DST_ZONE
@@ -676,12 +680,13 @@ class TestTimeZoneAnchoring:
             end=f"{monday.isoformat()}T19:00:00",
             timezone=_DST_ZONE,
         ) as event_id:
-            await update_event(
+            result = await update_event(
                 real_graph_client.sdk_client,
                 event_id=event_id,
                 start=f"{new_start.isoformat()}Z",
                 config=live_write_config,
             )
+            assert "note" not in result, result  # no corrective patch (#262)
 
             after = await get_event(real_graph_client.sdk_client, event_id)
             assert after["original_start_time_zone"] == _DST_ZONE
@@ -744,12 +749,15 @@ class TestTimeZoneAnchoring:
                     "Windows-named event here to convert into"
                 )
 
-            await update_event(
+            result = await update_event(
                 sdk,
                 event_id=event_id,
                 start=f"{new_start.isoformat()}Z",
                 config=live_write_config,
             )
+            # No `note`: Graph's reply agreed with the conversion through the
+            # Windows table, so no corrective patch was sent (#262).
+            assert "note" not in result, result
 
             after = await get_event(sdk, event_id)
             assert after["original_start_time_zone"] == stored, (
@@ -2199,7 +2207,7 @@ class TestRelativeTimesKeepTheEventsZone:
                     "Windows-named event here to refuse a relative time on"
                 )
 
-            with pytest.raises(ValueError, match="cannot convert a moment into"):
+            with pytest.raises(ValueError, match="is not an IANA zone name"):
                 await update_event(
                     sdk, event_id=event_id, start="+745h", end="+746h", config=live_write_config
                 )

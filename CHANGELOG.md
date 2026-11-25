@@ -26,9 +26,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   local day for such an event (#235). A zone name neither Python nor that list knows is sent as
   before. All-day events and local times without a zone are sent as written. So is an event with
   either end in the hour that repeats when clocks go back, or outside the years Python can hold
-  (such as `9999-12-31`): both ends are sent as written, and that event is still filed in UTC. The
-  conversion uses the host's time zone rules, so a host with outdated time zone data can shift
-  such a time.
+  (such as `9999-12-31`): both ends are sent as written, and that event is still filed in UTC.
+  Each converted time is checked against where Graph says it put the event. If they differ, for
+  example because Graph's rules for the zone differ from this server's (recent changes such as
+  Cuba's or Morocco's, or out-of-date time zone data on the host), the time is sent again as typed.
+  The moment is then right but the event is filed in UTC, and the result's `note` says so.
 
 ## [1.33.0] — 2026-11-16
 
