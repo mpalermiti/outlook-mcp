@@ -336,11 +336,16 @@ class TestCalendarWrite:
         client = MagicMock()
         client.me.events.by_event_id = MagicMock(return_value=builder)
         await calendar_write.update_event(
-            client, event_id="AAMkAG123=", start="2026-12-13T03:00:00Z", config=_CFG
+            client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T03:00:00Z",
+            end="2026-12-13T04:00:00Z",
+            config=_CFG,
         )
         assert_on_wire(
             builder.patch.call_args[0][0],
             '"dateTime": "2026-12-12T21:00:00"',
+            '"dateTime": "2026-12-12T22:00:00"',
             '"timeZone": "America/Chicago"',
         )
 

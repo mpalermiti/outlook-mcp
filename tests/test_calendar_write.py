@@ -3705,26 +3705,52 @@ class TestATypedInstantKeepsItsZone:
         event = _posted(mock_client)
         assert (event.start.date_time, event.start.time_zone) == ("2026-12-13T00:00:00Z", "UTC")
 
-    async def test_a_moment_in_the_repeated_hour_is_sent_as_written(self):
-        """01:30 happens twice in Los Angeles on 2027-11-07, so local time cannot say which.
+    @pytest.mark.parametrize(
+        ("start", "end"),
+        [
+            # 01:30 happens twice in Los Angeles on 2027-11-07: the start is in it.
+            ("2027-11-07T09:30:00Z", "2027-11-07T11:00:00Z"),
+            # 00:30 local is fine; the end, 01:30 PDT, is the repeated one.
+            ("2027-11-07T07:30:00Z", "2027-11-07T08:30:00Z"),
+        ],
+    )
+    async def test_a_moment_in_the_repeated_hour_sends_both_ends_as_written(self, start, end):
+        """Local time cannot say which 01:30 is meant, so that end keeps its `Z`.
 
-        Sent as typed, the moment is exact and the event is anchored in UTC, as
-        before this change; refusing it would break input that works today.
+        And so does the other one: converting only one would file the two ends
+        in different zones, a state the old behaviour (both in UTC) never made.
+        Refusing would break input that works today.
         """
         mock_client = self._poster()
 
         await create_event(
-            mock_client,
-            subject="Late",
-            start="2027-11-07T09:30:00Z",
-            end="2027-11-07T11:00:00Z",
-            timezone=self.LA,
-            config=_CFG,
+            mock_client, subject="Late", start=start, end=end, timezone=self.LA, config=_CFG
         )
 
         event = _posted(mock_client)
-        assert event.start.date_time == "2027-11-07T09:30:00Z"
-        assert event.end.date_time == "2027-11-07T03:00:00"
+        assert (event.start.date_time, event.end.date_time) == (start, end)
+
+    @pytest.mark.parametrize(
+        ("start", "end", "zone"),
+        [
+            # East of UTC, the last second of year 9999 is past the last date.
+            ("2026-12-13T02:00:00Z", "9999-12-31T23:59:59Z", "Asia/Tokyo"),
+            # West of UTC, the first moment of year 1 is before the first date.
+            ("0001-01-01T00:00:00Z", "2026-12-13T03:00:00Z", "America/Los_Angeles"),
+        ],
+    )
+    async def test_a_moment_outside_the_years_python_can_hold_is_sent_as_written(
+        self, start, end, zone
+    ):
+        """`astimezone` overflows there; that is no reason to fail a call that worked before."""
+        mock_client = self._poster()
+
+        await create_event(
+            mock_client, subject="Forever", start=start, end=end, timezone=zone, config=_CFG
+        )
+
+        event = _posted(mock_client)
+        assert (event.start.date_time, event.end.date_time) == (start, end)
 
     # ── update ────────────────────────────────────────────────────────
 
@@ -3787,6 +3813,71 @@ class TestATypedInstantKeepsItsZone:
         )
 
         assert builder.patch.call_args[0][0].end.date_time == "2026-12-12T19:00:00"
+
+    async def test_update_sends_both_ends_as_written_when_one_is_in_the_repeated_hour(self):
+        builder, mock_client = self._updatable(self.LA)
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2027-11-07T07:30:00Z",
+            end="2027-11-07T08:30:00Z",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert (patched.start.date_time, patched.end.date_time) == (
+            "2027-11-07T07:30:00Z",
+            "2027-11-07T08:30:00Z",
+        )
+
+    async def test_an_end_in_a_windows_zone_keeps_the_start_as_written_too(self):
+        """Start in Los Angeles, end in "Pacific Standard Time": the end cannot convert."""
+        builder, mock_client = self._updatable(self.LA, "Pacific Standard Time")
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert (patched.start.date_time, patched.end.date_time) == (
+            "2026-12-13T02:00:00Z",
+            "2026-12-13T03:00:00Z",
+        )
+
+    async def test_a_custom_zone_event_is_still_refused(self):
+        builder, mock_client = self._updatable("tzone://Microsoft/Custom")
+
+        with pytest.raises(ValueError, match="Could not read the zone"):
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-12-13T02:00:00Z",
+                end="2026-12-13T03:00:00Z",
+                config=_CFG,
+            )
+
+        builder.patch.assert_not_called()
+
+    async def test_update_converts_across_the_date_line(self):
+        """11:00 at UTC-12 on New Year's Eve is 13:00 on New Year's Day at UTC+14."""
+        builder, mock_client = self._updatable("Pacific/Kiritimati")
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-31T11:00:00-12:00",
+            end="2026-12-31T12:00:00-12:00",
+            config=_CFG,
+        )
+
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.date_time == "2027-01-01T13:00:00"
+        assert patched.end.date_time == "2027-01-01T14:00:00"
 
     async def test_a_windows_zoned_event_is_sent_as_written(self):
         """`zoneinfo` cannot convert into "Pacific Standard Time", so the old behaviour stays."""

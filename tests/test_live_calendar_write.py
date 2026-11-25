@@ -490,6 +490,17 @@ def _next_dst_transition(zone_name: str) -> date | None:
     return None
 
 
+def _utc_date_time(summary_time: str) -> str:
+    """The ``YYYY-MM-DDTHH:MM:SS`` of a start or end, which Graph returns in UTC.
+
+    The date as well as the time, unlike ``_utc_instant``: a move of a whole
+    day keeps the time of day.
+    """
+    date_time, _, zone = summary_time.partition(" (")
+    assert zone.rstrip(")") == "UTC", f"stopped returning UTC: {summary_time}"
+    return date_time[:19]
+
+
 def _utc_instant(summary_start: str) -> str:
     """The ``HH:MM:SS`` of a listing's start, which Graph returns in UTC.
 
@@ -622,8 +633,9 @@ class TestTimeZoneAnchoring:
         """#236: Graph files a single event sent a `Z` start in UTC, whatever `timeZone` says.
 
         `create_event` now sends that moment as wall-clock time in the zone, and
-        only Graph can say whether it kept the zone. The UTC instant is asserted
-        too, so a conversion that kept the zone but moved the event fails.
+        only Graph can say whether it kept the zone. 02:00Z is the previous day
+        in Los Angeles, so the full UTC date-time of both ends is asserted: a
+        conversion that kept the zone but moved the event a day fails too.
         """
         monday = _anchor_monday()
 
@@ -631,15 +643,51 @@ class TestTimeZoneAnchoring:
             real_graph_client,
             live_write_config,
             subject_suffix=" tz-z-start",
-            start=f"{monday.isoformat()}T17:00:00Z",
-            end=f"{monday.isoformat()}T17:30:00Z",
-            timezone="America/Los_Angeles",
+            start=f"{monday.isoformat()}T02:00:00Z",
+            end=f"{monday.isoformat()}T03:00:00Z",
+            timezone=_DST_ZONE,
         ) as event_id:
             detail = await get_event(real_graph_client.sdk_client, event_id)
 
-            assert detail["original_start_time_zone"] == "America/Los_Angeles"
-            assert detail["original_end_time_zone"] == "America/Los_Angeles"
-            assert _utc_instant(detail["start"]) == "17:00:00"
+            assert detail["original_start_time_zone"] == _DST_ZONE
+            assert detail["original_end_time_zone"] == _DST_ZONE
+            assert _utc_date_time(detail["start"]) == f"{monday.isoformat()}T02:00:00"
+            assert _utc_date_time(detail["end"]) == f"{monday.isoformat()}T03:00:00"
+
+    async def test_moving_a_start_with_a_z_time_keeps_the_zone(
+        self, real_graph_client, live_write_config
+    ):
+        """#236 on update: a `Z` start patched into a Los Angeles event stays in Los Angeles.
+
+        The new start is an hour before the stored end, which falls on the next
+        UTC day, so the patch crosses midnight in UTC but not locally.
+        """
+        monday = _anchor_monday()
+        zone = ZoneInfo(_DST_ZONE)
+        local_end = datetime.combine(monday, dt_time(19, 0), tzinfo=zone)
+        end_utc = local_end.astimezone(dt_timezone.utc).replace(tzinfo=None)
+        new_start = end_utc - timedelta(hours=1)
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" tz-z-move",
+            start=f"{monday.isoformat()}T17:00:00",
+            end=f"{monday.isoformat()}T19:00:00",
+            timezone=_DST_ZONE,
+        ) as event_id:
+            await update_event(
+                real_graph_client.sdk_client,
+                event_id=event_id,
+                start=f"{new_start.isoformat()}Z",
+                config=live_write_config,
+            )
+
+            after = await get_event(real_graph_client.sdk_client, event_id)
+            assert after["original_start_time_zone"] == _DST_ZONE
+            assert after["original_end_time_zone"] == _DST_ZONE
+            assert _utc_date_time(after["start"]) == new_start.isoformat()
+            assert _utc_date_time(after["end"]) == end_utc.isoformat()
 
     async def test_patching_a_time_keeps_the_zone_the_event_is_anchored_in(
         self, real_graph_client, live_write_config
