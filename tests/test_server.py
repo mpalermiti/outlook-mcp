@@ -7,6 +7,7 @@ import pytest
 
 from outlook_mcp.errors import GraphAPIError, ToolInputError
 from outlook_mcp.server import _rule_write_hint, _wrap_tool_errors, mcp
+from tests.test_calendar_write import reads_no_times
 
 EXPECTED_TOOLS = [
     # Auth (3)
@@ -544,6 +545,7 @@ class TestCalendarWriteArgumentOrder:
 
         sdk = AsyncMock()
         sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        reads_no_times(sdk.me.events)
         client = MagicMock()
         client.sdk_client = sdk
 
@@ -586,6 +588,7 @@ class TestCalendarWriteArgumentOrder:
 
         sdk = AsyncMock()
         sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        reads_no_times(sdk.me.events)
         client = MagicMock()
         client.sdk_client = sdk
         config = Config(client_id="test", timezone="Asia/Tokyo")
@@ -626,6 +629,7 @@ class TestCalendarWriteArgumentOrder:
 
         sdk = AsyncMock()
         sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        reads_no_times(sdk.me.events)
         client = MagicMock()
         client.sdk_client = sdk
 
@@ -661,6 +665,7 @@ class TestCalendarWriteArgumentOrder:
 
         sdk = AsyncMock()
         sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        reads_no_times(sdk.me.events)
         client = MagicMock()
         client.sdk_client = sdk
 
@@ -692,6 +697,8 @@ class TestCalendarWriteArgumentOrder:
         secondary = MagicMock()
         secondary.events.post = AsyncMock(return_value=MagicMock(id="E2", subject="Review"))
         sdk.me.calendars.by_calendar_id = MagicMock(return_value=secondary)
+        reads_no_times(sdk.me.events)
+        reads_no_times(secondary.events)
         return sdk, secondary
 
     @pytest.mark.asyncio
@@ -761,6 +768,7 @@ class TestCalendarWriteArgumentOrder:
 
         sdk = AsyncMock()
         sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        reads_no_times(sdk.me.events)
         client = MagicMock()
         client.sdk_client = sdk
 

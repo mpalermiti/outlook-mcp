@@ -60,15 +60,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   before. All-day events and local times without a zone are sent as written. So is an event with
   either end in the hour that repeats when clocks go back, or outside the years Python can hold
   (such as `9999-12-31`): both ends are sent as written, and that event is still filed in UTC.
-  For a single event, each converted time is checked against where Graph says it put the event.
-  If they differ by whole minutes, three hours at most, for example because Graph's rules for the
-  zone differ from this server's (recent changes such as Cuba's or Morocco's, or out-of-date time
-  zone data on the host), the time is sent again as typed. The moment is then right but that time
-  is filed in UTC, the result's `note` says where Graph had placed it, and any attendees get a
-  second update. A larger or odder difference is not changed, since no zone rule explains it: the
-  `note` says where Graph placed the time, so it can be checked with the user. A series is not
-  checked: Graph may report its first occurrence rather than the start sent, and a correction
-  would file the whole series in UTC.
+  For a single event, the event's times are read back after the write, with one extra request
+  made only when a time was converted, and each converted time is checked against where Graph
+  put it. (Graph's answer to the write itself cannot be used: it gives the times in the event's
+  own zone, whatever the request asks for.) If they differ by whole minutes, three hours at most,
+  for example because Graph's rules for the zone differ from this server's (recent changes such
+  as Cuba's or Morocco's, or out-of-date time zone data on the host), the time is sent again as
+  typed and read back once more. The moment is then right but that time is filed in UTC, the
+  result's `note` says where Graph had placed it, and any attendees get a second update. The
+  `note` calls the time right only when that second read finds it at the moment typed. If the
+  second read finds it elsewhere, the `note` says where; if it fails, or still shows where the
+  first read found it, the `note` says the time was not confirmed. A larger or odder difference
+  is not changed, since no zone rule explains it: the `note` says where Graph placed the time,
+  so it can be checked with the user. If the first read fails, or shows an updated event still
+  at the time it had before the change (a read that came too soon, not a zone rule), the event
+  stays as sent, with no `note`. Neither read is retried when Graph is busy, so a throttled read
+  does not hold back the answer. A series is not checked: Graph may report its first occurrence
+  rather than the start sent, and a correction would file the whole series in UTC.
 
 ## [1.33.0] — 2026-11-16
 

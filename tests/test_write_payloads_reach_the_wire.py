@@ -59,6 +59,7 @@ from outlook_mcp.tools import (
     todo,
     todo_attachments,
 )
+from tests.test_calendar_write import reads_no_times
 
 _CFG = Config(client_id="test")
 
@@ -223,6 +224,7 @@ class TestCalendarWrite:
         """The key lives in a hidden extended property, under Graph's camelCase name."""
         client = AsyncMock()
         client.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="s"))
+        reads_no_times(client.me.events)
         await calendar_write.create_event(
             client,
             subject="s",
@@ -335,6 +337,7 @@ class TestCalendarWrite:
         """
         client = MagicMock()
         client.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="s"))
+        reads_no_times(client.me.events)
         await calendar_write.create_event(
             client,
             subject="s",
