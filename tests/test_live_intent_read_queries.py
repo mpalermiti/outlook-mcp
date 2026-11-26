@@ -26,13 +26,19 @@ import pytest
 
 from outlook_mcp.calendar_resolver import fetch_all_calendars
 from outlook_mcp.errors import GraphAPIError
-from outlook_mcp.intents import agenda, catch_up, cursor, flags, open_loops
+from outlook_mcp.intents import agenda, brief, catch_up, cursor, flags, open_loops
 from outlook_mcp.intents.budget import RequestBudget
 from outlook_mcp.intents.envelope import utc
-from outlook_mcp.intents.people import parse_time
+from outlook_mcp.intents.people import parse_time, sender_of
 from outlook_mcp.intents.reading import read_view
-from outlook_mcp.intents.resolver import SENT_PATH, _conversation_filter, open_lookup
+from outlook_mcp.intents.resolver import (
+    SENT_PATH,
+    _conversation_filter,
+    _literal,
+    open_lookup,
+)
 from outlook_mcp.tools._delta import require_graph_url
+from outlook_mcp.tools.todo import fetch_all_task_lists
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 
@@ -292,3 +298,95 @@ async def test_catch_up_end_to_end_and_again_with_its_cursor(real_graph_client):
     assert again["understood"]["cursor"] == "ok"
     assert again["outcome"] == "answered", again["failed_sections"]
     assert again["graph_requests"] <= 40
+
+
+# ── brief (§12.5) ─────────────────────────────────────────────────────────
+
+
+async def test_p2_mail_from_a_sender_within_the_window_newest_first(lookup):
+    """P2: the window's bound first, then the exact sender, newest first."""
+    body = await lookup.graph.get("/me/messages", {"$select": "from", "$top": 25})
+    senders = [sender_of(r)[0] for r in body.get("value") or [] if sender_of(r)[0]]
+    if not senders:
+        pytest.skip("no received mail")
+    address = senders[0]
+    since = utc(datetime.now(timezone.utc) - timedelta(days=365))
+    found = await lookup.graph.get(
+        "/me/messages",
+        {
+            "$filter": (
+                f"receivedDateTime ge {since} and "
+                f"from/emailAddress/address eq '{_literal(address)}'"
+            ),
+            "$orderby": "receivedDateTime desc",
+            "$top": brief.MAIL_TOP,
+            "$select": brief.MESSAGE_SELECT,
+        },
+    )
+    rows = found.get("value") or []
+    assert rows, "the sender's own mail must come back"
+    assert all(sender_of(r)[0] == address for r in rows)
+    received = [r["receivedDateTime"] for r in rows]
+    assert received == sorted(received, reverse=True)
+
+
+async def test_p1_a_contacts_details_take_their_select(lookup):
+    body = await lookup.graph.get("/me/contacts", {"$select": "id", "$top": 1})
+    rows = body.get("value") or []
+    if not rows:
+        pytest.skip("no saved contacts")
+    row = await lookup.graph.get(f"/me/contacts/{rows[0]['id']}", {"$select": brief.CONTACT_SELECT})
+    assert "companyName" in row and "businessPhones" in row
+
+
+async def test_p6_open_tasks_expand_their_linked_resources(lookup):
+    """P6: To Do takes `$expand=linkedResources` beside the open-task filter (P-H1a)."""
+    lists = await fetch_all_task_lists(lookup.sdk)
+    if not lists:
+        pytest.skip("no task lists")
+    path = f"/me/todo/lists/{lists[0].id}/tasks"
+    try:
+        body = await lookup.graph.get(
+            path, {"$filter": "status ne 'completed'", "$top": 100, **brief.TASK_EXPAND}, ids=False
+        )
+    except GraphAPIError as error:
+        if error.status_code != 400:
+            raise
+        body = await lookup.graph.get(path, {"$top": 100, **brief.TASK_EXPAND}, ids=False)
+    for row in body.get("value") or []:
+        assert isinstance(row.get("linkedResources", []), list)
+
+
+async def test_m1_m4_an_event_with_its_attendees_and_attachments(lookup):
+    now = datetime.now(timezone.utc)
+    rows, _ = await read_view(
+        lookup,
+        "/me/calendarView",
+        now - timedelta(days=30),
+        now + timedelta(days=30),
+        "id",
+        pages=1,
+    )
+    if not rows:
+        pytest.skip("no events within 30 days of now")
+    event = await lookup.graph.get(f"/me/events/{rows[0]['id']}", {"$select": brief.EVENT_SELECT})
+    assert "attendees" in event and "bodyPreview" in event and "hasAttachments" in event
+    files = await lookup.graph.get(
+        f"/me/events/{rows[0]['id']}/attachments", {"$select": "id,name,size,contentType,isInline"}
+    )
+    assert isinstance(files.get("value"), list)
+
+
+@pytest.mark.parametrize("args", [{"topic": "the"}, {"meeting": "meeting"}])
+async def test_brief_end_to_end_stays_within_its_ceiling(real_graph_client, args):
+    from outlook_mcp.errors import NoMatchError
+
+    try:
+        env = await brief.read_brief(
+            real_graph_client, zone="UTC", loaded_tools=frozenset(), **args
+        )
+    except NoMatchError:
+        pytest.skip(f"nothing matched {args}")
+    assert env["tool"] == "outlook_brief"
+    assert env["outcome"] in ("answered", "candidates"), env["failed_sections"]
+    assert env["graph_requests"] <= 40
