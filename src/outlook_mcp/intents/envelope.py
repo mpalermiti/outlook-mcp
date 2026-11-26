@@ -325,6 +325,7 @@ def build_envelope(
     graph_requests: int,
     next: list[dict],
     capped: bool = False,
+    trim: bool = True,
 ) -> dict:
     """The envelope (§1.1), trimmed to the size cap.
 
@@ -346,7 +347,13 @@ def build_envelope(
         "next": next,
         "trimmed": False,
     }
-    return trim_to_cap(env)
+    return trim_to_cap(env) if trim else env
+
+
+def size_of(env: dict) -> int:
+    """The serialized size the cap is measured on (``plan``, ``receipt`` and ``cursor``
+    left out)."""
+    return _size(env)
 
 
 def _size(env: dict) -> int:

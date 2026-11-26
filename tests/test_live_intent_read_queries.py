@@ -216,6 +216,17 @@ async def test_open_loops_end_to_end_stays_within_its_ceiling(real_graph_client)
     assert env["graph_requests"] <= 38
 
 
+async def test_b1_junk_and_deleted_items_ids_for_the_reply_checks(lookup):
+    """The reply checks leave out Junk and Deleted Items by their ids, read by
+    well-known name in one batch (review B1)."""
+    replies = await lookup.graph.batch(
+        [f"/me/mailFolders/{name}?$select=id" for name in flags._NOT_REPLIES], ids=False
+    )
+    for reply in replies:
+        assert reply["status"] == 200, reply
+        assert isinstance(reply["body"].get("id"), str)
+
+
 # ── catch_up (§12.2) and its cursor (§7) ──────────────────────────────────
 
 

@@ -328,7 +328,13 @@ def _paged(items: list[dict], seen: Seen, path: str, size: int | None = None) ->
 _TIME_CLAUSE = re.compile(r"^(receivedDateTime|sentDateTime) (ge|gt|le|lt) (\S+)$")
 _FLAGGED = "flag/flagStatus eq 'flagged'"
 # Well-known folder names, and the parentFolderId the rows here carry for each.
-WELL_KNOWN = {"inbox": "inbox-id", "archive": "archive-id"}
+WELL_KNOWN = {
+    "inbox": "inbox-id",
+    "archive": "archive-id",
+    "junkemail": "junk-id",
+    "deleteditems": "deleted-id",
+    "drafts": "drafts-id",
+}
 
 
 def filtered(rows: list[dict], text: str | None) -> list[dict]:
@@ -403,6 +409,7 @@ class Mailbox:
         on(r"/me/todo/lists/([^/]+)/tasks/([^/]+)", self._task)
         on("/me/mailFolders/inbox/messageRules", self._rules)
         on("/me/mailFolders", lambda seen, m: page(self.folders))
+        on(r"/me/mailFolders/([a-z]+)", self._well_known_folder)
         on(
             r"/me/mailFolders/([^/]+)/childFolders",
             lambda seen, m: page(self.child_folders.get(m.group(1), [])),
@@ -478,6 +485,14 @@ class Mailbox:
         hits = [r for r in rows if not seen.search or kql_matches(seen.search, r)]
         return page([_select(r, seen) for r in hits[: int(seen.params.get("$top") or 10)]])
 
+    def _well_known_folder(self, seen: Seen, match) -> Any:
+        name = match.group(1).lower()
+        if name == "sentitems":
+            return {"id": SENT_FOLDER}
+        if name in WELL_KNOWN:
+            return {"id": WELL_KNOWN[name]}
+        return error(404, "ErrorItemNotFound")
+
     def _message(self, seen: Seen, match) -> Any:
         for row in self._all_mail():
             if row["id"] == match.group(1):
@@ -533,6 +548,8 @@ class Mailbox:
             for e in self.events.get(match.group(1), [])
             if e["start"]["dateTime"][:19] < end[:19] and e["end"]["dateTime"][:19] > start[:19]
         ]
+        if (seen.params.get("$orderby") or "").startswith("start/dateTime"):
+            events.sort(key=lambda e: e["start"]["dateTime"][:19])
         return _paged(events, seen, f"/me/calendars/{match.group(1)}/calendarView", 10)
 
     def _primary_view(self, seen: Seen, match) -> Any:

@@ -210,8 +210,14 @@ def mailbox(m: str = "") -> Mailbox:
                 when="2026-11-14T09:00:00Z",
                 folder="archive-id",
             ),
+            # Kim's reply, its sender checked: only that settles a follow-up (review B1).
             received(
-                "k1", KIM, f"Re: Visit{m}", conversation="conv-kim", when="2026-10-05T09:00:00Z"
+                "k1",
+                KIM,
+                f"Re: Visit{m}",
+                conversation="conv-kim",
+                when="2026-10-05T09:00:00Z",
+                headers=auth_header("pass", "example.com"),
             ),
         ],
     )
@@ -285,13 +291,16 @@ async def test_a_direction_reads_only_its_own_section(fake, direction, names):
         # No flags are read for a question about what waits on the owner.
         assert not [s for s in fake.operations if "flag/flagStatus" in (s.filter or "")]
     else:
-        assert not [
-            s
+        # No sender checks on what waits on the owner; only Kim's reply to a flagged
+        # letter is read, to confirm it (review B1).
+        checked = {
+            s.path
             for s in fake.operations
             if s.in_batch
             and "$select" in s.params
             and "internetMessageHeaders" in s.params["$select"]
-        ]
+        }
+        assert checked == {"/me/messages/k1"}
     assert reads
 
 
@@ -321,16 +330,21 @@ async def test_left_out_bulk_other_meetings_and_letters_to_oneself(fake):
         assert left_out not in shown, left_out
 
 
-async def test_unknown_senders_get_a_sender_check_and_known_ones_do_not(fake):
+async def test_the_waits_shown_first_get_a_sender_check_whoever_they_claim_to_be(fake):
+    """L6 goes to the top-ranked waits, known senders included: a spoof of someone the
+    owner writes to ranks high, so it most needs the check (review C1)."""
     env = await run(fake)
     items = {i["id"]: i for i in section(env, "waiting_on_me")["items"]}
     assert items["conv-dana"]["sender_auth"]["result"] == "verified"
     assert items["conv-bob"]["sender_auth"]["result"] == "unverified"
     assert {"code": "sender_unverified"} in items["conv-bob"]["warnings"]
-    # Sam is written to in the window, so no header read is spent on Sam.
-    assert items["conv-sam"]["sender_auth"]["result"] == "not_checked"
-    reads = [s.path for s in fake.operations if s.in_batch and s.path.startswith("/me/messages/")]
-    assert sorted(reads) == ["/me/messages/r2", "/me/messages/r3", "/me/messages/r7"]
+    assert items["conv-sam"]["sender_auth"]["result"] == "verified"
+    reads = {
+        s.path
+        for s in fake.operations
+        if s.in_batch and s.path.startswith("/me/messages/") and "Headers" in s.params["$select"]
+    }
+    assert {"/me/messages/r1", "/me/messages/a1", "/me/messages/r2", "/me/messages/r7"} <= reads
 
 
 async def test_a_failed_sender_check_reads_as_not_checked_and_keeps_the_item(fake):
@@ -499,7 +513,8 @@ async def test_words_keep_searched_conversations_even_outside_the_window(fake):
     assert ids_in(env, "waiting_on_me") == ["conv-sam", "conv-old"]
     assert ids_in(env, "waiting_on_them") == []
     latest = [s for s in fake.operations if s.in_batch and "conv-old" in (s.filter or "")]
-    assert len(latest) == 1 and latest[0].params["$top"] == "1"
+    # The newest three, so a draft on top doesn't hide the conversation.
+    assert len(latest) == 1 and latest[0].params["$top"] == "3"
 
 
 # ── Conservative fallbacks ────────────────────────────────────────────────
@@ -594,6 +609,18 @@ def worst_case() -> Mailbox:
                 folder="archive-id",
             )
         )
+    for n in range(6):
+        # A checked reply from P to each flagged letter: the confirmations at their most.
+        box.received.append(
+            received(
+                f"zr{n}",
+                P,
+                "reply",
+                conversation=f"zf{n}",
+                when="2026-10-02T09:00:00Z",
+                headers=auth_header("pass", "example.com"),
+            )
+        )
     for n in range(9):
         box.received.append(
             received(
@@ -611,17 +638,20 @@ def worst_case() -> Mailbox:
 async def test_the_worst_case_stays_within_thirty_eight_requests(fake):
     env = await run(fake, worst_case(), person=P, words="word")
     batched = [s for s in fake.operations if s.in_batch]
-    # L6, L5 and L9 each at their most.
-    assert len([s for s in batched if s.path.startswith("/me/messages/")]) == 10
+    # L6 (8) and the five replies' confirmations, L5 and L9, each at their most.
+    assert len([s for s in batched if s.path.startswith("/me/messages/")]) == 13
     assert len([s for s in batched if "gt" in (s.filter or "")]) == 5
-    assert len([s for s in batched if s.params.get("$top") == "1"]) == 9
-    # L7 (3: an address reads only the sent table), L8 1, L1 3, L2 3, L3 1, L9 9, L4 1,
-    # L5 5, L6 10.
+    assert len([s for s in batched if s.params.get("$top") == "3"]) == 4
+    assert len([s for s in batched if s.path.startswith("/me/mailFolders/")]) == 2
+    # L7 (3: an address reads only the sent table), L8 1, L1 3, L2 3, L3 1, L9 4, L4 1,
+    # L5 5, the Junk and Deleted Items ids 2, the replies' headers 5, L6 8.
     assert fake.counted == 36
     assert env["graph_requests"] == fake.counted
     assert budget.CEILINGS["outlook_open_loops"] == 40
-    assert env["outcome"] == "answered"
-    assert len(section(env, "waiting_on_me")["items"]) == 19
+    # Every window read was cut, so the older conversations were not judged.
+    assert env["outcome"] == "incomplete"
+    assert env["understood"]["conversations_not_judged"] > 0
+    assert len(section(env, "waiting_on_me")["items"]) == 10
     # Both P-SI1 fallbacks (Q1's and L1's) cost one request each, and stay under 40.
     fake.routes.clear()
     fake.seen.clear()
