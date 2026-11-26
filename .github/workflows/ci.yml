@@ -193,7 +193,7 @@ jobs:
           import outlook_mcp.server as s
           tools = [a for a in dir(s) if a.startswith("outlook_")]
           # This asserts the count in the *published* release, not this branch's.
-          # Bump at release time to whatever PyPI is serving (78 while 1.33.x is
+          # Bump at release time to whatever PyPI is serving (78 while 1.34.x is
           # latest) — this file is in
           # RELEASING.md §3's lockstep
           # list precisely so the weekly canary doesn't go permanently red the

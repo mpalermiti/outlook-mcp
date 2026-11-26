@@ -6,6 +6,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.34.0] — 2026-11-25
+
+An event time given in UTC or with an offset keeps the event's time zone, including zones Outlook
+names in Windows terms, and the time Microsoft stored is read back and put right if it moved. Moving
+a repeating event to another day moves its occurrences. Adding an email address to a contact right
+after creating it no longer fails. Drafts return their subject and a link to open them. 78 tools,
+71 by default.
+
 ### Added
 
 - **`outlook_create_draft` and `outlook_update_draft` return the draft's `subject` and
