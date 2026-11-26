@@ -84,8 +84,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   read several, list a thread, download an attachment, update or complete a task, list drafts),
   so a suggestion never names a tool the session lacks. With `intents` loaded, the server's
   instructions leave out working rules about tools that aren't loaded and add rules for the intent
-  tools (other people's words under `others_wrote`, the typed time forms, `candidates` and
-  `incomplete`, keeping only the latest `catch_up` cursor); `morning_brief` and `catch_up` use
+  tools (other people's words under `others_wrote`, the typed time forms, `candidates` (call
+  again only with a candidate offered under `next`, else ask) and `incomplete`, keeping only the
+  latest `catch_up` cursor), within 4,000 characters; `morning_brief` and `catch_up` use
   the intent tools, and a prompt whose tools aren't loaded is not offered. A selection without
   `intents` loads, is told and is offered exactly what it was.
 

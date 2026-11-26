@@ -163,6 +163,60 @@ def test_intents_alone_keeps_the_rules_whose_tools_it_has():
     assert len(text) <= 4_000
 
 
+def _bullets(text: str) -> list[str]:
+    """The working-rule bullets of an instructions text, each with its wrapped lines."""
+    return ["- " + b for b in text.split("\n- ")[1:]]
+
+
+def test_the_candidates_rule_never_invites_an_unoffered_call():
+    """§1.7 rule 5: no `choose` for a candidate that fails the known test or carries a
+    blocking warning, so the instructions must never suggest calling again with an
+    address or id the result did not offer (review F1)."""
+    text = guidance.build_instructions(_loaded({"intents"}))
+    (rule,) = [b for b in _bullets(text) if "`candidates`" in b]
+    assert "call again only with a candidate offered in `next`" in rule
+    assert "if none is, ask the user" in rule
+    for bullet in _bullets(text):
+        if "call again" in bullet:
+            assert "offered in `next`" in bullet, bullet
+            assert not re.search(r"\b(address|id)\b", bullet.split("call again", 1)[1]), bullet
+
+
+@pytest.mark.parametrize(("label", "loaded"), INTENT_SELECTIONS)
+def test_the_instructions_stay_within_4000_characters_under_intents(label, loaded):
+    """§10.9's cap holds for every selection with `intents`, everything loaded included."""
+    assert len(guidance.build_instructions(loaded)) <= 4_000, label
+
+
+def _tools_taking(parameter: str) -> frozenset[str]:
+    """Every tool whose signature in server.py has ``parameter``."""
+    tree = ast.parse((ROOT / "src" / "outlook_mcp" / "server.py").read_text("utf-8"))
+    return frozenset(
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
+        and node.name in toolsets.TOOL_GROUPS
+        and parameter in {a.arg for a in (*node.args.args, *node.args.kwonlyargs)}
+    )
+
+
+def test_a_parameter_rule_names_every_tool_that_takes_it():
+    """The parameter rules' tool sets are what the tools' signatures say."""
+    for marker, takers in guidance.PARAMETER_RULES.items():
+        parameter = marker.split("=")[0]
+        assert takers == _tools_taking(parameter), marker
+
+
+def test_under_intents_a_parameter_rule_goes_only_where_a_tool_takes_it():
+    """Nit: `intents` alone loads no tool that takes a body, so it isn't told about
+    is_markdown=True; it keeps concise=True, which its thread and draft tools take."""
+    alone = guidance.build_instructions(_loaded({"intents"}))
+    assert "is_markdown=True" not in alone
+    assert "concise=True" in alone
+    both = guidance.build_instructions(_loaded({"classic", "intents"}))
+    assert "is_markdown=True" in both
+
+
 def test_classic_intents_keeps_every_classic_rule():
     text = guidance.build_instructions(_loaded({"classic", "intents"}))
     for rule in guidance.CLASSIC_RULES:
@@ -224,39 +278,91 @@ def test_the_intents_prompts_say_what_the_contracts_say():
 # ── next (§1.7) ───────────────────────────────────────────────────────────
 
 
+def _targets_in(source: str, name: str) -> set[str]:
+    """Every tool a hint in ``source`` names: a `suggestion(...)` call, however it is
+    reached (`suggestion`, `envelope.suggestion`) and whether the tool is passed by
+    position or keyword, and a hint written as a dict with `template` and `tool` keys.
+    A target that can't be read is returned as `<unread:...>`, never skipped."""
+    tree = ast.parse(source)
+    constants = {
+        node.targets[0].id: node.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
+
+    def read(target: ast.AST | None, line: int) -> str:
+        if isinstance(target, ast.Constant) and isinstance(target.value, str):
+            return target.value
+        if isinstance(target, ast.Name) and target.id in constants:
+            return constants[target.id]
+        return f"<unread:{name}:{line}>"
+
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            called = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+            if called == "suggestion":
+                given = node.args[1] if len(node.args) > 1 else None
+                given = given or next((k.value for k in node.keywords if k.arg == "tool"), None)
+                found.add(read(given, node.lineno))
+        if isinstance(node, ast.Dict):
+            keys = {
+                k.value: v
+                for k, v in zip(node.keys, node.values, strict=True)
+                if isinstance(k, ast.Constant)
+            }
+            if "template" in keys and "tool" in keys:
+                found.add(read(keys["tool"], node.lineno))
+    return found
+
+
 def _hint_targets() -> set[str]:
-    """Every tool a `suggestion(...)` call in `intents/` names, read from the source,
-    plus find's table of them (`_NEXT`)."""
+    """Every tool a hint in `intents/` names, read from the source, plus find's table of
+    them (`_NEXT`). envelope.py defines `suggestion` and is skipped."""
     found: set[str] = set()
     for path in INTENTS_DIR.glob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        constants = {
-            node.targets[0].id: node.value.value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and isinstance(node.value, ast.Constant)
-            and isinstance(node.value.value, str)
-        }
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "suggestion":
-                target = node.args[1]
-                if isinstance(target, ast.Constant):
-                    found.add(target.value)
-                elif isinstance(target, ast.Name) and target.id in constants:
-                    found.add(constants[target.id])
-                elif path.name != "find.py":  # find passes the tool from `_NEXT`
-                    found.add(f"<unread:{path.name}:{node.lineno}>")
-            if (
-                path.name == "find.py"
-                and isinstance(node, ast.Constant)
+        if path.name == "envelope.py":
+            continue
+        source = path.read_text(encoding="utf-8")
+        targets = _targets_in(source, path.name)
+        if path.name == "find.py":  # find passes the tool from `_NEXT`
+            targets = {t for t in targets if not t.startswith("<unread")}
+            targets |= {
+                node.value
+                for node in ast.walk(ast.parse(source))
+                if isinstance(node, ast.Constant)
                 and isinstance(node.value, str)
                 and TOOL_NAME.fullmatch(node.value)
                 and node.value != "outlook_find"
-            ):
-                found.add(node.value)
+            }
+        found |= targets
     return found
+
+
+def test_the_hint_reader_has_no_blind_spots():
+    """Review nit: an attribute call, a keyword tool and a dict hint are read; a target
+    it can't read is flagged, never skipped."""
+    source = (
+        "from outlook_mcp.intents import envelope\n"
+        "TOOL = 'outlook_d'\n"
+        "a = envelope.suggestion('t', 'outlook_a', {})\n"
+        "b = suggestion('t', tool='outlook_b', args={})\n"
+        "c = {'template': 't', 'tool': 'outlook_c', 'args': {}, 'needs': []}\n"
+        "d = suggestion('t', TOOL, {})\n"
+        "e = suggestion('t', pick(), {})\n"
+    )
+    assert _targets_in(source, "x.py") == {
+        "outlook_a",
+        "outlook_b",
+        "outlook_c",
+        "outlook_d",
+        "<unread:x.py:7>",
+    }
 
 
 def test_every_hint_target_is_read():
