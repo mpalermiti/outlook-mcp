@@ -156,6 +156,7 @@ class TestUnencryptedFallbackWarning:
                 "outlook_mcp.auth._unencrypted_fallback_will_be_used",
                 return_value=True,
             ),
+            patch("outlook_mcp.auth.DeviceCodeCredential"),
         ):
             auth._make_credential()
             auth._make_credential()
@@ -175,6 +176,7 @@ class TestUnencryptedFallbackWarning:
                 "outlook_mcp.auth._unencrypted_fallback_will_be_used",
                 return_value=False,
             ),
+            patch("outlook_mcp.auth.DeviceCodeCredential"),
         ):
             auth._make_credential()
 
@@ -224,6 +226,7 @@ class TestUnencryptedCacheIsOptIn:
         with (
             caplog.at_level(logging.WARNING, logger="outlook_mcp.auth"),
             patch("outlook_mcp.auth._unencrypted_fallback_will_be_used", return_value=True),
+            patch("outlook_mcp.auth.DeviceCodeCredential"),
         ):
             auth._make_credential()
         assert [r for r in caplog.records if "unencrypted" in r.getMessage().lower()]
@@ -231,7 +234,10 @@ class TestUnencryptedCacheIsOptIn:
     def test_no_refusal_on_a_platform_that_encrypts(self):
         """macOS/Windows must be unaffected — this is a Linux-only failure mode."""
         auth = AuthManager(Config(client_id="test-id"))
-        with patch.object(auth_module.sys, "platform", "darwin"):
+        with (
+            patch.object(auth_module.sys, "platform", "darwin"),
+            patch("outlook_mcp.auth.DeviceCodeCredential"),
+        ):
             auth._make_credential()  # must not raise
 
     def test_cached_token_path_surfaces_the_config_error(self):
@@ -270,6 +276,7 @@ class TestUnencryptedCacheIsOptIn:
         username="user@example.com",
     )
 
+    @pytest.mark.real_credential
     def test_libsecret_installed_but_unusable_is_the_same_condition(self):
         """gi importable + no Secret Service: our eager check cannot see this.
 
@@ -296,6 +303,7 @@ class TestUnencryptedCacheIsOptIn:
             auth.try_cached_token()
         assert "allow_unencrypted_token_cache" in str(exc.value)
 
+    @pytest.mark.real_credential
     def test_the_cli_auth_path_translates_it_too(self):
         auth = AuthManager(Config(client_id="test-id"))
 
@@ -312,6 +320,7 @@ class TestUnencryptedCacheIsOptIn:
         ):
             auth.login_interactive()
 
+    @pytest.mark.real_credential
     def test_a_transient_auth_failure_does_not_flip_anything(self):
         """A wrapped non-refusal failure reads as "re-auth", never as the
         config error — the two remedies are different."""
@@ -537,6 +546,7 @@ class TestStaleConsentRemedy:
         "re-authenticate."
     )
 
+    @pytest.mark.real_credential
     def test_the_dead_end_sets_the_log_in_again_error(self):
         """Named code, named exit: the error's own text suggests neither.
 
@@ -566,6 +576,7 @@ class TestStaleConsentRemedy:
         assert "most often" in remedy
         assert "revoked" in remedy
 
+    @pytest.mark.real_credential
     def test_an_ordinary_stale_token_keeps_the_ordinary_remedy(self):
         """An expired token is refreshable — it must not claim the dead end.
 

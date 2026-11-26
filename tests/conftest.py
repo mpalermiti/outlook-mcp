@@ -37,9 +37,21 @@ Rules for ``live_write``, which exists precisely because it breaks that:
 * Every created item is removed in a ``finally``, and subjects/names carry
   ``LIVE_WRITE_SUBJECT`` / ``LIVE_WRITE_NAME`` so anything a crash leaks is
   greppable in the UI.
+
+Every other test is offline, and is held to it (#267) — see "Offline
+isolation" below: it runs against an empty settings directory, and it fails if
+it builds a real credential, opens the token cache, or connects off this
+machine.
 """
 
+import contextlib
+import functools
+import ipaddress
 import os
+import shutil
+import socket
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -197,3 +209,202 @@ def live_write_config(real_config, tmp_path):
         }
         update["allow_categories"] = sorted(set(real_config.allow_categories) | needed)
     return real_config.model_copy(update=update)
+
+
+# ── Offline isolation (#267) ─────────────────────────────────────────────
+#
+# The offline suite used to reach the operator's real sign-in. Every test that
+# opened the server — in process (`Client(mcp)`, the HTTP app) or in a child
+# Python — ran the real lifespan, which read ~/.outlook-mcp, found the saved
+# AuthenticationRecord and refreshed silently: the Keychain item azure-identity
+# keeps the token cache in, then login.microsoftonline.com. On an interpreter
+# that item does not trust, that was a password dialog per test; on one it
+# trusts, a silent read of the real token.
+#
+# Two parts, for every test that has no live marker:
+#
+# 1. Isolation. The test gets an empty settings directory. In this process the
+#    server lifespan loads its config from there and the auth record is looked
+#    for there; child processes get it as OUTLOOK_MCP_CONFIG_DIR. No config, no
+#    record, nothing to refresh. Proxy variables are cleared, so a stray request
+#    connects straight to its real address, where part 2 can see it.
+# 2. Guard. Building a real DeviceCodeCredential or MSAL client, opening a token
+#    cache store, or connecting a socket off loopback fails the test with
+#    SignInReached. A child process cannot be watched from here; part 1 is what
+#    keeps it away from the sign-in.
+#
+# A test that needs a real credential object on purpose — to run azure-identity's
+# own error wrapping, with `_get_app` replaced so the credential can reach
+# neither MSAL nor the cache — is marked `real_credential`. The rest of the
+# guard still applies to it.
+
+LIVE_MARKERS = ("integration", "live", "live_write")
+
+# Through a proxy every connection goes to the proxy's address, often loopback,
+# and the socket check could not see where a request was really going.
+PROXY_VARIABLES = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+
+# msal_extensions' stores, one of which azure-identity opens for a persistent
+# token cache: the Keychain (macOS), libsecret (Linux), DPAPI (Windows), and
+# the plaintext file.
+TOKEN_CACHE_STORES = (
+    "KeychainPersistence",
+    "LibsecretPersistence",
+    "FilePersistenceWithDataProtection",
+    "FilePersistence",
+)
+
+
+class SignInReached(pytest.fail.Exception):
+    """An offline test reached the real sign-in, or the network.
+
+    A pytest failure, which is a BaseException: the ``except Exception`` in
+    ``AuthManager.try_cached_token`` cannot swallow it.
+    """
+
+
+# Breaches during the current test phase. The report hook below reads them, so a
+# breach that something caught anyway (uvicorn's lifespan catches everything)
+# still fails the test.
+_breaches: list[str] = []
+
+
+def is_offline(item) -> bool:
+    """True unless the test carries a live marker, however it was applied."""
+    return not any(item.get_closest_marker(name) for name in LIVE_MARKERS)
+
+
+def is_loopback(host) -> bool:
+    """True for localhost and the loopback addresses, IPv4-mapped included."""
+    if host == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(str(host).split("%", 1)[0])  # drop an IPv6 zone
+    except ValueError:
+        return False  # any other host name
+    mapped = getattr(address, "ipv4_mapped", None)  # ::ffff:127.0.0.1
+    return (mapped or address).is_loopback
+
+
+def _breach(what: str):
+    message = (
+        f"An offline test {what} (#267). The offline suite must never touch the real "
+        "sign-in or the network. Mock auth instead: patch outlook_mcp.auth.DeviceCodeCredential, "
+        "or, for the server lifespan, outlook_mcp.server.load_config or "
+        "AuthManager.try_cached_token. A test that needs Graph belongs in a live tier."
+    )
+    _breaches.append(message)
+    raise SignInReached(message)
+
+
+def _refuse(what: str):
+    def refused(*args, **kwargs):
+        _breach(what)
+
+    return refused
+
+
+def _loopback_only(connect):
+    @functools.wraps(connect)
+    def guarded(sock, address):
+        if sock.family in (socket.AF_INET, socket.AF_INET6) and not is_loopback(address[0]):
+            _breach(f"connected a socket to {address[0]!r}, off this machine")
+        return connect(sock, address)
+
+    return guarded
+
+
+def _install_guard(monkeypatch, *, real_credential_allowed: bool) -> None:
+    import azure.identity
+    import msal
+    import msal_extensions
+
+    if not real_credential_allowed:
+        monkeypatch.setattr(
+            azure.identity.DeviceCodeCredential,
+            "__init__",
+            _refuse("built a real DeviceCodeCredential"),
+        )
+    monkeypatch.setattr(msal.ClientApplication, "__init__", _refuse("built an MSAL client"))
+    for store in TOKEN_CACHE_STORES:
+        monkeypatch.setattr(
+            getattr(msal_extensions, store),
+            "__init__",
+            _refuse(f"opened the token cache (msal_extensions.{store})"),
+        )
+    monkeypatch.setattr(socket.socket, "connect", _loopback_only(socket.socket.connect))
+    monkeypatch.setattr(socket.socket, "connect_ex", _loopback_only(socket.socket.connect_ex))
+
+
+@contextlib.contextmanager
+def _offline(item):
+    from outlook_mcp import auth, config, server
+
+    settings = Path(tempfile.mkdtemp(prefix="outlook-mcp-offline-"))
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setenv(config.CONFIG_DIR_ENV, str(settings))
+        monkeypatch.setattr(
+            server, "load_config", functools.partial(config.load_config, str(settings))
+        )
+        monkeypatch.setattr(auth, "_auth_record_path", lambda: settings / auth.AUTH_RECORD_FILE)
+        for name in PROXY_VARIABLES:
+            monkeypatch.delenv(name, raising=False)
+        _install_guard(
+            monkeypatch,
+            real_credential_allowed=item.get_closest_marker("real_credential") is not None,
+        )
+        yield
+    finally:
+        monkeypatch.undo()
+        _breaches.clear()
+        shutil.rmtree(settings, ignore_errors=True)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    """Isolate and guard each offline test, its fixtures' setup and teardown included.
+
+    A hook, not an autouse fixture: a module-scoped fixture is set up before any
+    function-scoped one, and test_http_transport.py's server fixture runs the
+    lifespan.
+    """
+    if not is_offline(item):
+        return (yield)
+    with _offline(item):
+        return (yield)
+
+
+def hold_breaches_against(report, breaches: list[str], *, raised: bool) -> None:
+    """Fail a test phase in which the guard fired, whatever became of the exception."""
+    found = "\n\n".join(dict.fromkeys(breaches))
+    if not report.failed:
+        report.outcome = "failed"
+        report.longrepr = found
+    elif not raised:
+        report.sections.append(("offline isolation (#267)", found))
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    report = yield
+    if _breaches:
+        raised = call.excinfo is not None and call.excinfo.errisinstance(SignInReached)
+        hold_breaches_against(report, _breaches, raised=raised)
+        _breaches.clear()
+    return report
+
+
+@contextlib.contextmanager
+def expect_breach():
+    """For the guard's own tests: the block must breach, and is not held against the test."""
+    with pytest.raises(SignInReached) as caught:
+        yield caught
+    _breaches.clear()
