@@ -2130,6 +2130,135 @@ class TestMovingAMastersDateMovesItsOccurrences:
             assert all(s[11:19] == "09:00:00" for s in starts), starts
 
 
+def _utc_of(day: date, hh_mm: str, zone: str) -> str:
+    """``hh_mm`` on ``day`` in ``zone``, as the UTC ``YYYY-MM-DDTHH:MM:SS`` Graph lists."""
+    local = datetime.combine(day, dt_time.fromisoformat(hh_mm), tzinfo=ZoneInfo(zone))
+    return f"{local.astimezone(dt_timezone.utc):%Y-%m-%dT%H:%M:%S}"
+
+
+class TestAZoneChangeBesideOtherSeriesEdits:
+    """#97: two `timezone` combinations whose Graph behaviour was unverified.
+
+    Neither takes the re-send a series master's zone change needs: a collapse
+    (`remove_recurrence=True`) skips it on purpose, and an occurrence is not a
+    master. So the patch is the new times and zone alone, plus `"recurrence":
+    null` for the collapse. Graph could have refused either with the opaque 400
+    a master's zone change without its recurrence gets, or filed one occurrence
+    in a zone the rest of its series is not in. Measured 2026-11-25 on a
+    consumer mailbox: it does neither.
+    """
+
+    async def test_a_collapse_with_a_new_zone_leaves_one_event_in_that_zone(
+        self, real_graph_client, live_write_config
+    ):
+        """One patch both ends the series and moves it: one event, 09:00 Los Angeles."""
+        sdk = real_graph_client.sdk_client
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" issue97-collapse",
+            start=f"{monday.isoformat()}T09:00:00",
+            end=f"{monday.isoformat()}T09:30:00",
+            timezone=_EAST,
+            recurrence={
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                "range": {"type": "numbered", "numberOfOccurrences": 3},
+            },
+        ) as event_id:
+            assert (await get_event(sdk, event_id))["type"] == "seriesMaster", "premise"
+
+            result = await update_event(
+                sdk,
+                event_id=event_id,
+                start=f"{monday.isoformat()}T09:00:00",
+                end=f"{monday.isoformat()}T09:30:00",
+                timezone=_DST_ZONE,
+                remove_recurrence=True,
+                config=live_write_config,
+            )
+            assert result["status"] == "updated"
+
+            after = await get_event(sdk, event_id)
+            assert after["type"] == "singleInstance"
+            assert after["recurrence"] is None
+            assert after["original_start_time_zone"] == _DST_ZONE
+            assert after["original_end_time_zone"] == _DST_ZONE
+            # The wall clock asked for, read in the new zone: not 09:00 New York.
+            assert _utc_date_time(after["start"]) == _utc_of(monday, "09:00", _DST_ZONE)
+            assert _utc_date_time(after["end"]) == _utc_of(monday, "09:30", _DST_ZONE)
+
+            # The two later Mondays went with the series rather than staying on.
+            listed = await list_events(
+                sdk,
+                after=f"{monday.isoformat()}T00:00:00Z",
+                before=f"{(monday + timedelta(days=15)).isoformat()}T00:00:00Z",
+                count=100,
+            )
+            assert not listed["has_more"], "too busy a fortnight to see every event in it"
+            ours = [e for e in listed["events"] if e["subject"].endswith(" issue97-collapse")]
+            assert [e["id"] for e in ours] == [event_id], [e["start"] for e in ours]
+
+    async def test_a_zone_on_one_occurrence_moves_its_time_and_keeps_the_series_zone(
+        self, real_graph_client, live_write_config
+    ):
+        """09:00 Los Angeles on one occurrence of a New York series.
+
+        Graph stores the moment asked for, 12:00 New York, as an exception in
+        the series' own zone. The occurrence is not filed under Los Angeles, and
+        the master and the other occurrences are left where they were.
+        """
+        sdk = real_graph_client.sdk_client
+        monday = _anchor_monday()
+
+        async with _temporary_event(
+            real_graph_client,
+            live_write_config,
+            subject_suffix=" issue97-occurrence",
+            start=f"{monday.isoformat()}T09:00:00",
+            end=f"{monday.isoformat()}T09:30:00",
+            timezone=_EAST,
+            recurrence={
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                "range": {"type": "numbered", "numberOfOccurrences": 3},
+            },
+        ) as event_id:
+            second = (await _instances(sdk, event_id, monday, _EAST))[1]
+            day = date.fromisoformat(second.start.date_time[:10])
+            assert (await get_event(sdk, second.id))["type"] == "occurrence", "premise"
+
+            result = await update_event(
+                sdk,
+                event_id=second.id,
+                start=f"{day.isoformat()}T09:00:00",
+                end=f"{day.isoformat()}T09:30:00",
+                timezone=_DST_ZONE,
+                config=live_write_config,
+            )
+            assert result["status"] == "updated"
+
+            edited = await get_event(sdk, second.id)
+            assert edited["type"] == "exception"
+            assert _utc_date_time(edited["start"]) == _utc_of(day, "09:00", _DST_ZONE)
+            assert _utc_date_time(edited["end"]) == _utc_of(day, "09:30", _DST_ZONE)
+            # Filed in the series' zone, not the one passed for this occurrence.
+            assert edited["original_start_time_zone"] == _EAST
+            assert edited["original_end_time_zone"] == _EAST
+
+            master = await get_event(sdk, event_id)
+            assert master["original_start_time_zone"] == _EAST
+            assert master["recurrence"]["range"]["numberOfOccurrences"] == 3
+
+            occurrences = await _instances(sdk, event_id, monday, _EAST)
+            starts = [o.start.date_time[:19] for o in occurrences]
+            assert starts == [
+                f"{monday.isoformat()}T09:00:00",
+                f"{day.isoformat()}T12:00:00",
+                f"{(monday + timedelta(weeks=2)).isoformat()}T09:00:00",
+            ], starts
+
+
 class TestCreatingInAnotherCalendar:
     """`calendar` on create, and the claim that lets every other tool ignore it.
 
