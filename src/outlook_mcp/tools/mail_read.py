@@ -902,6 +902,12 @@ async def search_mail(
         )
 
     messages = [_format_message_summary(m) for m in (response.value or [])]
+    # A `$search` answers with regular ids even in a process that asked for immutable
+    # ones (live round 1): there, they are translated to the process's family (D2).
+    # A process that doesn't load `intents` sends nothing more.
+    translated = await ids.translate_search_ids(graph_client, [m["id"] for m in messages])
+    for message in messages:
+        message["id"] = translated.get(message["id"], message["id"])
     if concise:
         messages = [_concise_summary(m) for m in messages]
     served += len(messages)

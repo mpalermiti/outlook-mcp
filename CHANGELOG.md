@@ -19,7 +19,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   install that doesn't name `intents`; one that already named it, which loaded nothing before,
   now gets `outlook_find`. With `intents` loaded, every request asks Graph for immutable ids,
   which are meant to stay the same when a message moves; whether a personal account grants them
-  is read from each reply, and is checked against a live test mailbox before release. No tip
+  is read from each reply, and is checked against a live test mailbox before release. A search
+  answers with regular ids regardless, so `outlook_find`, `outlook_search_mail` and
+  `outlook_search_contacts` convert their results' ids, one extra request per search. No tip
   points to it yet.
 
 - **The tool groups can be chosen in config.json, and `outlook-mcp toolsets` shows or sets
