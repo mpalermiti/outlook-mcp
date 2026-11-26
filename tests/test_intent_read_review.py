@@ -8,6 +8,7 @@ for brief, and "nit" for the small ones fixed with them.
 
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -491,3 +492,26 @@ def test_live_an_organizer_response_on_a_meeting_not_the_owners_is_a_stranger_in
     assert own["is_organizer"] is True
     assert {"code": "organizer_you"} in own["why"]
     assert {"code": "stranger_invite"} not in own["warnings"]
+
+
+# ── Live round 1, $search ids: no regular id ever leaves a read tool ─────
+
+
+async def test_live_open_loops_hands_out_no_search_id(fake):
+    """L8 keeps only the hits' conversations; every message id it hands out comes from
+    a filter read, so none is a search's regular id (no translation is needed)."""
+    box = ol.mailbox()
+    box.received.append(
+        received(
+            "old",
+            "zed@example.com",
+            "Invoice 42",
+            conversation="conv-old",
+            when="2026-09-01T09:00:00Z",
+        )
+    )
+    env = await ol.run(fake, box, words="invoice", tools=EVERY_TOOL)
+    assert any(s.search for s in fake.operations)  # the search ran, with regular ids
+    assert "conv-old" in [i["id"] for i in sec(env, "waiting_on_me")["items"]]
+    assert "rest-" not in json.dumps(env)
+    assert not [s for s in fake.operations if s.path == "/me/translateExchangeIds"]
