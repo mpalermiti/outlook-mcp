@@ -39,19 +39,20 @@ Rules for ``live_write``, which exists precisely because it breaks that:
   greppable in the UI.
 
 Every other test is offline, and is held to it (#267) — see "Offline
-isolation" below: it runs against an empty settings directory, and it fails if
-it builds a real credential, opens the token cache, or connects off this
-machine.
+isolation" below: it runs against an empty settings directory of its own, and
+it fails if it builds a real credential, opens the token cache, or reaches the
+network.
 """
 
 import contextlib
 import functools
+import inspect
 import ipaddress
 import os
 import shutil
 import socket
+import sys
 import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -221,17 +222,25 @@ def live_write_config(real_config, tmp_path):
 # that item does not trust, that was a password dialog per test; on one it
 # trusts, a silent read of the real token.
 #
-# Two parts, for every test that has no live marker:
+# Three parts:
 #
-# 1. Isolation. The test gets an empty settings directory. In this process the
-#    server lifespan loads its config from there and the auth record is looked
-#    for there; child processes get it as OUTLOOK_MCP_CONFIG_DIR. No config, no
-#    record, nothing to refresh. Proxy variables are cleared, so a stray request
-#    connects straight to its real address, where part 2 can see it.
-# 2. Guard. Building a real DeviceCodeCredential or MSAL client, opening a token
-#    cache store, or connecting a socket off loopback fails the test with
-#    SignInReached. A child process cannot be watched from here; part 1 is what
-#    keeps it away from the sign-in.
+# 1. The run. When the -m expression selects no live tier (the default run),
+#    pytest_configure points OUTLOOK_MCP_CONFIG_DIR at an empty temporary
+#    directory before outlook_mcp is first imported. Nothing later is early
+#    enough: config.DEFAULT_CONFIG_DIR is fixed at import, and server.py reads
+#    the config at import to choose its tools. A run that selects a live tier
+#    keeps the real directory, because the live fixtures need it.
+# 2. Each test without a live marker gets a fresh, empty settings directory of
+#    its own. Every DEFAULT_CONFIG_DIR the package holds and every function
+#    default bound to it (load_config, save_config) point there, and so does
+#    OUTLOOK_MCP_CONFIG_DIR for child processes. No config, no auth record,
+#    nothing to refresh, and nothing a test writes outlives it. Proxy variables
+#    are cleared, so a stray request goes straight to its real address, where
+#    part 3 can see it.
+# 3. The guard. Building a real DeviceCodeCredential or MSAL client, opening a
+#    token cache store, looking a host name up in DNS, or connecting or sending
+#    to an address off loopback fails the test with SignInReached. A child
+#    process cannot be watched from here; parts 1 and 2 keep it away.
 #
 # A test that needs a real credential object on purpose — to run azure-identity's
 # own error wrapping, with `_get_app` replaced so the credential can reach
@@ -239,6 +248,10 @@ def live_write_config(real_config, tmp_path):
 # guard still applies to it.
 
 LIVE_MARKERS = ("integration", "live", "live_write")
+
+# outlook_mcp.config.CONFIG_DIR_ENV, spelled out: importing outlook_mcp here
+# would fix the settings directory before part 1 can move it.
+CONFIG_DIR_ENV = "OUTLOOK_MCP_CONFIG_DIR"
 
 # Through a proxy every connection goes to the proxy's address, often loopback,
 # and the socket check could not see where a request was really going.
@@ -270,6 +283,9 @@ class SignInReached(pytest.fail.Exception):
     """
 
 
+# The run's empty settings directory (part 1), or None when a live tier is selected.
+run_settings: str | None = None
+
 # Breaches during the current test phase. The report hook below reads them, so a
 # breach that something caught anyway (uvicorn's lifespan catches everything)
 # still fails the test.
@@ -279,6 +295,43 @@ _breaches: list[str] = []
 def is_offline(item) -> bool:
     """True unless the test carries a live marker, however it was applied."""
     return not any(item.get_closest_marker(name) for name in LIVE_MARKERS)
+
+
+def _carrying(marker: str):
+    return lambda name, /, **kwargs: name == marker
+
+
+def selects_a_live_tier(markexpr: str) -> bool:
+    """Whether a run with this -m expression can select a test from a live tier.
+
+    Uses pytest's own parser for -m (private: there is no public one), so the
+    answer is the one pytest's deselection gives.
+    """
+    if not markexpr.strip():
+        return True  # no -m at all: every test, the live tiers included
+    from _pytest.mark.expression import Expression
+
+    expression = Expression.compile(markexpr)
+    return any(expression.evaluate(_carrying(marker)) for marker in LIVE_MARKERS)
+
+
+def pytest_configure(config):
+    """Part 1: an offline run never sees the real settings directory, even at import."""
+    global run_settings
+    if selects_a_live_tier(config.getoption("markexpr")):
+        return
+    previous = os.environ.get(CONFIG_DIR_ENV)
+    run_settings = tempfile.mkdtemp(prefix="outlook-mcp-offline-run-")
+    os.environ[CONFIG_DIR_ENV] = run_settings
+
+    def restore():
+        if previous is None:
+            os.environ.pop(CONFIG_DIR_ENV, None)
+        else:
+            os.environ[CONFIG_DIR_ENV] = previous
+        shutil.rmtree(run_settings, ignore_errors=True)
+
+    config.add_cleanup(restore)
 
 
 def is_loopback(host) -> bool:
@@ -291,6 +344,21 @@ def is_loopback(host) -> bool:
         return False  # any other host name
     mapped = getattr(address, "ipv4_mapped", None)  # ::ffff:127.0.0.1
     return (mapped or address).is_loopback
+
+
+def needs_dns(host) -> bool:
+    """True for a host name a lookup would send to DNS: not empty, localhost or an address."""
+    if host is None:
+        return False
+    if isinstance(host, bytes):
+        host = host.decode("ascii", "replace")
+    if host in ("", "localhost"):
+        return False
+    try:
+        ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return True
+    return False
 
 
 def _breach(what: str):
@@ -321,6 +389,27 @@ def _loopback_only(connect):
     return guarded
 
 
+def _sends_to_loopback_only(sendto):
+    @functools.wraps(sendto)
+    def guarded(sock, *args):
+        address = args[-1]  # sendto(data, address) or sendto(data, flags, address)
+        if sock.family in (socket.AF_INET, socket.AF_INET6) and not is_loopback(address[0]):
+            _breach(f"sent a datagram to {address[0]!r}, off this machine")
+        return sendto(sock, *args)
+
+    return guarded
+
+
+def _no_name_lookups(getaddrinfo):
+    @functools.wraps(getaddrinfo)
+    def guarded(host, *args, **kwargs):
+        if needs_dns(host):
+            _breach(f"looked up {host!r} in DNS")
+        return getaddrinfo(host, *args, **kwargs)
+
+    return guarded
+
+
 def _install_guard(monkeypatch, *, real_credential_allowed: bool) -> None:
     import azure.identity
     import msal
@@ -341,20 +430,35 @@ def _install_guard(monkeypatch, *, real_credential_allowed: bool) -> None:
         )
     monkeypatch.setattr(socket.socket, "connect", _loopback_only(socket.socket.connect))
     monkeypatch.setattr(socket.socket, "connect_ex", _loopback_only(socket.socket.connect_ex))
+    monkeypatch.setattr(socket.socket, "sendto", _sends_to_loopback_only(socket.socket.sendto))
+    monkeypatch.setattr(socket, "getaddrinfo", _no_name_lookups(socket.getaddrinfo))
+
+
+def _move_settings(set_attribute, old: str, new: str) -> None:
+    """Point each DEFAULT_CONFIG_DIR the package holds, and each function default
+    bound to one, from `old` to `new`."""
+    for name, module in list(sys.modules.items()):
+        if module is None or not (name == "outlook_mcp" or name.startswith("outlook_mcp.")):
+            continue
+        if getattr(module, "DEFAULT_CONFIG_DIR", None) == old:
+            set_attribute(module, "DEFAULT_CONFIG_DIR", new)
+        for value in list(vars(module).values()):
+            defaults = value.__defaults__ if inspect.isfunction(value) else None
+            if defaults and any(isinstance(d, str) and d == old for d in defaults):
+                moved = tuple(new if isinstance(d, str) and d == old else d for d in defaults)
+                set_attribute(value, "__defaults__", moved)
 
 
 @contextlib.contextmanager
 def _offline(item):
-    from outlook_mcp import auth, config, server
+    from outlook_mcp import config
 
-    settings = Path(tempfile.mkdtemp(prefix="outlook-mcp-offline-"))
+    settings = tempfile.mkdtemp(prefix="outlook-mcp-offline-")
     monkeypatch = pytest.MonkeyPatch()
     try:
-        monkeypatch.setenv(config.CONFIG_DIR_ENV, str(settings))
-        monkeypatch.setattr(
-            server, "load_config", functools.partial(config.load_config, str(settings))
-        )
-        monkeypatch.setattr(auth, "_auth_record_path", lambda: settings / auth.AUTH_RECORD_FILE)
+        # Part 2: this process, and child processes through the environment.
+        _move_settings(monkeypatch.setattr, config.DEFAULT_CONFIG_DIR, settings)
+        monkeypatch.setenv(CONFIG_DIR_ENV, settings)
         for name in PROXY_VARIABLES:
             monkeypatch.delenv(name, raising=False)
         _install_guard(
@@ -364,6 +468,9 @@ def _offline(item):
         yield
     finally:
         monkeypatch.undo()
+        # A module first imported during the test took the test's directory as its
+        # own; hand it the restored one, as if it had been imported outside.
+        _move_settings(setattr, settings, config.DEFAULT_CONFIG_DIR)
         _breaches.clear()
         shutil.rmtree(settings, ignore_errors=True)
 
@@ -404,7 +511,7 @@ def pytest_runtest_makereport(item, call):
 
 @contextlib.contextmanager
 def expect_breach():
-    """For the guard's own tests: the block must breach, and is not held against the test."""
+    """For the guard's own tests: the block must breach, and only that breach is forgiven."""
     with pytest.raises(SignInReached) as caught:
         yield caught
-    _breaches.clear()
+    _breaches.remove(caught.value.msg)

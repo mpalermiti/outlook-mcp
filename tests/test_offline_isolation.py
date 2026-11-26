@@ -1,10 +1,13 @@
 """The offline suite's isolation and guard (#267) — see "Offline isolation" in conftest.py.
 
-Each breach here is deliberate and harmless if the guard were broken: a credential
-that is never used, cache stores in tmp_path, sockets aimed at documentation-only
-addresses (RFC 5737 / RFC 3849) or at loopback.
+Each breach here is deliberate, and harmless if the guard were broken: a credential
+that is never used; cache stores whose construction never reads the Keychain item
+(azure-identity and msal_extensions read it on first use, which never comes); a
+lookup of a `.invalid` name; sockets aimed at documentation-only addresses
+(RFC 5737 / RFC 3849) or at loopback.
 """
 
+import json
 import os
 import re
 import socket
@@ -22,6 +25,7 @@ from msal_extensions.persistence import BasePersistence
 
 from tests import conftest
 from tests.conftest import (
+    CONFIG_DIR_ENV,
     LIVE_MARKERS,
     PROXY_VARIABLES,
     TOKEN_CACHE_STORES,
@@ -29,9 +33,13 @@ from tests.conftest import (
     hold_breaches_against,
     is_loopback,
     is_offline,
+    needs_dns,
+    selects_a_live_tier,
 )
 
 CLIENT_ID = "00000000-0000-0000-0000-000000000000"
+REAL_SETTINGS = os.path.realpath(os.path.expanduser("~/.outlook-mcp"))
+REPO = Path(__file__).resolve().parents[1]
 
 
 # ── The guard fires ──────────────────────────────────────────────────────
@@ -101,6 +109,42 @@ def test_a_connection_off_this_machine_fails_the_test(family, address, method):
     assert address[0] in str(caught.value)
 
 
+def test_a_datagram_off_this_machine_fails_the_test():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock, expect_breach() as caught:
+        sock.sendto(b"x", ("192.0.2.1", 9))
+    assert "192.0.2.1" in str(caught.value)
+
+
+def test_a_dns_lookup_fails_the_test():
+    with expect_breach() as caught:
+        socket.getaddrinfo("outlook-mcp-offline-guard-test.invalid", 443)
+    assert ".invalid" in str(caught.value)
+
+
+def test_a_lookup_that_never_reaches_dns_is_allowed():
+    assert socket.getaddrinfo("127.0.0.1", 9, type=socket.SOCK_STREAM)
+    assert socket.getaddrinfo("localhost", 9, type=socket.SOCK_STREAM)
+
+
+@pytest.mark.parametrize(
+    ("host", "dns"),
+    [
+        (None, False),
+        ("", False),
+        ("localhost", False),
+        ("127.0.0.1", False),
+        ("192.0.2.1", False),
+        ("::1", False),
+        ("fe80::1%lo0", False),
+        (b"login.microsoftonline.com", True),
+        ("login.microsoftonline.com", True),
+        ("example.invalid", True),
+    ],
+)
+def test_what_needs_dns(host, dns):
+    assert needs_dns(host) is dns
+
+
 def test_a_loopback_connection_is_allowed():
     with socket.socket() as server, socket.socket() as client:
         server.bind(("127.0.0.1", 0))
@@ -134,9 +178,21 @@ def test_what_counts_as_loopback(host, loopback):
 def test_a_swallowed_breach_is_still_recorded():
     try:
         DeviceCodeCredential(client_id=CLIENT_ID)
-    except BaseException:  # noqa: BLE001 — what uvicorn's lifespan does
+    except BaseException:  # what uvicorn's lifespan does
         pass
     assert conftest._breaches, "the report hook would have nothing to fail the test with"
+    conftest._breaches.clear()
+
+
+def test_expect_breach_forgives_only_its_own_breach():
+    try:
+        DeviceCodeCredential(client_id=CLIENT_ID)
+    except BaseException:
+        pass
+    with expect_breach():
+        msal.PublicClientApplication(CLIENT_ID, authority="https://127.0.0.1:9/consumers")
+    assert len(conftest._breaches) == 1
+    assert "DeviceCodeCredential" in conftest._breaches[0]
     conftest._breaches.clear()
 
 
@@ -161,7 +217,7 @@ def test_a_phase_that_failed_for_another_reason_carries_the_breach_too():
     assert raised.sections == []  # the failure already is the breach
 
 
-# ── Only the offline tests are guarded ───────────────────────────────────
+# ── Only the offline tests are guarded; only offline runs move the directory ──
 
 
 class _Item:
@@ -179,23 +235,90 @@ def test_the_live_tiers_are_left_alone():
         assert not is_offline(_Item("asyncio", marker))
 
 
+def _default_markexpr(request) -> str:
+    addopts = request.config.getini("addopts")
+    return addopts[addopts.index("-m") + 1]
+
+
 def test_the_guard_exempts_exactly_the_tiers_the_default_run_deselects(request):
-    addopts = " ".join(request.config.getini("addopts"))
-    assert set(re.findall(r"not (\w+)", addopts)) == set(LIVE_MARKERS)
+    assert set(re.findall(r"not (\w+)", _default_markexpr(request))) == set(LIVE_MARKERS)
+    assert not selects_a_live_tier(_default_markexpr(request))
 
 
-# ── An offline test has no settings directory of its own ────────────────
+@pytest.mark.parametrize(
+    ("markexpr", "live"),
+    [
+        ("", True),
+        ("live", True),
+        ("integration", True),
+        ("live_write", True),
+        ("live or integration", True),
+        ("not live", True),  # still selects integration
+        ("not integration and not live and not live_write", False),
+        ("not (integration or live or live_write)", False),
+        ("asyncio", False),
+        ("real_credential", False),
+    ],
+)
+def test_which_runs_keep_the_real_settings_directory(markexpr, live):
+    assert selects_a_live_tier(markexpr) is live
+
+
+# ── An offline test has no settings directory but its own ────────────────
+
+
+def test_conftest_names_the_packages_variable():
+    from outlook_mcp import config
+
+    assert CONFIG_DIR_ENV == config.CONFIG_DIR_ENV
 
 
 def test_an_offline_test_sees_an_empty_settings_directory():
-    from outlook_mcp import auth, config
+    from outlook_mcp import auth
 
-    settings = Path(os.environ[config.CONFIG_DIR_ENV])
+    settings = Path(os.environ[CONFIG_DIR_ENV])
     assert settings.is_dir()
     assert not any(settings.iterdir())
     assert auth._auth_record_path().parent == settings
     assert auth._load_auth_record() is None
     assert not any(os.environ.get(name) for name in PROXY_VARIABLES)
+
+
+def test_every_default_the_package_holds_points_at_the_tests_own_directory():
+    from outlook_mcp import auth, cli, config, errors, server, validation
+
+    here = os.environ[CONFIG_DIR_ENV]
+    assert os.path.realpath(here) != REAL_SETTINGS
+    for module in (config, auth, cli, server, validation):
+        assert module.DEFAULT_CONFIG_DIR == here, module.__name__
+    assert config.load_config.__defaults__ == (here,)
+    assert config.save_config.__defaults__ == (here,)
+    assert cli.load_config is config.load_config
+    assert errors._config_dir() == here
+    assert os.path.realpath(config.Config().attachments_dir) == os.path.realpath(
+        os.path.join(here, "attachments")
+    )
+
+
+def test_an_offline_run_moves_the_settings_directory_before_anything_is_imported(request):
+    if selects_a_live_tier(request.config.getoption("markexpr")):
+        pytest.skip("this run selects a live tier, which needs the real settings directory")
+    assert conftest.run_settings is not None
+    assert os.path.realpath(conftest.run_settings) != REAL_SETTINGS
+
+
+@pytest.mark.parametrize("attempt", [1, 2])
+def test_nothing_a_test_writes_to_the_default_directory_outlives_it(attempt):
+    from outlook_mcp import cli, config
+
+    here = Path(os.environ[CONFIG_DIR_ENV])
+    assert os.path.realpath(config.save_config.__defaults__[0]) == os.path.realpath(here)
+    assert not any(here.iterdir()), "an earlier test's settings are still here"
+
+    client_id = f"00000000-0000-0000-0000-00000000000{attempt}"
+    config.save_config(config.Config(client_id=client_id))  # no directory given
+    assert (here / "config.json").is_file()
+    assert cli.load_config().client_id == client_id
 
 
 async def test_the_real_lifespan_reaches_no_sign_in():
@@ -215,4 +338,101 @@ def test_a_child_process_inherits_the_empty_settings_directory():
     out = subprocess.run(
         [sys.executable, "-c", probe], capture_output=True, text=True, check=True, timeout=60
     ).stdout.splitlines()
-    assert out == [os.environ["OUTLOOK_MCP_CONFIG_DIR"], "None"]
+    assert out == [os.environ[CONFIG_DIR_ENV], "None"]
+
+
+# ── The hooks, end to end, in a pytest of their own ──────────────────────
+
+_CHILD_TESTS = """
+import os
+
+import pytest
+from azure.identity import DeviceCodeCredential
+
+# Imported during collection, as the real suite does: server.py reads the config
+# at import to choose its tools.
+from outlook_mcp import config, server
+
+STAND_IN = os.environ["STAND_IN_REAL_SETTINGS"]
+TOOLS = set(server.mcp._tool_manager._tools)
+
+
+def test_offline_never_sees_the_real_directory_or_its_config():
+    assert config.DEFAULT_CONFIG_DIR != STAND_IN
+    assert "outlook_create_rule" not in TOOLS
+
+
+def test_a_swallowed_breach_still_fails():
+    try:
+        DeviceCodeCredential(client_id="00000000-0000-0000-0000-000000000000")
+    except BaseException:
+        pass
+
+
+@pytest.mark.live
+def test_live_keeps_the_real_directory_and_runs_unguarded():
+    assert config.DEFAULT_CONFIG_DIR == STAND_IN
+    assert "outlook_create_rule" in TOOLS  # mailbox_settings_write, read at import
+    DeviceCodeCredential(client_id="00000000-0000-0000-0000-000000000000")  # never used
+"""
+
+
+@pytest.fixture
+def child_suite(tmp_path):
+    """A throwaway pytest project using this conftest, and a stand-in for ~/.outlook-mcp.
+
+    The stand-in's config turns on mailbox_settings_write, which adds the rules
+    tools at import: what makes the real config visible in the tool surface.
+    """
+    stand_in = tmp_path / "stand-in-real-settings"
+    stand_in.mkdir(mode=0o700)
+    config_file = stand_in / "config.json"
+    config_file.write_text(json.dumps({"mailbox_settings_write": True}), encoding="utf-8")
+    config_file.chmod(0o600)
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "conftest.py").write_text(
+        "from tests.conftest import *  # noqa: F403 — the hooks under test\n", encoding="utf-8"
+    )
+    markers = "".join(f"    {marker}: x\n" for marker in (*LIVE_MARKERS, "real_credential"))
+    (project / "pytest.ini").write_text(f"[pytest]\nmarkers =\n{markers}", encoding="utf-8")
+    (project / "test_hooks.py").write_text(_CHILD_TESTS, encoding="utf-8")
+
+    env = {key: value for key, value in os.environ.items() if key != "OUTLOOK_MCP_TOOLSETS"}
+    env.update(
+        {
+            CONFIG_DIR_ENV: str(stand_in),
+            "STAND_IN_REAL_SETTINGS": os.path.abspath(stand_in),
+            "PYTHONPATH": os.pathsep.join(filter(None, [str(REPO), env.get("PYTHONPATH")])),
+        }
+    )
+
+    def run(markexpr: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-rA", "-m", markexpr],
+            cwd=project,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+
+    return run
+
+
+def test_an_offline_run_isolates_from_import_and_fails_a_swallowed_breach(child_suite):
+    result = child_suite("not integration and not live and not live_write")
+    out = result.stdout
+    assert "PASSED test_hooks.py::test_offline_never_sees_the_real_directory_or_its_config" in out
+    assert "FAILED test_hooks.py::test_a_swallowed_breach_still_fails" in out
+    assert "built a real DeviceCodeCredential" in out
+    assert "1 failed, 1 passed, 1 deselected" in out, out
+
+
+def test_a_live_run_keeps_the_real_directory_and_installs_no_guard(child_suite):
+    result = child_suite("live")
+    out = result.stdout
+    assert "PASSED test_hooks.py::test_live_keeps_the_real_directory_and_runs_unguarded" in out
+    assert "1 passed, 2 deselected" in out, out
+    assert result.returncode == 0

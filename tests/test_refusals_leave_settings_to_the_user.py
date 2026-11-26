@@ -13,7 +13,7 @@ import re
 
 import pytest
 
-from outlook_mcp.config import DEFAULT_CONFIG_DIR
+from outlook_mcp import config
 from outlook_mcp.errors import (
     RULE_WRITE_NEEDS_SETTINGS_WRITE,
     AccountMismatchError,
@@ -83,7 +83,7 @@ def test_the_attachment_fence_leaves_its_directory_to_the_user(tmp_path):
 
 def test_the_plaintext_refusal_does_not_hand_the_agent_the_config_path():
     """Naming the setting is for the user; where the file lives is not the agent's business."""
-    assert DEFAULT_CONFIG_DIR not in str(UnencryptedTokenCacheError())
+    assert config.DEFAULT_CONFIG_DIR not in str(UnencryptedTokenCacheError())
 
 
 def test_a_refused_download_target_says_how_to_retry(tmp_path):
