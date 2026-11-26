@@ -75,6 +75,7 @@ from outlook_mcp.intents.resolver import (
     Filters,
     Lookup,
     Resolution,
+    _immutable,
     _literal,
     check_words,
     label_score,
@@ -476,6 +477,7 @@ async def _person(ctx: _Context, words: str):
         ]
         if excluded is None:
             not_covered.append("junk_not_told_apart")
+        kept = []
         for row in letters.get("value") or []:
             sent = parse_time(row.get("sentDateTime"))
             if (
@@ -484,7 +486,10 @@ async def _person(ctx: _Context, words: str):
                 and sent >= ctx.start
                 and any(a == address for a, _ in recipients(row))
             ):
-                rows.append(row)
+                kept.append(row)
+        # A search hands back regular ids (live round 1): one translation turns the kept
+        # letters' ids into the ones P2's filter gave, so no message has two ids.
+        rows += await _immutable(lookup, kept)
         targets = _targets(rows, table)
         reads = await header_reads(lookup, targets) if targets else {}
         return rows, reads
@@ -718,7 +723,8 @@ async def _meeting(ctx: _Context, words: str):
             participants.add(sender_of(message)[0] or "")
             if when is not None and when >= ctx.start and participants & people:
                 found.append(message)
-        return found
+        # A search's regular ids, translated (live round 1).
+        return await _immutable(lookup, found)
 
     recent_once = Once(recent)
 
@@ -876,9 +882,10 @@ async def _topic(ctx: _Context, words: str):
         )
         rows = [r for r in body.get("value") or [] if matches_locally(r, selection)]
         # As built: the sent table (Q1), so a sender's `known` and the lookalike checks
-        # are real, beyond §12.5's arithmetic.
+        # are real, beyond §12.5's arithmetic. Its list reply also sets the id family
+        # before the search's regular ids are translated (live round 1).
         table = await lookup.sent_table()
-        return rows, table
+        return await _immutable(lookup, rows), table
 
     mail_once = Once(mail)
 

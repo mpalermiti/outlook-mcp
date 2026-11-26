@@ -444,8 +444,9 @@ class Mailbox:
         ):
             return error(400, "BadRequest", "Could not find a property named 'eventMessage'")
         if seen.search:
+            # Live round 1: a Sent Items `$search` hands back regular ids too.
             hits = [r for r in self.sent if kql_matches(seen.search, r)]
-            return page(hits[: int(seen.params.get("$top") or 25)])
+            return page([as_rest(r) for r in hits[: int(seen.params.get("$top") or 25)]])
         rows = filtered(self.sent, seen.filter)
         newest = ordered(rows, seen, "sentDateTime")
         return _paged(newest, seen, "/me/mailFolders/sentitems/messages", 100)

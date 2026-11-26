@@ -898,3 +898,41 @@ async def test_live_catch_up_a_received_meeting_naming_the_owner_is_a_stranger_i
     assert shown["is_organizer"] is False
     assert {"code": "organizer_you"} not in shown["why"]
     assert {"code": "stranger_invite"} in shown["warnings"]
+
+
+async def test_live_brief_a_received_meeting_naming_the_owner_is_not_theirs(fake):
+    box = br.mailbox()
+    box.events["cal-1"].append(
+        {
+            **_forged("ev-forged", "2026-11-30T09:00:00", "2026-11-30T10:00:00"),
+            "subject": "Invoice review",
+        }
+    )
+    env = await br.run(fake, box, topic="invoice", tools=EVERY_TOOL)
+    (shown,) = sec(env, "events")["items"]
+    assert shown["is_organizer"] is False
+    assert {"code": "organizer_you"} not in shown["why"]
+
+
+# ── Live round 1, $search ids in brief: every search's ids are translated ──
+
+
+@pytest.mark.parametrize("form", ["person", "meeting", "topic"])
+async def test_live_brief_hands_out_no_search_id(fake, form):
+    box = br.mailbox()
+    box.received.append(
+        received("inv", "billing@example.net", "Invoice 42", when="2026-11-25T09:00:00Z")
+    )
+    args = {"person": br.SAM, "meeting": "budget sync", "topic": "invoice"}[form]
+    env = await br.run(fake, box, tools=EVERY_TOOL, **{form: args})
+    assert env["outcome"] == "answered"
+    assert any(s.search for s in fake.operations)  # a search ran, with regular ids
+    assert "rest-" not in json.dumps(env)
+    translations = [s for s in fake.operations if s.path == "/me/translateExchangeIds"]
+    assert len(translations) == 1
+
+
+async def test_live_brief_a_letter_found_by_search_carries_its_immutable_id(fake):
+    env = await br.run(fake, person=br.SAM, tools=EVERY_TOOL)
+    letters = [i for i in sec(env, "recent")["items"] if i["from"]["address"] == ME]
+    assert letters and all(not i["id"].startswith("rest-") for i in letters)
