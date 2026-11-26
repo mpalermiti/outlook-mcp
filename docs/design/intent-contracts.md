@@ -2,7 +2,7 @@
 
 Changelog: 2026-11-26. Every change to a rule or override routes `far_reaching`, `undo` included; `undo` reads events live; the act tools check attendees and route against live state every run; the plan store claims `running` atomically and releases it in a `finally`, keeps a finished plan's receipt until expiry, and prunes on every access; "reversible" is defined; `CLAUDE.md` text is proposed (§17). Open items before later steps are tracked in §18.
 
-Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3's internals are built in `src/outlook_mcp/intents/` (the envelope, budget, resolver, people, selection and id-family modules, and `find`), and no intent tool is registered yet.
+Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3 is built in `src/outlook_mcp/intents/`: `outlook_find` is registered in the opt-in `intents` group, off by default, as an early preview.
 
 These contracts define the interfaces every intent tool builds on: the answer envelope, the resolver, typed times, mail selections, plans and acting, undo receipts, the `catch_up` cursor, the follow-up marker, the approval and permission mapping, and how the tool set ships. They are meant to be precise enough to implement and to test against. Where they depart from the intent-tool design, §15 says so.
 
@@ -98,7 +98,7 @@ Reason / Warning
 | Tool kind | Values |
 | --- | --- |
 | Read: catch_up, open_loops, agenda, brief | `answered`; brief and open_loops can also return `candidates` when a person or meeting is ambiguous (§2.5) |
-| find | `exact`, `single`, `candidates`, `nothing_found` |
+| find | `exact`, `single`, `candidates`, `nothing_found`; and, as built, `incomplete`: the search ran out of requests or time, or a list it read was cut at its cap, and it matched nothing in what it read. `understood.not_searched` says what was left out. `nothing_found` is only for a finished search, and a capped search is never `single` |
 | Private: compose, capture_task, follow_up, save_contact | `done`, `candidates` (a name was ambiguous: nothing written) |
 | Plan: schedule, change_meeting, clear_time, answer_invites, tidy, undo | `planned`, `blocked` (5.8), `candidates`, `nothing_to_do` |
 | send | `sent`, `scheduled` |
@@ -338,17 +338,18 @@ Resolution
    - `kind = message` and `words` is a `<…@…>` Message-ID: `mail_read.resolve_message_id` (reuse).
    - `kind = folder`: `folder_resolver.resolve_folder_id` (reuse). Its ambiguous-name refusal becomes `candidates`.
 2. Gather candidates (2.6), score them (2.3) and sort.
-3. **single** needs all three of these. Anything else is `candidates` (one or more) or `nothing_found` (zero).
+3. **single** needs all of these. Anything else is `candidates` (one or more), `nothing_found` (zero, after a finished search) or, as built, `incomplete` (zero, after a search that did not finish or was capped).
    - Exactly one candidate survives the filters.
    - It carries none of the **blocking warnings**: `lookalike_name`, `lookalike_domain`, `lookalike_address`, `idn_domain`, `mixed_script_name`, `name_contains_other_address`, `invalid_address`, `sender_failed`, `stranger_invite`.
+   - As built: a sender check that was due ran (a candidate whose check failed or was never made reads `not_checked` and is never `single`; a person who never wrote to the user has nothing to check), and the search was not cut at a cap.
    - It passes the **known test** for its kind:
 
 | kind | Known test |
 | --- | --- |
-| person | the address appears as a recipient in Sent Items (`written_to`, by scan or search) |
-| message, file | the sender is `written_to`, or the message is in Sent Items |
-| thread | the user has a message in the conversation, or the last sender is `written_to` |
-| event | the user is the organizer, or the organizer is `written_to` |
+| person | the address appears as a recipient in Sent Items (`written_to`, by scan or search), and the name that matched came from Sent Items or a saved contact, not only from received mail |
+| message, file | the sender is `written_to`, or the message is in Sent Items. Never the From address alone: mail that claims the user's own address outside Sent Items is checked like any other sender |
+| thread | the user has a message in the conversation (in Sent Items), or the last sender is `written_to` |
+| event | Graph says the user is the organizer (`isOrganizer`), or the organizer is `written_to`; an organizer address that is the user's own proves nothing |
 | task, draft, rule, folder | always passes: these are the user's own objects |
 
 4. What each purpose does with the outcome:
@@ -368,7 +369,7 @@ Resolution
   - the classic send tools, which are destructive and so approved;
   - every other device and client the person uses.
 - The sent table counts **letters only**. Meeting requests and responses are dropped (2.6 Q1), so accepting a stranger's invite doesn't make them known. The user's own addresses are dropped too.
-- One letter ever makes a recipient known for good, even "stop emailing me". That is the design's rule, and the holdout set tests it.
+- One letter ever makes a recipient known for good, even "stop emailing me". That is the design's rule.
 
 ### 2.3 Ranking, deterministic
 
@@ -458,7 +459,7 @@ The `person` queries rank only from Sent Items and contacts:
 
 | # | Query | Purpose | Evidence |
 | --- | --- | --- | --- |
-| Q1 | `GET /me/mailFolders/sentitems/messages?$select=from,toRecipients,ccRecipients,bccRecipients,sentDateTime,conversationId&$orderby=sentDateTime desc&$top=100`, following nextLink for at most 3 pages (300 messages) | **The sent table:** address → count, last letter, recipient display name. Rows whose `@odata.type` is `#microsoft.graph.eventMessage` are dropped: meeting requests and responses aren't letters (P-SI1). `from` addresses become the user's own addresses (`me`), which never count as recipients | standard list [doc F3]; Graph returns `@odata.type` on each item [doc example, delta-query-messages] |
+| Q1 | `GET /me/mailFolders/sentitems/messages?$select=from,toRecipients,ccRecipients,bccRecipients,sentDateTime,conversationId,parentFolderId,subject,microsoft.graph.eventMessage/meetingMessageType&$orderby=sentDateTime desc&$top=100` (read again without the cast if Graph refuses it), following nextLink for at most 3 pages (300 messages) | **The sent table:** address → count, last letter, recipient display name, and the Sent Items folder's id. Rows are dropped as meeting requests and responses, which aren't letters (P-SI1), when any one of three signals says so: `@odata.type` names `eventMessage`, `meetingMessageType` came back, or the subject starts with a standard response prefix ("Accepted:", "Declined:", "Tentative:" and the like). Q7 and Q8 drop rows the same way. `from` addresses become the user's own addresses (`me`), which never count as recipients | standard list [doc F3]; Graph returns `@odata.type` on each item [doc example, delta-query-messages] |
 | Q2 | `GET /me/contacts?$search="<words>"&$select=id,displayName,givenName,surname,emailAddresses&$top=25` | contacts by name | [repo-live] `outlook_search_contacts` |
 | Q3 | `GET /me/contacts?$filter=emailAddresses/any(a:a/address eq '<addr>')&$select=id,displayName,emailAddresses&$top=5` | is this exact address saved? | [doc G] |
 | Q4 | `GET /me/messages?$search="from:<words>"&$select=from,receivedDateTime&$top=25`, only when Q1 and Q2 give fewer than `limit` | discover received-only senders (rank 0) | [repo-live] KQL property restriction |

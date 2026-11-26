@@ -17,8 +17,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   reads. It is in the new `intents` group, off by default: `outlook-mcp toolsets classic,intents`
   (or `OUTLOOK_MCP_TOOLSETS=classic,intents`) adds it to the default set. Nothing changes for an
   install that doesn't name `intents`; one that already named it, which loaded nothing before,
-  now gets `outlook_find`. With `intents` loaded, every request asks Graph for immutable ids, so
-  the ids every tool returns stay the same when a message moves. No tip points to it yet.
+  now gets `outlook_find`. With `intents` loaded, every request asks Graph for immutable ids,
+  which are meant to stay the same when a message moves; whether a personal account grants them
+  is read from each reply, and is checked against a live test mailbox before release. No tip
+  points to it yet.
 
 - **The tool groups can be chosen in config.json, and `outlook-mcp toolsets` shows or sets
   them.** `"toolsets": "mail,calendar"` in config.json works like `OUTLOOK_MCP_TOOLSETS`, which
