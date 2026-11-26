@@ -26,7 +26,7 @@ You'll like this if you're:
 - Looking for **real coverage** — mail, calendar, contacts, to-do, drafts, folders, batch ops, threading — instead of a mail-only or calendar-only wrapper
 - Security-conscious: tokens in the OS keyring (Keychain on macOS, libsecret on Linux -- never cleartext unless you opt in), granular `allow_categories`, optional `read_only` mode, zero telemetry
 
-This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 78 tools — way more than you need for "read my inbox").
+This **isn't for you** if you need work/school M365 accounts (use Microsoft's official tooling — Entra ID auth and admin-consent flows are out of scope here), or if a basic mail-only client would suffice (this has 79 tools — way more than you need for "read my inbox").
 
 ### How it differs from other Outlook tools you'll find
 
@@ -46,7 +46,7 @@ Give your AI agent full Outlook access. Example prompts that just work:
 - *"Draft a reply to the last message from my sister saying I'll call her this weekend."*
 - *"Move all newsletter and promotional email from this week to a 'Read Later' folder — batch 20 at a time."*
 
-The server exposes 78 discrete tools (71 load by default; the four rule tools, document reader, MIME export and contact photo tool are [opt-in](#toolset-selection-optional--outlook_mcp_toolsets)) so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
+The server exposes 79 discrete tools (71 load by default; the four rule tools, document reader, MIME export, contact photo tool and the `outlook_find` preview are [opt-in](#toolset-selection-optional--outlook_mcp_toolsets)) so the agent can compose its own workflow — read, triage, write, schedule, track tasks — without hardcoded macros.
 
 ## Works With
 
@@ -80,8 +80,9 @@ The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md
 
 ## Features
 
-**78 tools** across 14 categories. 71 load by default; the four rule tools,
-document reader, MIME export and contact photo tool are opt-in groups (see [Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets)).
+**79 tools** across 15 categories. 71 load by default; the four rule tools,
+document reader, MIME export, contact photo tool and the `outlook_find` intent tool (an early
+preview) are opt-in groups (see [Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets)).
 
 - **Auth (1)** -- auth status check (login is via CLI)
 - **Mail Read (8)** -- list inbox (with Focused Inbox and uncategorized filters), read message, opt-in original MIME export, bulk read by ID via `$batch`, search (KQL), list folders, delta-sync inbox changes, composed "since last call" digest across mail/events/contacts
@@ -97,6 +98,7 @@ document reader, MIME export and contact photo tool are opt-in groups (see [Tool
 - **Folder Management (3)** -- create, rename, delete mail folders
 - **Threading and Batch (3)** -- list thread, copy message, batch triage
 - **User and Admin (4)** -- whoami, list calendars, list categories, mail tips
+- **Intent Tools (preview) (1)** -- find a person, message, thread, file, event, task, draft, rule or folder by name or words in one call, with reasons and warnings (opt-in `intents` group; see [Intent tools](#intent-tools-early-preview--opt-in))
 
 **Design principles:**
 
@@ -591,6 +593,12 @@ A limit is an explicit error, never a silently partial document.
 | `outlook_list_categories` | List category definitions with colors. |
 | `outlook_get_mail_tips` | Pre-send check (OOF, delivery restrictions). |
 
+### Intent Tools (preview)
+
+| Tool | Description |
+|------|-------------|
+| `outlook_find` | Resolve a name, search words, an exact id, an address or a Message-ID to people, messages, threads, files, events, tasks, drafts, rules or folders, with the reasons each matched and any warnings (a lookalike address, a failed sender check, an invitation from a stranger). `single` only for an exact reference or someone you have sent mail to; otherwise ranked `candidates`. Read-only. Opt-in `intents` group, early preview: see [Intent tools](#intent-tools-early-preview--opt-in). |
+
 ---
 
 ## Prompts
@@ -676,9 +684,9 @@ anyone who controls it can also retarget the settings file with `OUTLOOK_MCP_CON
 ### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`
 
 The 71 default tool schemas load into the client's context every turn (the chars/4 proxy `test_tool_surface_budget.py` measures with; a different yardstick than the ~8.6k o200k figure in ROADMAP for the 62-tool surface). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
-Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`, `documents`, `rules`, `mime`, and `contact_photos`. Unset loads every group except the opt-in ones — `documents`, `rules`, `mime`, and `contact_photos` — so a stock install gets 71 of the 78 tools. Name `rules` here, or set `mailbox_settings_write: true` with no selection made (or `classic`), to get the four rule tools; that setting is itself the request for rule management. A selection here always wins: the flag does not add `rules` to a narrower list. For example, `OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"` loads 31 tools instead of 71, cutting the per-turn schema cost to about 40% of the default.
+Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`, `documents`, `rules`, `mime`, `contact_photos`, and `intents`. Unset loads every group except the opt-in ones — `documents`, `rules`, `mime`, `contact_photos`, and `intents` — so a stock install gets 71 of the 79 tools. Name `rules` here, or set `mailbox_settings_write: true` with no selection made (or `classic`), to get the four rule tools; that setting is itself the request for rule management. A selection here always wins: the flag does not add `rules` to a narrower list. For example, `OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"` loads 31 tools instead of 71, cutting the per-turn schema cost to about 40% of the default.
 
-Naming any group loads only the groups named, plus `account`, and a name that is not a group matches nothing. To add all opt-in groups to the default set, name the default groups and the opt-ins: `OUTLOOK_MCP_TOOLSETS=mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime,contact_photos`.
+Naming any group loads only the groups named, plus `account`, and a name that is not a group matches nothing. To add all opt-in groups to the default set, name the default groups and the opt-ins: `OUTLOOK_MCP_TOOLSETS=mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime,contact_photos,intents`.
 
 **In config.json instead.** The same list can live in config.json as `"toolsets": "mail,calendar"`. `OUTLOOK_MCP_TOOLSETS` wins when it is set and not blank; a blank value counts as unset, so the file's list applies. With neither, the default set loads, as before. Earlier releases never read this key, so if your config.json already has one, it takes effect when you upgrade; the server names it on stderr at every start (`Tool groups from config.json toolsets: ...`). `classic` names that default set: `"toolsets": "classic"` loads what an unset selection loads (with `rules` when `mailbox_settings_write` is on), and `classic,documents` adds the document reader to it.
 
@@ -688,7 +696,15 @@ Naming any group loads only the groups named, plus `account`, and a name that is
 - Earlier releases ignore the config key (with a warning), and read `classic` in `OUTLOOK_MCP_TOOLSETS` as an unknown name that loads only the account tools. Upgrade before using either.
 - These are your settings. An agent that thinks another group would help should tell you, not run the command.
 
-The groups are not the headings of the Tool Reference. `mail` holds the mail read, write and triage tools, `outlook_list_thread`, `outlook_copy_message` and `outlook_batch_triage`, but `outlook_list_folders` is in `folders`; the Focused Inbox tools (`outlook_reclassify_message` and the three override tools) are in `admin`, with categories and mail tips; the three `*_delta` tools are in `delta` and `outlook_changes_since` in `digest`; `outlook_list_calendars` is in `calendar`; the two draft-attachment tools are in `drafts`, `outlook_read_attachment` in `documents`, and the four rule tools in `rules`, MIME export in `mime`, and `outlook_set_contact_photo` in `contact_photos`; and `account` is `outlook_auth_status` and `outlook_whoami`.
+The groups are not the headings of the Tool Reference. `mail` holds the mail read, write and triage tools, `outlook_list_thread`, `outlook_copy_message` and `outlook_batch_triage`, but `outlook_list_folders` is in `folders`; the Focused Inbox tools (`outlook_reclassify_message` and the three override tools) are in `admin`, with categories and mail tips; the three `*_delta` tools are in `delta` and `outlook_changes_since` in `digest`; `outlook_list_calendars` is in `calendar`; the two draft-attachment tools are in `drafts`, `outlook_read_attachment` in `documents`, and the four rule tools in `rules`, MIME export in `mime`, `outlook_set_contact_photo` in `contact_photos`, and `outlook_find` in `intents`; and `account` is `outlook_auth_status` and `outlook_whoami`.
+
+#### Intent tools (early preview) — opt-in
+
+The intent tools answer a request in one call instead of several. The first, `outlook_find`, is an **early preview**: off unless you turn it on, and its answer's shape may still change.
+
+- **Turn it on** with `outlook-mcp toolsets classic,intents` (the default set plus `outlook_find`), or `OUTLOOK_MCP_TOOLSETS=classic,intents`, then restart your MCP client. `intents` on its own loads `outlook_find` and the two account tools only. `outlook-mcp toolsets classic` turns it off again.
+- **What `find` does.** Given a name, search words, an exact id, an address or a Message-ID, it returns matching people, messages, threads, files, events, tasks, drafts, rules or folders, ranked, with the reasons each matched. It only reads. People are ranked from the mail you have sent and the contacts you saved, never from mail you received. A match counts as `single` only when the request was an exact id or address, or when it is someone you have sent mail to; otherwise you get `candidates`. Lookalike names and addresses, a sender whose domain failed Microsoft's check, and an invitation from someone you have never written to come back as warnings, and they keep a match from being `single`. Text other people wrote is kept under `others_wrote` in the answer.
+- **Ids.** With `intents` loaded, the server asks Microsoft Graph for immutable ids on every request, so the ids every tool hands back stay the same when a message moves between folders. Ids saved by an agent from a session without `intents` may not match ones from a session with it.
 
 ### Two accounts, two instances (optional) — `OUTLOOK_MCP_CONFIG_DIR`
 

@@ -10,6 +10,7 @@ from kiota_authentication_azure.azure_identity_authentication_provider import (
 from msgraph import GraphRequestAdapter, GraphServiceClient
 
 from outlook_mcp.errors import AuthRequiredError
+from outlook_mcp.intents import ids
 
 # The only host the SDK client may authenticate a request to. The raw delta
 # path pins the same host for the same reason (`tools/_delta.py`).
@@ -41,7 +42,10 @@ class GraphClient:
         auth_provider = AzureIdentityAuthenticationProvider(
             credential, is_cae_enabled=False, allowed_hosts=[GRAPH_HOST]
         )
-        request_adapter = GraphRequestAdapter(auth_provider)
+        # A process that loads an intent tool asks for immutable ids on every request
+        # (decision D2, `intents/ids.py`); any other process builds the SDK's default.
+        http_client = ids.sdk_client() if ids.IMMUTABLE_IDS else None
+        request_adapter = GraphRequestAdapter(auth_provider, http_client)
         self.sdk_client = GraphServiceClient(request_adapter=request_adapter)
         # Retained so delta-query tools can mint raw bearer tokens for direct
         # httpx calls to Graph's *delta endpoints — the SDK's typed delta

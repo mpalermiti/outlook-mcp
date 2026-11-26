@@ -64,7 +64,13 @@ from outlook_mcp.intents.people import (
     recipients,
     sender_of,
 )
-from outlook_mcp.intents.selection import MailSelection, kql_words, matches_locally, search_kql
+from outlook_mcp.intents.selection import (
+    MailSelection,
+    attachment_kql,
+    kql_words,
+    matches_locally,
+    search_kql,
+)
 from outlook_mcp.intents.transport import IntentGraph, build_url, counted
 from outlook_mcp.tools.mail_read import RECEIVED_FLOOR, SUMMARY_SELECT
 from outlook_mcp.tools.todo import fetch_all_task_lists
@@ -910,6 +916,8 @@ async def _mail(
         path, {"$search": search_kql(selection), "$select": select, "$top": SEARCH_TOP}
     )
     rows = [r for r in body.get("value") or [] if matches_locally(r, selection)]
+    if kind == "file":
+        rows += await _named_in_attachments(lookup, path, select, selection, rows)
     notes = {"selection": selection.echo(), "sender_resolved": senders[0] if senders else None}
     if kind == "draft":
         # The owner's own: no sent table is needed to know them.
@@ -967,6 +975,33 @@ async def _mail(
     verdicts = await _header_verdicts(lookup, _others(rows, table)[:HEADER_READS])
     ranked = [_mail_candidate(r, table, verdicts, words, filters.folder) for r in rows]
     return _Found(ranked=ranked, sources=sources, notes=notes)
+
+
+async def _named_in_attachments(
+    lookup: Lookup, path: str, select: str, selection: MailSelection, found: list[dict]
+) -> list[dict]:
+    """Messages whose attachment names hold the words, beyond those ``found`` already.
+
+    P-AT1: whether a personal mailbox takes KQL ``attachment:``. On a 400 the file
+    search is what it was without it, the words search alone; nothing is raised.
+    """
+    query = attachment_kql(selection)
+    if query is None:
+        return []
+    try:
+        body = await lookup.graph.get(
+            path, {"$search": query, "$select": select, "$top": SEARCH_TOP}
+        )
+    except GraphAPIError as error:
+        if error.status_code != 400:
+            raise
+        return []
+    seen = {r.get("id") for r in found}
+    return [
+        r
+        for r in body.get("value") or []
+        if r.get("id") not in seen and matches_locally(r, selection)
+    ]
 
 
 def _others(rows: list[dict], table: SentTable) -> list[dict]:

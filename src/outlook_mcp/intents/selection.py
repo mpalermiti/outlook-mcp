@@ -81,9 +81,7 @@ class MailSelection:
 def search_kql(selection: MailSelection) -> str:
     """The ``$search`` value for a selection with words, quoted as Graph needs it.
 
-    Words first, then the sender (several OR'd in one group), the widened dates
-    and ``hasAttachments:true``. Addresses are checked whole, so none can carry
-    KQL of its own.
+    Words first, then the other fields (``_field_parts``).
     """
     if not selection.words:
         raise ValueError("A search needs words.")
@@ -93,7 +91,14 @@ def search_kql(selection: MailSelection) -> str:
             f"The words {selection.words[:50]!r} leave nothing to search once quotes, "
             "brackets and the KQL operators AND, OR, NOT and NEAR are taken out."
         )
-    parts = [words]
+    return '"' + " ".join([words, *_field_parts(selection)]) + '"'
+
+
+def _field_parts(selection: MailSelection) -> list[str]:
+    """The KQL for every field but the words: the sender (several OR'd in one group),
+    the widened dates and ``hasAttachments:true``. Addresses are checked whole, so none
+    can carry KQL of its own."""
+    parts = []
     senders = [validate_email(a) for a in selection.from_]
     if len(senders) == 1:
         parts.append(f"from:{senders[0]}")
@@ -105,7 +110,24 @@ def search_kql(selection: MailSelection) -> str:
         parts.append(f"received<={_day(selection.older_than + timedelta(days=1))}")
     if selection.has_attachments:
         parts.append("hasAttachments:true")
-    return '"' + " ".join(parts) + '"'
+    return parts
+
+
+def attachment_kql(selection: MailSelection) -> str | None:
+    """The ``$search`` value that finds the words in attachment names, or None.
+
+    A search's default properties are the sender, subject and body, so a file whose
+    name is the only place its words appear is missed by ``search_kql``. KQL
+    ``attachment:`` reaches attachment names: each plain word gets one, and the
+    other fields follow as in ``search_kql``. Words that are already property
+    restrictions (``subject:plan``) are left to the words search. Probe P-AT1
+    settles whether a personal mailbox takes it; the caller falls back on a 400.
+    """
+    plain = [t for t in kql_words(selection.words or "").split() if ":" not in t]
+    if not plain:
+        return None
+    named = [f"attachment:{t}" for t in plain]
+    return '"' + " ".join([*named, *_field_parts(selection)]) + '"'
 
 
 def matches_locally(row: dict, selection: MailSelection) -> bool:

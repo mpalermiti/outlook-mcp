@@ -228,7 +228,7 @@ async def test_a_blocking_warning_keeps_even_a_known_match_from_single(fake, nam
 
 @pytest.mark.parametrize(
     ("known", "lookalike"),
-    [("pat@paypal.com", "pat@paypa1.com"), ("dev@microsoft.com", "dev@rnicrosoft.com")],
+    [("pat@paypal.com", "pat@paypa1.com"), ("dev@modern.com", "dev@rnodern.com")],
 )
 async def test_blocking_warnings_prevent_single(fake, known, lookalike):
     box = mailbox()

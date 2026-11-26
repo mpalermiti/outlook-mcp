@@ -30,24 +30,8 @@ PACKAGE = "outlook_mcp"
 ROOTS = {f"{PACKAGE}.cli"}
 
 # Modules that exist for reasons other than being imported. Keep short, with
-# a reason.
-_INTENTS_AHEAD_OF_REGISTRATION = (
-    "Intent tools' internals, built and tested ahead of their registration: "
-    "outlook_find is wired into server.py once the toolset machinery that loads "
-    "the opt-in `intents` group lands. That change removes these entries, and "
-    "test_allowlist_entries_still_exist_and_are_still_unreachable makes it."
-)
-ALLOWED: dict[str, str] = {
-    f"{PACKAGE}.intents": _INTENTS_AHEAD_OF_REGISTRATION,
-    f"{PACKAGE}.intents.budget": _INTENTS_AHEAD_OF_REGISTRATION,
-    f"{PACKAGE}.intents.envelope": _INTENTS_AHEAD_OF_REGISTRATION,
-    f"{PACKAGE}.intents.find": _INTENTS_AHEAD_OF_REGISTRATION,
-    f"{PACKAGE}.intents.ids": _INTENTS_AHEAD_OF_REGISTRATION,
-    f"{PACKAGE}.intents.people": _INTENTS_AHEAD_OF_REGISTRATION,
-    f"{PACKAGE}.intents.resolver": _INTENTS_AHEAD_OF_REGISTRATION,
-    f"{PACKAGE}.intents.selection": _INTENTS_AHEAD_OF_REGISTRATION,
-    f"{PACKAGE}.intents.transport": _INTENTS_AHEAD_OF_REGISTRATION,
-}
+# a reason. There are none today; the set is here so the next one has a home.
+ALLOWED: dict[str, str] = {}
 
 
 def _module_name(path: pathlib.Path) -> str:
@@ -64,7 +48,7 @@ def _all_modules() -> dict[str, pathlib.Path]:
 
 def _imports_of(path: pathlib.Path, module: str, known: set[str]) -> set[str]:
     """Package-internal modules this file imports anywhere in its body."""
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     package_of = module if path.name == "__init__.py" else module.rpartition(".")[0]
     found: set[str] = set()
 

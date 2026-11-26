@@ -569,7 +569,7 @@ def _crowded() -> Mailbox:
         ({"kind": "person", "words": "sam"}, 22),
         ({"kind": "message", "words": "budget", "sender": "jones"}, 11),
         ({"kind": "thread", "words": "budget", "sender": "jones"}, 11),
-        ({"kind": "file", "words": "budget", "sender": "jones"}, 21),
+        ({"kind": "file", "words": "budget", "sender": "jones"}, 22),
         ({"kind": "event", "words": "budget"}, 1 + 15 + 3),
         ({"kind": "task", "words": "budget"}, 1 + 8),
         ({"kind": "draft", "words": "budget"}, 1),
@@ -603,6 +603,38 @@ async def test_p_f5_headers_missing_from_a_list_are_read_one_by_one(fake):
     person = env["sections"][0]["items"][0]
     assert person["sender_auth"] == {"result": "verified", "from_domain": "example.net"}
     assert any(s.path == "/me/messages/r9" for s in fake.operations)
+
+
+def _file_only_named_in_its_attachment() -> Mailbox:
+    box = mailbox()
+    box.received.append(
+        received("n1", "sam.jones@example.com", "Numbers for you", attachments=True)
+    )
+    box.attachments["n1"] = [
+        {"id": "att-n", "name": "Forecast-2027.xlsx", "size": 9, "isInline": False}
+    ]
+    return box
+
+
+async def test_a_file_named_only_in_its_attachment_is_found(fake):
+    env = await run(fake, _file_only_named_in_its_attachment(), kind="file", words="forecast")
+    assert ids_of(env) == ["att-n"]
+    assert '"attachment:forecast hasAttachments:true"' in env["understood"]["queries"]
+    assert fake.searches() == [
+        '"forecast hasAttachments:true"',
+        '"attachment:forecast hasAttachments:true"',
+    ]
+
+
+async def test_p_at1_a_refused_attachment_search_falls_back_to_the_words_search(fake):
+    box = _file_only_named_in_its_attachment()
+    box.attachment_search_supported = False
+    env = await run(fake, box, kind="file", words="forecast")
+    assert env["outcome"] == "nothing_found"  # what the words search alone finds
+    assert env["failed_sections"] == []
+    fake.routes.clear()
+    env = await run(fake, box, kind="file", words="budget")
+    assert ids_of(env) == ["att-1"]  # the words search still answers
 
 
 async def test_p_h1a_a_refused_task_filter_falls_back_to_a_local_one(fake):

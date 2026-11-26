@@ -63,7 +63,7 @@ def test_norm_name(raw, normal):
 @pytest.mark.parametrize(
     ("lookalike", "real"),
     [
-        ("rnicrosoft.com", "microsoft.com"),
+        ("rnodern.com", "modern.com"),
         ("paypa1.com", "paypal.com"),
         ("g00gle.com", "google.com"),
     ],
@@ -233,7 +233,7 @@ def _table(*rows):
 KNOWN = _table(
     letter([("sam.jones@example.com", "Sam Jones")]),
     letter([("pat@paypal.com", "Pat")]),
-    letter([("dev@microsoft.com", "Dev")]),
+    letter([("dev@modern.com", "Dev")]),
     letter([("friend@gmail.com", "Friend")]),
 )
 
@@ -245,7 +245,7 @@ def _warnings(address, name, written=False, contacts=()):
 def test_blocking_warnings_prevent_single_inputs():
     assert "mixed_script_name" in _warnings("sam@other.example", "Sаm Jones")
     assert "lookalike_domain" in _warnings("pat@paypa1.com", "Pat")
-    assert "lookalike_domain" in _warnings("dev@rnicrosoft.com", "Dev")
+    assert "lookalike_domain" in _warnings("dev@rnodern.com", "Dev")
     assert "idn_domain" in _warnings("x@xn--pypal-4ve.com", "X")
     assert "name_contains_other_address" in _warnings("x@evil.example", "billing@bank.example.com")
     assert "lookalike_name" in _warnings("sam@elsewhere.example", "Sam Jones")

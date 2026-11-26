@@ -71,10 +71,10 @@ def test_showing_the_environment_selection(config_file, capsys, monkeypatch):
 
 
 def test_showing_names_an_unknown_name(capsys, monkeypatch):
-    monkeypatch.setenv("OUTLOOK_MCP_TOOLSETS", "mail,intents")
+    monkeypatch.setenv("OUTLOOK_MCP_TOOLSETS", "mail,nothing_here")
     assert _run() == 0
     out = capsys.readouterr().out
-    assert "'intents'" in out and "not a tool group in this release" in out
+    assert "'nothing_here'" in out and "not a tool group in this release" in out
 
 
 def test_showing_a_broken_config_exits_with_the_repair(config_file, capsys):
@@ -95,6 +95,20 @@ def test_writing_creates_the_file_with_only_the_key(config_file, capsys):
     out = capsys.readouterr().out
     assert str(config_file) in out
     assert out.rstrip().endswith("Restart your MCP client to load the new tools.")
+
+
+def test_the_intents_group_can_be_turned_on(config_file, capsys):
+    """`classic,intents` is the default set plus outlook_find, the early preview."""
+    config_file.write_text(json.dumps({"client_id": "c"}), encoding="utf-8")
+
+    assert _run("classic,intents") == 0
+
+    written = json.loads(config_file.read_text(encoding="utf-8"))
+    assert written == {"client_id": "c", "toolsets": "classic,intents"}
+    capsys.readouterr()
+    assert _run() == 0
+    out = capsys.readouterr().out
+    assert "intents" in out and "Unknown" not in out
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
@@ -269,7 +283,7 @@ def test_what_was_written_loads_as_the_selection(config_file):
     )
 
 
-@pytest.mark.parametrize("names", [("intents",), ("mail,foo",), ("classic", "intents")])
+@pytest.mark.parametrize("names", [("nothing_here",), ("mail,foo",), ("classic", "nothing_here")])
 def test_an_unknown_name_is_refused_and_nothing_is_written(config_file, capsys, names):
     config_file.write_text(json.dumps({"client_id": "c"}), encoding="utf-8")
     before = config_file.read_bytes()

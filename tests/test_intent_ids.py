@@ -232,3 +232,209 @@ async def test_sdk_requests_through_the_counted_client_spend_and_hold(fake):
 def test_the_process_family_is_one_object():
     assert ids.ID_FAMILY is ids.ID_FAMILY
     assert isinstance(ids.ID_FAMILY, IdFamily)
+
+
+# ── The process switch: every Outlook request in a process that loads intents ──
+
+
+@pytest.fixture
+def switched_on(monkeypatch):
+    monkeypatch.setattr(ids, "IMMUTABLE_IDS", True)
+    monkeypatch.setattr(ids, "ID_FAMILY", IdFamily())
+
+
+def test_the_switch_is_off_unless_an_intent_tool_loads():
+    assert ids.wanted_for({"outlook_list_inbox", "outlook_whoami"}) is False
+    assert ids.wanted_for({"outlook_list_inbox", "outlook_find"}) is True
+    assert ids.wanted_for(set()) is False
+
+
+def test_off_the_headers_are_left_exactly_as_they_were(monkeypatch):
+    monkeypatch.setattr(ids, "IMMUTABLE_IDS", False)
+    headers = {"Prefer": "odata.maxpagesize=50", "Accept": "application/json"}
+    assert ids.with_preference(headers) is headers
+    assert ids.with_preference(None) == {}
+
+
+def test_on_the_preference_is_combined_into_the_headers(switched_on):
+    assert ids.with_preference({"Prefer": "odata.maxpagesize=50"}) == {
+        "Prefer": 'odata.maxpagesize=50, IdType="ImmutableId"'
+    }
+    assert ids.with_preference({"Accept": "x"}) == {
+        "Accept": "x",
+        "Prefer": 'IdType="ImmutableId"',
+    }
+    # Any spelling of the header name is the same header.
+    assert ids.with_preference({"prefer": 'outlook.body-content-type="text"'}) == {
+        "prefer": 'outlook.body-content-type="text", IdType="ImmutableId"'
+    }
+
+
+@pytest.mark.parametrize(
+    ("url", "carries"),
+    [
+        ("https://graph.microsoft.com/v1.0/me/messages?$top=1", True),
+        ("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages", True),
+        ("https://graph.microsoft.com/v1.0/me/messages/AAMk/attachments", True),
+        ("https://graph.microsoft.com/v1.0/me/calendars/c1/calendarView", True),
+        ("https://graph.microsoft.com/v1.0/me/events/e1", True),
+        ("https://graph.microsoft.com/v1.0/me/contacts", True),
+        ("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta", True),
+        ("https://graph.microsoft.com/v1.0/me/mailFolders", False),
+        ("https://graph.microsoft.com/v1.0/me/calendars", False),
+        ("https://graph.microsoft.com/v1.0/me/todo/lists/l/tasks", False),
+        ("https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messageRules", False),
+        ("https://graph.microsoft.com/v1.0/me", False),
+        ("https://graph.microsoft.com/v1.0/$batch", False),
+    ],
+)
+def test_which_replies_speak_for_the_family(url, carries):
+    assert ids.carries_outlook_ids(url) is carries
+
+
+def _sdk_over(fake):
+    from outlook_mcp.graph import GraphClient
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(ids, "base_client", fake.http_client)
+        return GraphClient(fake.graph_client().credential)
+
+
+async def test_on_every_sdk_request_asks_and_the_reply_is_heard(switched_on):
+    graph = FakeGraph()
+    graph.on("/me/messages", lambda seen, m: page([{"id": "m1"}]))
+    client = _sdk_over(graph)
+    from msgraph.generated.users.item.messages.messages_request_builder import (
+        MessagesRequestBuilder,
+    )
+
+    from outlook_mcp.pagination import build_request_config
+
+    config = build_request_config(
+        MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters, {"$top": 1}
+    )
+    config.headers.add("Prefer", 'outlook.body-content-type="text"')
+    await client.sdk_client.me.messages.get(request_configuration=config)
+    assert (
+        graph.seen[0].headers["prefer"] == 'outlook.body-content-type="text", IdType="ImmutableId"'
+    )
+    assert ids.ID_FAMILY.family == "immutable"
+
+
+async def test_on_a_reply_without_ids_does_not_vote(switched_on):
+    graph = FakeGraph()
+    graph.preference_applied = None
+    graph.on("/me/mailFolders", lambda seen, m: page([{"id": "f", "displayName": "F"}]))
+    client = _sdk_over(graph)
+    await client.sdk_client.me.mail_folders.get()
+    assert graph.seen[0].headers["prefer"] == 'IdType="ImmutableId"'
+    assert ids.ID_FAMILY.family is None
+
+
+async def test_off_an_sdk_request_carries_nothing_new(monkeypatch):
+    monkeypatch.setattr(ids, "IMMUTABLE_IDS", False)
+    graph = FakeGraph()
+    graph.on("/me/messages", lambda seen, m: page([]))
+    client = _sdk_over(graph)
+    # Off, the server builds the SDK's own default client: the stand-in is never used.
+    assert client.sdk_client.request_adapter._http_client is not None
+    calls = []
+    monkeypatch.setattr(ids, "base_client", lambda: calls.append(1))
+    from outlook_mcp.graph import GraphClient
+
+    GraphClient(graph.graph_client().credential)
+    assert calls == []
+
+
+# ── The classic tools' raw paths, in a process that loads intents ────────
+
+_DELTA = "https://graph.microsoft.com/v1.0/me/calendarView/delta"
+
+
+def _raw_over(fake, monkeypatch, module):
+    import httpx
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        f"{module}.httpx.AsyncClient",
+        lambda *a, **k: real(transport=httpx.MockTransport(fake.handle)),
+    )
+
+
+@pytest.mark.parametrize("on", [True, False])
+async def test_a_delta_page_combines_the_preference_with_the_page_size(monkeypatch, on):
+    from outlook_mcp.tools._delta import fetch_delta_pages
+
+    monkeypatch.setattr(ids, "IMMUTABLE_IDS", on)
+    fake = FakeGraph()
+    fake.on(
+        "/me/calendarView/delta",
+        lambda seen, m: {"value": [], "@odata.deltaLink": f"{_DELTA}?$deltatoken=t"},
+    )
+    _raw_over(fake, monkeypatch, "outlook_mcp.tools._delta")
+    await fetch_delta_pages(
+        fake.graph_client().credential,
+        initial_url=f"{_DELTA}?startDateTime=2026-11-01T00:00:00Z&endDateTime=2026-12-01T00:00:00Z",
+        delta_token=None,
+        page_size=50,
+        resource="calendar",
+        headers={"Prefer": "odata.maxpagesize=50"},
+    )
+    expected = 'odata.maxpagesize=50, IdType="ImmutableId"' if on else "odata.maxpagesize=50"
+    assert fake.seen[0].headers["prefer"] == expected
+
+
+@pytest.mark.parametrize("on", [True, False])
+async def test_a_bulk_read_asks_on_the_envelope_and_each_sub_request(monkeypatch, on):
+    from outlook_mcp.tools.mail_read import read_messages
+
+    monkeypatch.setattr(ids, "IMMUTABLE_IDS", on)
+    fake = FakeGraph()
+    fake.on(r"/me/messages/(\w+)", lambda seen, m: {"id": m.group(1), "subject": "s"})
+    _raw_over(fake, monkeypatch, "outlook_mcp.tools.mail_read")
+    await read_messages(fake.graph_client(), ["m1", "m2"], format="text")
+    envelope = next(s for s in fake.seen if s.path == "/$batch")
+    subs = [s for s in fake.seen if s.in_batch]
+    text = 'outlook.body-content-type="text"'
+    if on:
+        assert envelope.headers["prefer"] == 'IdType="ImmutableId"'
+        assert {s.headers["prefer"] for s in subs} == {f'{text}, IdType="ImmutableId"'}
+    else:
+        assert "prefer" not in envelope.headers
+        assert {s.headers["prefer"] for s in subs} == {text}
+        # Off, a sub-request is exactly what it was: no headers key added where none was.
+        assert [s.body for s in fake.seen if s.path == "/$batch"][0]["requests"][0]["headers"] == {
+            "Prefer": text
+        }
+
+
+async def test_a_bulk_read_without_its_own_headers_gains_none_when_off(monkeypatch):
+    from outlook_mcp.tools.mail_read import read_messages
+
+    monkeypatch.setattr(ids, "IMMUTABLE_IDS", False)
+    fake = FakeGraph()
+    fake.on(r"/me/messages/(\w+)", lambda seen, m: {"id": m.group(1), "subject": "s"})
+    _raw_over(fake, monkeypatch, "outlook_mcp.tools.mail_read")
+    await read_messages(fake.graph_client(), ["m1"], format="html")
+    request = next(s for s in fake.seen if s.path == "/$batch").body["requests"][0]
+    assert "headers" not in request
+
+
+@pytest.mark.parametrize("on", [True, False])
+async def test_batch_triage_asks_on_each_sub_request(monkeypatch, on):
+    from outlook_mcp.config import Config
+    from outlook_mcp.tools.batch import batch_triage
+
+    monkeypatch.setattr(ids, "IMMUTABLE_IDS", on)
+    fake = FakeGraph()
+    fake.on(r"/me/messages/(\w+)", lambda seen, m: {"id": m.group(1)}, method="PATCH")
+    # On, the server's own client with its hooks; off, a plain SDK client over the fake.
+    sdk = _sdk_over(fake).sdk_client if on else fake.graph_client().sdk_client
+    await batch_triage(sdk, ["m1", "m2"], "mark_read", "true", config=Config())
+    subs = [s for s in fake.seen if s.in_batch]
+    assert len(subs) == 2
+    for sub in subs:
+        assert sub.headers["content-type"] == "application/json"
+        assert ("prefer" in sub.headers) is on
+    envelope = next(s for s in fake.seen if s.path == "/$batch")
+    assert ("immutableid" in envelope.headers.get("prefer", "").lower()) is on

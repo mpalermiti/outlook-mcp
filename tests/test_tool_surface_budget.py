@@ -484,3 +484,24 @@ def test_contact_photos_surface_has_its_own_budget_and_preserves_default_schemas
     )
     assert photo["annotations"]["idempotentHint"] is True
     assert _proxy_tokens(enabled) <= CONTACT_PHOTOS_SURFACE_CEILING
+
+
+# The intent tools (opt-in `intents` group, preview). `outlook_find` alone is 237 proxy
+# tokens: its 369-character description and ten arguments, `kind` an enum of nine. The
+# design gives the eighteen intent tools 4,750 together, about 264 each (intent
+# contracts §10.11), so the group's own ceiling grows by a deliberate raise per tool.
+# Default + intents is 72 / 11,443; `intents` alone (find and the two account tools) is
+# 3 / 342. All groups: 79 / 12,597. The default and every other ceiling are unchanged.
+INTENT_TOOLS_CEILING = 245
+INTENTS_SELECTION_CEILING = 11_550
+
+
+def test_the_intent_tools_fit_their_own_ceiling_and_leave_the_default_alone():
+    enabled, find = _assert_one_opt_in_tool_on_an_unchanged_default("intents", "outlook_find")
+    assert find["annotations"]["readOnlyHint"] is True
+    intent_tools = [e for e in enabled if toolsets.TOOL_GROUPS.get(e["name"]) == "intents"]
+    assert _proxy_tokens(intent_tools) <= INTENT_TOOLS_CEILING, (
+        f"The intent tools cost {_proxy_tokens(intent_tools)} proxy tokens, over their "
+        f"{INTENT_TOOLS_CEILING} ceiling."
+    )
+    assert _proxy_tokens(enabled) <= INTENTS_SELECTION_CEILING

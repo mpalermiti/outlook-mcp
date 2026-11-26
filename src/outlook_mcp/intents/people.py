@@ -88,7 +88,7 @@ _SKELETON_EXTRA = (("rn", "m"), ("vv", "w"), ("0", "o"), ("1", "l"))
 
 
 def domain_skeleton(domain: str) -> str:
-    """A domain with lookalike letters folded: ``rnicrosoft.com`` reads as ``microsoft.com``."""
+    """A domain with lookalike letters folded: ``rnodern.com`` reads as ``modern.com``."""
     skeleton = _fold(domain).translate(_CONFUSABLES)
     for lookalike, letter in _SKELETON_EXTRA:
         skeleton = skeleton.replace(lookalike, letter)

@@ -13,7 +13,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from outlook_mcp.intents.selection import MailSelection, kql_words, matches_locally, search_kql
+from outlook_mcp.intents.selection import (
+    MailSelection,
+    attachment_kql,
+    kql_words,
+    matches_locally,
+    search_kql,
+)
 
 UTC = timezone.utc
 
@@ -65,6 +71,25 @@ def test_has_attachments_false_is_checked_locally_only():
 )
 def test_the_words_cannot_widen_the_search(words, kept):
     assert kql_words(words) == kept
+
+
+def test_the_attachment_search_names_each_word_and_keeps_the_fields():
+    # P-AT1: KQL `attachment:` reaches attachment names, which the default
+    # properties (from, subject, body) don't.
+    selection = MailSelection(
+        words="q3 budget subject:plan",
+        from_=["sam@example.com"],
+        newer_than=datetime(2026, 11, 10, 8, tzinfo=UTC),
+        has_attachments=True,
+    )
+    assert attachment_kql(selection) == (
+        '"attachment:q3 attachment:budget from:sam@example.com received>=2026-11-09 '
+        'hasAttachments:true"'
+    )
+
+
+def test_words_with_no_plain_word_make_no_attachment_search():
+    assert attachment_kql(MailSelection(words="subject:plan", has_attachments=True)) is None
 
 
 def test_words_that_leave_nothing_are_refused():

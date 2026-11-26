@@ -15,6 +15,7 @@ from outlook_mcp.folder_resolver import (
     resolve_folder_id,
     walk_folder_tree,
 )
+from outlook_mcp.intents import ids
 from outlook_mcp.pagination import (
     apply_pagination,
     build_request_config,
@@ -726,19 +727,25 @@ async def read_messages(
             "method": "GET",
             "url": _build_read_subrequest_url(mid, include_deferred_send, include_sender_auth),
         }
-        # A $batch sub-request carries its own headers.
-        if _wants_text_body(format, concise):
-            sub["headers"] = {"Prefer": _TEXT_BODY_PREFER}
+        # A $batch sub-request carries its own headers, and in a process that loads an
+        # intent tool each also asks for immutable ids (decision D2).
+        sub_headers = ids.with_preference(
+            {"Prefer": _TEXT_BODY_PREFER} if _wants_text_body(format, concise) else None
+        )
+        if sub_headers:
+            sub["headers"] = sub_headers
         subrequests.append(sub)
 
     tok = credential.get_token(GRAPH_TOKEN_SCOPE)
-    headers = {
-        "Authorization": f"Bearer {tok.token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        # A $batch response carries up to 20 messages; httpx decompresses it.
-        "Accept-Encoding": "gzip",
-    }
+    headers = ids.with_preference(
+        {
+            "Authorization": f"Bearer {tok.token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            # A $batch response carries up to 20 messages; httpx decompresses it.
+            "Accept-Encoding": "gzip",
+        }
+    )
 
     async with httpx.AsyncClient(timeout=30.0) as client:
 

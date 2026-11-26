@@ -37,6 +37,7 @@ import httpx
 
 from outlook_mcp.errors import ForeignCursorError, UntrustedURLError, graph_json
 from outlook_mcp.graph import GRAPH_HOST  # the only host that may receive a Graph token
+from outlook_mcp.intents import ids
 from outlook_mcp.throttle import send_with_retry
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0/"
@@ -294,6 +295,9 @@ async def fetch_delta_pages(
     }
     if headers:
         base_headers.update(headers)
+    # In a process that loads an intent tool, every page asks for immutable ids too,
+    # combined with the page size (decision D2); otherwise nothing changes.
+    base_headers = ids.with_preference(base_headers)
 
     collected: list[dict] = []
     next_token: str | None = None

@@ -21,13 +21,15 @@ from mcp.client import Client
 from outlook_mcp import toolsets
 from outlook_mcp.server import mcp
 
-TOOLS_DIR = Path(__file__).resolve().parent.parent / "src" / "outlook_mcp" / "tools"
+PACKAGE_DIR = Path(__file__).resolve().parent.parent / "src" / "outlook_mcp"
+# The classic tools and the intent tools: a tool in either that can send is found.
+SCANNED = (PACKAGE_DIR / "tools", PACKAGE_DIR / "intents")
 
 
 def _tools_that_can_send() -> set[str]:
-    """Tool names passed to a `mail_send` gate anywhere under tools/."""
+    """Tool names passed to a `mail_send` gate anywhere under tools/ or intents/."""
     found: set[str] = set()
-    for path in TOOLS_DIR.glob("*.py"):
+    for path in (p for directory in SCANNED for p in sorted(directory.glob("*.py"))):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
                 continue
@@ -67,6 +69,12 @@ def test_the_scan_finds_every_tool_that_can_send():
         "outlook_update_rule",
         "outlook_delete_rule",
     }
+
+
+def test_the_scan_covers_the_intent_tools():
+    """`outlook_find` only reads; the scan reads its package all the same."""
+    assert all(directory.is_dir() for directory in SCANNED)
+    assert (PACKAGE_DIR / "intents" / "find.py").is_file()
 
 
 def test_every_tool_that_can_send_is_destructive():

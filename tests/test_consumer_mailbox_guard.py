@@ -77,7 +77,7 @@ def test_every_consumer_claim_in_the_live_tier_requests_the_guard():
     offenders: list[str] = []
 
     for path in sorted(live_dir.glob("test_live_*.py")):
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue

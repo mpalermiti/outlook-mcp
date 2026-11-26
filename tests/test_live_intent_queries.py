@@ -29,7 +29,7 @@ from outlook_mcp.intents.budget import RequestBudget
 from outlook_mcp.intents.find import find_items
 from outlook_mcp.intents.people import parse_time, recipients, sender_of
 from outlook_mcp.intents.resolver import open_lookup
-from outlook_mcp.intents.selection import MailSelection, search_kql
+from outlook_mcp.intents.selection import MailSelection, attachment_kql, search_kql
 from outlook_mcp.tools.todo import fetch_all_task_lists
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
@@ -308,6 +308,44 @@ async def test_has_attachments_narrows_a_search(lookup):
         pytest.skip("no received message with attachments and a plain subject word")
     hits = await _search(lookup, MailSelection(words=word, has_attachments=True))
     assert row["id"] in {h["id"] for h in hits}
+    assert all(h.get("hasAttachments") is True for h in hits)
+
+
+async def test_p_at1_attachment_search_finds_a_file_by_its_name(lookup):
+    """KQL `attachment:` must reach attachment names, or find falls back without it.
+
+    Graph refusing it (400) is P-AT1's other answer: the resolver then searches the
+    words alone, so that skips with the reason rather than failing.
+    """
+    for row in await _received(lookup):
+        if not row.get("hasAttachments"):
+            continue
+        body = await lookup.graph.get(
+            f"/me/messages/{quote(row['id'], safe='')}/attachments",
+            {"$select": resolver.ATTACHMENT_SELECT},
+        )
+        names = [a.get("name") for a in body.get("value") or [] if a.get("isInline") is False]
+        word = next(
+            (w for n in names for w in re.split(r"[^A-Za-z]+", n or "") if _WORD.fullmatch(w)),
+            None,
+        )
+        if word:
+            break
+    else:
+        pytest.skip("no received message with a file whose name has a plain word")
+    query = attachment_kql(MailSelection(words=word, has_attachments=True))
+    try:
+        hits = (
+            await lookup.graph.get(
+                "/me/messages",
+                {"$search": query, "$select": resolver.MESSAGE_SELECT, "$top": resolver.SEARCH_TOP},
+            )
+        ).get("value") or []
+    except GraphAPIError as error:
+        if error.status_code == 400:
+            pytest.skip("P-AT1: Graph refuses `attachment:` here; find searches the words alone")
+        raise
+    assert hits, f"attachment:{word} found nothing, though a file of that name exists"
     assert all(h.get("hasAttachments") is True for h in hits)
 
 

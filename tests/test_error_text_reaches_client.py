@@ -30,6 +30,7 @@ from outlook_mcp.errors import (
     AccountMismatchError,
     AuthRequiredError,
     GraphAPIError,
+    NoMatchError,
     NotFoundError,
     OutlookMCPError,
     PermissionDeniedError,
@@ -94,6 +95,11 @@ async def _text_the_model_sees(raiser) -> tuple[bool, str]:
             lambda: NotFoundError("Message", "AAMk123"),
             ["Message", "AAMk123", "not found"],
             id="not_found",
+        ),
+        pytest.param(
+            lambda: NoMatchError("person", "Sam", ["sent mail", "contacts"]),
+            ["Nothing matched person 'Sam'", "sent mail", "Pass an exact address or id"],
+            id="no_match",
         ),
         pytest.param(
             lambda: GraphAPIError(429, "TooManyRequests", "Too many requests."),

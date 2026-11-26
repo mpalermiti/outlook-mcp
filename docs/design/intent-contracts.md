@@ -477,7 +477,7 @@ Other kinds:
 | kind | Queries |
 | --- | --- |
 | message, thread | With words: `$search` on `/me/messages`, or on the folder when given. KQL = `sanitize_kql(words)` (reuse), then `from:<addr>` (filters.from resolved first; if that person is ambiguous the outcome is `candidates` for the person), `received>=YYYY-MM-DD`, `received<=…` and `hasAttachments:true`, with `$top=25`. `$select` is `SUMMARY_SELECT` plus `toRecipients,ccRecipients,parentFolderId`. With no words, `$filter` mode (§4). A thread is the latest message per `conversationId` |
-| file | the message query with `hasAttachments`, then one `$batch` of `GET /me/messages/{id}/attachments?$select=id,name,size,contentType,isInline` for the top 10 messages. Non-inline attachments are matched on `file_name` |
+| file | the message query with `hasAttachments`, plus a second search with KQL `attachment:<word>` for each plain word (P-AT1; a 400 leaves the first search alone), then one `$batch` of `GET /me/messages/{id}/attachments?$select=id,name,size,contentType,isInline` for the top 10 messages. Non-inline attachments are matched on `file_name`. The second search reaches files whose names are the only place the words appear: a search's default properties are the sender, subject and body |
 | event | `calendarView` per calendar over `window` (default now − 30 d to now + 180 d). `$select=id,subject,start,end,isAllDay,isOrganizer,organizer,responseStatus,isCancelled,showAs,seriesMasterId,type,attendees`, `$top=100`, at most 3 pages × 5 calendars. Matched locally on subject, attendee names and addresses, since Graph has no `$search` on events [repo-live `list_events`] |
 | task | `GET /me/todo/lists`, skipping `wellknownListName = flaggedEmails` (those duplicate flagged mail, §8), then per list `…/tasks?$filter=status ne 'completed'&$top=100` (P-H1a; without that filter, filter locally), at most 8 lists. Matched on title |
 | draft | `$search` in `drafts`, or the newest 25 |
@@ -1782,7 +1782,7 @@ Every page uses the same conventions:
 | --- | --- |
 | person | 22 (2.6) |
 | message or thread with `sender` | 5 + 1 + 5 header reads = 11 |
-| file with `sender` | 5 + 1 + 10 attachment lists + 5 = 21 |
+| file with `sender` | 5 + 2 + 10 attachment lists + 5 = 22 |
 | event | 1 + 15 |
 | task | 1 + 8 |
 | draft, rule | 1 |
@@ -2157,7 +2157,7 @@ Fetched 2026-11-26. "Allowed" means the "Delegated (personal Microsoft account)"
 
 ## 14. Live probes to run later
 
-**36 probes.** They run only on two test accounts the project owns, never on a maintainer's own mailbox.
+**37 probes.** They run only on two test accounts the project owns, never on a maintainer's own mailbox.
 
 **Cautions:**
 - WRITE probes use throwaway items.
@@ -2203,12 +2203,13 @@ Fetched 2026-11-26. "Allowed" means the "Delegated (personal Microsoft account)"
 | P-H1b | GET | To Do due filter | 200 or 400; nice to have | — |
 | P-SE1 | GET | Seed letters to `probe@example.com`, to `probe@example.com.example`, and to `pro.be@example.com`. `$search="recipients:probe@example.com"` | which ones come back. Q7 counts only exact address matches either way; this shows whether KQL needs that local filter | §2.6 Q7 |
 | P-T1 | WRITE | POST the same event twice with one `transactionId` | never two events | §5.12 |
+| **P-AT1** (new) | GET | `$search="attachment:<word> hasAttachments:true"` on `/me/messages`, with a word from a file's name that appears nowhere else in the message | the message comes back means names are searched; a 400 means `find` keeps to the words search, as it does on that answer | §2.6 file |
 
 **Which probes gate which step:**
 
 | Step | Probes |
 | --- | --- |
-| 3 (find) | P-SI1, P-SE1, P-F5 |
+| 3 (find) | P-SI1, P-SE1, P-F5, P-AT1 |
 | 4 (read tools) | P-DL1, P-D3a, P-C2, P-LAT1's read timings |
 | 6 (plans and acting) | **P-UI1**, P-EC1, P-B1, P-B6, P-S2, P-F7, P-T1, P-MK1, P-E1 |
 | 7 (tidy) | P-RL1, P-F1, P-F4b, P-F4c, P-F2c, P-LAT1's move timings |

@@ -363,6 +363,24 @@ def _what_may_leave(request):
         yield
 
 
+# ── The id family switch (intents/ids.py) ─────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _a_classic_install_unless_a_test_says_otherwise(monkeypatch):
+    """Every test starts with the immutable-id switch off and no id family learned.
+
+    The server turns the switch on at import when its selection loads an intent
+    tool, so CI's every-group run would otherwise send the preference from every
+    classic tool and change the headers their tests pin. A test of the switch, or
+    of a process that loads intents, sets it itself or runs a fresh process.
+    """
+    from outlook_mcp.intents import ids
+
+    monkeypatch.setattr(ids, "IMMUTABLE_IDS", False)
+    monkeypatch.setattr(ids, "ID_FAMILY", ids.IdFamily())
+
+
 # ── The send tier ─────────────────────────────────────────────────────────
 
 # Every SendGuard this run made, for the summary line.

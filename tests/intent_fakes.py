@@ -283,6 +283,8 @@ def kql_term(term: str, row: dict) -> bool:
         return bool(row.get("hasAttachments")) is (value == "true")
     if sep and prop.lower() == "subject":
         return value in str(row.get("subject") or "").casefold()
+    if sep and prop.lower() == "attachment":
+        return any(value in name.casefold() for name in row.get("_attachment_names", []))
     text = " ".join(
         [
             str(row.get("subject") or ""),
@@ -332,6 +334,8 @@ class Mailbox:
     headers_on_lists: bool = True
     # P-H1a: whether To Do takes `$filter=status ne 'completed'`.
     task_filter_supported: bool = True
+    # P-AT1: whether a message search takes KQL `attachment:`.
+    attachment_search_supported: bool = True
 
     def install(self, fake: FakeGraph) -> FakeGraph:
         on = fake.on
@@ -366,7 +370,9 @@ class Mailbox:
     def _messages(self, seen: Seen, match) -> Any:
         rows = self.received
         if seen.search:
-            hits = [r for r in rows if kql_matches(seen.search, r)]
+            if "attachment:" in seen.search and not self.attachment_search_supported:
+                return error(400, "BadRequest", "Invalid search query")
+            hits = [r for r in rows if kql_matches(seen.search, self._named(r))]
             hits.sort(key=lambda r: r.get("receivedDateTime") or "", reverse=True)
             return page([_select(r, seen) for r in hits[: int(seen.params.get("$top") or 10)]])
         wanted = seen.filter or ""
@@ -384,6 +390,15 @@ class Mailbox:
         hits.sort(key=lambda r: r.get("receivedDateTime") or "", reverse=descending)
         top = int(seen.params.get("$top") or 10)
         return page([_select(r, seen, self.headers_on_lists) for r in hits[:top]])
+
+    def _named(self, row: dict) -> dict:
+        """The row with its non-inline attachments' names, for KQL `attachment:`."""
+        names = [
+            str(a.get("name") or "")
+            for a in self.attachments.get(row.get("id"), [])
+            if not a.get("isInline")
+        ]
+        return {**row, "_attachment_names": names}
 
     def _folder_messages(self, seen: Seen, match) -> Any:
         folder = match.group(1)

@@ -8,6 +8,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`outlook_find`, the first intent tool, as an opt-in early preview.** One call turns a name,
+  search words, an exact id, an address or a Message-ID into ranked people, messages, threads,
+  files, events, tasks, drafts, rules or folders, with the reasons each matched and warnings for
+  lookalike names and addresses, failed sender checks and invitations from strangers. People are
+  ranked only from mail you sent and contacts you saved; a match is `single` only for an exact
+  reference or someone you have sent mail to, and otherwise comes back as `candidates`. It only
+  reads. It is in the new `intents` group, off by default: `outlook-mcp toolsets classic,intents`
+  (or `OUTLOOK_MCP_TOOLSETS=classic,intents`) adds it to the default set. Nothing changes for an
+  install that doesn't name `intents`; one that already named it, which loaded nothing before,
+  now gets `outlook_find`. With `intents` loaded, every request asks Graph for immutable ids, so
+  the ids every tool returns stay the same when a message moves. No tip points to it yet.
+
 - **The tool groups can be chosen in config.json, and `outlook-mcp toolsets` shows or sets
   them.** `"toolsets": "mail,calendar"` in config.json works like `OUTLOOK_MCP_TOOLSETS`, which
   still wins when it is set and not blank. `classic` names the default set (with `rules` when
