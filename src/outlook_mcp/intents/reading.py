@@ -153,11 +153,23 @@ def is_busy(row: dict) -> bool:
     return show_as in BUSY_SHOW_AS
 
 
-def is_open_invite(row: dict) -> bool:
-    """An invitation still waiting for the owner's answer: not theirs, not answered, not
-    cancelled."""
+def owner_organizes(row: dict, me: frozenset[str]) -> bool:
+    """Whether the owner organizes the event: its organizer is one of their addresses.
+
+    Graph's ``isOrganizer`` is never read. Live, on a personal mailbox, it stays false
+    on meetings the owner organizes (probe day 1), so it can neither prove nor deny
+    it. An invitation that names the owner as its organizer reads as theirs here, as
+    it does in Outlook.
+    """
+    address = sender_of({"from": row.get("organizer")})[0]
+    return bool(address) and address in me
+
+
+def is_open_invite(row: dict, me: frozenset[str] = frozenset()) -> bool:
+    """An invitation still waiting for the owner's answer: not theirs (by the organizer's
+    address, ``owner_organizes``), not answered, not cancelled."""
     return (
-        row.get("isOrganizer") is not True
+        not owner_organizes(row, me)
         and response_of(row) in ("none", "notResponded")
         and row.get("isCancelled") is not True
     )
@@ -170,10 +182,15 @@ def _location(row: dict) -> str | None:
 
 
 def _event_marks(
-    row: dict, *, today: date | None, start: datetime | None, tz: tzinfo, known: bool | None
+    row: dict,
+    *,
+    today: date | None,
+    start: datetime | None,
+    tz: tzinfo,
+    known: bool | None,
+    is_organizer: bool,
 ) -> tuple[list[dict], list[dict]]:
     """The reasons and warnings every event item carries."""
-    is_organizer = row.get("isOrganizer") is True
     response = response_of(row)
     reasons: list[dict] = []
     if is_organizer:
@@ -204,25 +221,32 @@ def event_item(
     zone_name: str,
     now: datetime,
     table: SentTable | None = None,
+    me: frozenset[str] = frozenset(),
 ) -> dict:
     """The event item of §1.4.
 
-    With the sent table, the organizer's ``known`` is the known test (the owner
-    organizes it, or has written to the organizer; Graph's ``isOrganizer`` only), and
-    an open invitation from someone never written to carries ``stranger_invite``.
-    Without it, ``known`` is null unless the owner organizes the event: a tool that
-    reads no sent mail does not guess.
+    The owner organizes an event when its organizer is one of their addresses (``me``,
+    with the sent table's when given: ``owner_organizes``). With the sent table, the
+    organizer's ``known`` is the known test (the owner organizes it, or has written to
+    the organizer), and an open invitation from someone never written to carries
+    ``stranger_invite``. Without it, ``known`` is null unless the owner organizes the
+    event: a tool that reads no sent mail does not guess.
     """
     organizer, organizer_name = sender_of({"from": row.get("organizer")})
     organizer = _address(organizer)
-    is_organizer = row.get("isOrganizer") is True
+    is_organizer = owner_organizes(row, me | (table.me if table is not None else frozenset()))
     if table is None:
         known: bool | None = True if is_organizer else None
     else:
         known = is_organizer or bool(organizer and table.get(organizer) is not None)
     start, end = event_span(row, tz)
     reasons, warnings = _event_marks(
-        row, today=now.astimezone(tz).date(), start=start, tz=tz, known=known
+        row,
+        today=now.astimezone(tz).date(),
+        start=start,
+        tz=tz,
+        known=known,
+        is_organizer=is_organizer,
     )
     if table is not None and not is_organizer:
         if not known and response_of(row) in ("none", "notResponded"):
