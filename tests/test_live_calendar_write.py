@@ -2145,13 +2145,22 @@ class TestAZoneChangeBesideOtherSeriesEdits:
     null` for the collapse. Graph could have refused either with the opaque 400
     a master's zone change without its recurrence gets, or filed one occurrence
     in a zone the rest of its series is not in. Measured 2026-11-25 on a
-    consumer mailbox: it does neither.
+    consumer mailbox: it does neither. The collapse with new times used to be
+    refused for a series with a changed occurrence, which it discards by
+    request; it no longer is.
     """
 
-    async def test_a_collapse_with_a_new_zone_leaves_one_event_in_that_zone(
+    async def test_a_series_with_an_edited_occurrence_collapses_into_one_event_in_a_new_zone(
         self, real_graph_client, live_write_config
     ):
-        """One patch both ends the series and moves it: one event, 09:00 Los Angeles."""
+        """One patch both ends the series and moves it: one event, 09:00 Los Angeles.
+
+        An occurrence is edited first, so this is a series whose times no other
+        change may touch. Ending it discards the edit by request, so the
+        collapse is not refused, and the edit goes with the series.
+        """
+        from outlook_mcp.tools.calendar_write import _refuse_to_discard_occurrences
+
         sdk = real_graph_client.sdk_client
         monday = _anchor_monday()
 
@@ -2167,7 +2176,19 @@ class TestAZoneChangeBesideOtherSeriesEdits:
                 "range": {"type": "numbered", "numberOfOccurrences": 3},
             },
         ) as event_id:
-            assert (await get_event(sdk, event_id))["type"] == "seriesMaster", "premise"
+            second = (await _instances(sdk, event_id, monday, _EAST))[1]
+            day = second.start.date_time[:10]
+            await update_event(
+                sdk,
+                event_id=second.id,
+                subject=LIVE_WRITE_SUBJECT + " issue97-collapse EDITED",
+                start=f"{day}T10:00:00",
+                end=f"{day}T10:30:00",
+                config=live_write_config,
+            )
+            # Premise, read only: the occurrence check would refuse this series.
+            with pytest.raises(ValueError, match="would discard 1"):
+                await _refuse_to_discard_occurrences(sdk, event_id)
 
             result = await update_event(
                 sdk,
@@ -2189,7 +2210,7 @@ class TestAZoneChangeBesideOtherSeriesEdits:
             assert _utc_date_time(after["start"]) == _utc_of(monday, "09:00", _DST_ZONE)
             assert _utc_date_time(after["end"]) == _utc_of(monday, "09:30", _DST_ZONE)
 
-            # The two later Mondays went with the series rather than staying on.
+            # The later Mondays, the edited one included, went with the series.
             listed = await list_events(
                 sdk,
                 after=f"{monday.isoformat()}T00:00:00Z",
@@ -2197,8 +2218,14 @@ class TestAZoneChangeBesideOtherSeriesEdits:
                 count=100,
             )
             assert not listed["has_more"], "too busy a fortnight to see every event in it"
-            ours = [e for e in listed["events"] if e["subject"].endswith(" issue97-collapse")]
-            assert [e["id"] for e in ours] == [event_id], [e["start"] for e in ours]
+            ours = [e for e in listed["events"] if "issue97-collapse" in e["subject"]]
+            # Anything of ours still listed besides the event is deleted before the
+            # assertion, so a failure here leaves nothing on the calendar.
+            strays = [e for e in ours if e["id"] != event_id]
+            for stray in strays:
+                await delete_event(sdk, stray["id"], config=live_write_config)
+            assert not strays, [(e["start"], e["subject"]) for e in strays]
+            assert [e["id"] for e in ours] == [event_id]
 
     async def test_a_zone_on_one_occurrence_moves_its_time_and_keeps_the_series_zone(
         self, real_graph_client, live_write_config

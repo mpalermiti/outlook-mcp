@@ -59,7 +59,7 @@ from outlook_mcp.tools import (
     todo,
     todo_attachments,
 )
-from tests.test_calendar_write import CURRENT_ETAG, _current_event, reads_no_times
+from tests.test_calendar_write import _current_event, reads_no_times
 
 _CFG = Config(client_id="test")
 
@@ -837,7 +837,7 @@ class TestCalendarWrite:
         the explicit null, and nothing read from Graph is echoed back. The whole
         body is compared, so a re-send creeping in, or the old zone, fails here.
         Graph accepts this patch and leaves one event anchored in the new zone:
-        `test_a_collapse_with_a_new_zone_leaves_one_event_in_that_zone`.
+        `test_a_series_with_an_edited_occurrence_collapses_into_one_event_in_a_new_zone`.
         """
         from outlook_mcp.tools._recurrence import build_event_recurrence
 
@@ -872,10 +872,12 @@ class TestCalendarWrite:
             "end": {"dateTime": "2026-11-02T09:30:00", "timeZone": "America/Los_Angeles"},
             "recurrence": None,
         }
-        # New times on a master still go through the occurrence check, so the
-        # patch is pinned to the version that check read.
+        # A collapse is not checked for changed occurrences, which it discards by
+        # request, and echoes nothing back, so it is neither read for them nor
+        # pinned to a change key.
+        assert builder.get.await_count == 1, "only the read for the event's zone"
         sent = builder.patch.call_args.kwargs["request_configuration"]
-        assert sent.headers.get("If-Match") == {CURRENT_ETAG}
+        assert not sent.headers.get("If-Match")
 
     async def test_a_zone_on_an_occurrence_sends_only_its_new_times(self):
         """#97: `timezone` on one occurrence of a New York series, not on the master.

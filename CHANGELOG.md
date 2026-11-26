@@ -6,6 +6,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ending a repeating event and moving it in the same call is no longer refused (#97).**
+  `outlook_update_event` with `remove_recurrence=True` and a new `start` and `end` (with or
+  without `timezone`) refused a series that had edited or deleted occurrences, saying they would
+  be lost. Ending the series is what loses them, and `remove_recurrence=True` on its own was
+  always allowed, so the check no longer applies to it. Microsoft accepts both changes at once and
+  leaves a single event at the new time, in the new zone when one is given. Any other change to
+  the times or repeat rule of such a series is still refused.
+
+### Documentation
+
+- **`timezone` on one occurrence of a series is described as it behaves (#97).** The time given
+  is booked, but Microsoft keeps the series' time zone for that occurrence, so reading it back
+  shows the series' zone rather than the one passed. Nothing about the call changed; the README,
+  SKILL.md and the code's own notes now say so.
+
 ## [1.34.0] — 2026-11-25
 
 An event time given in UTC or with an offset keeps the event's time zone, including zones Outlook
