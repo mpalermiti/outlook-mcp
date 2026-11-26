@@ -1,7 +1,7 @@
-"""Live query-shape regression guards. Requires a cached token.
+"""Live query-shape regression guards. Need a signed-in test account.
 
-Run with: uv run pytest -m live -v
-Auto-skipped without credentials (so CI, which has none, skips them).
+Run with: scripts/live-tests.sh live (RELEASING.md 1b)
+Deselected by default, so CI never runs them; run against the project's test accounts.
 
 WHY THIS TIER EXISTS
 --------------------

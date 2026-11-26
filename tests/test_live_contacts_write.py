@@ -9,7 +9,7 @@ through the tool's own read path, and asserts each value persisted.
 Contacts have no outward side effect: nothing is emailed, nothing is shared.
 Everything created is deleted in a `finally` and named with LIVE_WRITE_NAME.
 
-    OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write -v
+    scripts/live-tests.sh live_write   (RELEASING.md 1d)
 """
 
 from __future__ import annotations

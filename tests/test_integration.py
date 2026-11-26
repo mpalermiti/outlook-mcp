@@ -1,7 +1,7 @@
-"""Integration smoke tests — require a real Azure AD app and a cached token.
+"""Integration smoke tests — need a real Azure AD app and a signed-in test account.
 
-Run with: uv run pytest -m integration -v
-Auto-skipped without credentials (so CI, which has none, skips them).
+Run with: scripts/live-tests.sh integration (RELEASING.md 1c)
+Deselected by default, so CI never runs them; run against the project's test accounts.
 
 These check that each tool returns its documented response SHAPE. They are not
 query-shape guards — see tests/test_live_query_shape.py for those.

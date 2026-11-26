@@ -10,7 +10,7 @@ Read `tests/conftest.py` before adding anything here: no attendees, no
 unbounded ranges, calendar only, and everything created is deleted in a
 `finally`.
 
-    OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write -v
+    scripts/live-tests.sh live_write   (RELEASING.md 1d)
 """
 
 from __future__ import annotations
