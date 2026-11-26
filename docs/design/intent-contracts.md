@@ -1989,7 +1989,12 @@ Rank: To before Cc; then sender known (count, descending); then waiting longest 
   - the count is `understood.calendars_beyond_5`; `not_covered` also names `events_beyond_300` and `task_lists_beyond_8`/`tasks_beyond_100` when a cap cut a read, which sets `partial`;
   - `include_tasks: false` leaves the `tasks_due` section out and reads no To Do list;
   - a day item carries `events_total`, and its events are concise (times local, no organizer);
-  - free time never starts before now, so a past day has none.
+  - free time never starts before now, so a past day has none;
+  - each view is read with `$orderby=start/dateTime`, so a capped read is the window's head; past the last event read on a capped calendar nothing is free, `understood.events_read_until` says where, the calendar sections are `total_exact: false` and the answer is `incomplete`;
+  - a day's events name their calendar by its index in `understood.calendars`; when the answer is too long, day events lose their location, then the last days lose their events (counted in `events_total`), before the envelope's own trim;
+  - an overlap item names at most five others;
+  - P-H1a's refusal is remembered for the call, so the fallback costs one request;
+  - `brief_meeting` is offered only for a meeting the owner organizes or has accepted.
 
 **understood:** `window`, `zone`, day bounds, and `calendars: list[{id, is_default}]`. Calendar names are under `others_wrote`, because a shared calendar is named by its owner.
 

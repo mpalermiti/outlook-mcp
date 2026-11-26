@@ -42,6 +42,8 @@ from outlook_mcp.validation import CONFIG_REMEDY_TEXT, _first_instant_of_local_d
 BUSY_SHOW_AS = frozenset({"busy", "tentative", "oof", "workingElsewhere"})
 ALL_DAY_BLOCKS = frozenset({"busy", "oof"})
 TASK_TOP = 100
+# Calendar views are read in this order, so a capped read is the window's head.
+VIEW_ORDER = "start/dateTime"
 _IMPORTANCE = frozenset({"low", "normal", "high"})
 _TASK_STATUS = frozenset({"notStarted", "inProgress", "completed", "waitingOnOthers", "deferred"})
 
@@ -255,11 +257,18 @@ async def read_view(
     pages: int,
     top: int = 100,
 ) -> tuple[list[dict], bool]:
-    """A calendar view over ``[start, end)``: at most ``pages`` pages of ``top``. Also
-    whether more were left unread."""
+    """A calendar view over ``[start, end)``, in start order: at most ``pages`` pages of
+    ``top``. Also whether more were left unread. In start order, a cap cuts the tail,
+    so what was read is complete up to the last event read (review A1)."""
     body = await lookup.graph.get(
         path,
-        {"startDateTime": utc(start), "endDateTime": utc(end), "$select": select, "$top": top},
+        {
+            "startDateTime": utc(start),
+            "endDateTime": utc(end),
+            "$select": select,
+            "$orderby": VIEW_ORDER,
+            "$top": top,
+        },
     )
     rows = list(body.get("value") or [])
     for _ in range(pages - 1):
@@ -290,18 +299,27 @@ async def open_tasks(
     if len(lists) > lists_max:
         not_covered.append(f"task_lists_beyond_{lists_max}")
     pairs: list[tuple[dict, str]] = []
+    filtered = True
     for task_list in lists[:lists_max]:
         path = f"/me/todo/lists/{quote(task_list.id, safe='')}/tasks"
         extra = dict(params or {})
-        try:
-            # P-H1a: whether To Do takes this filter on a personal account. On a 400 the
-            # list is read unfiltered; open tasks are picked out locally either way.
-            body = await lookup.graph.get(
-                path, {"$filter": "status ne 'completed'", "$top": TASK_TOP, **extra}, ids=False
-            )
-        except GraphAPIError as error:
-            if error.status_code != 400:
-                raise
+        body = None
+        if filtered:
+            try:
+                # P-H1a: whether To Do takes this filter on a personal account. On a 400
+                # the lists are read unfiltered, and open tasks picked out locally. The
+                # refusal is remembered for the rest of the call: one extra request, not
+                # one per list (review A2).
+                body = await lookup.graph.get(
+                    path,
+                    {"$filter": "status ne 'completed'", "$top": TASK_TOP, **extra},
+                    ids=False,
+                )
+            except GraphAPIError as error:
+                if error.status_code != 400:
+                    raise
+                filtered = False
+        if body is None:
             body = await lookup.graph.get(path, {"$top": TASK_TOP, **extra}, ids=False)
         rows = body.get("value") or []
         if (body.get("@odata.nextLink") or len(rows) >= TASK_TOP) and (

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 import httpx
 
@@ -315,7 +315,14 @@ def _paged(items: list[dict], seen: Seen, path: str, size: int | None = None) ->
     start = int(seen.params.get("$skiptoken") or 0)
     chunk = items[start : start + top]
     more = start + top < len(items)
-    return page(chunk, f"{GRAPH}{path}?$skiptoken={start + top}&$top={top}" if more else None)
+    if not more:
+        return page(chunk)
+    # The link keeps the request's other options, as Graph's do, so a filtered list
+    # pages through the same rows.
+    kept = {k: v for k, v in seen.params.items() if k not in ("$skiptoken", "$top")}
+    query = "&".join(f"{k}={quote(v, safe='')}" for k, v in kept.items())
+    link = f"{GRAPH}{path}?$skiptoken={start + top}&$top={top}" + (f"&{query}" if query else "")
+    return page(chunk, link)
 
 
 @dataclass
@@ -475,6 +482,8 @@ class Mailbox:
             for e in self.events.get(match.group(1), [])
             if e["start"]["dateTime"][:19] < end[:19] and e["end"]["dateTime"][:19] > start[:19]
         ]
+        if (seen.params.get("$orderby") or "").startswith("start/dateTime"):
+            events.sort(key=lambda e: e["start"]["dateTime"][:19])
         return _paged(events, seen, f"/me/calendars/{match.group(1)}/calendarView", 10)
 
     def _event(self, seen: Seen, match) -> Any:
