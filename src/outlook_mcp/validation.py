@@ -4,7 +4,7 @@ import base64
 import binascii
 import logging
 import re
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
@@ -513,6 +513,143 @@ def sanitize_kql(query: str) -> str:
             "use KQL syntax like subject:budget or from:sarah@acme.com."
         )
     return f'"{sanitized}"'
+
+
+# ── Typed time windows (intent contracts §3) ──────────────────────────────
+#
+# The intent tools take a window as one of a closed set of typed forms and parse
+# no natural language: an agent that typed "tomorrow at 3" is told the exact
+# value to pass instead, never guessed for. A window is a half-open
+# ``[start, end)`` pair of UTC instants computed in one zone, the same zone that
+# shows the times back.
+
+_WINDOW_KEYWORDS = ("today", "tomorrow", "this_week", "next_week")
+
+# Every accepted form, quoted whole in each refusal so the next call can be right.
+WINDOW_FORMS = (
+    "A window is one of: today, tomorrow, this_week or next_week (weeks start on "
+    "Monday); an offset, where +7d is the next seven days and 7d or -7d the last "
+    "seven (units m, h, d, w); a date such as 2026-11-27 for that whole day; or two "
+    "times joined by '/', each a date, a date and time, an offset or now, such as "
+    "now/+7d or 2026-11-27T09:00:00/2026-11-27T17:00:00."
+)
+
+
+def _first_instant_of_local_day(day: date, zone: ZoneInfo) -> datetime:
+    """Local midnight of ``day`` in ``zone``, as a UTC instant.
+
+    A midnight that falls in a daylight-saving gap does not exist (America/Santiago
+    skips 00:00-01:00 on the day its clocks go forward). The day then starts at the
+    first instant after the gap: the earliest instant whose wall time is at or past
+    midnight, found by bisection between the two readings of the missing time.
+    """
+    wall = datetime.combine(day, time(0))
+    early = wall.replace(tzinfo=zone, fold=0).astimezone(timezone.utc)
+    if early.astimezone(zone).replace(tzinfo=None) == wall:
+        return early
+    late = wall.replace(tzinfo=zone, fold=1).astimezone(timezone.utc)
+    low, high = min(early, late), max(early, late)
+    # Invariant: wall(low) < midnight <= wall(high). One-second resolution is
+    # finer than any zone's transition times.
+    while high - low > timedelta(seconds=1):
+        middle = low + (high - low) / 2
+        if middle.astimezone(zone).replace(tzinfo=None) >= wall:
+            high = middle
+        else:
+            low = middle
+    return high.replace(microsecond=0)
+
+
+def _window_refusal(value: str, now_local: datetime, why: str | None = None) -> ValueError:
+    """The refusal for a window outside the grammar, with a typed value to pass instead."""
+    example = (now_local + timedelta(days=1)).strftime("%Y-%m-%dT15:00")
+    shown = sanitize_output(value[:60])
+    reason = f" {why}" if why else ""
+    return ValueError(
+        f"Invalid window {shown!r}.{reason} {WINDOW_FORMS} Phrases are not read: for "
+        f"'tomorrow at 3', pass {example} instead."
+    )
+
+
+def _instant(value: str, zone_name: str, now: datetime) -> datetime:
+    """One side of an interval: ``validate_datetime`` read in ``zone_name``, as a datetime."""
+    utc = validate_datetime(value, zone_name, now=now)
+    return datetime.strptime(utc, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+
+
+def resolve_window(
+    value: str,
+    zone: str,
+    *,
+    now: datetime | None = None,
+    max_days: int | None = None,
+    zone_remedy: str | None = CONFIG_REMEDY_TEXT,
+) -> tuple[datetime, datetime]:
+    """Resolve a typed window to ``(start, end)``: aware UTC datetimes, ``end`` exclusive.
+
+    Forms (``WINDOW_FORMS``): a keyword (``today``, ``tomorrow``, ``this_week``,
+    ``next_week``); an offset, where ``+N`` is ``[now, now + N]`` and a bare or
+    ``-N`` is ``[now - N, now]``, as for every other relative time here; an ISO
+    date, that local day; or ``A/B``, two instants as ``validate_datetime`` reads
+    them, B later than A. Days and weeks are local to ``zone`` (weeks start on
+    Monday), so a day is 23 or 25 hours long across a daylight-saving change.
+
+    ``zone`` is an IANA name, checked by :func:`resolve_timezone` with
+    ``zone_remedy`` appended to its refusal: the config file's remedy by default,
+    since the intent tools read windows in ``config.timezone`` unless a tool takes
+    its own zone argument. ``max_days`` is the calling tool's longest span.
+    """
+    reference = now or datetime.now(timezone.utc)
+    tz = resolve_timezone(zone, remedy=zone_remedy)
+    now_local = reference.astimezone(tz)
+    if not isinstance(value, str) or has_control_characters(value) or not value.strip():
+        raise _window_refusal(str(value), now_local)
+    text = value.strip()
+    lowered = text.lower()
+
+    start: datetime
+    end: datetime
+    if lowered in _WINDOW_KEYWORDS:
+        today = now_local.date()
+        if lowered in ("today", "tomorrow"):
+            first = today + timedelta(days=0 if lowered == "today" else 1)
+            days = 1
+        else:
+            first = today - timedelta(days=today.weekday())
+            if lowered == "next_week":
+                first += timedelta(days=7)
+            days = 7
+        start = _first_instant_of_local_day(first, tz)
+        end = _first_instant_of_local_day(first + timedelta(days=days), tz)
+    elif (offset := _RELATIVE_RE.match(text)) is not None:
+        sign, magnitude, unit = offset.groups()
+        span = timedelta(**{_RELATIVE_UNITS[unit.lower()]: int(magnitude)})
+        start, end = (reference, reference + span) if sign == "+" else (reference - span, reference)
+    elif "/" in text:
+        left, _, right = text.partition("/")
+        if not left.strip() or not right.strip() or "/" in right:
+            raise _window_refusal(text, now_local)
+        try:
+            start = _instant(left.strip(), zone, reference)
+            end = _instant(right.strip(), zone, reference)
+        except ValueError as exc:
+            raise _window_refusal(text, now_local) from exc
+        if end <= start:
+            raise _window_refusal(text, now_local, "The second time must be later than the first.")
+    else:
+        try:
+            day = datetime.strptime(text, "%Y-%m-%d").date()
+        except ValueError as exc:
+            raise _window_refusal(text, now_local) from exc
+        start = _first_instant_of_local_day(day, tz)
+        end = _first_instant_of_local_day(day + timedelta(days=1), tz)
+
+    if max_days is not None and end - start > timedelta(days=max_days):
+        raise ValueError(
+            f"Window {sanitize_output(text[:60])!r} spans more than {max_days} days, the "
+            "longest this tool reads. Pass a shorter window."
+        )
+    return start, end
 
 
 def validate_header_zone(name: str, remedy: str | None = None) -> str:

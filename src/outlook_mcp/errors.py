@@ -340,6 +340,28 @@ class ForeignCursorError(OutlookMCPError):
         self.source = source
 
 
+class NoMatchError(OutlookMCPError):
+    """Raised when a name or search words match nothing (intent contracts §11).
+
+    For a tool that acts on the match, and for the read tools other than
+    ``outlook_find``, which answers ``nothing_found`` instead. An *ambiguous*
+    reference is not an error: the candidates come back as a result, because they
+    are the data the next call needs. ``sources`` names where the server looked,
+    in plain words ("sent mail", "contacts"), never what it found there.
+    """
+
+    def __init__(self, kind: str, words: str, sources: list[str]):
+        from outlook_mcp.validation import sanitize_output
+
+        shown = sanitize_output(words)[:80]
+        searched = ", ".join(sources) if sources else "nothing"
+        super().__init__(
+            "no_match",
+            f"Nothing matched {kind} '{shown}' (searched: {searched}).",
+            "Pass an exact address or id, or different words.",
+        )
+
+
 class ToolInputError(OutlookMCPError, ValueError):
     """A tool argument the caller can fix, raised as an anticipated failure.
 
