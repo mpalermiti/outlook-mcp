@@ -113,23 +113,6 @@ def _field_parts(selection: MailSelection) -> list[str]:
     return parts
 
 
-def attachment_kql(selection: MailSelection) -> str | None:
-    """The ``$search`` value that finds the words in attachment names, or None.
-
-    A search's default properties are the sender, subject and body, so a file whose
-    name is the only place its words appear is missed by ``search_kql``. KQL
-    ``attachment:`` reaches attachment names: each plain word gets one, and the
-    other fields follow as in ``search_kql``. Words that are already property
-    restrictions (``subject:plan``) are left to the words search. Probe P-AT1
-    settles whether a personal mailbox takes it; the caller falls back on a 400.
-    """
-    plain = [t for t in kql_words(selection.words or "").split() if ":" not in t]
-    if not plain:
-        return None
-    named = [f"attachment:{t}" for t in plain]
-    return '"' + " ".join([*named, *_field_parts(selection)]) + '"'
-
-
 def matches_locally(row: dict, selection: MailSelection) -> bool:
     """Whether a Graph message row meets the selection's exact fields."""
     if selection.from_:

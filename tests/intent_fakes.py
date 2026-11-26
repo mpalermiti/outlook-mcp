@@ -194,6 +194,18 @@ def page(items: list[dict], next_link: str | None = None) -> dict:
 # ── Graph-shaped rows ─────────────────────────────────────────────────────
 
 ME = "me@example.com"
+# Live round 1: `$search` hands back an item's regular (REST) id, whatever the request
+# asked for, while lists and filters hand back the immutable one. The fake spells a
+# search hit's id as this prefix plus the item's own id, and translateExchangeIds
+# maps it back.
+REST = "rest-"
+
+
+def as_rest(row: dict) -> dict:
+    """``row`` as a `$search` returns it: its id in the regular family."""
+    return {**row, "id": REST + str(row.get("id"))}
+
+
 # The Sent Items folder's id: a message there is one the owner really sent.
 SENT_FOLDER = "sent-id"
 
@@ -287,7 +299,8 @@ def kql_term(term: str, row: dict) -> bool:
     if sep and prop.lower() == "subject":
         return value in str(row.get("subject") or "").casefold()
     if sep and prop.lower() == "attachment":
-        return any(value in name.casefold() for name in row.get("_attachment_names", []))
+        # P-AT1, live: `attachment:` matches the start of a file's name only.
+        return any(name.casefold().startswith(value) for name in row.get("_attachment_names", []))
     text = " ".join(
         [
             str(row.get("subject") or ""),
@@ -295,7 +308,9 @@ def kql_term(term: str, row: dict) -> bool:
             _people_text(row, ("from",)),
         ]
     ).casefold()
-    return term.casefold() in text
+    # Plain words also find a file whose name starts with them (P-AT1, live).
+    names = row.get("_attachment_names", [])
+    return term.casefold() in text or any(n.casefold().startswith(term.casefold()) for n in names)
 
 
 def kql_matches(value: str, row: dict) -> bool:
@@ -392,6 +407,8 @@ class Mailbox:
     attachment_search_supported: bool = True
     # P-SI1: whether a list's $select takes the eventMessage cast.
     cast_select_supported: bool = True
+    # Whether translateExchangeIds answers (live round 1: it does).
+    translate_supported: bool = True
 
     def install(self, fake: FakeGraph) -> FakeGraph:
         on = fake.on
@@ -400,6 +417,7 @@ class Mailbox:
         on(r"/me/messages/([^/]+)", self._message)
         on(r"/me/messages/([^/]+)/attachments", self._attachments)
         on("/me/contacts", self._contacts)
+        on("/me/translateExchangeIds", self._translate, method="POST")
         on("/me/calendars", lambda seen, m: _paged(self.calendars, seen, "/me/calendars", 100))
         on(r"/me/calendars/([^/]+)/calendarView", self._calendar_view)
         on("/me/calendarView", self._primary_view)
@@ -442,7 +460,11 @@ class Mailbox:
                 return error(400, "BadRequest", "Invalid search query")
             hits = [r for r in rows if kql_matches(seen.search, self._named(r))]
             hits.sort(key=lambda r: r.get("receivedDateTime") or "", reverse=True)
-            return page([_select(r, seen) for r in hits[: int(seen.params.get("$top") or 10)]])
+            top = int(seen.params.get("$top") or 10)
+            return page(
+                [as_rest(_select(r, seen, self.headers_on_lists)) for r in hits[:top]],
+                self._more(seen, len(hits) > top),
+            )
         wanted = seen.filter or ""
         if (by_id := _FILTER_MESSAGE_ID.match(wanted)) is not None:
             literal = by_id.group(1).replace("''", "'")
@@ -480,10 +502,18 @@ class Mailbox:
             rows = [r for r in self.received if r.get("parentFolderId") in ids]
         if seen.filter and not seen.search:
             path = f"/me/mailFolders/{folder}/messages"
-            hits = [_select(r, seen) for r in ordered(filtered(rows, seen.filter), seen)]
+            hits = [
+                _select(r, seen, self.headers_on_lists)
+                for r in ordered(filtered(rows, seen.filter), seen)
+            ]
             return _paged(hits, seen, path, 10)
-        hits = [r for r in rows if not seen.search or kql_matches(seen.search, r)]
-        return page([_select(r, seen) for r in hits[: int(seen.params.get("$top") or 10)]])
+        hits = [r for r in rows if not seen.search or kql_matches(seen.search, self._named(r))]
+        chosen = hits[: int(seen.params.get("$top") or 10)]
+        shown = [_select(r, seen, self.headers_on_lists) for r in chosen]
+        return page([as_rest(r) for r in shown] if seen.search else shown)
+
+    def _more(self, seen: Seen, more: bool) -> str | None:
+        return f"{GRAPH}{seen.path}?$skiptoken=next" if more else None
 
     def _well_known_folder(self, seen: Seen, match) -> Any:
         name = match.group(1).lower()
@@ -494,13 +524,30 @@ class Mailbox:
         return error(404, "ErrorItemNotFound")
 
     def _message(self, seen: Seen, match) -> Any:
+        # A read by either id finds the item and echoes the id it was given (live).
+        given = match.group(1)
         for row in self._all_mail():
-            if row["id"] == match.group(1):
-                return _select(row, seen)
+            if row["id"] == given.removeprefix(REST):
+                return {**_select(row, seen), "id": given}
         return error(404, "ErrorItemNotFound", "The specified object was not found in the store.")
 
     def _attachments(self, seen: Seen, match) -> Any:
-        return page(self.attachments.get(match.group(1), []))
+        return page(self.attachments.get(match.group(1).removeprefix(REST), []))
+
+    def _translate(self, seen: Seen, match) -> Any:
+        """POST /me/translateExchangeIds, restId to restImmutableEntryId (live round 1)."""
+        if not self.translate_supported:
+            return error(500, "InternalServerError", "translation failed")
+        body = seen.body or {}
+        assert body.get("sourceIdType") == "restId", body
+        assert body.get("targetIdType") == "restImmutableEntryId", body
+        return {
+            "value": [
+                {"sourceId": i, "targetId": i.removeprefix(REST)}
+                for i in body.get("inputIds") or []
+                if i.startswith(REST)
+            ]
+        }
 
     # Contacts
 
@@ -521,7 +568,7 @@ class Mailbox:
                 )
                 or term in str(c.get("displayName") or "").casefold()
             ]
-            return page(hits[: int(seen.params.get("$top") or 10)])
+            return page([as_rest(c) for c in hits[: int(seen.params.get("$top") or 10)]])
         if (exact := _FILTER_CONTACT.search(seen.filter or "")) is not None:
             address = exact.group(1).casefold()
             return page(
