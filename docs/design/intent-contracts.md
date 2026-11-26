@@ -2122,7 +2122,8 @@ Sections:
 - M3's search is built from the subject, which someone else may have written: it runs, but is not echoed in `understood.queries` (`understood.queries_not_echoed` counts it). A message matches when one of the event's people other than the owner is on it.
 - `others_wrote` gains `company`, `job_title`, `phones` and `birthday` for a saved contact's details. Attendee items are people (§2.4's `Who`) with `response` and `type`.
 - `recent` and `open_loops` mark `total_exact` false (P3 is a search). A task matches a person when its title holds their name after `norm_name`, and a topic when it holds every word.
-- An ambiguous person or meeting answers in a `candidates` section, with `choose` only for known, unblocked candidates.
+- An ambiguous person or meeting answers in a `candidates` section, with `choose` only for known, unblocked candidates. A resolution that could not finish answers `incomplete` with `understood.not_searched` (review E4), and one that ran out of time or requests marks every section so (C3: one deadline from the call's start).
+- **Review fixes (#284):** P2 leaves out Junk and Deleted Items (their ids read once), and the messages `next` may point at (the newest, and the latest waiting on the owner) get a header read first; `draft_reply` and `open` need a check that ran and did not fail (E1). Message items carry `folder_id`. P5 reads 3 messages' files and P6 5 lists, to make room: the person path stays within 40 with P-H1a's fallback. A content type is shown only when it is a plain MIME type of at most 100 characters, here and in find (E2). Capped task, calendar and attachment reads go into `not_covered` and make their sections inexact (E3). `brief_person` is never offered for the owner. Meeting messages are told by type only.
 
 **Docstring** (at most 450 characters): the three forms; that a meeting brief lists who answered; that notes or decisions exist only if someone emailed them.
 

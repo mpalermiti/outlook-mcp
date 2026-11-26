@@ -131,6 +131,9 @@ _SHOW_AS = frozenset({"free", "tentative", "busy", "oof", "workingElsewhere", "u
 _TASK_STATUS = frozenset({"notStarted", "inProgress", "completed", "waitingOnOthers", "deferred"})
 _IMPORTANCE = frozenset({"low", "normal", "high"})
 _MIME_TYPE = re.compile(r"^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$")
+# The longest content type shown: it sits outside `others_wrote` (the read tools' review,
+# E2), so a type longer than any real one is not shown.
+MIME_TYPE_MAX = 100
 _NAME_WHY = {
     "address": "exact_address",
     "full": "exact_name",
@@ -1307,7 +1310,9 @@ def _file_candidate(
         "id": attachment.get("id"),
         "message_id": row.get("id"),
         "size": size if isinstance(size, int) and not isinstance(size, bool) else None,
-        "content_type": content_type if _MIME_TYPE.fullmatch(content_type) else None,
+        "content_type": content_type
+        if _MIME_TYPE.fullmatch(content_type) and len(content_type) <= MIME_TYPE_MAX
+        else None,
         "from": shown,
         "received": utc(received_at) if received_at else None,
         "first_seen": None,

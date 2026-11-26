@@ -360,7 +360,14 @@ async def test_the_person_path_stays_within_thirty_eight(fake):
     assert env["graph_requests"] == fake.counted <= 38
     attachment_reads = [s for s in fake.operations if s.path.endswith("/attachments")]
     assert len(attachment_reads) == brief.PERSON_FILES
-    assert len([s for s in fake.operations if s.path.endswith("/tasks")]) == brief.TASK_LISTS
+    tasks = [s for s in fake.operations if s.path.endswith("/tasks")]
+    assert len(tasks) == brief.PERSON_TASK_LISTS
+    # The Junk and Deleted Items ids, and the sender checks of what `next` may name.
+    folders = [s for s in fake.operations if s.path.startswith("/me/mailFolders/") and s.in_batch]
+    assert {s.path for s in folders} == {
+        "/me/mailFolders/junkemail",
+        "/me/mailFolders/deleteditems",
+    }
 
 
 # ── Meeting ───────────────────────────────────────────────────────────────
