@@ -49,8 +49,8 @@ def _build_deferred_send_property(deferred_send_datetime: str, tz: str = "UTC"):
     return prop, normalized
 
 
-# `$select` for reading a draft's audience back after a write.
-_RECIPIENT_FIELDS = "toRecipients,ccRecipients,bccRecipients,replyTo"
+# `$select` for reading a draft back after a write: every field `_draft_result` reports.
+_DRAFT_RESULT_SELECT = "subject,webLink,toRecipients,ccRecipients,bccRecipients,replyTo"
 
 
 def _addresses(recipients: Any) -> list[str]:
@@ -64,13 +64,22 @@ def _addresses(recipients: Any) -> list[str]:
     return [sanitize_output(address) for address in addresses if address]
 
 
-def _audience(message: Any) -> dict:
-    """The draft's full recipient lists, as stored: to, cc, bcc and reply_to."""
+def _draft_result(message: Any) -> dict:
+    """The draft as stored: its subject, full recipient lists and Outlook on the web link.
+
+    A reply's subject is built from the original's, which its sender wrote, so it is
+    scrubbed as the read tools scrub a subject. ``web_link`` is Graph's, as given.
+    Either is ``None`` when Graph's answer does not carry it (#268).
+    """
+    subject = getattr(message, "subject", None)
+    web_link = getattr(message, "web_link", None)
     return {
+        "subject": sanitize_output(subject) if isinstance(subject, str) else None,
         "to": _addresses(getattr(message, "to_recipients", None)),
         "cc": _addresses(getattr(message, "cc_recipients", None)),
         "bcc": _addresses(getattr(message, "bcc_recipients", None)),
         "reply_to": _addresses(getattr(message, "reply_to", None)),
+        "web_link": web_link if isinstance(web_link, str) else None,
     }
 
 
@@ -290,7 +299,7 @@ async def create_draft(
             msg.single_value_extended_properties = [deferred_prop]
         # POST /me/messages creates a draft
         created = await graph_client.me.messages.post(msg)
-        result = {"status": "created", "draft_id": created.id, **_audience(created)}
+        result = {"status": "created", "draft_id": created.id, **_draft_result(created)}
     else:
         if forward_message_id:
             action = "forward"
@@ -315,13 +324,14 @@ async def create_draft(
         try:
             if body or deferred_prop is not None:
                 await new_draft.patch(patch)
-            # The recipients are read back rather than taken from the create
-            # call's answer, which need not echo the cc, bcc and Reply-To sent
-            # with it: the result says who the draft goes to as stored.
+            # The draft is read back rather than taken from the create call's
+            # answer, which need not echo the cc, bcc and Reply-To sent with it:
+            # the result says who the draft goes to, and under which subject
+            # (Graph's "RE:"/"FW:" unless one was passed), as stored.
             stored = await new_draft.get(
                 request_configuration=build_request_config(
                     MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters,
-                    {"$select": _RECIPIENT_FIELDS},
+                    {"$select": _DRAFT_RESULT_SELECT},
                 )
             )
         except Exception as exc:
@@ -337,7 +347,7 @@ async def create_draft(
         result = {
             "status": "created",
             "draft_id": created.id,
-            **_audience(stored),
+            **_draft_result(stored),
         }
 
     if deferred_normalized is not None:
@@ -458,16 +468,17 @@ async def update_draft(
     builder = graph_client.me.messages.by_message_id(draft_id)
     stored = await builder.patch(msg)
     if not isinstance(stored, Message):
-        # Graph normally answers a PATCH with the stored message. If it did not,
-        # read the audience back: what the draft holds now, not what was sent.
+        # Graph normally answers a PATCH with the stored message, subject and
+        # webLink included. If it did not, read the draft back: what it holds
+        # now, not what was sent.
         stored = await builder.get(
             request_configuration=build_request_config(
                 MessageItemRequestBuilder.MessageItemRequestBuilderGetQueryParameters,
-                {"$select": _RECIPIENT_FIELDS},
+                {"$select": _DRAFT_RESULT_SELECT},
             )
         )
 
-    result = {"status": "updated", "draft_id": draft_id, **_audience(stored)}
+    result = {"status": "updated", "draft_id": draft_id, **_draft_result(stored)}
     if deferred_normalized is not None:
         result["deferred_send_datetime"] = deferred_normalized
     return result
