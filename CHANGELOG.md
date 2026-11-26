@@ -33,12 +33,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   calendars only. `zone` shows the times in another place. It only reads, and is in the opt-in
   `intents` group with `outlook_find`; nothing changes for an install that doesn't name
   `intents`. An answer that ran out of requests or time, or lost a section to an error, says
-  `incomplete` rather than showing empty days.
+  `incomplete` rather than showing empty days. A calendar is read in start order, and if it
+  holds more events than are read, nothing after the last one read is called free and the
+  answer says `incomplete`. A long window keeps every day, dropping the last days' event lists
+  first when the answer would be too long.
 
 - **`outlook_open_loops`, an intent tool, as an opt-in early preview.** Conversations waiting on
   you, whose latest message is someone else's sent to you, and conversations waiting on someone
   else, whose latest message is your own letter, over a look-back window (14 days unless you say
-  otherwise, at most 90); plus flagged letters from before the window that no reply followed.
+  otherwise, at most 90); plus flagged letters from before the window that no reply settled: a
+  reply counts only when it is from someone the letter went to, outside Junk and Deleted Items,
+  with a verified sender, and not an automatic reply, a bounce or bulk mail.
   Mailing-list and automatic mail, what Focused Inbox puts in Other, meeting messages and letters
   only to yourself are left out. Your mail is what is in Sent Items: a message elsewhere that only
   claims your address can't end or start a wait. `older_than`, `person` and `words` narrow the
@@ -48,13 +53,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`outlook_catch_up`, an intent tool, as an opt-in early preview.** What arrived and what needs
   you. The first call reads a look-back window (`24h` unless you say otherwise); each answer
   returns a `cursor` to pass back next time, replacing the old one, so the next answer holds only
-  what arrived since. New Inbox mail goes to the first section it fits: a reply on a flagged
-  conversation, a reply where you had written, mail to you that you haven't answered, or other
-  mail (counted, with its top senders). Mail that was only read, flagged, categorized or moved in
-  is not new. Alongside: flags due, invitations you haven't answered, today's meetings, To Do
+  what arrived since. New Inbox mail goes to the first section it fits: a checked reply on a
+  flagged conversation (from someone it waits on, outside Junk and Deleted Items, with a verified
+  sender, not an automatic reply or a bounce), a reply where you had written, mail to you that you
+  haven't answered, or other mail (counted, with its top senders). Mail that was only read,
+  flagged, categorized or moved in is not new, and a meeting message is told by its type, never
+  its subject. Alongside: flags due, invitations you haven't answered, today's meetings, To Do
   tasks due, and, with a cursor, what changed on your calendar. A cursor Graph no longer accepts
-  starts again from your last call, and says so. The cursor holds Graph links and times only,
-  and a link in it that isn't Graph's own delta link is refused. Inbox and primary calendar only.
+  starts again from your last call, and says so. The cursor holds Graph links and times only;
+  a link in it that isn't Graph's own delta link for the Inbox or the calendar, or a time in the
+  future, is refused. Inbox and primary calendar only.
   It only reads, and is in the opt-in `intents` group. `outlook_changes_since` is unchanged.
 
 - **`outlook_brief`, an intent tool, as an opt-in early preview.** What's going on with one

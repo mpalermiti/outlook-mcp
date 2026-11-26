@@ -1869,7 +1869,8 @@ The **look-ahead** H = max(end of today, local time, window end), capped at now 
 
 **As built:**
 - The owner's mail is what is in Sent Items: a later message that only claims the owner's address is neither `you_replied` (F2) nor an arrival. An arrival from one of the owner's addresses is counted in `understood.arrivals.from_your_address`, not dropped silently.
-- A resync bootstraps from `cursor.made` less the 2-minute overlap, the same threshold arrivals use, so nothing in the overlap is lost. G2 and G6 count a refused or stale first request inside their own 4 and 2, so a fallback doesn't pass the ceiling.
+- A resync bootstraps from `cursor.made` less the 2-minute overlap, the same threshold arrivals use, so nothing in the overlap is lost. G2 and G6 count a refused or stale first request inside their own 4 and 2. That bounds G2 and G6 only: other fallbacks (P-SI1's cast, P-H1a's, now one request per call, and P-D3a's three-folder scan) add to the total, and two at once can reach the ceiling, which answers `incomplete` (review A2).
+- **Review fixes (#283):** a flag's `reply_from_them` names the replier (`address`, `known`) and counts only a confirmed reply (§8.2 as built under open_loops); `clear_follow_up` is offered only for one from someone the owner writes to. G5 checks the 5 earliest-due flags and G3 reads 8 headers, to make room for the confirmations (2 folder ids, up to 5 header reads): worst case 38. `draft_reply` needs a sender check that ran and did not fail. Arrivals and the owner's letters by conversation tell meeting messages by type only. `cal.since` is carried across a call that did not read the calendar and is the base for a roll, a resync or a first read (review D1). Unread arrivals (`has_more`) make the mail sections inexact and the answer `incomplete` (D2). The cursor's mail link must be the Inbox's, and its times may not lie in the future (D3). P-D3a's fallback adds `flags_fallback_scan`, and `flags_older_than_scan` with `incomplete` when a scanned folder had more (D4). G7 is read in start order: invites are inexact when it is cut, and the answer is `incomplete` if the cut falls before today ends. With a cursor a window that lies ahead is accepted, for the look-ahead. A nested, oversized or `v: true` cursor is refused or reset.
 - `cal` gains `since`: while a round that began as a fresh snapshot (a first read, a roll, a resync) is unfinished, only events modified after it count as changes. `mail.bootstrap_from` also carries the arrival threshold forward when a call didn't read mail (`focus`), or a round is unfinished (`arrivals.has_more`). An empty link means that source starts on the next call.
 - `calendar_changes` is in the answer only with a usable cursor. `answer` is offered for the first invitation without a blocking warning; `stranger_invite` blocks.
 - F1 also selects the recipients and the subject; P-D3a's fallback scans the Inbox, Sent Items and the Archive.
@@ -1942,6 +1943,12 @@ Rank: To before Cc; then sender known (count, descending); then waiting longest 
 
 **As built:**
 - The owner's mail is what is in Sent Items (find's review, B1). A message elsewhere whose `from` is one of the owner's addresses, a copy of a note to self or a forgery, is left out of who wrote last: it can neither end a wait nor start one. F2 counts a later message as `you_replied` only from Sent Items.
+- F2 counts a later message as their reply (review B1) only when it is from someone the flagged message waits on (a letter's recipients, a received message's sender), outside Junk and Deleted Items (their ids read once, in one batch), and its headers show a verified sender and no automatic or bulk mail (`Auto-Submitted`, `Precedence`, `X-Autoreply`, a `multipart/report` bounce, list headers). The first such candidate per flag is read. Anything short of that leaves the follow-up open, in `understood.replies_unconfirmed`.
+- Meeting messages are told by type only (`@odata.type`, `meetingMessageType`) everywhere mail is listed or counted; the subject-prefix backstop is for the sent table alone (review B2).
+- L6 reads the 8 top-ranked waits, known senders included (review C1), and `draft_reply` goes only to a wait whose check ran and did not fail. L9 reads 4 conversations, the newest 3 messages each, and judges a conversation by its latest message that is not a draft.
+- When a window read is cut at its cap, only conversations whose latest message is at least as new as the oldest message read from every capped folder are judged; `understood.judged_since` and `conversations_not_judged` say so, and the answer is `incomplete` (review C2).
+- One deadline from the start of the call covers the person and word lookups and the core read too (review C3).
+- Worst case 36 requests (L7 3-5, L8 1, L1 3, L2 3, L3 1, L9 4, L4 1, L5 5, the two folder ids, 5 confirmations, L6 8); 38 with both P-SI1 fallbacks.
 - A conversation whose latest message is a meeting message is skipped, not read by its message before.
 - L1 also selects `parentFolderId`, `subject`, `bodyPreview` and the eventMessage cast (P-SI1, read again without the cast on a 400). F1 also selects the recipients and the subject, so a flagged letter says whom it waits on.
 - P-D3a's fallback scans Sent Items only (open_loops reads flags only for sent letters), and the section's `total_exact` is false.
@@ -2007,7 +2014,12 @@ Rank: To before Cc; then sender known (count, descending); then waiting longest 
   - the count is `understood.calendars_beyond_5`; `not_covered` also names `events_beyond_300` and `task_lists_beyond_8`/`tasks_beyond_100` when a cap cut a read, which sets `partial`;
   - `include_tasks: false` leaves the `tasks_due` section out and reads no To Do list;
   - a day item carries `events_total`, and its events are concise (times local, no organizer);
-  - free time never starts before now, so a past day has none.
+  - free time never starts before now, so a past day has none;
+  - each view is read with `$orderby=start/dateTime`, so a capped read is the window's head; past the last event read on a capped calendar nothing is free, `understood.events_read_until` says where, the calendar sections are `total_exact: false` and the answer is `incomplete`;
+  - a day's events name their calendar by its index in `understood.calendars`; when the answer is too long, day events lose their location, then the last days lose their events (counted in `events_total`), before the envelope's own trim;
+  - an overlap item names at most five others;
+  - P-H1a's refusal is remembered for the call, so the fallback costs one request;
+  - `brief_meeting` is offered only for a meeting the owner organizes or has accepted.
 
 **understood:** `window`, `zone`, day bounds, and `calendars: list[{id, is_default}]`. Calendar names are under `others_wrote`, because a shared calendar is named by its owner.
 

@@ -24,12 +24,16 @@ from outlook_mcp.calendar_resolver import fetch_all_calendars
 from outlook_mcp.intents import budget
 from outlook_mcp.intents.budget import RequestBudget, run_sections
 from outlook_mcp.intents.envelope import (
+    SIZE_CAP,
     build_envelope,
     build_next,
     has_blocking_warning,
     others_wrote,
     section,
+    size_of,
     suggestion,
+    trim_to_cap,
+    utc,
     why,
 )
 from outlook_mcp.intents.reading import (
@@ -61,6 +65,7 @@ EVENT_PAGES = 3
 EVENT_TOP = 100
 TASK_LISTS = 8
 DAY_EVENTS = 30
+OVERLAP_PARTNERS = 5
 MIN_FREE = (5, 480)
 CAPS = {"days": MAX_DAYS, "overlaps": 20, "invites": 20, "tasks_due": 30}
 # A2's `$select` (§12.4).
@@ -146,8 +151,9 @@ def _wall(day: date, minutes: int, tz: tzinfo) -> datetime:
     return wall.replace(tzinfo=tz).astimezone(timezone.utc)
 
 
-def _concise(row: dict, calendar: str, tz: tzinfo, now: datetime) -> dict:
-    """A day's event: when, where it is from, and how it stands, without the organizer."""
+def _concise(row: dict, calendar: int, tz: tzinfo, now: datetime) -> dict:
+    """A day's event: when, which calendar (its place in ``understood.calendars``), and
+    how it stands, without the organizer."""
     start, end = event_span(row, tz)
     full = event_item(row, calendar=calendar, tz=tz, zone_name="", now=now)
     return {
@@ -225,13 +231,16 @@ async def read_agenda(
     chosen_calendars: list[Any] = []
     not_covered: list[str] = []
     beyond = 0
+    # The start of the last event read on a calendar whose read was cut at its cap:
+    # past it, nothing is known, so nothing is called free (review A1).
+    read_until: datetime | None = None
 
     async with open_lookup(
         graph_client, spent, now=moment, zone=zone_name, signed_in=signed_in
     ) as lookup:
 
         async def read_calendars() -> list[tuple[dict, str]]:
-            nonlocal beyond
+            nonlocal beyond, read_until
             found = await fetch_all_calendars(lookup.sdk)
             chosen, beyond = _choose_calendars(found, wanted)
             chosen_calendars.extend(chosen)
@@ -248,8 +257,13 @@ async def read_agenda(
                     pages=EVENT_PAGES,
                     top=EVENT_TOP,
                 )
-                if more and "events_beyond_300" not in not_covered:
-                    not_covered.append("events_beyond_300")
+                if more:
+                    if "events_beyond_300" not in not_covered:
+                        not_covered.append("events_beyond_300")
+                    starts = [s for s in (event_span(r, tz)[0] for r in rows) if s]
+                    if starts:
+                        last = max(starts)
+                        read_until = last if read_until is None else min(read_until, last)
                 for row in rows:
                     if not isinstance(row.get("id"), str):
                         continue
@@ -282,8 +296,21 @@ async def read_agenda(
             calendar_result.value,
             key=lambda pair: (event_span(pair[0], tz)[0] or start, str(pair[0].get("id"))),
         )
+        place = {c.id: n for n, c in enumerate(chosen_calendars)}
         day_items = [
-            _day_item(d, events, tz, moment, start, end, first_minute, last_minute, min_free)
+            _day_item(
+                d,
+                events,
+                tz,
+                moment,
+                start,
+                end,
+                first_minute,
+                last_minute,
+                min_free,
+                place=place,
+                read_until=read_until,
+            )
             for d in days
         ]
         overlap_items = _overlap_items(events, tz, zone_name, moment)
@@ -292,10 +319,11 @@ async def read_agenda(
             for row, cal in events
             if is_open_invite(row) and _starts_in(row, tz, start, end)
         ]
+        exact = read_until is None
         sections += [
-            section("days", day_items, cap=CAPS["days"]),
-            section("overlaps", overlap_items, cap=CAPS["overlaps"]),
-            section("invites", invites, cap=CAPS["invites"]),
+            section("days", day_items, cap=CAPS["days"], total_exact=exact),
+            section("overlaps", overlap_items, cap=CAPS["overlaps"], total_exact=exact),
+            section("invites", invites, cap=CAPS["invites"], total_exact=exact),
         ]
         suggestions += _suggestions(invites, events, tz, moment)
     else:
@@ -307,7 +335,12 @@ async def read_agenda(
         task_result = results["tasks_due"]
         if task_result.status == "ok":
             due_items = _tasks_due(task_result.value, days, today)
-            sections.append(section("tasks_due", due_items, cap=CAPS["tasks_due"]))
+            tasks_exact = not any(
+                c.startswith(("task_lists_beyond", "tasks_beyond")) for c in not_covered
+            )
+            sections.append(
+                section("tasks_due", due_items, cap=CAPS["tasks_due"], total_exact=tasks_exact)
+            )
         else:
             sections.append(
                 section("tasks_due", [], cap=CAPS["tasks_due"], status=task_result.status)
@@ -334,9 +367,14 @@ async def read_agenda(
     }
     if beyond:
         understood["calendars_beyond_5"] = beyond
-    return build_envelope(
+    outcome = outcome_of(sections)
+    if read_until is not None:
+        # A calendar's read was cut: the days past it are not known (review A1).
+        understood["events_read_until"] = utc(read_until)
+        outcome = "incomplete"
+    env = build_envelope(
         tool=TOOL,
-        outcome=outcome_of(sections),
+        outcome=outcome,
         as_of=moment,
         understood=understood,
         sections=sections,
@@ -344,7 +382,37 @@ async def read_agenda(
         graph_requests=spent.spent,
         next=build_next(suggestions, loaded_tools),
         capped=bool(not_covered),
+        trim=False,
     )
+    return _fit(env)
+
+
+def _fit(env: dict) -> dict:
+    """The envelope within the size cap, keeping every day (review A3).
+
+    Before the envelope's own trim (which takes items from the last section first),
+    the days give up what they can spare: first their events' locations, then their
+    events, from the last day back. Each day keeps its date, free blocks, busy minutes
+    and ``events_total``, so a long window still answers when you are free.
+    """
+    days = next((s for s in env["sections"] if s["name"] == "days"), None)
+    reduced = False
+    if days is not None and size_of(env) > SIZE_CAP:
+        for day in days["items"]:
+            for shown in day["events"]:
+                if shown["others_wrote"].pop("location", None) is not None:
+                    reduced = True
+        for day in reversed(days["items"]):
+            while day["events"] and size_of(env) > SIZE_CAP:
+                day["events"].pop()
+                reduced = True
+            if size_of(env) <= SIZE_CAP:
+                break
+    env = trim_to_cap(env)
+    if reduced:
+        env["trimmed"] = True
+        env["partial"] = True
+    return env
 
 
 def _overlaps(span: tuple[datetime | None, datetime | None], low: datetime, high: datetime) -> bool:
@@ -367,9 +435,13 @@ def _day_item(
     first_minute: int,
     last_minute: int,
     min_free: int,
+    *,
+    place: dict[str, int],
+    read_until: datetime | None,
 ) -> dict:
     """One local date: its events, the free blocks between day_start and day_end, and
-    the minutes busy events take inside those bounds."""
+    the minutes busy events take inside those bounds. No time at or after
+    ``read_until`` is called free: past a capped read, nothing is known."""
     midnight, next_midnight = local_midnight(day, tz), local_midnight(day + timedelta(days=1), tz)
     on_day = [
         (row, cal) for row, cal in events if _overlaps(event_span(row, tz), midnight, next_midnight)
@@ -386,6 +458,8 @@ def _day_item(
     busy_in_bounds = _clip(busy, low, high) if low < high else []
     # Free time never starts before now: today's begins at now, a past day has none.
     free_from = max(low, now)
+    if read_until is not None:
+        high = min(high, read_until)
     free: list[dict] = []
     cursor = free_from
     for span_start, span_end in _clip(busy, free_from, high) if free_from < high else []:
@@ -399,7 +473,7 @@ def _day_item(
         for s, e in free  # type: ignore[misc]
         if _minutes((s, e)) >= min_free
     ]
-    shown = [_concise(row, cal, tz, now) for row, cal in on_day]
+    shown = [_concise(row, place.get(cal, 0), tz, now) for row, cal in on_day]
     return {
         "kind": "day",
         "id": day.isoformat(),
@@ -434,7 +508,13 @@ def _overlap_items(
         if row["id"] not in partners:
             continue
         item = event_item(row, calendar=cal, tz=tz, zone_name=zone_name, now=now)
-        item["why"] = [*item["why"], *(why("overlaps", **{"with": p}) for p in partners[row["id"]])]
+        # At most OVERLAP_PARTNERS reasons: a day of back-to-back meetings would otherwise
+        # repeat every other id on every item.
+        found = partners[row["id"]]
+        item["why"] = [
+            *item["why"],
+            *(why("overlaps", **{"with": p}) for p in found[:OVERLAP_PARTNERS]),
+        ]
         items.append(item)
     return items
 
@@ -476,7 +556,10 @@ def _suggestions(
             and start >= now
             and row.get("isAllDay") is not True
             and row.get("isCancelled") is not True
-            and response_of(row) != "declined"
+            # The owner's own, or one they accepted: agenda reads no sent mail, so it
+            # can't tell a stranger's invitation, whose subject and attendees a brief
+            # would then search for (review A4).
+            and (row.get("isOrganizer") is True or response_of(row) == "accepted")
         ):
             offers.append(suggestion("brief_meeting", "outlook_brief", {"meeting": row["id"]}))
             break
