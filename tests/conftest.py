@@ -1,6 +1,16 @@
 """Shared test fixtures for outlook-mcp.
 
-Two tiers here need real credentials and are skipped without them:
+Four tiers here reach a real mailbox. Each is deselected by default and runs
+against the project's own throwaway test accounts — a main account and its pair —
+signed in only inside the container ``scripts/live-tests.sh`` starts
+(RELEASING.md). Nothing in the repository names them: the run takes their
+addresses from the environment (``OUTLOOK_MCP_TEST_ACCOUNT``,
+``OUTLOOK_MCP_TEST_PAIR``), and a live test refuses to start unless the signed-in
+account, read from ``/me`` and the saved sign-in record, is one of them
+(``tests/live_guard.py``, "Whose mailbox" below). The one exception is
+deliberate: ``OUTLOOK_MCP_LIVE_OWN_MAILBOX=1`` lets the read-only ``live`` tier
+run against whatever account is signed in, as an optional smoke check of a real,
+lived-in mailbox.
 
 ``-m integration``
     End-to-end plumbing smoke tests — does each tool return its documented
@@ -14,10 +24,14 @@ Two tiers here need real credentials and are skipped without them:
     tests. See ``tests/test_live_query_shape.py``.
 
 ``-m live_write``
-    The only tier that mutates a real mailbox, added for #41. Some
-    payloads can only be validated by Graph accepting them — a recurrence that
-    is well-formed to the SDK still 400s if the range disagrees with the start
-    — and a mock cannot see that. Kept as narrow as possible.
+    Mutates the test mailbox, added for #41. Some payloads can only be
+    validated by Graph accepting them — a recurrence that is well-formed to the
+    SDK still 400s if the range disagrees with the start — and a mock cannot
+    see that. Kept as narrow as possible.
+
+``-m live_send``
+    The only tier that sends: real mail and invitations from the main test
+    account to its pair, and nobody else. See "Sending" below.
 
 Tiers 1 and 2 are READ-ONLY: never add a fixture or test there that writes to
 the mailbox — no sends, drafts, category or folder mutations, no deletes.
@@ -30,13 +44,33 @@ Rules for ``live_write``, which exists precisely because it breaks that:
 * Calendar, contacts, To Do and unsent drafts only — the surfaces whose writes
   have no outward side effect. Nothing here may send, and a stray send is not
   recoverable: a draft is created, read back and deleted, never sent
-  (``tests/test_live_write_never_sends.py`` checks the tier's files for a send).
+  (``tests/test_live_tiers_never_send.py`` checks the tier's files for a send,
+  and the Graph client the live tiers share refuses one on the wire).
 * No attendees, ever. A recurring invite emails real people on every
   occurrence.
 * Bounded ranges only (``numbered``/``endDate``) — never ``noEnd``.
 * Every created item is removed in a ``finally``, and subjects/names carry
   ``LIVE_WRITE_SUBJECT`` / ``LIVE_WRITE_NAME`` so anything a crash leaks is
-  greppable in the UI.
+  greppable in the UI (``scripts/live-tests.sh`` lists any after the run).
+
+Sending (``live_send``), the one place a send is allowed:
+
+* Triple-gated: the marker, ``OUTLOOK_MCP_LIVE_SEND=1``, and a send budget for
+  the run (``OUTLOOK_MCP_LIVE_SEND_BUDGET``; ``scripts/live-tests.sh live_send
+  --sends N`` sets both). It runs only as the main test account.
+* Recipients: only the pair. Every request its Graph client makes is checked
+  before it leaves (``live_guard.SendGuard``): each recipient of a ``sendMail``,
+  each attendee of an invitation, the attendees of a meeting it updates or
+  cancels. A send whose recipients the request does not name (a reply, a
+  draft's send) is refused, as is deleting any event the tier did not create.
+* Counted: a test reserves the sends it will make before making any, and
+  skips if the run's budget cannot cover them, so a test never stops halfway
+  with an invitation it cannot cancel.
+* Tests that need the pair to answer (reply, accept) skip unless
+  ``OUTLOOK_MCP_TEST_PAIR_CAN_SEND=1``: a new Outlook.com account cannot send
+  until its owner verifies it.
+* Everything it sends or receives carries ``LIVE_SEND_SUBJECT`` and is deleted
+  from both mailboxes afterwards (``tests/live_mailbox.py``).
 
 Every other test is offline, and is held to it (#267) — see "Offline
 isolation" below: it runs against an empty settings directory of its own, and
@@ -56,11 +90,21 @@ import tempfile
 
 import pytest
 
-# Prefix for every item this tier creates, so an orphan left by a hard crash is
-# obvious in the calendar UI and easy to search for.
-LIVE_WRITE_SUBJECT = "[outlook-mcp live-write guard] safe to delete"
-# Contacts and tasks have no subject; their names carry the same marker.
-LIVE_WRITE_NAME = "LiveWriteGuard-SafeToDelete"
+from tests.live_guard import (  # the markers are re-exported for the live test files
+    LIVE_MARKERS,
+    LIVE_SEND_SUBJECT,  # noqa: F401
+    LIVE_WRITE_NAME,  # noqa: F401
+    LIVE_WRITE_SUBJECT,  # noqa: F401
+    NeverSends,
+    SendGuard,
+    account_refusal,
+    identity_of,
+    install,
+    live_tiers_of,
+    own_mailbox_allows,
+    refusal,
+    settings_from,
+)
 
 
 @pytest.fixture
@@ -95,12 +139,12 @@ def real_auth(real_config):
 
     auth = AuthManager(real_config)
     if not auth.try_cached_token():
-        pytest.skip("Not authenticated — run `outlook-mcp auth` on this host first")
+        pytest.skip(NOT_SIGNED_IN)
     return auth
 
 
 @pytest.fixture
-def real_graph_client(real_auth):
+def real_graph_client(real_auth, request):
     """Real Graph client built from the cached credential.
 
     Function-scoped on purpose: the underlying kiota/httpx transport binds to
@@ -111,7 +155,12 @@ def real_graph_client(real_auth):
     """
     from outlook_mcp.graph import GraphClient
 
-    return GraphClient(real_auth.get_credential())
+    client = GraphClient(real_auth.get_credential())
+    # Every tier that uses this client is one that never sends: a request that
+    # would (a send, a reply, an invitation, a meeting update) is refused before
+    # it leaves. The send tier has its own client, `send_graph_client`.
+    install(client, NeverSends(tier=", ".join(sorted(live_tiers_of(request.node))) or "this tier"))
+    return client
 
 
 # Every personal Microsoft account lives in this one well-known tenant; a work
@@ -212,6 +261,161 @@ def live_write_config(real_config, tmp_path):
     return real_config.model_copy(update=update)
 
 
+# ── Whose mailbox (tests/live_guard.py) ─────────────────────────────────
+#
+# Checked in pytest_runtest_setup, before any fixture runs, so a live test that
+# builds its own client is held to it too. First, from the environment alone and
+# before any sign-in is read: is a test account named, or has the owner opted in
+# to the read-only `live` tier on their own mailbox? Then, once per run, which
+# account the cached token belongs to (/me and the saved sign-in record).
+
+NOT_SIGNED_IN = (
+    "Not authenticated — the settings directory this run uses holds no valid sign-in. "
+    "Live tiers run in the container scripts/live-tests.sh starts, where each test "
+    "account's signed-in settings are mounted."
+)
+GRAPH_ME = "https://graph.microsoft.com/v1.0/me"
+GRAPH_SCOPE = "https://graph.microsoft.com/.default"
+
+# The signed-in identity, looked up once per run: {"who": address-or-None} or {"skip": reason}.
+_identity: dict[str, str | None] = {}
+
+
+def _signed_in_identity() -> str | None:
+    """The address the cached token belongs to, or None if the sources disagree."""
+    if "skip" in _identity:
+        pytest.skip(_identity["skip"])
+    if "who" in _identity:
+        return _identity["who"]
+
+    import httpx
+
+    from outlook_mcp.auth import AuthManager, _load_auth_record
+    from outlook_mcp.config import load_config
+
+    config = load_config()
+    auth = AuthManager(config)
+    if not config.client_id or not auth.try_cached_token():
+        _identity["skip"] = NOT_SIGNED_IN
+        pytest.skip(NOT_SIGNED_IN)
+    token = auth.get_credential().get_token(GRAPH_SCOPE).token
+    response = httpx.get(
+        GRAPH_ME,
+        params={"$select": "userPrincipalName,mail"},
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    me = response.json() if response.is_success else {}
+    record = _load_auth_record()
+    _identity["who"] = identity_of(me, getattr(record, "username", None))
+    return _identity["who"]
+
+
+def _refuse_to_run(item, reason: str) -> None:
+    item.session.shouldstop = reason  # one refusal is enough to say it; stop the run
+    pytest.fail(reason, pytrace=False)
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    tiers = live_tiers_of(item)
+    if not tiers:
+        return
+    settings = settings_from(os.environ)
+    reason = refusal(tiers, settings)
+    if reason:
+        _refuse_to_run(item, reason)
+    if own_mailbox_allows(tiers, settings):
+        return
+    reason = account_refusal(_signed_in_identity(), tiers, settings)
+    if reason:
+        _refuse_to_run(item, reason)
+
+
+# ── The send tier ─────────────────────────────────────────────────────────
+
+# Every SendGuard this run made, for the summary line.
+_send_guards: list[SendGuard] = []
+
+
+@pytest.fixture(scope="session")
+def send_guard():
+    """The run's send budget and recipient rule, or skip."""
+    settings = settings_from(os.environ)
+    if not settings.send:
+        pytest.skip(
+            "Send tier is opt-in — scripts/live-tests.sh live_send --sends N sets "
+            "OUTLOOK_MCP_LIVE_SEND=1 and the run's send budget"
+        )
+    if settings.send_budget is None:
+        pytest.skip("No send budget for this run — set OUTLOOK_MCP_LIVE_SEND_BUDGET to a count")
+    guard = SendGuard(pair=settings.pair, budget=settings.send_budget)
+    _send_guards.append(guard)
+    return guard
+
+
+@pytest.fixture
+def sends(send_guard):
+    """The run's send guard; whatever the test reserved and did not use is released."""
+    yield send_guard
+    send_guard.release()
+
+
+@pytest.fixture
+def send_graph_client(real_auth, send_guard):
+    """A Graph client whose every request is held to the send tier's rule."""
+    from outlook_mcp.graph import GraphClient
+
+    client = GraphClient(real_auth.get_credential())
+    install(client, send_guard)
+    return client
+
+
+@pytest.fixture
+def send_config(real_config, tmp_path):
+    """Real config for the send tier, with sending and invitations allowed in process.
+
+    As with `live_write_config`, the settings file is never modified.
+    """
+    if real_config.read_only:
+        pytest.skip("Config is read_only — the send tier cannot run")
+    update = {"attachments_dir": str(tmp_path / "attachments")}
+    if real_config.allow_categories:
+        from outlook_mcp.permissions import CATEGORY_CALENDAR_WRITE, CATEGORY_MAIL_SEND
+
+        needed = {CATEGORY_CALENDAR_WRITE, CATEGORY_MAIL_SEND}
+        update["allow_categories"] = sorted(set(real_config.allow_categories) | needed)
+    return real_config.model_copy(update=update)
+
+
+@pytest.fixture(scope="session")
+def pair_mailbox():
+    """`tests.live_mailbox`, once the pair account is known to be mounted and reachable."""
+    settings = settings_from(os.environ)
+    if not settings.pair_config_dir or not os.path.isdir(settings.pair_config_dir):
+        pytest.skip(
+            "The pair account's settings are not mounted "
+            "(OUTLOOK_MCP_TEST_PAIR_CONFIG_DIR; scripts/live-tests.sh mounts them)"
+        )
+    from tests import live_mailbox
+
+    # Before any test sends: a send the test cannot then find, or clean up after,
+    # is a send wasted. Outlook.com can lock a new account outright.
+    try:
+        live_mailbox.run("pair", "whoami", timeout=120)
+    except live_mailbox.MailboxError as exc:
+        pytest.skip(f"The pair account cannot be reached, so nothing is sent to it: {exc}")
+    return live_mailbox
+
+
+def pytest_terminal_summary(terminalreporter):
+    for guard in _send_guards:
+        terminalreporter.write_line(
+            f"live_send: {guard.used} real send(s) this run, budget {guard.budget}"
+            + (f" — {'; '.join(guard.log)}" if guard.log else "")
+        )
+
+
 # ── Offline isolation (#267) ─────────────────────────────────────────────
 #
 # The offline suite used to reach the operator's real sign-in. Every test that
@@ -246,8 +450,6 @@ def live_write_config(real_config, tmp_path):
 # own error wrapping, with `_get_app` replaced so the credential can reach
 # neither MSAL nor the cache — is marked `real_credential`. The rest of the
 # guard still applies to it.
-
-LIVE_MARKERS = ("integration", "live", "live_write")
 
 # outlook_mcp.config.CONFIG_DIR_ENV, spelled out: importing outlook_mcp here
 # would fix the settings directory before part 1 can move it.

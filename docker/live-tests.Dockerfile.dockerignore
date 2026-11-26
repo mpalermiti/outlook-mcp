@@ -1,0 +1,14 @@
+# Only what the image needs: the package, its tests and scripts, the lockfile, and
+# the workflow files the offline suite checks.
+.git
+.venv
+.worktrees
+**/__pycache__
+.pytest_cache
+.ruff_cache
+dist
+build
+agent
+# An env file never goes into an image, wherever it was left.
+*.env
+.env*

@@ -9,7 +9,7 @@ checks that a draft's result names the draft it made: its saved subject and its 
 on the web link (#268).
 
 Nothing is sent: no test here calls a send, and every draft is deleted in a
-``finally`` (``tests/test_live_write_never_sends.py`` holds that line). Every draft,
+``finally`` (``tests/test_live_tiers_never_send.py`` holds that line). Every draft,
 new, reply or forward, is addressed to ``live.write.guard@example.com`` with
 LIVE_WRITE_SUBJECT as its subject, replacing the sender and "RE:" subject Graph picks
 for a reply, so no draft names a real correspondent and anything a crash leaks is
