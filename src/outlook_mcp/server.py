@@ -168,19 +168,31 @@ LOADED_GROUPS = toolsets.resolve_groups(SELECTION, _mailbox_settings_write_is_on
 LOADED_TOOLS = toolsets.loaded_tools(LOADED_GROUPS)
 
 
-def _warn_about_the_selection(
-    enabled: set[str] | None, source: str, loaded: frozenset[str]
-) -> None:
-    """Name any selected name that is not a group, and its source, on stderr.
+def _report_the_selection(enabled: set[str] | None, source: str, loaded: frozenset[str]) -> None:
+    """Say on stderr where a selection from config.json came from, and name unknown names.
 
-    Accepted rather than refused, as an unknown config key is: a selection
-    written for a newer release must still start this one. A selection that
-    then loads nothing beyond the account tools gets a second line saying so.
+    A selection from config.json is announced every start. The key was
+    ignored before this release, so a file that already had one starts
+    choosing the tools; that must never happen silently. The variable is the
+    person's own launch setting, and the default needs no word.
+
+    An unknown name is accepted rather than refused, as an unknown config key
+    is: a selection written for a newer release must still start this one. A
+    selection that then loads nothing beyond the account tools gets a further
+    line saying so.
     """
+    where = toolsets.SOURCE_NAMES[source]
+    if source == "config":
+        logger.warning(
+            "Tool groups from config.json toolsets: %s (%d of %d tools). `outlook-mcp "
+            "toolsets` shows them; `outlook-mcp toolsets classic` goes back to the default set.",
+            ", ".join(sorted(enabled or ())),
+            len(loaded),
+            len(toolsets.TOOL_GROUPS),
+        )
     unknown = toolsets.unknown_toolset_names(enabled)
     if not unknown:
         return
-    where = toolsets.SOURCE_NAMES[source]
     groups = sorted(set(toolsets.TOOL_GROUPS.values()))
     logger.warning(
         "%s names tool groups this release does not have, so they load nothing: %s. "
@@ -2310,7 +2322,7 @@ async def outlook_get_mail_tips(ctx: Context, emails: list[str]) -> dict:
 # destructive annotations on all tools, then keeps the groups chosen near the
 # top of this module (`LOADED_GROUPS`, under "Which tools load").
 toolsets.configure(mcp, LOADED_GROUPS)
-_warn_about_the_selection(SELECTION, SELECTION_SOURCE, LOADED_TOOLS)
+_report_the_selection(SELECTION, SELECTION_SOURCE, LOADED_TOOLS)
 
 
 def main():

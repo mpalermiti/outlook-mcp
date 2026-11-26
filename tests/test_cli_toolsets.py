@@ -98,11 +98,116 @@ def test_writing_creates_the_file_with_only_the_key(config_file, capsys):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
-def test_writing_leaves_the_file_0600_and_the_directory_0700(config_file):
-    os.chmod(config_file.parent, 0o755)
+def test_a_new_directory_is_0700_and_the_file_0600(config_file):
+    config_file.parent.rmdir()
     assert _run("classic") == 0
     assert stat.S_IMODE(config_file.stat().st_mode) == 0o600
     assert stat.S_IMODE(config_file.parent.stat().st_mode) == 0o700
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
+def test_an_existing_directory_keeps_the_mode_the_person_gave_it(config_file):
+    config_file.write_text(json.dumps({"client_id": "c"}), encoding="utf-8")
+    config_file.chmod(0o644)
+    os.chmod(config_file.parent, 0o750)
+    assert _run("classic") == 0
+    assert stat.S_IMODE(config_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(config_file.parent.stat().st_mode) == 0o750
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or os.geteuid() == 0, reason="POSIX modes, which root ignores"
+)
+def test_a_directory_locked_against_writing_is_not_unlocked(config_file, capsys):
+    """Refused with the reason, not a traceback; the lock and the file stay as they were."""
+    config_file.write_text(json.dumps({"client_id": "c"}), encoding="utf-8")
+    config_file.chmod(0o600)
+    before = config_file.read_bytes()
+    os.chmod(config_file.parent, 0o500)
+    try:
+        assert _run("mail") == 1
+        assert stat.S_IMODE(config_file.parent.stat().st_mode) == 0o500
+    finally:
+        os.chmod(config_file.parent, 0o700)
+    assert config_file.read_bytes() == before
+    err = capsys.readouterr().err
+    assert "Could not write" in err and "config.json was not changed" in err
+    assert "Traceback" not in err
+
+
+def test_a_write_that_fails_is_reported_without_a_traceback(config_file, capsys, monkeypatch):
+    config_file.write_text(json.dumps({"client_id": "c"}), encoding="utf-8")
+    before = config_file.read_bytes()
+
+    def full_disk(path, data):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(cli, "atomic_write", full_disk)
+    assert _run("mail") == 1
+    assert config_file.read_bytes() == before
+    err = capsys.readouterr().err
+    assert "No space left on device" in err and "config.json was not changed" in err
+
+
+def test_a_value_json_cannot_write_back_is_refused(config_file, capsys):
+    """`1e999` reads as infinity; writing it back would put `Infinity` in the file."""
+    body = '{"client_id": "c", "note": 1e999}'
+    config_file.write_text(body, encoding="utf-8")
+    assert _run("mail") == 1
+    assert config_file.read_text(encoding="utf-8") == body
+    assert "Nothing was written" in capsys.readouterr().err
+
+
+# ── A `toolsets` key of another type, written before the key existed ────────
+
+BAD_VALUES = [["mail", "calendar"], 5, {"mail": True}]
+
+
+@pytest.fixture
+def bad_key_config(config_file, request):
+    from outlook_mcp import config as config_mod
+
+    request.getfixturevalue("monkeypatch").setattr(config_mod, "_toolsets_type_reported", False)
+
+    def write(value):
+        settings = {"client_id": "test-client", "read_only": True, "toolsets": value}
+        config_file.write_text(json.dumps(settings), encoding="utf-8")
+        return settings
+
+    return write
+
+
+@pytest.mark.parametrize("value", BAD_VALUES)
+def test_showing_ignores_a_key_of_another_type(bad_key_config, capsys, value):
+    bad_key_config(value)
+    assert _run() == 0
+    out = capsys.readouterr().out
+    assert "classic, the default" in out
+    assert f"{len(DEFAULT_TOOLS)} of {len(toolsets.TOOL_GROUPS)}" in out
+
+
+@pytest.mark.parametrize("value", BAD_VALUES)
+def test_the_command_replaces_a_key_of_another_type(bad_key_config, config_file, value):
+    settings = bad_key_config(value)
+    assert _run("classic") == 0
+    written = json.loads(config_file.read_text(encoding="utf-8"))
+    assert written == {**settings, "toolsets": "classic"}
+    assert list(written) == list(settings)
+
+
+@pytest.mark.parametrize("value", BAD_VALUES)
+def test_status_and_auth_still_work_with_a_key_of_another_type(bad_key_config, capsys, value):
+    from unittest.mock import patch
+
+    bad_key_config(value)
+    cli.cmd_status()
+    out = capsys.readouterr().out
+    assert "Client ID: test-cli..." in out and "read-only" in out
+    assert "classic, the default" in out
+
+    with patch("outlook_mcp.auth.AuthManager.login_interactive", lambda self: None):
+        cli.cmd_auth()
+    assert "Done." in capsys.readouterr().out
 
 
 def test_writing_keeps_every_other_key_value_and_order(config_file):

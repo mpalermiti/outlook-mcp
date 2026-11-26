@@ -626,7 +626,7 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions on
 | `attachments_dir` | `string` | `"~/.outlook-mcp/attachments"` | The only directory the attachment tools may read from or write to. Every path an agent supplies is resolved and must land inside it — a symlink out or a `..` is refused. Widen it only if you understand that anything reachable can be emailed, and that downloads can add new files there. It must be an absolute path (a leading `~` is expanded), and it cannot be your home folder, a folder that contains it, or a folder that contains the settings folder; a subfolder of any of them is fine. A config that breaks these rules fails to load: the server starts in its safe state and `outlook-mcp` prints a repair line. Fix it by choosing a folder of its own. |
 | `allow_categories` | `list[string]` | `[]` | Optional. Restrict write tools to specific categories (see below). Empty list = all writes allowed when `read_only: false`. |
 | `allow_unencrypted_token_cache` | `bool` | `false` | Permit the OAuth token cache to be written in cleartext when the platform has no encrypted store (Linux without libsecret). Off by default: authentication stops with an explanation rather than silently persisting a reusable Graph token in plaintext. macOS and Windows always encrypt and are unaffected. |
-| `toolsets` | `string` | `null` | Which tool groups this server loads, as a comma-separated list such as `"mail,calendar"`, or `"classic"` for the default set. `OUTLOOK_MCP_TOOLSETS` overrides it when set and not blank. Unset loads the default set, as before. See [Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets); `outlook-mcp toolsets` sets it for you. |
+| `toolsets` | `string` | `null` | Which tool groups this server loads, as a comma-separated list such as `"mail,calendar"`, or `"classic"` for the default set. `OUTLOOK_MCP_TOOLSETS` overrides it when set and not blank. Unset loads the default set, as before. A value that is not a string is ignored with a warning. See [Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets); `outlook-mcp toolsets` sets it for you. |
 | `show_tips` | `bool` | `true` | Lets the server add one short tip, once per run, to a tool's result when a newer tool does that job in fewer calls. This release has no such tips; `false` turns them off ahead of time. |
 
 A `config.json` that repeats a key inside one object is refused, because the file would not say which value is meant.
@@ -649,10 +649,11 @@ No override is automatically written back to the file.
 | `OUTLOOK_MCP_ALLOW_CATEGORIES` | JSON array of category names | May narrow the permitted categories; cannot widen them |
 | `OUTLOOK_MCP_ATTACHMENTS_DIR` | Directory path | Must resolve to the configured directory or a descendant |
 | `OUTLOOK_MCP_ALLOW_UNENCRYPTED_TOKEN_CACHE` | `true` or `false` | May prohibit plaintext storage; cannot enable it unless the file already permits it |
-| `OUTLOOK_MCP_SHOW_TIPS` | `true` or `false` | Overrides `show_tips`, either way |
+| `OUTLOOK_MCP_SHOW_TIPS` | `true` or `false` | Overrides `show_tips`, either way; blank counts as unset |
 
 Unset variables do nothing. A supported variable set to an empty value refuses startup,
-including an empty Compose `${VAR}` pass-through. Booleans accept only `true`/`false`
+including an empty Compose `${VAR}` pass-through. The one exception is `OUTLOOK_MCP_SHOW_TIPS`,
+which only decides whether a tip may appear and treats blank as unset. Booleans accept only `true`/`false`
 (case-insensitive, surrounding whitespace allowed); list input must be JSON, for example
 `["mail_drafts","contacts_write"]`.
 
@@ -679,9 +680,9 @@ Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folder
 
 Naming any group loads only the groups named, plus `account`, and a name that is not a group matches nothing. To add all opt-in groups to the default set, name the default groups and the opt-ins: `OUTLOOK_MCP_TOOLSETS=mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime,contact_photos`.
 
-**In config.json instead.** The same list can live in config.json as `"toolsets": "mail,calendar"`. `OUTLOOK_MCP_TOOLSETS` wins when it is set and not blank; a blank value counts as unset, so the file's list applies. With neither, the default set loads, as before. `classic` names that default set: `"toolsets": "classic"` loads what an unset selection loads (with `rules` when `mailbox_settings_write` is on), and `classic,documents` adds the document reader to it.
+**In config.json instead.** The same list can live in config.json as `"toolsets": "mail,calendar"`. `OUTLOOK_MCP_TOOLSETS` wins when it is set and not blank; a blank value counts as unset, so the file's list applies. With neither, the default set loads, as before. Earlier releases never read this key, so if your config.json already has one, it takes effect when you upgrade; the server names it on stderr at every start (`Tool groups from config.json toolsets: ...`). `classic` names that default set: `"toolsets": "classic"` loads what an unset selection loads (with `rules` when `mailbox_settings_write` is on), and `classic,documents` adds the document reader to it.
 
-- `outlook-mcp toolsets mail,calendar` writes the key for you and leaves the rest of config.json as it is; `outlook-mcp toolsets classic` goes back to the default. Restart your MCP client afterwards: tools are chosen at start.
+- `outlook-mcp toolsets mail,calendar` writes the key for you and keeps every other key and value, rewriting the file as indented JSON; `outlook-mcp toolsets classic` goes back to the default. Restart your MCP client afterwards: tools are chosen at start.
 - `outlook-mcp toolsets` on its own, and `outlook-mcp status`, show which groups load, where that choice came from, and the tool count.
 - A name that is not a group loads nothing. The server says so on stderr at start, naming where the name came from, and `outlook-mcp toolsets` refuses to write it.
 - Earlier releases ignore the config key (with a warning), and read `classic` in `OUTLOOK_MCP_TOOLSETS` as an unknown name that loads only the account tools. Upgrade before using either.

@@ -189,7 +189,15 @@ def test_the_environment_sets_show_tips_either_way(
     assert load_config(str(tmp_path)).show_tips is expected
 
 
-@pytest.mark.parametrize("env_value", ["", "yes", "0"])
+@pytest.mark.parametrize(("file_value", "env_value"), [(True, ""), (False, "  ")])
+def test_a_blank_show_tips_variable_counts_as_unset(tmp_path, monkeypatch, file_value, env_value):
+    """A cosmetic setting: a blank pass-through must not stop the server, unlike the others."""
+    _settings(str(tmp_path), show_tips=file_value)
+    monkeypatch.setenv("OUTLOOK_MCP_SHOW_TIPS", env_value)
+    assert load_config(str(tmp_path)).show_tips is file_value
+
+
+@pytest.mark.parametrize("env_value", ["yes", "0", "on"])
 def test_an_unclear_show_tips_value_is_refused_without_echoing_it(tmp_path, monkeypatch, env_value):
     monkeypatch.setenv("OUTLOOK_MCP_SHOW_TIPS", env_value)
     with pytest.raises(EnvironmentConfigError) as exc:

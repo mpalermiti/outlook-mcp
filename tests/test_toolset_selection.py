@@ -219,7 +219,7 @@ def test_this_process_registered_what_it_precomputed():
     assert set(server.mcp._tool_manager._tools) == set(server.LOADED_TOOLS)
 
 
-# ── The warnings ──────────────────────────────────────────────────────────
+# ── What the server says at start ─────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -229,17 +229,17 @@ def test_this_process_registered_what_it_precomputed():
 def test_an_unknown_name_is_warned_about_with_its_source(source, where, caplog):
     loaded = toolsets.loaded_tools({"mail", "foo"})
     with caplog.at_level(logging.WARNING):
-        server._warn_about_the_selection({"mail", "foo"}, source, loaded)
+        server._report_the_selection({"mail", "foo"}, source, loaded)
 
-    messages = [r.getMessage() for r in caplog.records]
-    assert len(messages) == 1, messages
-    assert where in messages[0] and "'foo'" in messages[0]
-    assert "classic" in messages[0] and "mail" in messages[0]
+    unknown = [r.getMessage() for r in caplog.records if "does not have" in r.getMessage()]
+    assert len(unknown) == 1, caplog.records
+    assert where in unknown[0] and "'foo'" in unknown[0]
+    assert "classic" in unknown[0] and "mail" in unknown[0]
 
 
 def test_a_selection_that_loads_only_the_account_tools_says_so(caplog):
     with caplog.at_level(logging.WARNING):
-        server._warn_about_the_selection({"intents"}, "env", frozenset(ACCOUNT_TOOLS))
+        server._report_the_selection({"intents"}, "env", frozenset(ACCOUNT_TOOLS))
 
     messages = [r.getMessage() for r in caplog.records]
     assert len(messages) == 2, messages
@@ -247,13 +247,29 @@ def test_a_selection_that_loads_only_the_account_tools_says_so(caplog):
     assert "account" in messages[1] and "OUTLOOK_MCP_TOOLSETS" in messages[1]
 
 
-@pytest.mark.parametrize("enabled", [None, {"mail"}, {"classic"}, {"classic", "documents"}])
-def test_known_names_are_not_warned_about(enabled, caplog):
+@pytest.mark.parametrize(
+    ("source", "enabled"),
+    [("default", None), ("env", {"mail"}), ("env", {"classic"}), ("env", {"classic", "documents"})],
+)
+def test_known_names_from_the_environment_or_the_default_are_quiet(source, enabled, caplog):
     with caplog.at_level(logging.WARNING):
-        server._warn_about_the_selection(
-            enabled, "env", toolsets.loaded_tools(toolsets.resolve_groups(enabled, False))
+        server._report_the_selection(
+            enabled, source, toolsets.loaded_tools(toolsets.resolve_groups(enabled, False))
         )
     assert caplog.records == []
+
+
+def test_a_selection_from_config_json_is_never_silent(caplog):
+    """A key written before this release, ignored until now, takes effect: say where from."""
+    loaded = toolsets.loaded_tools({"mail", "calendar"})
+    with caplog.at_level(logging.WARNING):
+        server._report_the_selection({"mail", "calendar"}, "config", loaded)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 1, messages
+    assert messages[0].startswith("Tool groups from config.json toolsets: calendar, mail")
+    assert f"{len(loaded)} of {len(toolsets.TOOL_GROUPS)} tools" in messages[0]
+    assert "outlook-mcp toolsets classic" in messages[0]
 
 
 # ── Reading the file at import ───────────────────────────────────────────
@@ -272,6 +288,37 @@ def test_the_file_value_is_read_quietly_at_import(caplog):
     assert caplog.records == []
 
 
+@pytest.mark.parametrize("value", [["mail", "calendar"], 5, 2.5, True, {"mail": True}])
+def test_a_toolsets_key_of_another_type_is_ignored_with_one_warning(value, caplog, monkeypatch):
+    """Main ignored the key, whatever it held; a list must not now refuse the whole file."""
+    monkeypatch.setattr(config_mod, "_toolsets_type_reported", False)
+    _write_config(
+        config_mod.DEFAULT_CONFIG_DIR,
+        {"client_id": "test-client", "read_only": True, "toolsets": value},
+    )
+
+    with caplog.at_level(logging.WARNING):
+        first = config_mod.load_config()
+        second = config_mod.load_config()
+
+    for config in (first, second):
+        assert (config.client_id, config.read_only, config.toolsets) == ("test-client", True, None)
+    warned = [r.getMessage() for r in caplog.records if r.getMessage().startswith(TYPE_WARNING)]
+    assert len(warned) == 1, [r.getMessage() for r in caplog.records]
+    assert "string" in warned[0] and "default" in warned[0]
+    assert server._toolsets_from_config() is None
+
+
+def test_the_import_time_peek_does_not_spend_the_one_warning(caplog, monkeypatch):
+    monkeypatch.setattr(config_mod, "_toolsets_type_reported", False)
+    _write_config(config_mod.DEFAULT_CONFIG_DIR, {"toolsets": ["mail"]})
+    with caplog.at_level(logging.WARNING):
+        assert server._toolsets_from_config() is None
+        assert caplog.records == []
+        config_mod.load_config()
+    assert [r for r in caplog.records if r.getMessage().startswith(TYPE_WARNING)]
+
+
 def test_a_config_that_will_not_load_gives_classic_not_account_only():
     (Path(config_mod.DEFAULT_CONFIG_DIR) / "config.json").write_text("{nope", encoding="utf-8")
     assert server._toolsets_from_config() is None
@@ -282,7 +329,10 @@ def test_a_config_that_will_not_load_gives_classic_not_account_only():
 
 # Warnings are collected from the package's loggers before the import that
 # prints them, rather than read back from stderr, where the SDK's log handler
-# wraps lines to the width of a terminal the child does not have.
+# wraps lines to the width of a terminal the child does not have. After the
+# import, the probe also runs the load `server.main` runs before the transport
+# starts, and `outlook-mcp auth`, `status` and `toolsets` run first: a config
+# that main loaded must still load, with its other settings intact.
 _PROBE = """
 import asyncio, json, logging
 warnings = []
@@ -292,12 +342,22 @@ class Keep(logging.Handler):
 logging.getLogger("outlook_mcp").addHandler(Keep(logging.WARNING))
 from outlook_mcp import server
 tools = asyncio.run(server.mcp.list_tools())
+at_import = list(warnings)
+del warnings[:]
+try:
+    config = server.load_config()
+    loaded = {"ok": True, "client_id": config.client_id, "read_only": config.read_only,
+              "toolsets": config.toolsets}
+except Exception as exc:
+    loaded = {"ok": False, "error": type(exc).__name__}
 print(json.dumps({
     "tools": sorted(t.name for t in tools),
     "loaded": sorted(server.LOADED_TOOLS),
     "source": server.SELECTION_SOURCE,
     "documents_bullet": "outlook_read_attachment" in server.INSTRUCTIONS,
-    "warnings": warnings,
+    "warnings": at_import,
+    "config": loaded,
+    "load_warnings": list(warnings),
 }))
 """
 
@@ -319,26 +379,64 @@ def _probe(settings: str, env_value: str | None) -> dict:
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
-# The config shapes an existing install can have, and the `mailbox_settings_write`
-# value main's import-time peek read from each (False for any config that does
-# not load). None means no config.json at all: a fresh install, or one that runs
-# on the defaults.
-CONFIG_SHAPES: dict[str, tuple[object, bool]] = {
-    "no file": (None, False),
-    "client id only": ({"client_id": "test-client"}, False),
+# The config shapes an existing install can have: (contents, the
+# `mailbox_settings_write` value main's import-time peek read, whether main
+# loaded it, the selection this branch reads from it). None means no
+# config.json at all: a fresh install, or one that runs on the defaults.
+#
+# The `toolsets` shapes are configs written before the key existed, where main
+# warned about it and ignored it. A string is the one this branch honours: that
+# is the feature, and the only change to what loads. Any other type is warned
+# about and ignored, as main did, and must never stop the config loading.
+CONFIG_SHAPES: dict[str, tuple[object, bool, bool, str | None]] = {
+    "no file": (None, False, True, None),
+    "client id only": ({"client_id": "test-client"}, False, True, None),
     "read only": (
         {"client_id": "test-client", "read_only": True, "allow_categories": ["mail_drafts"]},
         False,
+        True,
+        None,
     ),
-    "rule writes": ({"client_id": "test-client", "mailbox_settings_write": True}, True),
+    "rule writes": ({"client_id": "test-client", "mailbox_settings_write": True}, True, True, None),
     "unknown and legacy keys": (
         {"client_id": "test-client", "accounts": [], "toolset": "mail"},
         False,
+        True,
+        None,
     ),
-    "not JSON": ("{not json", False),
+    "not JSON": ("{not json", False, False, None),
     "invalid value": (
         {"client_id": "test-client", "mailbox_settings_write": True, "read_only_consent": True},
         False,
+        False,
+        None,
+    ),
+    "toolsets string": (
+        {"client_id": "test-client", "read_only": True, "toolsets": "mail"},
+        False,
+        True,
+        "mail",
+    ),
+    "toolsets empty string": ({"client_id": "test-client", "toolsets": ""}, False, True, None),
+    "toolsets null": ({"client_id": "test-client", "toolsets": None}, False, True, None),
+    "toolsets list": (
+        {"client_id": "test-client", "read_only": True, "toolsets": ["mail", "calendar"]},
+        False,
+        True,
+        None,
+    ),
+    "toolsets list with rule writes": (
+        {"client_id": "test-client", "mailbox_settings_write": True, "toolsets": ["rules"]},
+        True,
+        True,
+        None,
+    ),
+    "toolsets number": ({"client_id": "test-client", "toolsets": 5}, False, True, None),
+    "toolsets object": (
+        {"client_id": "test-client", "toolsets": {"mail": True}},
+        False,
+        True,
+        None,
     ),
 }
 
@@ -352,6 +450,8 @@ PROCESS_ENV_VALUES: list[str | None] = [
     ",".join(_ALL_GROUPS),
 ]
 
+TYPE_WARNING = "config.json key 'toolsets' ignored"
+
 
 def _settings_for(base: Path, name: str, shape: object) -> str:
     directory = base / name.replace(" ", "-")
@@ -363,24 +463,52 @@ def _settings_for(base: Path, name: str, shape: object) -> str:
     return str(directory)
 
 
-def test_every_existing_config_shape_registers_what_main_did(tmp_path):
+def test_every_existing_config_shape_loads_and_registers_what_main_did(tmp_path):
     """The matrix, in fresh interpreters, because the selection is made at import."""
     cases = []
-    for name, (shape, settings_write) in CONFIG_SHAPES.items():
+    for name, (shape, settings_write, loads, selection) in CONFIG_SHAPES.items():
         settings = _settings_for(tmp_path, name, shape)
         for env_value in PROCESS_ENV_VALUES:
-            cases.append((name, settings, settings_write, env_value))
+            cases.append((name, shape, settings, settings_write, loads, selection, env_value))
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        results = list(pool.map(lambda case: _probe(case[1], case[3]), cases))
+        results = list(pool.map(lambda case: _probe(case[2], case[6]), cases))
 
-    for (name, _, settings_write, env_value), measured in zip(cases, results):
-        expected = _on_main(env_value, settings_write)
+    for (name, shape, _, settings_write, loads, selection, env_value), measured in zip(
+        cases, results
+    ):
         label = f"{name} / OUTLOOK_MCP_TOOLSETS={env_value!r}"
+        env_wins = toolsets.parse_toolsets(env_value) is not None
+        expected = _on_main(env_value if env_wins else selection, settings_write)
+        from_file = not env_wins and selection is not None
         assert set(measured["tools"]) == expected, label
         assert set(measured["loaded"]) == expected, label
+        assert measured["source"] == ("config" if from_file else "env" if env_wins else "default")
         assert measured["documents_bullet"] is ("outlook_read_attachment" in expected), label
-        assert bool(measured["warnings"]) is (env_value == "foo"), label
+
+        # It loads wherever main's did, and the other settings come through.
+        config = measured["config"]
+        assert config["ok"] is loads, (label, config)
+        if loads and isinstance(shape, dict):
+            assert config["client_id"] == "test-client", label
+            assert config["read_only"] is shape.get("read_only", False), label
+            given = shape.get("toolsets")
+            assert config["toolsets"] == (given if isinstance(given, str) else None), label
+
+        # A key of the wrong type is named once, by the real load, never at import.
+        bad_type = isinstance(shape, dict) and not isinstance(
+            shape.get("toolsets"), (str, type(None))
+        )
+        type_warnings = [w for w in measured["load_warnings"] if w.startswith(TYPE_WARNING)]
+        assert len(type_warnings) == (1 if bad_type else 0), (label, measured["load_warnings"])
+        assert not [w for w in measured["warnings"] if w.startswith(TYPE_WARNING)], label
+
+        # At start: unknown names are warned about, and a selection read from
+        # config.json is never silent.
+        unknown = [w for w in measured["warnings"] if "does not have" in w]
+        notice = [w for w in measured["warnings"] if w.startswith("Tool groups from config.json")]
+        assert bool(unknown) is (env_value == "foo"), (label, measured["warnings"])
+        assert len(notice) == (1 if from_file else 0), (label, measured["warnings"])
 
 
 def test_a_symlinked_config_still_registers_the_default(tmp_path):
@@ -430,7 +558,8 @@ def test_an_unknown_name_in_the_file_warns_once_and_names_the_file(tmp_path):
 
     assert set(measured["tools"]) == ACCOUNT_TOOLS
     warnings = measured["warnings"]
-    assert len(warnings) == 2, warnings
-    assert "'intents'" in warnings[0] and "config.json toolsets" in warnings[0]
-    assert "account" in warnings[1] and "config.json toolsets" in warnings[1]
+    assert len(warnings) == 3, warnings
+    assert warnings[0].startswith("Tool groups from config.json toolsets: intents")
+    assert "'intents'" in warnings[1] and "config.json toolsets" in warnings[1]
+    assert "account" in warnings[2] and "config.json toolsets" in warnings[2]
     assert not [w for w in warnings if "OUTLOOK_MCP_TOOLSETS" in w], warnings

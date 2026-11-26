@@ -111,8 +111,11 @@ def _write_toolsets(value: str) -> Path:
 
     An existing file must be a regular file that loads with the normal loader;
     its other keys and values stay as written, in their order, with no defaults
-    filled in. A missing file is created holding only this key. Written through
-    the same owner-only directory and atomic file write as every settings file.
+    filled in, though the file is rewritten as indented JSON. A missing file is
+    created holding only this key. The file is written atomically and owner-only
+    (0600), like every settings file. A missing directory is created owner-only
+    (0700); an existing one keeps the mode the person gave it, so a directory
+    they locked against writing refuses the write instead of being unlocked.
     """
     config_dir = DEFAULT_CONFIG_DIR
     path = Path(config_dir) / "config.json"
@@ -139,10 +142,24 @@ def _write_toolsets(value: str) -> Path:
         except (OSError, ValueError) as exc:
             _refuse(1, *config_repair_lines(exc), "Nothing was written.")
     settings["toolsets"] = value
-    atomic_write(
-        _ensure_dir(config_dir) / "config.json",
-        json.dumps(settings, indent=2, ensure_ascii=False) + "\n",
-    )
+    try:
+        # allow_nan=False: a number JSON cannot hold (1e999 reads as infinity)
+        # would otherwise come back as `Infinity`, which is not JSON.
+        text = json.dumps(settings, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    except ValueError:
+        _refuse(
+            1,
+            f"{path} holds a number JSON cannot write back, such as 1e999, so rewriting it "
+            'would change it. Set "toolsets" by hand instead. Nothing was written.',
+        )
+    try:
+        if not Path(config_dir).is_dir():
+            _ensure_dir(config_dir)
+        atomic_write(path, text)
+    except OSError as exc:
+        _refuse(
+            1, f"Could not write {path}: {exc.strerror or exc}.", "config.json was not changed."
+        )
     return path
 
 
