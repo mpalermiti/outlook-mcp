@@ -622,6 +622,21 @@ class TestDescribeRecurrence:
             ),
             (
                 {
+                    "pattern": {
+                        "type": "weekly",
+                        "interval": 2,
+                        "daysOfWeek": ["sunday", "monday"],
+                    },
+                    "range": {
+                        "type": "numbered",
+                        "startDate": "2026-11-08",
+                        "numberOfOccurrences": 4,
+                    },
+                },
+                "every 2 weeks on Monday, Sunday (weeks from Sunday), from 2026-11-08, 4 times",
+            ),
+            (
+                {
                     "pattern": {"type": "absoluteMonthly", "interval": 2, "dayOfMonth": 15},
                     "range": {
                         "type": "endDate",

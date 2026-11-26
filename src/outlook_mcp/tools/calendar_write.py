@@ -622,10 +622,14 @@ def _follow_new_start(
 
     The pattern moves too when it is the series' own — the one Graph holds,
     whether read back here for a zone change or handed back by the caller from
-    ``outlook_get_event``. Its days belong to the stored start, so they move by
-    as many days as the start did; see ``move_pattern``. A pattern that differs
-    from the stored one is the caller's new instruction, written for the new
-    start, and is sent as given.
+    ``outlook_get_event``. A zone change reads the same instants in a new zone,
+    so its days shift as far as the stored start's local day does, all of them
+    (``move_pattern``). A start the caller also moved to another day then
+    follows the rules of a same-zone move (#98 review): the series' own,
+    re-sent, goes through ``move_series``; one the caller handed back keeps a
+    single day following the new start, as agents moving a weekly meeting
+    rely on, and several days exactly as written. A pattern that differs from
+    the stored one is the caller's new instruction and is sent as given.
 
     Except where the stored pattern skips its own ``startDate`` (a "weekdays"
     series begun on a Saturday): Graph may have put its first occurrence later,
@@ -659,7 +663,31 @@ def _follow_new_start(
             "start. Nothing was modified. Pass `recurrence` with the days you want "
             "alongside `start`; it is sent as given."
         )
-    return move_pattern(payload, old=old, new=event_start_date(start, zone))
+    new = event_start_date(start, zone)
+    by_zone = _day_in_new_zone(existing, zone) or old
+    shifted = move_pattern(payload, old=old, new=by_zone)
+    if new == by_zone:
+        return shifted
+    if not given:
+        return move_series(shifted, old=by_zone, new=new)
+    if len({str(d).lower() for d in (payload.get("pattern") or {}).get("daysOfWeek") or ()}) > 1:
+        return payload
+    return move_pattern(payload, old=old, new=new)
+
+
+def _day_in_new_zone(existing: Any, zone: str | None) -> date | None:
+    """The day the stored start falls on in ``zone``, if that is a zone change.
+
+    Where a zone change alone puts the series: Thursday 02:00Z is Wednesday in
+    Los Angeles. ``None`` with the zone unchanged, or when it cannot be worked
+    out here, and the stored ``startDate`` then stands for it.
+    """
+    stored_zone, _ = _anchor_zones(existing)
+    stored = getattr(existing, "start", None)
+    at = getattr(stored, "date_time", None)
+    if stored_zone == zone or not at or maybe_zone(zone) is None:
+        return None
+    return event_start_date(_as_instant(str(at), getattr(stored, "time_zone", None)), zone)
 
 
 def _resend_recurrence(event: Any, *, anchor: str | None, zone: str | None) -> Any:
@@ -1211,8 +1239,10 @@ async def update_event(
     as controls. When the caller has not supplied a new recurrence the event's
     existing one is read and sent back, so a series created before events
     carried a zone can be repaired in place rather than deleted and rebuilt.
-    Its days move with the start's local date (``_follow_new_start``): a
-    Thursday 02:00Z series re-anchored to Los Angeles becomes a Wednesday one.
+    Its days move as far as the zone moves the stored start's local date
+    (``_follow_new_start``): a Thursday 02:00Z series re-anchored to Los Angeles
+    becomes a Wednesday one. A start also moved to another day by the caller
+    then follows the same-zone rules below, as a separate step.
 
     Moving a series master's start to another **day** in the same zone needs
     the same (#98). Without it Graph answers ``updated`` and snaps the master
@@ -1249,9 +1279,11 @@ async def update_event(
     pattern of an existing one. It takes the same shapes as ``create_event``.
     Graph anchors the range on the series master's start, so when ``start``
     isn't part of the same patch the event's current start is read first. When
-    it is, a supplied ``range.startDate`` is dropped and re-derived from it, and
-    a pattern equal to the stored one moves with it — so ``outlook_get_event``'s
-    recurrence can be handed back beside a new start and zone.
+    it is, a supplied ``range.startDate`` is dropped and re-derived from it. A
+    pattern equal to the stored one moves with a zone change, and a one-day one
+    follows a start moved to another day, while several days are sent exactly
+    as written — so ``outlook_get_event``'s recurrence can be handed back beside
+    a new start and zone.
     Passing ``None`` leaves any existing recurrence untouched — this is a
     partial patch — except that it is carried along when a series' start moves
     to another day, as above.

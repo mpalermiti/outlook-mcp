@@ -589,6 +589,9 @@ def describe_recurrence(payload: dict) -> str:
     month_name = calendar.month_name[month] if month and 1 <= month <= 12 else str(month)
     if kind == "weekly":
         words += f" on {named}"
+        # Only a multi-week rule reads its week start, and there it decides the days.
+        if boundary := _week_boundary(pattern):
+            words += f" (weeks from {boundary.capitalize()})"
     elif kind == "absoluteMonthly":
         words += f" on day {_whole(pattern, 'dayOfMonth')}"
     elif kind == "absoluteYearly":
@@ -631,8 +634,9 @@ def move_series(payload: dict, *, old: date, new: date) -> dict:
             f"This series repeats on {listed}, and the new start, {new.isoformat()}, is "
             "not one of those days, so there is no telling which days it should repeat "
             "on from there. Nothing was modified.",
-            "Pass `recurrence` alongside `start`, with the days you want in "
-            "pattern.daysOfWeek; it is sent as given.",
+            "Pass `recurrence` alongside `start` with the days you want in "
+            "pattern.daysOfWeek: exactly those days are sent, the range starting on "
+            "the new start.",
         )
     return move_pattern(moved, old=old, new=new)
 

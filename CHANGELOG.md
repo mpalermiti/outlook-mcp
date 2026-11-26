@@ -22,7 +22,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   that already repeats on the new day is kept and only its start date moves: weekdays started on
   a Wednesday stay weekdays. A rule naming one day moves to the new day: a weekly Monday series
   moved to a Tuesday becomes a weekly Tuesday series. An end date moves by as many days as the
-  start, so the series keeps its length. A start moved later also starts the series later:
+  start (for a monthly or yearly rule that can be one occurrence fewer, and the `note` gives the
+  new end). The same holds when `timezone` changes in the same call: the zone's own share still
+  moves every day, and the caller's move on top follows these rules. A `recurrence` handed back
+  beside a start on another day keeps a single day following the new start, as before, and is
+  now sent with several days exactly as written. A start moved later also starts the series later:
   occurrences before it are dropped, and a numbered series counts from the new start. A new time
   on the same day is sent as before. Refused instead of reported as `updated`, with nothing sent:
   several weekdays moved to a day they skip, and a rule with no exact equivalent on the new day
