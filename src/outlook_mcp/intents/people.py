@@ -30,30 +30,31 @@ from outlook_mcp.validation import validate_email
 
 # ── Normalization ─────────────────────────────────────────────────────────
 
-# Letters from other scripts that render like Latin ones.
+# Letters from other scripts that render like Latin ones, written as escapes: in the
+# source they would be indistinguishable from the Latin letters they imitate.
 _CONFUSABLES = str.maketrans(
     {
         # Cyrillic
-        "а": "a",
-        "е": "e",
-        "о": "o",
-        "р": "p",
-        "с": "c",
-        "у": "y",
-        "х": "x",
-        "і": "i",
-        "ј": "j",
-        "ѕ": "s",
-        "ԁ": "d",
-        "ӏ": "l",
+        "\u0430": "a",  # cyrillic small letter a
+        "\u0435": "e",  # cyrillic small letter ie
+        "\u043e": "o",  # cyrillic small letter o
+        "\u0440": "p",  # cyrillic small letter er
+        "\u0441": "c",  # cyrillic small letter es
+        "\u0443": "y",  # cyrillic small letter u
+        "\u0445": "x",  # cyrillic small letter ha
+        "\u0456": "i",  # cyrillic small letter byelorussian-ukrainian i
+        "\u0458": "j",  # cyrillic small letter je
+        "\u0455": "s",  # cyrillic small letter dze
+        "\u0501": "d",  # cyrillic small letter komi de
+        "\u04cf": "l",  # cyrillic small letter palochka
         # Greek
-        "α": "a",
-        "ο": "o",
-        "ρ": "p",
-        "ν": "v",
-        "τ": "t",
-        "κ": "k",
-        "ι": "i",
+        "\u03b1": "a",  # greek small letter alpha
+        "\u03bf": "o",  # greek small letter omicron
+        "\u03c1": "p",  # greek small letter rho
+        "\u03bd": "v",  # greek small letter nu
+        "\u03c4": "t",  # greek small letter tau
+        "\u03ba": "k",  # greek small letter kappa
+        "\u03b9": "i",  # greek small letter iota
     }
 )
 _NOT_NAME_CHAR = re.compile(r"[^a-z0-9]+")
@@ -163,8 +164,8 @@ _CHECKED_SCRIPTS = ("LATIN", "CYRILLIC", "GREEK")
 def mixed_script(name: str) -> bool:
     """Whether a name mixes letters from two or more of Latin, Cyrillic and Greek.
 
-    Han, Hiragana, Katakana and Hangul are never counted, so "Tanaka 田中" and
-    kanji with kana are not flagged.
+    Han, Hiragana, Katakana and Hangul are never counted, so neither a surname written
+    in Latin and in Han nor kanji written with kana is flagged.
     """
     seen = set()
     for char in name:
@@ -322,7 +323,8 @@ def build_sent_table(rows: Iterable[dict], *, signed_in: str | None) -> SentTabl
 
 
 def written_score(count: int) -> int:
-    """``min(25, 5 + 5·floor(log2 c))``, 0 for no letters: 1→5, 2→10, 4→15, 8→20, 16+→25."""
+    """``min(25, 5 + 5 * floor(log2 c))``, 0 for no letters: 1 gives 5, 2 gives 10, 4 gives 15,
+    8 gives 20, 16 or more 25."""
     if count <= 0:
         return 0
     return min(25, 5 + 5 * int(math.floor(math.log2(count))))
