@@ -63,6 +63,10 @@ Listed on the [official MCP Registry](https://registry.modelcontextprotocol.io/v
 
 The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md).
 
+- **Event time zones** (1.34): an event given a time in UTC or with an offset keeps your time zone instead of being filed in UTC, including events Outlook names in Windows terms like "Pacific Standard Time". The time Microsoft stored is checked, and put back if it moved.
+- **Moving a repeating event** (1.34): giving a series a new start day moves its occurrences. Before, it answered "updated" and left them where they were. A multi-day series moved to a day outside its pattern is refused, so the days are never guessed.
+- **Drafts** (1.34): creating or updating a draft returns its subject and a link that opens it in Outlook on the web.
+- **Contacts** (1.34): adding an email address to a contact you just created no longer fails.
 - **To Do time zones** (1.33): a task's due date, reminder and repeat rule use your configured time zone instead of UTC, so a task lands on the day you meant. `due` also takes `+7d` or `now`.
 - **Contact photos** (1.33): set or replace a contact's photo from a JPEG, PNG or GIF file. Off unless you turn it on.
 - **Relative event times** (1.32): an event's `start` and `end` take `+2h`, `now` or `7d`, like every other date, and the reply shows the time each became.
@@ -71,12 +75,6 @@ The last few releases, in brief. Every change is in the [CHANGELOG](CHANGELOG.md
 - **Mac sign-in fixed** (1.32): from Oct 26, a Microsoft library update made outlook-mcp look for your sign-in in the wrong Keychain entry and report "Not authenticated". 1.32 reads the original entry again. After upgrading, run `outlook-mcp status`, and if it still says not authenticated, run `outlook-mcp auth` once ([what happened](#not-authenticated-after-upgrading-macos)).
 - **Safer by default** (1.31.3–1.31.4): downloads never overwrite a file, writing into a calendar or task list someone else owns needs send permission like an invitation, attachment text is read only in standard character sets, and a config that points the attachments folder at your home folder, under any of its names, is refused. A reply or forward that fails says whether anything was sent (1.31.4).
 - **Export an email** (1.31): get a message's original file exactly as it arrived, attachments included, up to 10 MB. Off unless you turn it on.
-- **Inbox rules** (1.30): list, create, change and delete server-side inbox rules, and see what each rule leaves out (1.30.2). Off unless you turn it on, and a rule that forwards mail also needs send permission.
-- **Calendar** (1.27–1.29): turn a meeting invitation into its calendar event, attach files to events, tag an event so you can find it again, create events in any of your calendars, and see who owns each calendar.
-- **Remote clients** (1.27–1.28): an optional HTTP mode serves a client on another machine and refuses to start without a token. Downloads can come back in the reply instead of as a file on the server.
-- **Safer sends** (1.27–1.28): a send that times out is never sent twice on its own, and a large attachment that fails to upload no longer lets the mail go without it.
-- **Accounts and settings** (1.29): pin a server to one sign-in, and set options from environment variables, which can only tighten security.
-- **Cheaper every turn** (1.29): the tool list every client reads on each turn is a quarter smaller, and features that would add to it are off by default.
 
 ---
 
@@ -472,8 +470,8 @@ Creating, updating or deleting a rule also needs `MailboxSettings.ReadWrite` on 
 | Tool | Description |
 |------|-------------|
 | `outlook_list_drafts` | List draft messages with pagination. |
-| `outlook_create_draft` | Create a draft, with an HTML (`is_html=True`) or Markdown (`is_markdown=True`) body if wanted. With `reply_to_message_id` (`reply_all=True` for reply-all) or `forward_message_id`, the draft is created in that message's thread with the original quoted below, and nothing is sent; Graph fills a reply's recipients and subject, and a forward needs `to`. Supports scheduled delivery via `deferred_send_datetime` (server-side, Outlook-desktop-compatible "Delay Delivery"). |
-| `outlook_update_draft` | Update draft fields. Accepts `is_html=True` for HTML bodies, `is_markdown=True` for Markdown ones, and `deferred_send_datetime` to set or clear the scheduled delivery time. |
+| `outlook_create_draft` | Create a draft, with an HTML (`is_html=True`) or Markdown (`is_markdown=True`) body if wanted. With `reply_to_message_id` (`reply_all=True` for reply-all) or `forward_message_id`, the draft is created in that message's thread with the original quoted below, and nothing is sent; Graph fills a reply's recipients and subject, and a forward needs `to`. Supports scheduled delivery via `deferred_send_datetime` (server-side, Outlook-desktop-compatible "Delay Delivery"). Returns the draft's `subject` (a reply's or forward's is the one Graph wrote) and `web_link`, each `null` when Graph gives none. |
+| `outlook_update_draft` | Update draft fields. Accepts `is_html=True` for HTML bodies, `is_markdown=True` for Markdown ones, and `deferred_send_datetime` to set or clear the scheduled delivery time. Returns the draft's `subject` and `web_link` (opens it in Outlook on the web), each `null` when Graph gives none. |
 | `outlook_send_draft` | Send an existing draft. |
 | `outlook_delete_draft` | Delete a draft. |
 

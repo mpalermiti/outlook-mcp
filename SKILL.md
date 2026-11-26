@@ -163,7 +163,7 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
 ### Drafts
 - `outlook_list_drafts` — List with pagination
 - `outlook_create_draft` — Create for later review; `reply_to_message_id` (with `reply_all`) or `forward_message_id` drafts in that message's thread, original quoted, and nothing is sent
-- `outlook_update_draft` — Update
+- `outlook_update_draft` — Update; like create, returns `subject` and `web_link`
 - `outlook_send_draft` — Send
 - `outlook_delete_draft` — Delete
 
