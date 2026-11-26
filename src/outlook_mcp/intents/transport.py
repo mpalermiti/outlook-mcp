@@ -161,6 +161,8 @@ class IntentGraph:
         self._note(url)
         response = await self._send("GET", url, units=1)
         if ids:
+            # P-A2: whether a personal mailbox honours the preference at all. Not
+            # assumed either way: the reply says which family it is (ids.py).
             self.id_family.observe(response.headers.get("Preference-Applied"))
         return graph_json(response)
 
@@ -208,6 +210,9 @@ class IntentGraph:
                 }
                 status = reply.get("status")
                 if ids and isinstance(status, int) and 200 <= status < 300:
+                    # P-A4: whether a sub-request's own header is honoured, and its
+                    # Preference-Applied returned. A sub-response without it counts
+                    # as the regular family, so a mismatch shows up as "mixed".
                     self.id_family.observe(_header(reply.get("headers"), "Preference-Applied"))
                 replies.append(reply)
         return replies

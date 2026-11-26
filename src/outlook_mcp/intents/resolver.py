@@ -1349,7 +1349,11 @@ def _list_name(task_list: Any) -> str:
 
 async def _tasks(lookup: Lookup, words: str, filters: Filters) -> _Found:
     """Open tasks in the owner's lists (§2.6), matched on title. The flagged-email list
-    is skipped: it mirrors flagged mail."""
+    is skipped: it mirrors flagged mail.
+
+    To Do ids are not immutable-id resources, so these replies don't speak for the
+    id family (``ids=False``); P-A6 settles whether the preference touches them.
+    """
     lists = [t for t in await fetch_all_task_lists(lookup.sdk) if _list_name(t) != "flaggedEmails"]
     if filters.task_list:
         wanted = filters.task_list.strip()
