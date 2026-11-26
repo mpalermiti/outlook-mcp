@@ -368,13 +368,16 @@ def build_sent_table(rows: Iterable[dict], *, signed_in: str | None) -> SentTabl
     )
     for row in rows:
         table.scanned += 1
+        # The owner's letters by conversation, for catch_up: a meeting message told by
+        # its type only, since these sort mail rather than rank people (review B2).
+        sent_at = parse_time(row.get("sentDateTime"))
+        conversation = row.get("conversationId")
+        if isinstance(conversation, str) and sent_at is not None and not is_meeting_type(row):
+            table.letters.setdefault(conversation, []).append(sent_at)
         if is_meeting_message(row):
             table.meeting_messages_dropped += 1
             continue
         sent = parse_time(row.get("sentDateTime"))
-        conversation = row.get("conversationId")
-        if isinstance(conversation, str) and sent is not None:
-            table.letters.setdefault(conversation, []).append(sent)
         for address, name in recipients(row):
             if address in me:
                 continue

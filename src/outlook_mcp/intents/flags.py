@@ -78,6 +78,8 @@ class Flags:
     exact: bool = True
     # True when more flags exist than the one page read.
     beyond_first_page: bool = False
+    # The fallback's scan of a folder stopped at its one page: older flags were not seen.
+    scan_capped: bool = False
 
 
 async def flagged_mail(lookup: Lookup, *, fallback_folders: tuple[str, ...]) -> Flags:
@@ -97,6 +99,7 @@ async def flagged_mail(lookup: Lookup, *, fallback_folders: tuple[str, ...]) -> 
         if error.status_code != 400:
             raise
         rows: list[dict] = []
+        capped = False
         since = utc(lookup.now - timedelta(days=FALLBACK_DAYS))
         for folder in fallback_folders:
             try:
@@ -114,7 +117,8 @@ async def flagged_mail(lookup: Lookup, *, fallback_folders: tuple[str, ...]) -> 
                     continue
                 raise
             rows += [r for r in scanned.get("value") or [] if is_flagged(r)]
-        return Flags(rows=rows, exact=False)
+            capped = capped or bool(scanned.get("@odata.nextLink"))
+        return Flags(rows=rows, exact=False, scan_capped=capped)
     return Flags(
         rows=[r for r in body.get("value") or [] if is_flagged(r)],
         beyond_first_page=bool(body.get("@odata.nextLink")),

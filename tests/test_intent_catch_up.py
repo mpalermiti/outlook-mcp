@@ -214,7 +214,15 @@ def mailbox(m: str = "") -> tuple[Mailbox, InboxDelta, CalendarDelta]:
             ),
             "@odata.type": "#microsoft.graph.eventMessageRequest",
         },
-        received("a9", KIM, f"Re: Visit{m}", conversation="conv-kim", when="2026-11-26T08:00:00Z"),
+        received(
+            "a9",
+            KIM,
+            f"Re: Visit{m}",
+            conversation="conv-kim",
+            when="2026-11-26T08:00:00Z",
+            # A checked reply: only that settles a follow-up (review B1).
+            headers=auth_header("pass", "example.com"),
+        ),
         received(
             "a10",
             JO,
@@ -472,7 +480,12 @@ async def test_the_reasons_on_each_kind_of_arrival(fake):
     assert needs["a10"]["why"][1]["count"] == 1
     follow = {i["id"]: i for i in section(env, "follow_ups")["items"]}
     assert {"code": "flag_overdue", "due": "2026-11-20T00:00:00Z"} in follow["f-bill"]["why"]
-    assert {"code": "reply_from_them", "at": "2026-11-26T08:00:00Z"} in follow["f-kim"]["why"]
+    assert {
+        "code": "reply_from_them",
+        "at": "2026-11-26T08:00:00Z",
+        "address": KIM,
+        "known": True,
+    } in follow["f-kim"]["why"]
     assert follow["f-kim"]["from"]["known"] is True  # the owner's own letter
 
 
@@ -697,7 +710,10 @@ async def test_a_call_that_skipped_mail_hands_its_threshold_on(fake):
     state = decoded(env["cursor"])
     assert state["mail"]["link"] == f"{MAIL_LINK}?$deltatoken=round1"
     assert state["mail"]["bootstrap_from"] == "2026-11-26T11:58:00Z"
-    assert state["cal"] == decoded(first["cursor"])["cal"]
+    # The calendar wasn't read: its link is kept, and the changes it owes date from the
+    # first call (review D1).
+    kept = decoded(first["cursor"])["cal"]
+    assert state["cal"] == {**kept, "since": "2026-11-26T12:00:00Z"}
 
 
 # ── Probes, failures and the budget ───────────────────────────────────────

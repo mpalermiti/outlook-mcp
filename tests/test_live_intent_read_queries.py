@@ -264,6 +264,9 @@ async def test_p_dl1_a_created_only_inbox_delta_is_accepted_and_its_links_check(
     for row in items:
         if "@removed" not in row:
             assert "receivedDateTime" in row and "conversationId" in row, sorted(row)
+    # The cursor accepts a mail link only for the Inbox, by name (review D3): Graph must
+    # keep the spelling it was asked in, or every later call would be refused.
+    assert cursor._link(link, "mail") == link
     later = await lookup.graph.follow(link)
     assert "@odata.deltaLink" in later or "@odata.nextLink" in later
 

@@ -49,7 +49,7 @@ from outlook_mcp.intents.envelope import (
 from outlook_mcp.intents.flags import flag_due, flag_reasons, flagged_mail, reply_checks
 from outlook_mcp.intents.people import (
     SentTable,
-    is_meeting_message,
+    is_meeting_type,
     is_valid_address,
     parse_time,
     recipients,
@@ -86,8 +86,8 @@ RESYNC_MAX = timedelta(days=31)
 SENT_PAGES = 2  # G1
 MAIL_PAGES = 4  # G2, attempts included
 MAIL_TOP = 50
-HEADER_READS = 10  # G3
-FLAG_CHECKS = 8  # G5
+HEADER_READS = 8  # G3 (10 in §12.2)
+FLAG_CHECKS = 5  # G5 (8 in §12.2): the confirmations of replies take the rest (review B1)
 CAL_PAGES = 2  # G6, attempts included
 CAL_PAGE_SIZE = 100
 VIEW_PAGES = 2  # G7
@@ -162,12 +162,13 @@ async def read_catch_up(
     if focus not in FOCUSES:
         raise ValueError(f"focus must be one of: {', '.join(FOCUSES)}.")
     tz = zone_info(zone)
-    state, cursor_status = cursors.read(cursor, username=signed_in)
+    state, cursor_status = cursors.read(cursor, username=signed_in, now=moment)
     window_value = window if window is not None else ("24h" if state is None else None)
     span = None
     if window_value is not None:
         span = resolve_window(window_value, zone, now=moment, max_days=MAX_DAYS)
-        if span[0] >= moment:
+        # With a cursor the window sets only the look-ahead, so it may lie ahead (§12.2).
+        if span[0] >= moment and state is None:
             raise ValueError(
                 "catch_up reads what arrived, so the window must start in the past: 24h is "
                 "the last day, while +24h would be the next one."
@@ -227,6 +228,7 @@ async def read_catch_up(
             found = result.value
             sections += found["sections"]
             understood.update(found["understood"])
+            understood["not_covered"] += found.get("not_covered", [])
             mail_state = found["state"]
             offers += found["offers"]
         else:
@@ -272,9 +274,14 @@ async def read_catch_up(
             "focus": focus,
         }
     )
+    outcome = outcome_of(sections)
+    if understood.pop("_incomplete", False):
+        # Arrivals left unread, a flag scan that could not reach back, or a calendar
+        # view cut before today ended: the answer is not the whole of it (review D2, D4).
+        outcome = "incomplete"
     env = build_envelope(
         tool=TOOL,
-        outcome=outcome_of(sections),
+        outcome=outcome,
         as_of=moment,
         understood=understood,
         sections=sections,
@@ -283,6 +290,7 @@ async def read_catch_up(
         next=build_next(_order_offers(offers), loaded_tools),
         capped=len(understood["not_covered"]) > len(NOT_COVERED)
         or bool(understood.get("flags_beyond_first_page"))
+        or bool(understood.get("replies_unconfirmed"))
         or bool((understood.get("arrivals") or {}).get("has_more")),
     )
     env["cursor"] = token
@@ -308,11 +316,19 @@ def _kept_mail(state: CursorState | None, span, moment: datetime) -> MailState:
 
 
 def _kept_calendar(state: CursorState | None, moment: datetime) -> CalState:
+    """The calendar state when this call did not read it (focus, a failure, the time
+    limit): the old link, and the time changes are owed from, so a later snapshot (a
+    resync, a roll) still reports what changed in between (review D1)."""
     if state is None:
         return CalState(
             link="", start=utc(moment - CAL_BACK), end=utc(moment + CAL_AHEAD), since=utc(moment)
         )
-    return state.cal
+    return CalState(
+        link=state.cal.link,
+        start=state.cal.start,
+        end=state.cal.end,
+        since=state.cal.since or state.made,
+    )
 
 
 # ── Mail: the Inbox delta (G2) ────────────────────────────────────────────
@@ -430,8 +446,8 @@ async def _read_mail(
         received = parse_time(row.get("receivedDateTime"))
         if received is None or received <= threshold:
             continue  # not an arrival: read, flagged, moved in, or older (§7.3)
-        if is_meeting_message(row):
-            continue  # meeting requests are reported through invites
+        if is_meeting_type(row):
+            continue  # meeting requests are reported through invites (by type: review B2)
         if sender_of(row)[0] in table.me:
             from_you += 1
             continue
@@ -490,18 +506,31 @@ async def _mail_sections(
         lookup, [(row, flag_time(row)) for _, row in checked], sent_folder=sent_folder, me=me
     )
     answered: set[str] = set()  # arrivals shown on a flag's item, and nowhere else
+    clearable: set[str] = set()  # flags a known person's checked reply settled
+    unconfirmed: list[str] = []
     follow_rows: list[tuple[dict, list[dict]]] = []
     for due, row in due_flags:
         reasons = flag_reasons(row, now)
         check = checks.get(str(row.get("id")))
         if check is not None and check.checked:
-            if check.from_them:
-                first = check.from_them[0]
-                at = parse_time(first.get("receivedDateTime"))
-                reasons.append(why("reply_from_them", **({"at": utc(at)} if at else {})))
-                answered |= {str(r.get("id")) for r in check.from_them}
+            if check.reply is not None:
+                # A checked reply from whom the flag waits on (review B1): who, and
+                # whether the owner writes to them, as §8.2 asks.
+                at = parse_time(check.reply.get("receivedDateTime"))
+                address = check.reply_from
+                known = bool(address and address not in me and table.get(address) is not None)
+                params: dict = {"at": utc(at)} if at else {}
+                if address and is_valid_address(address):
+                    params["address"] = address
+                params["known"] = known
+                reasons.append(why("reply_from_them", **params))
+                answered.add(str(check.reply.get("id")))
+                if known:
+                    clearable.add(str(row.get("id")))
             elif check.you_replied is not None:
                 reasons.append(why("you_replied", at=utc(check.you_replied)))
+            if check.unconfirmed:
+                unconfirmed.append(str(row.get("id")))
         follow_rows.append((row, reasons))
 
     # Each arrival goes into the first section it qualifies for.
@@ -596,16 +625,24 @@ async def _mail_sections(
     )
     by_sender = [{"address": a, "count": n} for a, n in senders.most_common(TOP_SENDERS)]
 
+    # A reply is offered only where the sender check ran and did not fail (review C1).
     offers = [
         suggestion(
             "draft_reply", "outlook_compose", {"mode": "reply", "message_id": i["id"]}, ["body"]
         )
-        for i in [i for i in need_items if not has_blocking_warning(i)][:2]
+        for i in [
+            i
+            for i in need_items
+            if not has_blocking_warning(i)
+            and i["from"]["sender_auth"]["result"] in ("verified", "unverified")
+        ][:2]
     ]
+    # Clearing is offered only on a checked reply from someone the owner writes to:
+    # never on a message that merely sits in the conversation (review B1).
     offers += [
         suggestion("clear_follow_up", "outlook_follow_up", {"message_id": i["id"], "clear": True})
         for i in follow_items
-        if any(r["code"] in ("reply_from_them", "you_replied") for r in i["why"])
+        if i["id"] in clearable and not has_blocking_warning(i)
     ]
     tops = [i for i in reply_items if not has_blocking_warning(i)][:1]
     offers += [
@@ -633,18 +670,34 @@ async def _mail_sections(
         understood["gap"] = read.gap
     if len(due_flags) > FLAG_CHECKS:
         understood["flags_not_checked"] = len(due_flags) - FLAG_CHECKS
+    if unconfirmed:
+        understood["replies_unconfirmed"] = unconfirmed
+    not_covered: list[str] = []
+    if not flags.exact:
+        # P-D3a's fallback ran: flags older than its scan are not seen (review D4).
+        not_covered.append("flags_fallback_scan")
+        if flags.scan_capped:
+            not_covered.append("flags_older_than_scan")
+            understood["_incomplete"] = True
+    if read.has_more:
+        # Arrivals were left for the next call: no mail count is whole (review D2).
+        understood["_incomplete"] = True
+    mail_exact = not read.has_more
     return {
         "sections": [
-            section("needs_reply", need_items, cap=CAPS["needs_reply"]),
-            section("replies_to_you", reply_items, cap=CAPS["replies_to_you"]),
+            section("needs_reply", need_items, cap=CAPS["needs_reply"], total_exact=mail_exact),
+            section(
+                "replies_to_you", reply_items, cap=CAPS["replies_to_you"], total_exact=mail_exact
+            ),
             section(
                 "follow_ups",
                 [i for i in follow_items],
                 cap=CAPS["follow_ups"],
                 total_exact=flags.exact and not flags.beyond_first_page,
             ),
-            section("other_mail", [], cap=0, total=len(other)),
+            section("other_mail", [], cap=0, total=len(other), total_exact=mail_exact),
         ],
+        "not_covered": not_covered,
         "understood": understood,
         "state": read.state,
         "offers": offers,
@@ -679,7 +732,7 @@ async def _calendar_sections(
         if cal_end is not None and cal_end - now < ROLL_WHEN:
             # Fewer than 14 days of look-ahead left: a new snapshot, kept only for what
             # changed since the last call. Deletions in between can't be told (§7.4).
-            rolled, since = True, parse_time(state.made)
+            rolled, since = True, _owed_since(state)
             not_covered.append("deletions_at_roll")
             items, link, more = await _delta_pages(
                 lookup,
@@ -698,7 +751,7 @@ async def _calendar_sections(
             except GraphAPIError as error:
                 if not is_stale_delta(error.status_code):
                     raise
-                resynced, since = True, parse_time(state.made)
+                resynced, since = True, _owed_since(state)
                 start, end = now - CAL_BACK, now + CAL_AHEAD
                 items, link, more = await _delta_pages(
                     lookup,
@@ -709,7 +762,7 @@ async def _calendar_sections(
                 )
     else:
         # A first read: the snapshot only starts the delta; nothing in it is a change.
-        since = parse_time(state.made) if state is not None else now
+        since = _owed_since(state) if state is not None else now
         items, link, more = await _delta_pages(
             lookup,
             _cal_bootstrap_url(start, end),
@@ -747,8 +800,14 @@ async def _calendar_sections(
     rows, view_more = await read_view(
         lookup, "/me/calendarView", today_start, now + CAL_AHEAD, VIEW_SELECT, pages=VIEW_PAGES
     )
+    read_until = None
     if view_more:
         not_covered.append("events_beyond_200")
+        # In start order (reading.read_view), so the cut is the view's tail (review A1).
+        starts = [s for s in (event_span(r, tz)[0] for r in rows) if s]
+        read_until = max(starts) if starts else today_start
+        if read_until < end_of_today:
+            understood["_incomplete"] = True
     events = sorted(
         (r for r in rows if isinstance(r.get("id"), str)),
         key=lambda r: (event_span(r, tz)[0] or now, r["id"]),
@@ -782,15 +841,29 @@ async def _calendar_sections(
     )
     return {
         "sections": [
-            section("invites", invites, cap=CAPS["invites"]),
-            section("meetings_today", today, cap=CAPS["meetings_today"]),
-            section("calendar_changes", changes, cap=CAPS["calendar_changes"]),
+            section("invites", invites, cap=CAPS["invites"], total_exact=read_until is None),
+            section(
+                "meetings_today",
+                today,
+                cap=CAPS["meetings_today"],
+                total_exact=read_until is None or read_until >= end_of_today,
+            ),
+            # An unfinished round has more changes to come (review nit).
+            section(
+                "calendar_changes", changes, cap=CAPS["calendar_changes"], total_exact=not more
+            ),
         ],
         "understood": understood,
         "not_covered": not_covered,
         "state": state_out,
         "offers": offers,
     }
+
+
+def _owed_since(state: CursorState) -> datetime | None:
+    """The time calendar changes are owed from: the last call that read the calendar
+    (``cal.since``, carried across calls that did not), else the last call (review D1)."""
+    return parse_time(state.cal.since) if state.cal.since else parse_time(state.made)
 
 
 def _order_offers(offers: list[dict]) -> list[dict]:
