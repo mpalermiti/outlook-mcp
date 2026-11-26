@@ -6,6 +6,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **The tool groups can be chosen in config.json, and `outlook-mcp toolsets` shows or sets
+  them.** `"toolsets": "mail,calendar"` in config.json works like `OUTLOOK_MCP_TOOLSETS`, which
+  still wins when it is set and not blank. `classic` names the default set (with `rules` when
+  `mailbox_settings_write` is on), so `outlook-mcp toolsets classic` is the way back.
+  `outlook-mcp toolsets <groups>` writes that one key and keeps every other key and value,
+  rewriting the file as indented JSON; on its own, it and `outlook-mcp status` show the groups
+  that load, where the choice came from and the tool count. A name that is not a group still
+  loads nothing, and the server now says so at start, naming where it came from. A new
+  `show_tips` setting (`OUTLOOK_MCP_SHOW_TIPS`) is in place for a one-time tip in tool results;
+  no release shows one yet.
+
+### Changed
+
+- **A `toolsets` key already in config.json now takes effect.** Earlier releases never read it:
+  they warned that it was an unknown key and loaded the default set. A string there now chooses
+  the tool groups, so an install whose config.json already has one loads only those groups. The
+  server says so on every start ("Tool groups from config.json toolsets: ..."), and
+  `outlook-mcp status` names config.json as the source. To keep the default set, remove the key
+  or run `outlook-mcp toolsets classic`. A value that is not a string (a list, a number, an
+  object) is still ignored, with a warning, and the config loads as before.
+- **`classic` in `OUTLOOK_MCP_TOOLSETS` now means the default set, alone or in a list.** It was
+  not a group name, so `classic` loaded only the two account tools and `classic,mail` only the
+  mail tools. Every other value of the variable loads what it did.
+
 ### Fixed
 
 - **Ending a repeating event and moving it in the same call is no longer refused (#97).**

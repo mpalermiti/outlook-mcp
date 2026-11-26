@@ -15,7 +15,12 @@ from outlook_mcp.config import Config, EnvironmentConfigError, _misspelt_safety_
 from outlook_mcp.permissions import VALID_CATEGORIES
 
 PREFIX = "OUTLOOK_MCP_"
-PLAIN_FIELDS = ("client_id", "tenant_id", "timezone")
+# Plain: the environment may set these either way. `show_tips` only decides
+# whether a result may carry a tip. The tool selection is not here: the server
+# has read OUTLOOK_MCP_TOOLSETS directly since before this module, where blank
+# means "not set" (`toolsets.resolve_selection`), and a plain field here would
+# refuse a blank value at startup instead.
+PLAIN_FIELDS = ("client_id", "tenant_id", "timezone", "show_tips")
 SECURITY_FIELDS = (
     "read_only",
     "read_only_consent",
@@ -25,7 +30,11 @@ SECURITY_FIELDS = (
     "expected_username",
 )
 ENV_FIELDS = {PREFIX + field.upper(): field for field in (*PLAIN_FIELDS, *SECURITY_FIELDS)}
-BOOL_FIELDS = {"read_only", "read_only_consent", "allow_unencrypted_token_cache"}
+BOOL_FIELDS = {"read_only", "read_only_consent", "allow_unencrypted_token_cache", "show_tips"}
+# Blank means "not set" for these. Every other variable refuses a blank value, so
+# an empty pass-through cannot silently drop a restriction; a cosmetic setting
+# has none to drop, and should not stop the server over one.
+BLANK_IS_UNSET = {"show_tips"}
 
 
 def _refuse(variable: str, reason: str) -> EnvironmentConfigError:
@@ -105,7 +114,7 @@ def apply_environment(baseline: Config, environ: Mapping[str, str]) -> Config:
     updates = {
         field: _parse(variable, field, environ[variable])
         for variable, field in ENV_FIELDS.items()
-        if variable in environ
+        if variable in environ and (field not in BLANK_IS_UNSET or environ[variable].strip())
     }
     if not updates:
         return baseline

@@ -326,6 +326,26 @@ class Config(BaseModel):
             "persisting a reusable Graph token in plaintext."
         ),
     )
+    # Not a safety key: absent means the default set of tools, which is what
+    # every release before this one loaded. Names are checked where the
+    # selection is made (server.py warns, `outlook-mcp toolsets` refuses), so a
+    # file written for a newer release still boots this one, and a value that
+    # is not a string is ignored with a warning (`_ignore_toolsets_of_another_type`).
+    toolsets: str | None = Field(
+        default=None,
+        description=(
+            'Which tool groups this server loads: a comma-separated list such as "mail,calendar", '
+            'or "classic" for the default set. OUTLOOK_MCP_TOOLSETS overrides it when set and '
+            "not blank."
+        ),
+    )
+    show_tips: bool = Field(
+        default=True,
+        description=(
+            "Allow the server to add one short tip, once per run, to a tool's result when a "
+            "newer tool does that job in fewer calls. false turns it off."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -384,6 +404,36 @@ class Config(BaseModel):
                 "`outlook-mcp auth` again to consent the write scopes."
             )
         return self
+
+    @field_validator("toolsets", mode="before")
+    @classmethod
+    def _ignore_toolsets_of_another_type(cls, value: object) -> object:
+        """A ``toolsets`` that is not a string is ignored with a warning, never refused.
+
+        Before this key existed, config.json could already hold one (a list is the
+        natural guess beside ``allow_categories``), and releases then ignored it as
+        an unknown key. Refusing it now would stop the server, `auth` and `status`
+        on a file that loaded the day before, and `outlook-mcp toolsets` could not
+        repair it either. So it is treated as unset, which is what it meant then,
+        and named once per process by the first load that is not a quiet peek.
+        """
+        if value is None or isinstance(value, str):
+            return value
+        global _toolsets_type_reported
+        if _warn_about_unknown_keys and not _toolsets_type_reported:
+            _toolsets_type_reported = True
+            kind = (
+                "true or false"
+                if isinstance(value, bool)
+                else {list: "list", dict: "object"}.get(type(value), "number")
+            )
+            logger.warning(
+                "config.json key 'toolsets' ignored: it takes a string of tool group names, "
+                'such as "mail,calendar", and this one is a %s. It is treated as unset, so '
+                "the default set loads unless OUTLOOK_MCP_TOOLSETS names groups.",
+                kind,
+            )
+        return None
 
     @field_validator("expected_username")
     @classmethod
@@ -640,6 +690,10 @@ _warn_about_unknown_keys = True
 # note, for one. A `quiet` load silences every notice it would print, because a
 # peek repeated it once more on every start.
 _quiet_config_load = False
+# Set once a `toolsets` value of another type has been named: a server start
+# loads the config twice (before the transport, then in the lifespan), and the
+# second telling adds nothing.
+_toolsets_type_reported = False
 
 
 def load_config(

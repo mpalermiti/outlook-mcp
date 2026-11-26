@@ -72,14 +72,16 @@ def test_default_surface_omits_only_optional_groups():
 
 
 def test_current_surface_follows_the_requested_toolsets():
-    # Mirror how server.py configures at import: the raw env selection goes
-    # through resolve_groups first, so an unset env yields the default group set
-    # (opt-in groups excluded) rather than None — which would keep `rules`.
-    enabled = toolsets.resolve_groups(
-        toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")),
-        server._mailbox_settings_write_is_on(),
+    # Mirror how server.py configures at import: the selection (the variable,
+    # else config.json's `toolsets`) goes through resolve_groups first, so an
+    # unset one yields the default group set (opt-in groups excluded) rather
+    # than None — which would keep `rules`.
+    selection, _ = toolsets.resolve_selection(
+        os.environ.get("OUTLOOK_MCP_TOOLSETS"), server._toolsets_from_config()
     )
+    enabled = toolsets.resolve_groups(selection, server._mailbox_settings_write_is_on())
     assert LOADED == toolsets.select_kept_tools(list(REGISTERED), enabled)
+    assert LOADED == set(server.LOADED_TOOLS)
 
 
 # The README's "Features" list names its categories in words; their counts are
