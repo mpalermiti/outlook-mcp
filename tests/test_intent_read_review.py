@@ -751,3 +751,14 @@ async def test_live_open_loops_hands_out_no_search_id(fake):
     assert "conv-old" in [i["id"] for i in sec(env, "waiting_on_me")["items"]]
     assert "rest-" not in json.dumps(env)
     assert not [s for s in fake.operations if s.path == "/me/translateExchangeIds"]
+
+
+async def test_live_catch_up_a_received_meeting_naming_the_owner_is_a_stranger_invite(fake):
+    parts = cu.mailbox()
+    box, _, _ = parts
+    box.events["cal-1"].append(_forged("forged", "2026-11-26T16:00:00", "2026-11-26T17:00:00"))
+    env = await cu.run(fake, parts, tools=EVERY_TOOL)
+    shown = next(i for i in sec(env, "meetings_today")["items"] if i["id"] == "forged")
+    assert shown["is_organizer"] is False
+    assert {"code": "organizer_you"} not in shown["why"]
+    assert {"code": "stranger_invite"} in shown["warnings"]
