@@ -45,6 +45,27 @@ IMMUTABLE_IDS = False
 # Path segments whose replies carry Outlook ids that the preference changes. Folders,
 # calendars, To Do and rules keep their ids either way, so they don't vote.
 _ID_SEGMENTS = frozenset({"messages", "events", "calendarview", "contacts", "attachments"})
+# Last segments whose replies carry no ids: actions answered 202 with no body, raw
+# content, and upload sessions (review S5). `move`, `copy`, `createReply` and the like
+# return a message, so they still vote.
+_NO_IDS_LAST = frozenset(
+    {
+        "send",
+        "reply",
+        "replyall",
+        "forward",
+        "accept",
+        "decline",
+        "tentativelyaccept",
+        "cancel",
+        "dismissreminder",
+        "snoozereminder",
+        "createuploadsession",
+        "$value",
+        "photo",
+        "$count",
+    }
+)
 
 
 def _preferences(header: str | None) -> list[str]:
@@ -123,9 +144,44 @@ def with_preference(headers: Mapping[str, str] | None) -> Any:
 
 
 def carries_outlook_ids(url: object) -> bool:
-    """Whether a reply to ``url`` carries ids the preference applies to."""
-    segments = urlsplit(str(url)).path.lower().split("/")
+    """Whether a reply to ``url`` carries ids the preference applies to.
+
+    A path under an id-bearing collection (messages, events, contacts, attachments),
+    except To Do (whose task attachments share the word) and the actions whose
+    replies hold no ids.
+    """
+    segments = [s for s in urlsplit(str(url)).path.lower().split("/") if s]
+    if "todo" in segments or "photo" in segments:
+        return False
+    if segments and segments[-1] in _NO_IDS_LAST:
+        return False
     return any(segment in _ID_SEGMENTS for segment in segments)
+
+
+def _header_value(headers: Any, name: str) -> str | None:
+    """A header from an httpx reply or a ``$batch`` sub-response's plain dict."""
+    if headers is None:
+        return None
+    if isinstance(headers, Mapping):
+        for key, value in headers.items():
+            if isinstance(key, str) and key.lower() == name.lower():
+                return value if isinstance(value, str) else None
+        return None
+    getter = getattr(headers, "get", None)
+    value = getter(name) if callable(getter) else None
+    return value if isinstance(value, str) else None
+
+
+def hear_reply(url: object, status: object, headers: Any) -> None:
+    """Record one reply's ``Preference-Applied`` if it speaks for the id family.
+
+    Only with the switch on, only for a 200 or 201 (a 202 or 204 has no body and no
+    ids), and only for a path that carries Outlook ids. The SDK hook and the classic
+    raw paths (delta pages, each ``$batch`` sub-response) all report here.
+    """
+    if not IMMUTABLE_IDS or status not in (200, 201) or not carries_outlook_ids(url):
+        return
+    ID_FAMILY.observe(_header_value(headers, "Preference-Applied"))
 
 
 async def _ask(request: Any) -> None:
@@ -133,8 +189,7 @@ async def _ask(request: Any) -> None:
 
 
 async def _hear(response: Any) -> None:
-    if 200 <= response.status_code < 300 and carries_outlook_ids(response.request.url):
-        ID_FAMILY.observe(response.headers.get("Preference-Applied"))
+    hear_reply(response.request.url, response.status_code, response.headers)
 
 
 def base_client() -> Any:

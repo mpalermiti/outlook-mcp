@@ -774,6 +774,13 @@ async def read_messages(
 
     for i, mid in enumerate(message_ids):
         sub = responses_by_id.get(str(i))
+        if sub is not None:
+            # Each sub-response says which id family it came back in (decision D2).
+            ids.hear_reply(
+                GRAPH_BASE.rstrip("/") + subrequests[i]["url"],
+                sub.get("status"),
+                sub.get("headers"),
+            )
         if sub is None:
             failures.append(
                 {

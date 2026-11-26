@@ -309,6 +309,9 @@ async def fetch_delta_pages(
             # SDK's kiota RetryHandler, so it must honor Retry-After itself).
             r = await send_with_retry(client, "GET", url, headers=base_headers)
             r.raise_for_status()
+            # Which id family this page came back in (decision D2); a no-op unless the
+            # process loads an intent tool.
+            ids.hear_reply(url, r.status_code, r.headers)
             body = graph_json(r)
 
             page_items = body.get("value") or []

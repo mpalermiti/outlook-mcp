@@ -20,6 +20,7 @@ from outlook_mcp.intents.find import APPLIES_TO, find_items
 from outlook_mcp.intents.ids import IdFamily
 from tests.intent_fakes import (
     ME,
+    SENT_FOLDER,
     FakeGraph,
     Mailbox,
     auth_header,
@@ -81,6 +82,7 @@ def mailbox(marker: str = "") -> Mailbox:
                 conversation="conv-budget",
                 when="2026-11-23T09:00:00Z",
                 to=["sam.jones@example.com"],
+                folder=SENT_FOLDER,  # the owner's reply, in Sent Items
             ),
             received(
                 "d1",
@@ -393,7 +395,8 @@ async def test_rules_a_mailbox_refuses_are_not_supported(fake):
     box = mailbox()
     box.rules = error(403, "ErrorAccessDenied", "Access is denied.")
     env = await run(fake, box, kind="rule")
-    assert env["outcome"] == "nothing_found"
+    assert env["outcome"] == "incomplete"  # not searched is not "nothing there"
+    assert env["understood"]["not_searched"] == ["Access is denied."]
     assert env["partial"] is True
     assert env["sections"][0]["status"] == "failed"
     assert env["failed_sections"] == [
@@ -431,7 +434,7 @@ async def test_a_graph_failure_is_raised(fake):
 async def test_a_spent_budget_is_reported(fake, monkeypatch):
     monkeypatch.setitem(budget.CEILINGS, "outlook_find", 2)
     env = await run(fake, kind="person", words="sam")
-    assert env["outcome"] == "nothing_found"
+    assert env["outcome"] == "incomplete"
     assert env["sections"][0]["status"] == "skipped_budget"
     assert env["failed_sections"][0]["reason"] == "budget"
     assert env["graph_requests"] <= 2

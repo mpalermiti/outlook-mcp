@@ -35,8 +35,11 @@ SIZE_CAP = 24_000
 _UNCAPPED_KEYS = ("plan", "receipt", "cursor")
 
 # `outcome` per tool (§1.2). Only the tools built so far.
+# `incomplete` for find is a deviation from the contracts' four outcomes: a search that
+# did not finish, or was capped, and matched nothing in what it read. It is never
+# `nothing_found`, which only a finished search may say (review S4).
 OUTCOMES = {
-    "outlook_find": frozenset({"exact", "single", "candidates", "nothing_found"}),
+    "outlook_find": frozenset({"exact", "single", "candidates", "nothing_found", "incomplete"}),
 }
 
 SECTION_STATUSES = frozenset({"ok", "failed", "skipped_budget", "skipped_time"})
@@ -312,8 +315,13 @@ def build_envelope(
     failed_sections: list[dict],
     graph_requests: int,
     next: list[dict],
+    capped: bool = False,
 ) -> dict:
-    """The envelope (§1.1), trimmed to the size cap."""
+    """The envelope (§1.1), trimmed to the size cap.
+
+    ``capped``: a list was cut at its cap, so the answer may be missing matches. It
+    sets ``partial`` too, beyond the contracts' rule (failed sections and trims).
+    """
     if outcome not in OUTCOMES[tool]:
         raise ValueError(f"{tool} cannot answer {outcome!r}")
     env = {
@@ -323,7 +331,7 @@ def build_envelope(
         "as_of": utc(as_of),
         "understood": understood,
         "sections": sections,
-        "partial": bool(failed_sections) or any(s["status"] != "ok" for s in sections),
+        "partial": capped or bool(failed_sections) or any(s["status"] != "ok" for s in sections),
         "failed_sections": failed_sections,
         "graph_requests": graph_requests,
         "next": next,

@@ -63,6 +63,9 @@ def _parse_mark_read(value: Any) -> bool:
     return is_read
 
 
+_GRAPH = "https://graph.microsoft.com/v1.0"
+
+
 def _sub_headers() -> dict:
     """A write sub-request's headers. In a process that loads an intent tool, each also
     asks for immutable ids, so the ids it hands back are the process's one family (D2)."""
@@ -194,6 +197,11 @@ async def batch_triage(
         if mid is None:
             continue
         status = sub.get("status", 0)
+        # Which id family the reply came back in (decision D2); a no-op unless the
+        # process loads an intent tool.
+        request = subrequests[int(sub_id)] if sub_id.isdigit() else None
+        if request is not None:
+            ids.hear_reply(_GRAPH + request["url"], status, sub.get("headers"))
         if 200 <= status < 300:
             results_by_id[mid] = {"id": mid, "status": "success"}
         else:

@@ -88,9 +88,16 @@ LIMIT_MAX = 10
 
 # §2.6, Q1: the newest letters, 100 a page, at most 3 pages.
 SENT_PATH = "/me/mailFolders/sentitems/messages"
-SENT_SELECT = "from,toRecipients,ccRecipients,bccRecipients,sentDateTime,conversationId"
+# `parentFolderId` tells the Sent Items folder's id, and `subject` backs up P-SI1 (people.py),
+# beyond the contracts' list; the eventMessage cast asks for the meeting-message type
+# (P-SI1), and a sent table refused it is read again without it.
+SENT_SELECT_PLAIN = (
+    "from,toRecipients,ccRecipients,bccRecipients,sentDateTime,conversationId,"
+    "parentFolderId,subject"
+)
+SENT_SELECT = SENT_SELECT_PLAIN + ",microsoft.graph.eventMessage/meetingMessageType"
 SENT_PAGES = 3
-RECIPIENTS_SELECT = "toRecipients,ccRecipients,bccRecipients,sentDateTime"
+RECIPIENTS_SELECT = "toRecipients,ccRecipients,bccRecipients,sentDateTime,subject"
 CONTACT_SEARCH_SELECT = "id,displayName,givenName,surname,emailAddresses"
 CONTACT_EXACT_SELECT = "id,displayName,emailAddresses"
 SEARCH_TOP = 25
@@ -152,11 +159,17 @@ class Filters:
 
 @dataclass
 class Candidate:
-    """One ranked match: the item the envelope carries, and whether it is known."""
+    """One ranked match: the item the envelope carries, and whether it is known.
+
+    ``check_missing`` is set when a sender check was due and did not run (its read
+    failed, or it was never made): such a candidate is never ``single``. Mail the
+    owner sent, and a person who never wrote to them, have nothing to check.
+    """
 
     item: dict
     known: bool
     sort_key: tuple = ()
+    check_missing: bool = False
 
     @property
     def blocking(self) -> bool:
@@ -173,13 +186,19 @@ class Resolution:
     total: int
     understood: dict
     sources: list[str]
+    # What the search could not reach (a capped list, a calendar past the limit), in
+    # fixed server words. Non-empty means the answer may be missing matches.
+    not_searched: list[str] = field(default_factory=list)
 
     def proceed(self, purpose: str) -> Candidate | None:
         """What a tool of ``purpose`` goes on with (§2.2 step 4), or ``None`` to return
-        the candidates and write nothing. Nothing found raises ``NoMatchError``;
-        ``find`` reports its outcome instead of calling this."""
+        the candidates and write nothing. Nothing found raises ``NoMatchError``; an
+        ``incomplete`` search writes nothing either, since it cannot say there is no
+        match. ``find`` reports its outcome instead of calling this."""
         if self.outcome in ("exact", "single"):
             return self.target
+        if self.outcome == "incomplete":
+            return None
         if self.outcome == "nothing_found":
             raise NoMatchError(self.kind, self.words, self.sources)
         only = self.candidates[0] if len(self.candidates) == 1 else None
@@ -202,10 +221,15 @@ class Lookup:
     async def sent_table(self) -> SentTable:
         """Q1, once per call and never kept after it (house rule; decision D6 is open)."""
         if self._sent is None:
-            body = await self.graph.get(
-                SENT_PATH,
-                {"$select": SENT_SELECT, "$orderby": "sentDateTime desc", "$top": 100},
-            )
+            query = {"$select": SENT_SELECT, "$orderby": "sentDateTime desc", "$top": 100}
+            try:
+                body = await self.graph.get(SENT_PATH, query)
+            except GraphAPIError as error:
+                # P-SI1: a mailbox that refuses the eventMessage cast is read without it;
+                # the type annotation and the subject still drop meeting messages.
+                if error.status_code != 400:
+                    raise
+                body = await self.graph.get(SENT_PATH, {**query, "$select": SENT_SELECT_PLAIN})
             rows = list(body.get("value") or [])
             for _ in range(SENT_PAGES - 1):
                 link = body.get("@odata.nextLink")
@@ -292,18 +316,29 @@ class _Found:
     # Set when the result is about another kind: an ambiguous sender's people.
     kind: str | None = None
     notes: dict = field(default_factory=dict)
+    not_searched: list[str] = field(default_factory=list)
 
 
 def _finish(
     lookup: Lookup, kind: str, words: str, filters: Filters, limit: int, found: _Found
 ) -> Resolution:
     ranked = sorted(found.ranked, key=lambda c: c.sort_key)
+    only = ranked[0] if len(ranked) == 1 else None
     if found.exact and ranked:
         outcome, target, ranked = "exact", ranked[0], ranked[:1]
-    elif len(ranked) == 1 and ranked[0].known and not ranked[0].blocking and found.kind is None:
-        outcome, target = "single", ranked[0]
+    elif (
+        only is not None
+        and only.known
+        and not only.blocking
+        and not only.check_missing
+        and found.kind is None
+        and not found.not_searched  # a match past the cap could be a second one
+    ):
+        outcome, target = "single", only
     elif ranked:
         outcome, target = "candidates", None
+    elif found.not_searched:
+        outcome, target = "incomplete", None
     else:
         outcome, target = "nothing_found", None
     understood = {
@@ -315,6 +350,8 @@ def _finish(
     }
     if found.kind is not None:
         understood["matched_kind"] = found.kind
+    if found.not_searched:
+        understood["not_searched"] = list(found.not_searched)
     return Resolution(
         kind=kind,
         words=words,
@@ -324,6 +361,7 @@ def _finish(
         total=len(ranked),
         understood=understood,
         sources=found.sources,
+        not_searched=list(found.not_searched),
     )
 
 
@@ -419,8 +457,6 @@ def _sender_warnings(address: str | None, name: str | None, table: SentTable) ->
     ``first_time``, which belongs to people being written to."""
     if address is None:
         return []
-    if address in table.me:
-        return []
     found = person_warnings(
         address, name, table, written=table.get(address) is not None, contacts=[]
     )
@@ -480,9 +516,14 @@ class _Person:
     written: tuple[int, datetime | None, str] | None = None  # count, last, basis
     first_sent: datetime | None = None
     received_only: bool = False
+    # The only name that matched the words came from received mail (review S1): the
+    # person may be written to, but not under that name, so they are not known here.
+    name_from_received: bool = False
     first_seen: datetime | None = None
     first_seen_basis: str = "none"
     verdict: dict | None = None
+    # A sender check was due on their latest message and did not run (review S2).
+    check_failed: bool = False
 
     def take_name(self, points: int, kind: str | None) -> None:
         if points > self.name_points:
@@ -569,7 +610,7 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
                 break
             await _enrich(lookup, [target])
         return _Found(
-            ranked=[_person_candidate(target, table, contacts, lookup.now)],
+            ranked=[_person_candidate(target, table, contacts, lookup.now, checked=not light)],
             exact=True,
             sources=sources,
         )
@@ -626,8 +667,11 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
             found = person(address)
             found.take_name(points, kind)
             found.received_name = found.received_name or name
-            if not known_already and found.written is None:
-                found.received_only = True
+            if not known_already:
+                # Names come from sent mail and contacts only: a match on a name that
+                # arrived in received mail never makes anyone known.
+                found.received_only = found.written is None
+                found.name_from_received = found.written is not None
 
     if search and not from_sent and not from_contacts:
         # Q8: people written to more than the scanned letters ago.
@@ -660,7 +704,10 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
     if not light:
         await _enrich(lookup, ordered[:ENRICHED])
     return _Found(
-        ranked=[_person_candidate(p, table, contacts, lookup.now) for p in people.values()],
+        ranked=[
+            _person_candidate(p, table, contacts, lookup.now, checked=not light)
+            for p in people.values()
+        ],
         sources=sources,
     )
 
@@ -705,7 +752,10 @@ async def _enrich(lookup: Lookup, chosen: list[_Person]) -> None:
     needs_read: list[tuple[str, _Person]] = []
     for (slot, p), reply in zip(slots, replies, strict=True):
         if not 200 <= (reply.get("status") or 0) < 300:
-            continue  # this person's check is left as not done; nothing is assumed
+            # Left as not done, and nothing is assumed: a failed sender check keeps
+            # the person from being acted on alone (review S2).
+            p.check_failed = p.check_failed or slot == "latest"
+            continue
         rows = (reply.get("body") or {}).get("value") or []
         if slot == "latest" and rows:
             row = rows[0]
@@ -733,6 +783,7 @@ async def _enrich(lookup: Lookup, chosen: list[_Person]) -> None:
         verdicts = await _header_verdicts(lookup, [{"id": m} for m, _ in needs_read])
         for message_id, p in needs_read:
             p.verdict = verdicts.get(message_id)
+            p.check_failed = p.verdict is None
 
     # Q5: the first message ever received from them.
     first_urls = [
@@ -766,9 +817,14 @@ async def _enrich(lookup: Lookup, chosen: list[_Person]) -> None:
 
 
 def _person_candidate(
-    p: _Person, table: SentTable, contacts: list[tuple[str, str]], now: datetime
+    p: _Person,
+    table: SentTable,
+    contacts: list[tuple[str, str]],
+    now: datetime,
+    *,
+    checked: bool,
 ) -> Candidate:
-    """A person candidate (§2.4)."""
+    """A person candidate (§2.4). ``checked``: whether the per-person reads ran."""
     names = [n for n in (p.contact_name, p.sent_name, p.received_name) if n]
     warnings: dict[str, dict] = {}
     for name in names or [None]:
@@ -777,7 +833,7 @@ def _person_candidate(
         ):
             warnings.setdefault(w["code"], w)
     auth = sender_auth_result(p.verdict)
-    if p.received_only:
+    if p.received_only or p.name_from_received:
         warnings.setdefault("received_only", warn("received_only"))
     if auth["result"] == "failed":
         warnings.setdefault("sender_failed", warn("sender_failed"))
@@ -812,7 +868,13 @@ def _person_candidate(
         "warnings": list(warnings.values()),
         "others_wrote": others_wrote(name=names[0] if names else None),
     }
-    return Candidate(item=item, known=p.written is not None, sort_key=p.sort_key(now))
+    return Candidate(
+        item=item,
+        known=p.written is not None and not p.name_from_received,
+        sort_key=p.sort_key(now),
+        # The light path makes no sender check at all, so it never acts alone.
+        check_missing=p.check_failed or not checked,
+    )
 
 
 # ── Mail: message, thread, file, draft ────────────────────────────────────
@@ -916,13 +978,16 @@ async def _mail(
         path, {"$search": search_kql(selection), "$select": select, "$top": SEARCH_TOP}
     )
     rows = [r for r in body.get("value") or [] if matches_locally(r, selection)]
+    not_searched: list[str] = []
+    if body.get("@odata.nextLink"):
+        not_searched.append(f"matches after the first {SEARCH_TOP}")
     if kind == "file":
-        rows += await _named_in_attachments(lookup, path, select, selection, rows)
+        rows += await _named_in_attachments(lookup, path, select, selection, rows, not_searched)
     notes = {"selection": selection.echo(), "sender_resolved": senders[0] if senders else None}
     if kind == "draft":
         # The owner's own: no sent table is needed to know them.
         ranked = [_draft_candidate(r, words) for r in rows if r.get("isDraft") is not False]
-        return _Found(ranked=ranked, sources=["drafts"], notes=notes)
+        return _Found(ranked=ranked, sources=["drafts"], notes=notes, not_searched=not_searched)
     rows = [r for r in rows if r.get("isDraft") is not True]
     table = await lookup.sent_table()
     sources = ["mail"]
@@ -948,10 +1013,12 @@ async def _mail(
             )
             for r in latest
         ]
-        return _Found(ranked=ranked, sources=sources, notes=notes)
+        return _Found(ranked=ranked, sources=sources, notes=notes, not_searched=not_searched)
 
     if kind == "file":
         with_files = rows[:FILE_MESSAGES]
+        if len(rows) > FILE_MESSAGES:
+            not_searched.append(f"the files of matching messages after the first {FILE_MESSAGES}")
         replies = await lookup.graph.batch(
             [
                 f"/me/messages/{quote(r['id'], safe='')}/attachments?$select={ATTACHMENT_SELECT}"
@@ -959,26 +1026,35 @@ async def _mail(
             ]
         )
         found_files: list[tuple[dict, dict]] = []
+        unread = 0
         for row, reply in zip(with_files, replies, strict=True):
             if not 200 <= (reply.get("status") or 0) < 300:
+                unread += 1
                 continue
             for attachment in (reply.get("body") or {}).get("value") or []:
                 if attachment.get("isInline") is True:
                     continue
                 if label_score(words, attachment.get("name")) > 0:
                     found_files.append((row, attachment))
+        if unread:
+            not_searched.append(f"the files of {unread} matching messages whose list failed")
         file_rows = list({r["id"]: r for r, _ in found_files}.values())
         verdicts = await _header_verdicts(lookup, _others(file_rows, table)[:HEADER_READS])
         ranked = [_file_candidate(r, a, table, verdicts, words) for r, a in found_files]
-        return _Found(ranked=ranked, sources=sources, notes=notes)
+        return _Found(ranked=ranked, sources=sources, notes=notes, not_searched=not_searched)
 
     verdicts = await _header_verdicts(lookup, _others(rows, table)[:HEADER_READS])
     ranked = [_mail_candidate(r, table, verdicts, words, filters.folder) for r in rows]
-    return _Found(ranked=ranked, sources=sources, notes=notes)
+    return _Found(ranked=ranked, sources=sources, notes=notes, not_searched=not_searched)
 
 
 async def _named_in_attachments(
-    lookup: Lookup, path: str, select: str, selection: MailSelection, found: list[dict]
+    lookup: Lookup,
+    path: str,
+    select: str,
+    selection: MailSelection,
+    found: list[dict],
+    not_searched: list[str],
 ) -> list[dict]:
     """Messages whose attachment names hold the words, beyond those ``found`` already.
 
@@ -996,6 +1072,10 @@ async def _named_in_attachments(
         if error.status_code != 400:
             raise
         return []
+    if body.get("@odata.nextLink"):
+        message = f"matches after the first {SEARCH_TOP}"
+        if message not in not_searched:
+            not_searched.append(message)
     seen = {r.get("id") for r in found}
     return [
         r
@@ -1004,35 +1084,58 @@ async def _named_in_attachments(
     ]
 
 
+def _from_owner(row: dict, table: SentTable) -> bool:
+    """Whether the owner really sent this message: it is in Sent Items, or a draft.
+
+    Never the From address: that is the one field a sender picks freely, so mail in
+    the Inbox or Junk that claims the owner's own address is someone else's until
+    its sender check says otherwise (review B1). Mail the owner sent and later moved
+    out of Sent Items is treated the same way, which only costs a `single`.
+    """
+    if row.get("isDraft") is True:
+        return True
+    folder = row.get("parentFolderId")
+    return table.sent_folder is not None and folder == table.sent_folder
+
+
 def _others(rows: list[dict], table: SentTable) -> list[dict]:
-    """Rows not sent by the owner: only those get a sender check."""
-    return [r for r in rows if (sender_of(r)[0] or "") not in table.me]
+    """Rows the owner didn't send: each gets a sender check, the owner's addresses included."""
+    return [r for r in rows if not _from_owner(r, table)]
 
 
-def _sender_known(address: str | None, table: SentTable) -> bool:
-    return bool(address) and (address in table.me or table.get(address) is not None)
+def _known_sender(row: dict, table: SentTable) -> bool:
+    """The known test for a message (§2.2): the owner sent it, or its sender is written to."""
+    if _from_owner(row, table):
+        return True
+    address = _address(sender_of(row)[0])
+    return address is not None and address not in table.me and table.get(address) is not None
 
 
 def _mail_sort(row: dict, words: str, table: SentTable) -> tuple:
-    address, _ = sender_of(row)
     score = label_score(words, row.get("subject")) + 10
-    score += 15 if _sender_known(address, table) else 0
+    score += 15 if _known_sender(row, table) else 0
     return (-score, _time_sort(parse_time(row.get("receivedDateTime"))), str(row.get("id")))
 
 
-def _from(row: dict, table: SentTable, verdicts: dict[str, dict]) -> tuple[dict, dict, list[dict]]:
-    """``from`` for an item, the text that goes under ``others_wrote``, and warnings."""
+def _from(
+    row: dict, table: SentTable, verdicts: dict[str, dict]
+) -> tuple[dict, dict, list[dict], bool]:
+    """``from`` for an item, the text for ``others_wrote``, warnings, and whether the
+    sender check that was due is missing (it failed, or was never made)."""
     address, name = sender_of(row)
     valid = _address(address)
-    verdict = verdicts.get(str(row.get("id")))
-    auth = sender_auth_result(verdict) if valid not in table.me else sender_auth_result(None)
-    shown = {"address": valid, "known": _sender_known(valid, table), "sender_auth": auth}
+    owner = _from_owner(row, table)
+    verdict = None if owner else verdicts.get(str(row.get("id")))
+    auth = sender_auth_result(verdict)
+    shown = {"address": valid, "known": _known_sender(row, table), "sender_auth": auth}
     wrote: dict = {"name": name}
-    warnings = _verdict_warnings(auth["result"]) + _sender_warnings(valid, name, table)
+    warnings = _verdict_warnings(auth["result"])
+    if not owner:
+        warnings += _sender_warnings(valid, name, table)
     if address and not valid:
         wrote["address_text"] = address
         warnings.append(warn("invalid_address"))
-    return shown, wrote, warnings
+    return shown, wrote, warnings, not owner and verdict is None
 
 
 def _search_warnings(search: bool) -> list[dict]:
@@ -1069,12 +1172,12 @@ def _mail_candidate(
     *,
     search: bool = True,
 ) -> Candidate:
-    shown, wrote, warnings = _from(row, table, verdicts)
+    shown, wrote, warnings, unchecked = _from(row, table, verdicts)
     received_at = parse_time(row.get("receivedDateTime"))
     score = label_score(words, row.get("subject")) + (10 if search else 0)
     score += 15 if shown["known"] else 0
     reasons = [why("search_match")] if search else []
-    if shown["known"] and shown["address"] not in table.me:
+    if shown["known"] and not _from_owner(row, table):
         reasons.append(why("sender_written_to"))
     to_me = _to_me(row, table)
     if to_me == "to":
@@ -1108,9 +1211,11 @@ def _mail_candidate(
             address_text=wrote.get("address_text"),
         ),
     }
-    known = shown["known"]
     return Candidate(
-        item=item, known=known, sort_key=(-score, _time_sort(received_at), str(row.get("id")))
+        item=item,
+        known=shown["known"],
+        sort_key=(-score, _time_sort(received_at), str(row.get("id"))),
+        check_missing=unchecked,
     )
 
 
@@ -1124,9 +1229,11 @@ def _thread_candidate(
     count: int | None = None,
 ) -> Candidate:
     last = max(rows, key=lambda r: r.get("receivedDateTime") or "")
-    shown, wrote, warnings = _from(last, table, verdicts)
+    shown, wrote, warnings, unchecked = _from(last, table, verdicts)
     last_at = parse_time(last.get("receivedDateTime"))
-    mine = [r for r in rows if (sender_of(r)[0] or "") in table.me]
+    # The owner's messages in the thread are the ones in Sent Items, not the ones whose
+    # From names them (review B1).
+    mine = [r for r in rows if _from_owner(r, table)]
     score = label_score(words, last.get("subject")) + (10 if search else 0)
     score += 15 if shown["known"] or mine else 0
     reasons = [why("search_match")] if search else []
@@ -1136,7 +1243,7 @@ def _thread_candidate(
         reasons.append(why("you_wrote_in_thread", **at))
     elif shown["known"]:
         reasons.append(why("sender_written_to"))
-    from_me = shown["address"] in table.me
+    from_me = _from_owner(last, table)
     conversation = last.get("conversationId")
     item = {
         "kind": "thread",
@@ -1164,19 +1271,20 @@ def _thread_candidate(
         item=item,
         known=bool(mine) or shown["known"],
         sort_key=(-score, _time_sort(last_at), str(conversation)),
+        check_missing=unchecked,
     )
 
 
 def _file_candidate(
     row: dict, attachment: dict, table: SentTable, verdicts: dict[str, dict], words: str
 ) -> Candidate:
-    shown, wrote, warnings = _from(row, table, verdicts)
+    shown, wrote, warnings, unchecked = _from(row, table, verdicts)
     received_at = parse_time(row.get("receivedDateTime"))
     score = label_score(words, attachment.get("name")) + 10 + (15 if shown["known"] else 0)
     content_type = str(attachment.get("contentType") or "").strip().lower()
     size = attachment.get("size")
     reasons = [why("search_match")]
-    if shown["known"] and shown["address"] not in table.me:
+    if shown["known"] and not _from_owner(row, table):
         reasons.append(why("sender_written_to"))
     item = {
         "kind": "file",
@@ -1201,6 +1309,7 @@ def _file_candidate(
         item=item,
         known=shown["known"],
         sort_key=(-score, _time_sort(received_at), str(attachment.get("id"))),
+        check_missing=unchecked,
     )
 
 
@@ -1254,6 +1363,11 @@ async def _events(lookup: Lookup, words: str, filters: Filters) -> _Found:
     calendars = await fetch_all_calendars(lookup.sdk)
     calendars.sort(key=lambda c: 0 if getattr(c, "is_default_calendar", False) else 1)
     matched: dict[str, tuple[dict, str]] = {}
+    not_searched: list[str] = []
+    if len(calendars) > EVENT_CALENDARS:
+        not_searched.append(
+            f"{len(calendars) - EVENT_CALENDARS} more calendars after the first {EVENT_CALENDARS}"
+        )
     for calendar in calendars[:EVENT_CALENDARS]:
         body = await lookup.graph.get(
             f"/me/calendars/{quote(calendar.id, safe='')}/calendarView",
@@ -1269,7 +1383,12 @@ async def _events(lookup: Lookup, words: str, filters: Filters) -> _Found:
                 if isinstance(row.get("id"), str) and _event_match(words, row):
                     matched.setdefault(row["id"], (row, calendar.id))
             link = body.get("@odata.nextLink")
-            if page == EVENT_PAGES - 1 or not isinstance(link, str) or not link:
+            if not isinstance(link, str) or not link:
+                break
+            if page == EVENT_PAGES - 1:
+                not_searched.append(
+                    f"events after the first {EVENT_PAGES * EVENT_TOP} on calendar {calendar.id}"
+                )
                 break
             body = await lookup.graph.follow(link)
 
@@ -1280,6 +1399,7 @@ async def _events(lookup: Lookup, words: str, filters: Filters) -> _Found:
         ranked=ranked,
         sources=["your calendars"],
         notes={"window": {"start": utc(start), "end": utc(end)}},
+        not_searched=not_searched,
     )
 
 
@@ -1300,7 +1420,9 @@ def _event_candidate(
 ) -> Candidate:
     organizer, organizer_name = sender_of({"from": row.get("organizer")})
     organizer = _address(organizer)
-    is_organizer = row.get("isOrganizer") is True or bool(table and organizer in table.me)
+    # Graph's word only: an organizer address that is the owner's own proves nothing,
+    # since an invitation can name any organizer (review B1).
+    is_organizer = row.get("isOrganizer") is True
     written = bool(table and organizer and table.get(organizer) is not None)
     response = _enum((row.get("responseStatus") or {}).get("response"), _RESPONSES, "none")
     show_as = _enum(row.get("showAs"), _SHOW_AS, "unknown")
@@ -1401,6 +1523,11 @@ async def _tasks(lookup: Lookup, words: str, filters: Filters) -> _Found:
             raise ValueError(
                 f"No task list called '{sanitize_output(wanted)[:60]}'. Pass a list's name or id."
             )
+    not_searched: list[str] = []
+    if len(lists) > TASK_LISTS:
+        not_searched.append(
+            f"{len(lists) - TASK_LISTS} more task lists after the first {TASK_LISTS}"
+        )
     lists = lists[:TASK_LISTS]
 
     if _id_shaped(words):
@@ -1433,13 +1560,16 @@ async def _tasks(lookup: Lookup, words: str, filters: Filters) -> _Found:
             if error.status_code != 400:
                 raise
             body = await lookup.graph.get(path, {"$top": TASK_TOP}, ids=False)
-        for row in body.get("value") or []:
+        rows = body.get("value") or []
+        if body.get("@odata.nextLink") or len(rows) >= TASK_TOP:
+            not_searched.append(f"tasks after the first {TASK_TOP} in task list {task_list.id}")
+        for row in rows:
             if row.get("status") == "completed" or not label_score(words, row.get("title")):
                 continue
             if filters.window and not _due_in(row, filters.window, lookup.zone):
                 continue
             ranked.append(_task_candidate(row, task_list.id, words, filters, lookup))
-    return _Found(ranked=ranked, sources=["your task lists"])
+    return _Found(ranked=ranked, sources=["your task lists"], not_searched=not_searched)
 
 
 def _due(row: dict) -> date | None:

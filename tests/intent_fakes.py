@@ -194,6 +194,8 @@ def page(items: list[dict], next_link: str | None = None) -> dict:
 # ── Graph-shaped rows ─────────────────────────────────────────────────────
 
 ME = "me@example.com"
+# The Sent Items folder's id: a message there is one the owner really sent.
+SENT_FOLDER = "sent-id"
 
 
 def addr(address: str, name: str | None = None) -> dict:
@@ -225,6 +227,7 @@ def letter(
         "bccRecipients": people(bcc),
         "sentDateTime": sent,
         "conversationId": conversation,
+        "parentFolderId": SENT_FOLDER,
     }
     if odata_type:
         row["@odata.type"] = odata_type
@@ -336,6 +339,8 @@ class Mailbox:
     task_filter_supported: bool = True
     # P-AT1: whether a message search takes KQL `attachment:`.
     attachment_search_supported: bool = True
+    # P-SI1: whether a list's $select takes the eventMessage cast.
+    cast_select_supported: bool = True
 
     def install(self, fake: FakeGraph) -> FakeGraph:
         on = fake.on
@@ -361,6 +366,10 @@ class Mailbox:
     # Mail
 
     def _sent_items(self, seen: Seen, match) -> Any:
+        if "microsoft.graph.eventMessage" in (seen.params.get("$select") or "") and not (
+            self.cast_select_supported
+        ):
+            return error(400, "BadRequest", "Could not find a property named 'eventMessage'")
         if seen.search:
             hits = [r for r in self.sent if kql_matches(seen.search, r)]
             return page(hits[: int(seen.params.get("$top") or 25)])

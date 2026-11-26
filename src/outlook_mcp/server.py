@@ -463,7 +463,7 @@ def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
       the reply impossible to write. Error text gets the same in
       ``OutlookMCPError.__str__``.
     - Add the one-time ``server_tip`` to a result when one is due
-      (`_with_server_tip`; none is, until the first intent tool exists).
+      (`_with_server_tip`; none is while `toolsets.TIPS_LIVE` is off).
 
     Every tool passes through here, so it also dedents the docstring the SDK
     publishes as the tool's description.

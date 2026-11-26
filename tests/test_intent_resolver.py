@@ -344,7 +344,8 @@ async def test_person_queries_are_exactly_these(fake):
             ("$orderby", "sentDateTime desc"),
             (
                 "$select",
-                "from,toRecipients,ccRecipients,bccRecipients,sentDateTime,conversationId",
+                "from,toRecipients,ccRecipients,bccRecipients,sentDateTime,conversationId,"
+                "parentFolderId,subject,microsoft.graph.eventMessage/meetingMessageType",
             ),
             ("$top", "100"),
         ),
@@ -387,7 +388,7 @@ async def test_person_queries_are_exactly_these(fake):
         "/me/mailFolders/sentitems/messages",
         (
             ("$search", '"recipients:organizer@stranger.example"'),
-            ("$select", "toRecipients,ccRecipients,bccRecipients,sentDateTime"),
+            ("$select", "toRecipients,ccRecipients,bccRecipients,sentDateTime,subject"),
             ("$top", "25"),
         ),
     )
@@ -413,7 +414,7 @@ async def test_person_queries_are_exactly_these(fake):
         "/me/mailFolders/sentitems/messages",
         (
             ("$search", '"to:zed"'),
-            ("$select", "toRecipients,ccRecipients,bccRecipients,sentDateTime"),
+            ("$select", "toRecipients,ccRecipients,bccRecipients,sentDateTime,subject"),
             ("$top", "25"),
         ),
     )

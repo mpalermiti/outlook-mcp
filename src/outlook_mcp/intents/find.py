@@ -7,8 +7,11 @@ with one section, ``matches``. Its outcome is ``exact``, ``single``,
 ``candidates`` or ``nothing_found``: a name that matches nothing is an answer
 here, not an error.
 
-Not registered yet: the server wires it in as ``outlook_find`` once the
-toolset machinery that loads the opt-in ``intents`` group lands.
+Registered by the server as ``outlook_find`` in the opt-in ``intents`` group.
+
+``incomplete`` is a fifth outcome, beyond the contracts' four (§1.2): the search
+did not finish, or a list it read was cut at its cap, and it matched nothing in
+what it did read. ``understood.not_searched`` says what was left out.
 """
 
 from __future__ import annotations
@@ -186,18 +189,30 @@ async def find_items(
         (result,) = await run_sections([("matches", matches)])
         queries = list(lookup.graph.queries)
 
+    capped = False
     if result.status == "ok":
         resolution = result.value
         items = [c.item for c in resolution.candidates]
-        matched = section("matches", items, cap=limit, total=resolution.total)
+        capped = bool(resolution.not_searched)
+        matched = section(
+            "matches",
+            items,
+            cap=limit,
+            total=resolution.total,
+            # A capped search may have missed matches: its count is a floor (review S4).
+            total_exact=not capped,
+            total_display=f"{resolution.total}+" if capped else None,
+        )
         outcome = resolution.outcome
         understood = dict(resolution.understood)
         failed: list[dict] = []
     else:
+        # The search did not finish (budget, deadline, a refused feature): that is not
+        # "nothing matched", so it is never answered as `nothing_found` (review S4).
         items = []
         matched = section("matches", [], cap=limit, status=result.status)
-        outcome = "nothing_found"
-        understood = {"kind": kind, "words": words}
+        outcome = "incomplete"
+        understood = {"kind": kind, "words": words, "not_searched": [result.failure["message"]]}
         failed = [result.failure]
 
     understood["queries"] = queries
@@ -221,4 +236,5 @@ async def find_items(
         failed_sections=failed,
         graph_requests=spent.spent,
         next=build_next(_suggestions(items), loaded_tools),
+        capped=capped,
     )

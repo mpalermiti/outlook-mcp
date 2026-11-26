@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
+from collections import Counter
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -55,14 +56,25 @@ _CONFUSABLES = str.maketrans(
         "\u03c4": "t",  # greek small letter tau
         "\u03ba": "k",  # greek small letter kappa
         "\u03b9": "i",  # greek small letter iota
+        # Armenian, beyond the contracts' table (review N1)
+        "\u0585": "o",  # armenian small letter oh
+        "\u0578": "n",  # armenian small letter vo
+        "\u057d": "u",  # armenian small letter seh
+        "\u0570": "h",  # armenian small letter ho
     }
 )
 _NOT_NAME_CHAR = re.compile(r"[^a-z0-9]+")
 
 
+def _visible(text: str) -> str:
+    """``text`` without format characters (zero-width joiners and the like), which
+    render as nothing but would split a word or an address in two."""
+    return "".join(c for c in text if unicodedata.category(c) != "Cf")
+
+
 def _fold(text: str) -> str:
-    """NFKC, casefold, then NFD with combining marks dropped."""
-    folded = unicodedata.normalize("NFKC", text).casefold()
+    """NFKC, casefold, then NFD with combining marks dropped; format characters go first."""
+    folded = unicodedata.normalize("NFKC", _visible(text)).casefold()
     decomposed = unicodedata.normalize("NFD", folded)
     return "".join(c for c in decomposed if not unicodedata.combining(c))
 
@@ -181,9 +193,13 @@ _EMAIL_LIKE = re.compile(r"[^\s<>()\[\]\"',;:]+@[^\s<>()\[\]\"',;:]+\.[^\s<>()\[
 
 
 def contains_other_address(name: str, address: str) -> bool:
-    """Whether a display name holds an email-like token other than the real address."""
+    """Whether a display name holds an email-like token other than the real address.
+
+    Read after NFKC, so a fullwidth ``＠`` is an ``@``, and without format characters.
+    """
     real = address.casefold()
-    return any(token.casefold() != real for token in _EMAIL_LIKE.findall(name or ""))
+    shown = unicodedata.normalize("NFKC", _visible(name or ""))
+    return any(token.casefold() != real for token in _EMAIL_LIKE.findall(shown))
 
 
 def is_valid_address(address: str) -> bool:
@@ -197,16 +213,41 @@ def is_valid_address(address: str) -> bool:
 # ── The sent table (Q1) ───────────────────────────────────────────────────
 
 
+# The subjects Outlook gives a meeting response or cancellation it sends. English
+# only: a backstop for P-SI1, not the main signal.
+MEETING_SUBJECT_PREFIXES = (
+    "accepted:",
+    "declined:",
+    "tentative:",
+    "tentatively accepted:",
+    "new time proposed:",
+    "canceled:",
+    "cancelled:",
+)
+
+
 def is_meeting_message(row: dict) -> bool:
     """Whether a Sent Items row is a meeting request or response rather than a letter.
 
-    Probe P-SI1 settles how Graph types these in a personal mailbox's Sent Items.
-    The documented annotation is ``@odata.type`` = ``#microsoft.graph.eventMessage``
-    or a subtype (``…Request``, ``…Response``); every subtype is matched, ignoring
-    case. A row with no annotation is a plain message, which is how Graph writes
-    the collection's own type.
+    Probe P-SI1 settles how Graph marks these in a personal mailbox's Sent Items.
+    Until it runs, any one of three signals drops the row, so the owner's accept
+    or decline can never make a stranger known:
+
+    - ``@odata.type`` names ``eventMessage`` or a subtype, ignoring case;
+    - ``meetingMessageType`` came back, which only meeting messages carry (the
+      sent table asks for it through the eventMessage cast);
+    - the subject starts with a standard response prefix ("Accepted:" and so on).
+      A letter whose subject happens to start that way is dropped too, which can
+      only make someone less known, never more.
     """
-    return "eventmessage" in str(row.get("@odata.type") or "").lower()
+    if "eventmessage" in str(row.get("@odata.type") or "").lower():
+        return True
+    if row.get("meetingMessageType") is not None:
+        return True
+    subject = row.get("subject")
+    return isinstance(subject, str) and subject.strip().casefold().startswith(
+        MEETING_SUBJECT_PREFIXES
+    )
 
 
 def parse_time(value: object) -> datetime | None:
@@ -269,6 +310,9 @@ class SentTable:
     me: frozenset[str] = frozenset()
     scanned: int = 0
     meeting_messages_dropped: int = 0
+    # The Sent Items folder's id, read off the scanned rows: a message there is one the
+    # owner sent. None when Sent Items is empty, and then no message counts as theirs.
+    sent_folder: str | None = None
 
     def get(self, address: str) -> SentEntry | None:
         return self.entries.get(address.lower())
@@ -296,7 +340,12 @@ def build_sent_table(rows: Iterable[dict], *, signed_in: str | None) -> SentTabl
         if address:
             me.add(address)
 
-    table = SentTable(me=frozenset(me))
+    folders = Counter(
+        row.get("parentFolderId") for row in rows if isinstance(row.get("parentFolderId"), str)
+    )
+    table = SentTable(
+        me=frozenset(me), sent_folder=folders.most_common(1)[0][0] if folders else None
+    )
     for row in rows:
         table.scanned += 1
         if is_meeting_message(row):

@@ -66,19 +66,48 @@ def _word_of(text: str | None) -> str | None:
 # ── Q1: the sent table ────────────────────────────────────────────────────
 
 
-async def test_q1_sent_items_come_newest_first(lookup):
+async def _q1(lookup, select: str) -> list[dict]:
     body = await lookup.graph.get(
-        resolver.SENT_PATH,
-        {"$select": resolver.SENT_SELECT, "$orderby": "sentDateTime desc", "$top": 100},
+        resolver.SENT_PATH, {"$select": select, "$orderby": "sentDateTime desc", "$top": 100}
     )
-    rows = body.get("value") or []
+    return body.get("value") or []
+
+
+async def test_q1_sent_items_come_newest_first(lookup):
+    """The sent table's query, with the eventMessage cast if Graph takes it (P-SI1),
+    and without it if not, exactly as the resolver falls back."""
+    try:
+        rows = await _q1(lookup, resolver.SENT_SELECT)
+    except GraphAPIError as error:
+        if error.status_code != 400:
+            raise
+        rows = await _q1(lookup, resolver.SENT_SELECT_PLAIN)
     if not rows:
         pytest.skip("Sent Items is empty")
     sent = [r.get("sentDateTime") for r in rows if r.get("sentDateTime")]
     assert sent == sorted(sent, reverse=True), "the sent table must read the newest letters"
     assert all("toRecipients" in r for r in rows), "the $select must reach every row"
+    folders = {r.get("parentFolderId") for r in rows}
+    assert len(folders) == 1 and None not in folders, "every row names the Sent Items folder"
     table = await lookup.sent_table()
     assert table.scanned >= len(rows)
+    assert table.sent_folder == folders.pop()
+
+
+async def test_p_si1_a_meeting_message_type_comes_only_on_meeting_messages(lookup):
+    """Where Graph takes the cast, `meetingMessageType` must mark meeting messages and
+    nothing else; where it refuses it, the resolver reads without it (skipped here)."""
+    try:
+        rows = await _q1(lookup, resolver.SENT_SELECT)
+    except GraphAPIError as error:
+        if error.status_code == 400:
+            pytest.skip(
+                "P-SI1: Graph refuses the eventMessage cast here; the type and subject decide"
+            )
+        raise
+    typed = [r for r in rows if r.get("meetingMessageType") is not None]
+    for row in typed:
+        assert "eventmessage" in str(row.get("@odata.type") or "").lower(), row.get("@odata.type")
 
 
 # ── Q2, Q3: contacts ──────────────────────────────────────────────────────
