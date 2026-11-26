@@ -472,3 +472,75 @@ def test_n1_name_tricks_are_caught():
     armenian = warnings("x@evil.example", "Jօhn Smith")
     assert "lookalike_name" in armenian or "mixed_script_name" in armenian
     assert "lookalike_name" in warnings("x@evil.example", "Jo‍hn Smith")
+
+
+# ── Re-check of e26f981 ───────────────────────────────────────────────────
+
+
+def _older_than_the_scan(old_letter: dict) -> Mailbox:
+    filler = [
+        letter(
+            [("sam@example.com", "Sam")],
+            sent=f"2026-{1 + i // 28 % 10:02d}-{1 + i % 28:02d}T10:00:00Z",
+        )
+        for i in range(300)
+    ]
+    return Mailbox(
+        sent=filler + [old_letter],
+        received=[
+            received(
+                "x1",
+                "billing@vendor-mail.example",
+                "Quick favour",
+                name="Dana Whitfield",
+                headers=auth_header("pass", "vendor-mail.example"),
+            )
+        ],
+    )
+
+
+async def test_s1b_a_received_name_never_counts_even_when_the_letters_are_older_than_the_scan(fake):
+    """V7: Q7 proves the owner wrote to the address, not the name. The rule is about
+    where the name came from, whichever query found the address."""
+    old = letter([("billing@vendor-mail.example", "Vendor Billing")], sent="2024-03-01T10:00:00Z")
+    resolution = await res(fake, _older_than_the_scan(old), "person", "Dana Whitfield")
+    assert resolution.outcome != "single"
+    candidate = next(
+        c for c in resolution.candidates if c.item["address"] == "billing@vendor-mail.example"
+    )
+    assert candidate.item["written_to"]["basis"] == "search"  # Q7 found the old letter
+    assert candidate.known is False
+    assert "received_only" in codes(candidate)
+
+
+async def test_s1b_the_name_on_an_old_letter_does_count(fake):
+    """The owner's own letter names the person: that name may make them single."""
+    old = letter([("billing@vendor-mail.example", "Dana Whitfield")], sent="2024-03-01T10:00:00Z")
+    resolution = await res(fake, _older_than_the_scan(old), "person", "Dana Whitfield")
+    assert resolution.outcome == "single"
+    assert resolution.target.item["address"] == "billing@vendor-mail.example"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="P-SI1 release gate: an accept with no type annotation, no meetingMessageType and "
+    "a localized subject is still read as a letter; the probe must settle it before release",
+)
+async def test_p_si1_gate_a_localized_untyped_accept_does_not_make_a_stranger_known(fake):
+    """V9. Fails today on purpose; when P-SI1's fix lands this passes, and `strict`
+    makes the run fail until the marker comes off."""
+    accept = letter([("organizer@stranger.example", "Olga Stranger")], sent="2026-11-02T10:00:00Z")
+    accept["subject"] = "Zugesagt: Kostenlose Beratung"
+    resolution = await res(fake, Mailbox(sent=[accept]), "person", "Olga Stranger")
+    assert resolution.outcome != "single"
+
+
+async def test_nit_a_note_to_self_in_the_inbox_is_no_lookalike_of_a_correspondent(fake):
+    box = Mailbox(
+        sent=[letter([("me1@example.com", "Me One")])],
+        received=[received("n", ME, "Note to self", headers=auth_header("pass", "example.com"))],
+    )
+    resolution = await res(fake, box, "message", "note to self")
+    candidate = resolution.candidates[0]
+    assert "lookalike_address" not in codes(candidate)
+    assert candidate.known is False  # still not the owner's without Sent Items (B1)

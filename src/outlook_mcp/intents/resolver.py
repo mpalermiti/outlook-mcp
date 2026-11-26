@@ -457,8 +457,12 @@ def _sender_warnings(address: str | None, name: str | None, table: SentTable) ->
     ``first_time``, which belongs to people being written to."""
     if address is None:
         return []
+    # One of the owner's own addresses is checked for what its name hides, not as a
+    # lookalike of the people they write to: a note to self is no impostor of them.
+    # Whether the message is really theirs is the folder's and the sender check's job.
+    own = address in table.me
     found = person_warnings(
-        address, name, table, written=table.get(address) is not None, contacts=[]
+        address, name, table, written=own or table.get(address) is not None, contacts=[]
     )
     return [w for w in found if w["code"] != "first_time"]
 
@@ -516,18 +520,23 @@ class _Person:
     written: tuple[int, datetime | None, str] | None = None  # count, last, basis
     first_sent: datetime | None = None
     received_only: bool = False
-    # The only name that matched the words came from received mail (review S1): the
-    # person may be written to, but not under that name, so they are not known here.
-    name_from_received: bool = False
+    # Whether a name that matched the words came from the owner's own mail or contacts:
+    # a sent letter's recipient name, a saved contact, or the exact address. Only such a
+    # match may make a person known. A name seen only in received mail never does,
+    # whichever query found the address; Q7 proves letters, not the name (review S1).
+    trusted_name: bool = False
     first_seen: datetime | None = None
     first_seen_basis: str = "none"
     verdict: dict | None = None
     # A sender check was due on their latest message and did not run (review S2).
     check_failed: bool = False
 
-    def take_name(self, points: int, kind: str | None) -> None:
+    def take_name(self, points: int, kind: str | None, *, trusted: bool) -> None:
+        """Keep the best name match; ``trusted`` when the name came from the owner."""
         if points > self.name_points:
             self.name_points, self.name_kind = points, kind
+        if points and trusted:
+            self.trusted_name = True
 
     def score(self, now: datetime) -> int:
         count, last = (self.written[0], self.written[1]) if self.written else (0, None)
@@ -593,7 +602,7 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
     if is_valid_address(words.strip()):
         address = words.strip().lower()
         target = person(address)
-        target.take_name(100, "address")
+        target.take_name(100, "address", trusted=True)
         if not light:
             sources.append("contacts")
             body = await lookup.graph.get(
@@ -608,7 +617,7 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
                 target.contact_id = row.get("id") if isinstance(row.get("id"), str) else None
                 target.contact_name = row.get("displayName")
                 break
-            await _enrich(lookup, [target])
+            await _enrich(lookup, [target], words)
         return _Found(
             ranked=[_person_candidate(target, table, contacts, lookup.now, checked=not light)],
             exact=True,
@@ -618,7 +627,7 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
     for entry in table.entries.values():
         points, kind = name_match(words, entry.name, entry.address)
         if points:
-            person(entry.address).take_name(points, kind)
+            person(entry.address).take_name(points, kind, trusted=True)
     from_sent = bool(people)
 
     search = _q(words)
@@ -644,7 +653,7 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
                 )
                 if best[0]:
                     found = person(address)
-                    found.take_name(*best)
+                    found.take_name(*best, trusted=True)
                     found.contact_id = row.get("id") if isinstance(row.get("id"), str) else None
                     found.contact_name = display
                     from_contacts = True
@@ -665,13 +674,11 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
                 continue
             known_already = address in people
             found = person(address)
-            found.take_name(points, kind)
+            # A name from received mail: it finds the person, never makes them known.
+            found.take_name(points, kind, trusted=False)
             found.received_name = found.received_name or name
-            if not known_already:
-                # Names come from sent mail and contacts only: a match on a name that
-                # arrived in received mail never makes anyone known.
-                found.received_only = found.written is None
-                found.name_from_received = found.written is not None
+            if not known_already and found.written is None:
+                found.received_only = True
 
     if search and not from_sent and not from_contacts:
         # Q8: people written to more than the scanned letters ago.
@@ -690,7 +697,8 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
                 points, kind = name_match(words, name, address)
                 if points:
                     found = person(address)
-                    found.take_name(points, kind)
+                    # The recipient name on the owner's own letter: a trusted name.
+                    found.take_name(points, kind, trusted=True)
                     found.sent_name = found.sent_name or name
                     hits.setdefault(address, []).append(parse_time(row.get("sentDateTime")))
         for address, times in hits.items():
@@ -702,7 +710,7 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
 
     ordered = sorted(people.values(), key=lambda p: p.sort_key(lookup.now))
     if not light:
-        await _enrich(lookup, ordered[:ENRICHED])
+        await _enrich(lookup, ordered[:ENRICHED], words)
     return _Found(
         ranked=[
             _person_candidate(p, table, contacts, lookup.now, checked=not light)
@@ -712,7 +720,7 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
     )
 
 
-async def _enrich(lookup: Lookup, chosen: list[_Person]) -> None:
+async def _enrich(lookup: Lookup, chosen: list[_Person], words: str) -> None:
     """The per-person reads for the top candidates (§2.6): the latest received message
     and its sender check (Q6), letters beyond the scan (Q7), then first contact (Q5)
     under its own timeout."""
@@ -770,15 +778,22 @@ async def _enrich(lookup: Lookup, chosen: list[_Person]) -> None:
         elif slot == "letters":
             # P-SE1: KQL `recipients:` may match more than the exact address. Only
             # letters that really list it count, and meeting messages never do.
-            stamps = [
-                parse_time(row.get("sentDateTime"))
+            letters = [
+                row
                 for row in rows
                 if not is_meeting_message(row) and any(a == p.address for a, _ in recipients(row))
             ]
-            if stamps:
-                dated = [s for s in stamps if s is not None]
-                p.written = (len(stamps), max(dated) if dated else None, "search")
+            if letters:
+                dated = [t for t in (parse_time(r.get("sentDateTime")) for r in letters) if t]
+                p.written = (len(letters), max(dated) if dated else None, "search")
                 p.received_only = False
+                # These letters prove the owner wrote to the address. Their recipient
+                # names are the owner's own, so one matching the words is trusted.
+                for row in letters:
+                    for address, name in recipients(row):
+                        if address == p.address and name and name_match(words, name, address)[0]:
+                            p.trusted_name = True
+                            p.sent_name = p.sent_name or name
     if needs_read:
         verdicts = await _header_verdicts(lookup, [{"id": m} for m, _ in needs_read])
         for message_id, p in needs_read:
@@ -833,7 +848,7 @@ def _person_candidate(
         ):
             warnings.setdefault(w["code"], w)
     auth = sender_auth_result(p.verdict)
-    if p.received_only or p.name_from_received:
+    if p.received_only or (p.written is not None and not p.trusted_name):
         warnings.setdefault("received_only", warn("received_only"))
     if auth["result"] == "failed":
         warnings.setdefault("sender_failed", warn("sender_failed"))
@@ -870,7 +885,7 @@ def _person_candidate(
     }
     return Candidate(
         item=item,
-        known=p.written is not None and not p.name_from_received,
+        known=p.written is not None and p.trusted_name,
         sort_key=p.sort_key(now),
         # The light path makes no sender check at all, so it never acts alone.
         check_missing=p.check_failed or not checked,
@@ -1421,7 +1436,8 @@ def _event_candidate(
     organizer, organizer_name = sender_of({"from": row.get("organizer")})
     organizer = _address(organizer)
     # Graph's word only: an organizer address that is the owner's own proves nothing,
-    # since an invitation can name any organizer (review B1).
+    # since an invitation can name any organizer (review B1). P-SI1 also checks that
+    # Exchange leaves `isOrganizer` false on an incoming invitation naming the owner.
     is_organizer = row.get("isOrganizer") is True
     written = bool(table and organizer and table.get(organizer) is not None)
     response = _enum((row.get("responseStatus") or {}).get("response"), _RESPONSES, "none")

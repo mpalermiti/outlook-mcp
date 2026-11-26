@@ -239,6 +239,13 @@ def is_meeting_message(row: dict) -> bool:
     - the subject starts with a standard response prefix ("Accepted:" and so on).
       A letter whose subject happens to start that way is dropped too, which can
       only make someone less known, never more.
+
+    **P-SI1 release gate.** A response with no type annotation, no
+    ``meetingMessageType`` and a localized subject ("Zugesagt: …") is still read as a
+    letter, so accepting a stranger's invitation would make them known. The probe must
+    show that Graph marks responses in a personal mailbox's Sent Items by type or by
+    the cast property before a release
+    (``test_p_si1_gate_a_localized_untyped_accept_does_not_make_a_stranger_known``).
     """
     if "eventmessage" in str(row.get("@odata.type") or "").lower():
         return True
