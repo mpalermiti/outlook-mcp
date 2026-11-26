@@ -39,6 +39,7 @@ The live tiers run against two throwaway Outlook.com accounts the project owns: 
   - `tests/test_live_tiers_never_send.py` also checks the files.
   - A child process is not covered: `tests/live_mailbox.py` keeps its own rules.
   - New accounts have tiny sending limits, and Outlook.com locks one that sends too fast. Keep budgets small, and never send to the fictional people in seeded mail.
+  - If the env file names a stop file (`OUTLOOK_MCP_LIVE_STOP_FILE`) and it exists, a test account is locked or blocked: every tier but `offline` refuses (`tests/test_live_tests_stop_file.py`). Never delete it to get a run through; a person deletes it after unlocking the account.
 - Everything a writing tier creates carries a marker (`LIVE_WRITE_SUBJECT`, `LIVE_WRITE_NAME`, `LIVE_SEND_SUBJECT`); the runner lists leftovers after the run and `scripts/live-tests.sh clean` removes them. Live tests must leave the accounts as they found them: the mailboxes also hold a seeded scenario that other evaluation work relies on.
 
 ## Architecture

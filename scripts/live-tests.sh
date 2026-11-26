@@ -30,6 +30,10 @@
 #   OUTLOOK_MCP_LIVE_VOLUME=<Docker volume holding the main account's settings>
 #   OUTLOOK_MCP_LIVE_PAIR_VOLUME=<the same for the pair>
 #   OUTLOOK_MCP_TEST_PAIR_CAN_SEND=1   optional: once the pair account may send
+#   OUTLOOK_MCP_LIVE_STOP_FILE=<absolute path>   optional: while a file exists
+#       there, every tier but `offline` refuses to start. Whatever else uses the
+#       accounts creates it when Microsoft locks or blocks one; a person deletes
+#       it once the account is unlocked
 #
 # Each account is signed in once, by hand, inside a container and never on the
 # host. Build the image first (any tier does, e.g. `offline`), create the volume,
@@ -150,6 +154,19 @@ for name in OUTLOOK_MCP_TEST_ACCOUNT OUTLOOK_MCP_TEST_PAIR \
   OUTLOOK_MCP_LIVE_VOLUME OUTLOOK_MCP_LIVE_PAIR_VOLUME; do
   [ -n "$(value_of "$name")" ] || die "the env file does not set $name"
 done
+
+# A locked or blocked account gets no more traffic, not even a sign-in check:
+# Microsoft treats each attempt as more of what got it locked.
+stop_file="$(value_of OUTLOOK_MCP_LIVE_STOP_FILE)"
+if [ -n "$stop_file" ]; then
+  case "$stop_file" in
+    /*) ;;
+    *) die "OUTLOOK_MCP_LIVE_STOP_FILE must be an absolute path" ;;
+  esac
+  if [ -e "$stop_file" ]; then
+    die "the stop file OUTLOOK_MCP_LIVE_STOP_FILE names exists: a test account is locked or blocked. Unlock it at outlook.com in a browser, then delete the stop file"
+  fi
+fi
 volume="$(value_of OUTLOOK_MCP_LIVE_VOLUME)"
 pair_volume="$(value_of OUTLOOK_MCP_LIVE_PAIR_VOLUME)"
 for name in OUTLOOK_MCP_LIVE_VOLUME OUTLOOK_MCP_LIVE_PAIR_VOLUME; do

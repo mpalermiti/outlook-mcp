@@ -224,6 +224,11 @@ CHARS_PER_TOKEN = 4
 # No ceiling changes.
 # 11,200 once `outlook_update_event` says remove_recurrence=True is not refused for a
 # series' changed occurrences (+7 on 11,193, #97). No ceiling changes.
+# 11,205 once `outlook_create_draft` says a reply or forward draft marks the original read
+# (+5): Exchange does that as part of the create, so a draft made for review takes away an
+# unread message's unread state, and only the tool's own description can tell the model.
+# Default/documents/rules/MIME: 11,205 / 11,350 / 12,026 / 11,285; every group 78 / 12,360.
+# No ceiling changes.
 TOOL_SURFACE_CEILING = 12_150
 DEFAULT_SURFACE_CEILING = 11_250
 

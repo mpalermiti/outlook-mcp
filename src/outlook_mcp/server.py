@@ -1912,8 +1912,8 @@ async def outlook_create_draft(
     Use this when a human should review before sending; use outlook_send_message to send
     immediately without review.
     reply_to_message_id (reply_all=True for all) or forward_message_id drafts in that thread,
-    quoting the original; on a reply, Graph fills to/cc/subject, so pass [] for a
-    recipient you want cleared and omit the argument to keep Graph's choice.
+    quoting the original and marking it read; on a reply, Graph fills to/cc/subject, so
+    pass [] for a recipient you want cleared and omit the argument to keep Graph's choice.
     Pass deferred_send_datetime (ISO 8601, e.g. "2026-05-06T08:00:00Z") to schedule delayed
     delivery — Exchange holds the message server-side after outlook_send_draft.
     Pass reply_to to pre-populate the Reply-To header.
