@@ -204,22 +204,42 @@ async def _times_in_utc(target: Any) -> Any:
     """The event's ``start`` and ``end`` as Graph reads them back in UTC, or ``None``.
 
     One GET of only those two fields, through ``target``, the request builder
-    the write went to, so an event in another calendar is read there. ``None``
-    when the read fails: the check then fails open, as when the times cannot be
-    read, rather than turning a write that succeeded into an error.
+    the write went to, so an event in another calendar is read there. Sent once,
+    with kiota's retry off: the write has succeeded, and a throttled read
+    retried after ``Retry-After`` would hold back its answer for minutes, long
+    enough for a client to give up and create the event again. ``None`` when
+    Graph or the connection fails: the check then fails open, as when the times
+    cannot be read, rather than turning a write that succeeded into an error.
+    Anything else is a bug, and is not caught.
     """
+    import httpx
+    from kiota_abstractions.api_error import APIError
     from kiota_abstractions.base_request_configuration import RequestConfiguration
+    from kiota_http.middleware.options.retry_handler_option import RetryHandlerOption
     from msgraph.generated.users.item.events.item.event_item_request_builder import (
         EventItemRequestBuilder,
     )
 
     query = EventItemRequestBuilder.EventItemRequestBuilderGetQueryParameters(select=_TIMES_SELECT)
-    request_config = RequestConfiguration(query_parameters=query)
+    request_config = RequestConfiguration(
+        query_parameters=query, options=[RetryHandlerOption(should_retry=False)]
+    )
     request_config.headers.add("Prefer", _IN_UTC)
     try:
         return await target().get(request_configuration=request_config)
-    except Exception:
+    except (APIError, httpx.HTTPError):
         return None
+
+
+def _utc_instant(side: Any) -> datetime | None:
+    """The moment a ``start``/``end`` names, or ``None`` unless it is text in ``UTC``."""
+    text = getattr(side, "date_time", None)
+    if not isinstance(text, str) or getattr(side, "time_zone", None) != "UTC":
+        return None
+    moment = _parse_iso(text)
+    if moment is None:
+        return None
+    return moment.replace(tzinfo=dt_timezone.utc) if moment.tzinfo is None else moment
 
 
 def _read_back_instant(event: Any, which: str) -> datetime | None:
@@ -229,13 +249,54 @@ def _read_back_instant(event: Any, which: str) -> datetime | None:
     ``_IN_UTC`` asked for: anything else would be a guess.
     """
     side = getattr(event, "start", None) if which == "start" else getattr(event, "end", None)
-    text = getattr(side, "date_time", None)
-    if not isinstance(text, str) or getattr(side, "time_zone", None) != "UTC":
-        return None
-    moment = _parse_iso(text)
-    if moment is None:
-        return None
-    return moment.replace(tzinfo=dt_timezone.utc) if moment.tzinfo is None else moment
+    return _utc_instant(side)
+
+
+def _read_back_instants(event: Any, converted: dict) -> dict[str, datetime] | None:
+    """Each converted end's moment in the read-back ``event``, or ``None`` if any cannot be read.
+
+    Not knowing one end is not knowing where the event is.
+    """
+    got = {}
+    for which in converted:
+        moment = _read_back_instant(event, which)
+        if moment is None:
+            return None
+        got[which] = moment
+    return got
+
+
+def _stored_instants(event: Any, ends: dict) -> dict[str, datetime]:
+    """Where each of ``ends`` stood in ``event`` as a plain GET returned it, before a write.
+
+    A plain GET gives ``start`` and ``end`` in UTC; an end it did not give that
+    way is left out, and then nothing is compared with it.
+    """
+    sides = {"start": getattr(event, "start", None), "end": getattr(event, "end", None)}
+    found = {which: _utc_instant(sides[which]) for which in ends}
+    return {which: moment for which, moment in found.items() if moment is not None}
+
+
+def _as_it_was(got: dict[str, datetime], earlier: dict[str, datetime], converted: dict) -> bool:
+    """Whether a read found an end exactly where it stood before the latest write, not as typed.
+
+    That is most likely the event as it was, served by a read that came too
+    soon after the write (not seen for events; Graph has lagged straight after a
+    write for contacts, #259), not where Graph put the time sent. Taken at its
+    word, the gap is the move just asked for, which passes for a zone rule's and
+    would be "corrected", filing the event in UTC and mailing any attendees
+    again. So such a read says nothing. A real disagreement over a zone's rules
+    lands on the old time only when the move happens to equal the rules' gap,
+    and that event is left as Graph put it.
+    """
+    for which, (typed, _) in converted.items():
+        was, wanted = earlier.get(which), _parse_iso(typed)
+        if was is None or wanted is None:
+            continue
+        at_old = abs(got[which] - was) < timedelta(seconds=1)
+        if at_old and abs(got[which] - wanted) >= timedelta(seconds=1):
+            return True
+    return False
 
 
 def _a_zone_rule_could_move(got: datetime, wanted: datetime) -> bool:
@@ -252,16 +313,14 @@ def _a_zone_rule_could_move(got: datetime, wanted: datetime) -> bool:
     return False
 
 
-def _moved_ends(event: Any, converted: dict) -> tuple[list[str], bool]:
-    """Each converted end the read-back ``event`` puts at another moment than typed,
-    described, and whether a zone rule could explain every one of those gaps.
-
-    Empty when the event cannot say for every converted end: not knowing is not a move.
+def _moved_ends(read: dict[str, datetime], converted: dict) -> tuple[list[str], bool]:
+    """Each converted end ``read`` puts at another moment than typed, described, and
+    whether a zone rule could explain every one of those gaps.
     """
     moved, explained = [], True
     for which, (typed, _) in converted.items():
-        got, wanted = _read_back_instant(event, which), _parse_iso(typed)
-        if got is None or wanted is None:
+        got, wanted = read[which], _parse_iso(typed)
+        if wanted is None:
             return [], True
         if abs(got - wanted) < timedelta(seconds=1):
             continue
@@ -273,11 +332,12 @@ def _moved_ends(event: Any, converted: dict) -> tuple[list[str], bool]:
     return moved, explained
 
 
-def _zone_not_kept(moved: list[str], converted: dict, still: list[str]) -> str:
-    """The ``note`` for a corrected write: what moved, how far, and where it is now.
+def _zone_not_kept(moved: list[str], converted: dict, still: list[str] | None) -> str:
+    """The ``note`` for a corrected write: what moved, how far, and what is known now.
 
-    ``still`` is what the read after the correction found elsewhere; empty when
-    it found each end at the moment typed, or could not say.
+    ``still`` is what the read after the correction found away from the moment
+    typed: empty when it found every end there, ``None`` when it could not say.
+    Only the first says the time is right.
     """
     ends = " and ".join(converted)
     both = len(converted) > 1
@@ -285,18 +345,25 @@ def _zone_not_kept(moved: list[str], converted: dict, still: list[str]) -> str:
         f"Graph placed {' and '.join(moved)}: its rules for the event's time zone differ "
         f"from this server's. The {ends} {'were' if both else 'was'} saved again as typed"
     )
+    filed = (
+        f"{'they are' if both else 'it is'} filed in UTC rather than in the event's own time zone"
+    )
+    if still is None:
+        return (
+            f"{placed}, so {filed}. Reading the event back afterwards did not confirm the "
+            "time; outlook_get_event shows where it is."
+        )
     if still:
         return (
             f"{placed}, but reading the event back puts {' and '.join(still)}. Read the "
             "event with outlook_get_event and check the time with the user."
         )
-    return (
-        f"{placed}, so the time is right, but {'they are' if both else 'it is'} filed in "
-        f"UTC rather than in the event's own time zone."
-    )
+    return f"{placed}, so the time is right, but {filed}."
 
 
-async def _keep_typed_instants(target: Any, converted: dict, done: str) -> dict:
+async def _keep_typed_instants(
+    target: Any, converted: dict, done: str, before: dict[str, datetime] | None = None
+) -> dict:
     """Check a write that converted a typed time by reading the event back (#262 review).
 
     The conversion uses this host's zone rules (IANA, through ``_windows_zones``
@@ -310,12 +377,17 @@ async def _keep_typed_instants(target: Any, converted: dict, done: str) -> dict:
 
     Where the event is comes from a GET (``_times_in_utc``), not the write's
     reply, which Graph gives in the event's own zone whatever ``Prefer`` asks.
-    One GET when ``converted`` is not empty, none otherwise; a failed or
-    unreadable read means no correction and no ``note``, as before the check.
+    One GET when ``converted`` is not empty, none otherwise. A read that fails,
+    cannot be parsed, or finds an end exactly where ``before`` says it stood
+    before the write (``_as_it_was``; an update passes it, a create has nothing
+    before) means no correction and no ``note``, as before the check.
+
     After a correction the event is read once more, so the ``note`` says the
-    time is right only when Graph says so: a GET, on a path taken only when
-    Graph and this host already disagreed. If it is still elsewhere, nothing
-    more is sent and the ``note`` says where it is.
+    time is right only when that read finds it so: a GET, on a path taken only
+    when Graph and this host already disagreed. If it finds the event elsewhere,
+    nothing more is sent and the ``note`` says where. If it cannot say, or finds
+    the event where the first read did, the ``note`` says the time was not
+    confirmed.
 
     Callers pass ``converted`` only for a single event. A series' start can
     read back as its first occurrence rather than the start typed, days away,
@@ -328,7 +400,10 @@ async def _keep_typed_instants(target: Any, converted: dict, done: str) -> dict:
     """
     if not converted:
         return {}
-    moved, explained = _moved_ends(await _times_in_utc(target), converted)
+    read = _read_back_instants(await _times_in_utc(target), converted)
+    if read is None or _as_it_was(read, before or {}, converted):
+        return {}
+    moved, explained = _moved_ends(read, converted)
     if not moved:
         return {}
     if not explained:
@@ -367,7 +442,10 @@ async def _keep_typed_instants(target: Any, converted: dict, done: str) -> dict:
             "creating it again: pass `start` and `end` as local time without a zone or "
             "offset, which needs no conversion.",
         ) from exc
-    still, _ = _moved_ends(await _times_in_utc(target), converted)
+    after = _read_back_instants(await _times_in_utc(target), converted)
+    if after is None or _as_it_was(after, read, converted):
+        return {"note": _zone_not_kept(moved, converted, None)}
+    still, _ = _moved_ends(after, converted)
     return {"note": _zone_not_kept(moved, converted, still)}
 
 
@@ -1181,9 +1259,11 @@ async def create_event(
         ),
     )
     # Only a single event is read back and checked; see `_keep_typed_instants`.
+    # A reply without an id leaves nothing to read: the SDK will not build a
+    # request for one, and the event exists either way.
     note = await _keep_typed_instants(
         lambda: events.by_event_id(response.id),
-        converted if event.recurrence is None else {},
+        converted if event.recurrence is None and isinstance(response.id, str) else {},
         f"created (id {response.id})",
     )
 
@@ -1705,8 +1785,11 @@ async def update_event(
     # Not replayed after a 5xx either: on an event with attendees the patch is
     # mailed to them as an update, and a pinned replay would only be refused
     # with a 412 for the change key this very patch moved (#131).
+    # Where the converted ends stood before this patch, off the read already
+    # made, so a read-back that still shows them there is not taken for a move.
+    before = _stored_instants(await current_event(), checked) if checked else {}
     response = await call_without_replay(_patch, outcome_unknown=UPDATE_MAY_HAVE_BEEN_SENT)
-    note = await _keep_typed_instants(lambda: request_builder, checked, "updated")
+    note = await _keep_typed_instants(lambda: request_builder, checked, "updated", before)
     notes = [n for n in (series_note, note.get("note")) if n]
 
     return {

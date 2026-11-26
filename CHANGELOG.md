@@ -67,11 +67,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   for example because Graph's rules for the zone differ from this server's (recent changes such
   as Cuba's or Morocco's, or out-of-date time zone data on the host), the time is sent again as
   typed and read back once more. The moment is then right but that time is filed in UTC, the
-  result's `note` says where Graph had placed it, and any attendees get a second update. If the
-  second read still finds it elsewhere, the `note` says where instead of calling it right. A
-  larger or odder difference is not changed, since no zone rule explains it: the `note` says
-  where Graph placed the time, so it can be checked with the user. If the read fails, the event
-  stays as sent, with no `note`. A series is not checked: Graph may report its first occurrence
+  result's `note` says where Graph had placed it, and any attendees get a second update. The
+  `note` calls the time right only when that second read finds it at the moment typed. If the
+  second read finds it elsewhere, the `note` says where; if it fails, or still shows where the
+  first read found it, the `note` says the time was not confirmed. A larger or odder difference
+  is not changed, since no zone rule explains it: the `note` says where Graph placed the time,
+  so it can be checked with the user. If the first read fails, or shows an updated event still
+  at the time it had before the change (a read that came too soon, not a zone rule), the event
+  stays as sent, with no `note`. Neither read is retried when Graph is busy, so a throttled read
+  does not hold back the answer. A series is not checked: Graph may report its first occurrence
   rather than the start sent, and a correction would file the whole series in UTC.
 
 ## [1.33.0] — 2026-11-16

@@ -3,6 +3,7 @@
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
 from outlook_mcp.config import Config
@@ -31,14 +32,25 @@ def _created(subject: str, event_id: str = "AAMkAGnew="):
     return resp
 
 
-def _sdk() -> AsyncMock:
-    """An `AsyncMock` SDK client whose `by_event_id` is synchronous, as the SDK's is.
+def reads_no_times(events) -> MagicMock:
+    """Make `events.by_event_id(id).get()` answer with an event that has no times.
 
-    Left async, it hands a converted create's read back (`_times_in_utc`) a
-    coroutine that is never awaited, and Python warns about it.
+    A converted create reads its event back that way (`_times_in_utc`). With no
+    times to read, the check says nothing, which is what the tests using this
+    need: they are about other arguments, and
+    `TestAConvertedTimeIsCheckedAgainstGraph` covers the check. `by_event_id` is
+    synchronous, as the SDK's is. Returns the request builder it hands out.
     """
+    reader = MagicMock()
+    reader.get = AsyncMock(return_value=MagicMock(start=None, end=None))
+    events.by_event_id = MagicMock(return_value=reader)
+    return reader
+
+
+def async_sdk() -> AsyncMock:
+    """An `AsyncMock` SDK client whose events read back without times (`reads_no_times`)."""
     client = AsyncMock()
-    client.me.events.by_event_id = MagicMock()
+    reads_no_times(client.me.events)
     return client
 
 
@@ -182,7 +194,7 @@ def _make_event_builder():
 class TestCreateEvent:
     async def test_create_event_calls_post(self):
         """create_event builds Event and calls me.events.post()."""
-        mock_client = _sdk()
+        mock_client = async_sdk()
         mock_response = MagicMock()
         mock_response.id = "AAMkAGnew="
         mock_response.subject = "Lunch"
@@ -213,7 +225,7 @@ class TestCreateEvent:
 
     async def test_create_event_with_attendees(self):
         """create_event passes attendees to Event object."""
-        mock_client = _sdk()
+        mock_client = async_sdk()
         mock_response = MagicMock()
         mock_response.id = "AAMkAGnew="
         mock_response.subject = "Team Sync"
@@ -233,7 +245,7 @@ class TestCreateEvent:
 
     async def test_create_event_ignores_no_recurrence(self):
         """No recurrence argument leaves the Event's recurrence unset (regression guard)."""
-        mock_client = _sdk()
+        mock_client = async_sdk()
         mock_client.me.events.post = AsyncMock(return_value=_created("Lunch"))
 
         await create_event(
@@ -3169,7 +3181,7 @@ class TestShowAs:
         ],
     )
     async def test_create_event_maps_show_as_to_the_sdk_enum(self, supplied, expected):
-        mock_client = _sdk()
+        mock_client = async_sdk()
         mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
 
         await create_event(
@@ -3188,7 +3200,7 @@ class TestShowAs:
 
     async def test_create_event_leaves_show_as_unset_when_omitted(self):
         """Graph's own default is `busy`; sending one would take that decision."""
-        mock_client = _sdk()
+        mock_client = async_sdk()
         mock_client.me.events.post = AsyncMock(return_value=_created("Standup"))
 
         await create_event(
@@ -3344,7 +3356,7 @@ class TestCalendarWritesThatSendEmail:
         mock_client.me.events.post.assert_not_called()
 
     async def test_create_event_without_attendees_stays_calendar_only(self):
-        mock_client = _sdk()
+        mock_client = async_sdk()
         mock_client.me.events.post = AsyncMock(return_value=_created("Focus time"))
 
         result = await create_event(
@@ -3358,7 +3370,7 @@ class TestCalendarWritesThatSendEmail:
         assert result["status"] == "created"
 
     async def test_create_event_with_attendees_passes_once_mail_send_is_allowed(self):
-        mock_client = _sdk()
+        mock_client = async_sdk()
         mock_client.me.events.post = AsyncMock(return_value=_created("Sync"))
 
         result = await create_event(
@@ -3937,7 +3949,7 @@ class TestOnlineMeeting:
 
     @pytest.mark.parametrize("stated", [True, False])
     async def test_create_reports_is_online_as_graph_states_it(self, stated):
-        mock_client = _sdk()
+        mock_client = async_sdk()
         mock_client.me.events.post = AsyncMock(return_value=_reply(stated))
 
         result = await create_event(
@@ -3953,7 +3965,7 @@ class TestOnlineMeeting:
         assert result["is_online"] is stated
 
     async def test_create_omits_is_online_when_the_reply_does_not_carry_it(self):
-        mock_client = _sdk()
+        mock_client = async_sdk()
         mock_client.me.events.post = AsyncMock(return_value=_reply(None))
 
         result = await create_event(
@@ -3970,7 +3982,7 @@ class TestOnlineMeeting:
     async def test_create_without_is_online_keeps_its_old_result(self):
         """The default `False` is not reported: it cannot be told apart from an
         argument nobody passed, and every create would grow a key."""
-        mock_client = _sdk()
+        mock_client = async_sdk()
         mock_client.me.events.post = AsyncMock(return_value=_reply(False))
 
         result = await create_event(
@@ -4426,6 +4438,7 @@ class TestATypedInstantKeepsItsZone:
     def _poster():
         mock_client = MagicMock()
         mock_client.me.events.post = AsyncMock(return_value=_created("Dinner"))
+        reads_no_times(mock_client.me.events)
         return mock_client
 
     @staticmethod
@@ -5078,10 +5091,21 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
         assert _requests(builder) == ["get", "patch", "read"]
         assert result == {"status": "updated", "event_id": "AAMkAG123="}
 
-    @pytest.mark.parametrize("status", [404, 429, 503])
-    async def test_a_read_back_that_fails_is_not_guessed_at(self, status):
-        """The write succeeded; a failed read is no reason to say otherwise, or to move it."""
-        builder, mock_client = self._updatable("America/Havana", _graph_error(status))
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            _graph_error(404),
+            _graph_error(429),
+            _graph_error(503),
+            httpx.ConnectError("connection refused"),
+            httpx.ReadTimeout("timed out"),
+        ],
+        ids=["404", "429", "503", "no connection", "timed out"],
+    )
+    async def test_a_read_back_that_fails_is_not_guessed_at(self, failure):
+        """The write succeeded; Graph or the network failing the read is no reason to
+        say otherwise, or to move it."""
+        builder, mock_client = self._updatable("America/Havana", failure)
 
         result = await update_event(
             mock_client,
@@ -5093,6 +5117,110 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
 
         assert _requests(builder) == ["get", "patch", "read"]
         assert result == {"status": "updated", "event_id": "AAMkAG123="}
+
+    async def test_a_bug_in_the_read_back_is_not_taken_for_graph_failing(self):
+        """Only Graph's and the connection's failures fail open; anything else is ours."""
+        builder, mock_client = self._updatable("America/Havana", TypeError("a bug"))
+
+        with pytest.raises(TypeError, match="a bug"):
+            await update_event(
+                mock_client,
+                event_id="AAMkAG123=",
+                start="2026-12-13T02:00:00Z",
+                end="2026-12-13T03:00:00Z",
+                config=_CFG,
+            )
+
+    async def test_the_read_back_is_sent_once_with_kiotas_retry_off(self):
+        """The write is done: a throttled read retried after `Retry-After` would hold
+        back its answer for minutes, and a client that gives up may create it again."""
+        from kiota_http.middleware.options.retry_handler_option import RetryHandlerOption
+
+        builder, mock_client = self._updatable(
+            "America/Havana", _read_back(*_AN_HOUR_LATE), _read_back(*_AS_TYPED)
+        )
+
+        await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            config=_CFG,
+        )
+
+        reads = _read_backs(builder)
+        assert len(reads) == 2  # the check's read and the one after the correction
+        for read in reads:
+            options = list(read.kwargs["request_configuration"].options)
+            retry = [o for o in options if isinstance(o, RetryHandlerOption)]
+            assert len(retry) == 1, options
+            assert retry[0].should_retry is False
+
+    # ── a read that still shows the event as it was says nothing ──────
+
+    @staticmethod
+    def _stored(start_utc: str, end_utc: str | None = None):
+        """A single Havana event as a plain GET returns it, both ends in UTC."""
+        current = _current_event(date_time=f"{start_utc}.0000000", start_zone="America/Havana")
+        current.end = (
+            None if end_utc is None else MagicMock(date_time=f"{end_utc}.0000000", time_zone="UTC")
+        )
+        return current
+
+    @pytest.mark.parametrize(
+        ("stored", "start", "end"),
+        [
+            # An hour later, start only: what a zone rule's gap also looks like.
+            (("2026-12-13T01:00:00", "2026-12-13T03:00:00"), "2026-12-13T02:00:00Z", None),
+            # Half an hour earlier.
+            (("2026-12-13T02:30:00", "2026-12-13T03:00:00"), "2026-12-13T02:00:00Z", None),
+            # Three hours later, both ends.
+            (
+                ("2026-12-12T23:00:00", "2026-12-13T00:00:00"),
+                "2026-12-13T02:00:00Z",
+                "2026-12-13T03:00:00Z",
+            ),
+            # Only the start moved; the end is sent again unchanged.
+            (
+                ("2026-12-13T01:00:00", "2026-12-13T03:00:00"),
+                "2026-12-13T02:00:00Z",
+                "2026-12-13T03:00:00Z",
+            ),
+        ],
+        ids=["an hour later", "half an hour earlier", "both ends 3h", "start only of two"],
+    )
+    async def test_a_read_back_still_at_the_old_time_is_left_alone(self, stored, start, end):
+        """A plain move whose read-back echoes the time before it: not "corrected" (S1).
+
+        Taken at its word, the gap is the move itself, which passes for a zone
+        rule's: the event would be patched again, filed in UTC, and its
+        attendees mailed twice, under a note blaming the zone's rules.
+        """
+        builder, mock_client = self._updatable("America/Havana")
+        builder.get = _answering(self._stored(*stored), _read_back(*stored))
+
+        result = await update_event(
+            mock_client, event_id="AAMkAG123=", start=start, end=end, config=_CFG
+        )
+
+        assert _requests(builder) == ["get", "patch", "read"]
+        assert result == {"status": "updated", "event_id": "AAMkAG123="}
+
+    async def test_a_read_back_elsewhere_than_the_old_time_is_still_corrected(self):
+        """The guard is the old time exactly: an hour past the typed one is a zone's doing."""
+        builder, mock_client = self._updatable("America/Havana")
+        builder.get = _answering(
+            self._stored("2026-12-13T01:00:00", "2026-12-13T03:00:00"),
+            _read_back("2026-12-13T03:00:00", "2026-12-13T03:00:00"),
+            _read_back("2026-12-13T02:00:00", "2026-12-13T03:00:00"),
+        )
+
+        result = await update_event(
+            mock_client, event_id="AAMkAG123=", start="2026-12-13T02:00:00Z", config=_CFG
+        )
+
+        assert _requests(builder) == ["get", "patch", "read", "patch", "read"]
+        assert "so the time is right" in result["note"]
 
     @pytest.mark.parametrize(
         ("start", "end"),
@@ -5191,11 +5319,16 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
 
     @pytest.mark.parametrize(
         "confirmation",
-        [_graph_error(503), _read_back(None, None)],
-        ids=["fails", "cannot say"],
+        [_graph_error(503), _read_back(None, None), _read_back(*_AN_HOUR_LATE)],
+        ids=["fails", "cannot say", "still as the first read found it"],
     )
-    async def test_a_confirmation_that_cannot_be_read_leaves_the_note_as_it_was(self, confirmation):
-        """The correction sent the instant as typed, the form Graph always placed right."""
+    async def test_a_confirmation_that_cannot_say_claims_nothing(self, confirmation):
+        """Not "the time is right", and not "still elsewhere" either.
+
+        A read after the correction that repeats the first read's times is most
+        likely the event as it was a moment before, so it is not taken for a
+        correction Graph ignored; like a failed read, it confirms nothing.
+        """
         builder, mock_client = self._updatable(
             "America/Havana", _read_back(*_AN_HOUR_LATE), confirmation
         )
@@ -5209,7 +5342,12 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
         )
 
         assert _requests(builder) == ["get", "patch", "read", "patch", "read"]
-        assert "so the time is right" in result["note"]
+        note = result["note"]
+        assert "start at 2026-12-13T03:00:00 UTC instead of 2026-12-13T02:00:00 UTC" in note
+        assert "saved again as typed" in note and "filed in UTC" in note
+        assert "did not confirm the time" in note and "outlook_get_event" in note
+        assert "the time is right" not in note
+        assert "reading the event back puts" not in note
 
     async def test_an_unexplained_difference_is_not_read_again(self):
         """Nothing was written, so there is nothing to confirm."""
@@ -5616,17 +5754,12 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
 
     @pytest.mark.parametrize(
         "failure",
-        [_graph_error(404), _graph_error(503), TypeError("event_id cannot be null.")],
-        ids=["404", "503", "no id to read"],
+        [_graph_error(404), _graph_error(503), httpx.ConnectError("connection refused")],
+        ids=["404", "503", "no connection"],
     )
     async def test_a_create_whose_read_back_fails_is_still_created(self, failure):
         """The event exists: a failed read neither moves it nor reports an error."""
-        reply = _write_reply()
-        mock_client, fixer = self._poster(failure, reply=reply)
-        if isinstance(failure, TypeError):
-            # The SDK refuses to build a request builder for an id it was not given.
-            reply.id = None
-            mock_client.me.events.by_event_id.side_effect = failure
+        mock_client, fixer = self._poster(failure)
 
         result = await create_event(
             mock_client,
@@ -5637,8 +5770,26 @@ class TestAConvertedTimeIsCheckedAgainstGraph:
             config=_CFG,
         )
 
-        assert result == {"status": "created", "event_id": reply.id, "subject": "Dinner"}
-        fixer.patch.assert_not_called()
+        assert result == {"status": "created", "event_id": "AAMkAG123=", "subject": "Dinner"}
+        assert _requests(fixer) == ["read"]
+
+    async def test_a_create_reply_without_an_id_reads_nothing_back(self):
+        """The SDK builds no request for a missing id; the event exists either way."""
+        reply = _write_reply()
+        reply.id = None
+        mock_client, fixer = self._poster(_read_back(*_AN_HOUR_LATE), reply=reply)
+
+        result = await create_event(
+            mock_client,
+            subject="Dinner",
+            start="2026-12-13T02:00:00Z",
+            end="2026-12-13T03:00:00Z",
+            timezone="America/Havana",
+            config=_CFG,
+        )
+
+        mock_client.me.events.by_event_id.assert_not_called()
+        assert result == {"status": "created", "event_id": None, "subject": "Dinner"}
 
     @pytest.mark.parametrize(
         "read_back",

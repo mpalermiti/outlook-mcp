@@ -74,8 +74,8 @@ def _graph(read_backs: list[dict], **routes: dict) -> tuple[GraphServiceClient, 
     """A real SDK client over a transport that answers as Graph did live.
 
     A POST or PATCH gets the write's reply; a GET with `$select=start,end` gets
-    the next of ``read_backs``; any other GET gets ``routes[path]``. Returns the
-    client and each request sent, in order.
+    the next of ``read_backs`` (a body, or a whole `httpx.Response`); any other
+    GET gets ``routes[path]``. Returns the client and each request sent, in order.
     """
     sent: list[httpx.Request] = []
     queue = list(read_backs)
@@ -85,7 +85,10 @@ def _graph(read_backs: list[dict], **routes: dict) -> tuple[GraphServiceClient, 
         if request.method in ("POST", "PATCH"):
             return httpx.Response(201 if request.method == "POST" else 200, json=_WRITE_REPLY)
         if _query(request).get("$select") == ["start,end"]:
-            return httpx.Response(200, json=queue.pop(0))
+            answer = queue.pop(0)
+            return (
+                answer if isinstance(answer, httpx.Response) else httpx.Response(200, json=answer)
+            )
         return httpx.Response(200, json=routes[request.url.path])
 
     factory = GraphClientFactory.create_with_default_middleware
@@ -213,14 +216,36 @@ async def test_a_create_in_a_named_calendar_is_read_back_there():
     assert _shape(sent[2]) == _read_back(f"/v1.0/me/calendars/KIDS77=/events/{EVENT_ID}")
 
 
+#: A single Los Angeles event as a plain GET returns it: 01:00Z to 03:00Z.
+_STORED = {
+    **_WRITE_REPLY,
+    "isAllDay": False,
+    **_times("2026-12-13T01:00:00", "2026-12-13T03:00:00", "UTC"),
+}
+_PATH = f"/v1.0/me/events/{EVENT_ID}"
+
+
+async def test_a_throttled_read_back_is_sent_once():
+    """kiota's retry is off for the read: one 429, no wait, and the event is created.
+
+    With it on, a `Retry-After` of minutes holds back the answer to a create
+    that already succeeded, long enough for a client to give up and send it again.
+    """
+    throttled = httpx.Response(429, headers={"Retry-After": "1"}, json={"error": {}})
+    client, sent = _graph([throttled])
+
+    result = await _create(client)
+
+    assert [_shape(r) for r in sent] == [
+        ("POST", "/v1.0/me/events", {}, None),
+        _read_back(f"/v1.0/me/events/{EVENT_ID}"),
+    ]
+    assert result == {"status": "created", "event_id": EVENT_ID, "subject": "Dinner"}
+
+
 async def test_a_converted_update_is_read_back_with_a_get():
-    path = f"/v1.0/me/events/{EVENT_ID}"
-    stored = {
-        **_WRITE_REPLY,
-        "isAllDay": False,
-        **_times("2026-12-13T01:00:00", "2026-12-13T03:00:00", "UTC"),
-    }
-    client, sent = _graph([_AS_TYPED], **{path: stored})
+    path = _PATH
+    client, sent = _graph([_AS_TYPED], **{path: _STORED})
 
     result = await update_event(
         client, event_id=EVENT_ID, start="2026-12-13T02:00:00Z", config=_CFG
@@ -231,5 +256,47 @@ async def test_a_converted_update_is_read_back_with_a_get():
         ("GET", path, {}, None),
         ("PATCH", path, {}, None),
         _read_back(path),
+    ]
+    assert result == {"status": "updated", "event_id": EVENT_ID}
+
+
+async def test_a_moved_update_is_put_back_and_read_again():
+    client, sent = _graph([_AN_HOUR_LATE, _AS_TYPED], **{_PATH: _STORED})
+
+    result = await update_event(
+        client, event_id=EVENT_ID, start="2026-12-13T02:00:00Z", config=_CFG
+    )
+
+    assert [_shape(r) for r in sent] == [
+        ("GET", _PATH, {}, None),
+        ("PATCH", _PATH, {}, None),
+        _read_back(_PATH),
+        ("PATCH", _PATH, {}, None),
+        _read_back(_PATH),
+    ]
+    assert json.loads(sent[3].content) == {
+        "@odata.type": "#microsoft.graph.event",
+        "start": {"dateTime": "2026-12-13T02:00:00Z", "timeZone": "America/Los_Angeles"},
+    }
+    assert "so the time is right" in result["note"]
+
+
+async def test_an_update_read_back_at_its_old_time_is_left_alone():
+    """The read shows 01:00Z, where the event stood before the move to 02:00Z (S1).
+
+    That hour is the move asked for, not a zone rule's, so no second PATCH goes
+    out and nothing is said.
+    """
+    as_it_was = {"id": EVENT_ID, **_times("2026-12-13T01:00:00", "2026-12-13T03:00:00", "UTC")}
+    client, sent = _graph([as_it_was], **{_PATH: _STORED})
+
+    result = await update_event(
+        client, event_id=EVENT_ID, start="2026-12-13T02:00:00Z", config=_CFG
+    )
+
+    assert [_shape(r) for r in sent] == [
+        ("GET", _PATH, {}, None),
+        ("PATCH", _PATH, {}, None),
+        _read_back(_PATH),
     ]
     assert result == {"status": "updated", "event_id": EVENT_ID}
