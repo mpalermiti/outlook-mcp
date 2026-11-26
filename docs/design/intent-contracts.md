@@ -1994,7 +1994,8 @@ Rank: To before Cc; then sender known (count, descending); then waiting longest 
   - a day's events name their calendar by its index in `understood.calendars`; when the answer is too long, day events lose their location, then the last days lose their events (counted in `events_total`), before the envelope's own trim;
   - an overlap item names at most five others;
   - P-H1a's refusal is remembered for the call, so the fallback costs one request;
-  - `brief_meeting` is offered only for a meeting the owner organizes or has accepted.
+  - `brief_meeting` is offered only for a meeting the owner organizes or has accepted;
+  - who organizes a meeting is read from its organizer's address against the owner's own (the signed-in address, and the sent table's where read), never from Graph's `isOrganizer`, which live on a personal mailbox stays false on the owner's own meetings (probe day 1). The same rule holds in catch_up and brief. An invitation that names the owner as organizer reads as theirs, as in Outlook.
 
 **understood:** `window`, `zone`, day bounds, and `calendars: list[{id, is_default}]`. Calendar names are under `others_wrote`, because a shared calendar is named by its owner.
 

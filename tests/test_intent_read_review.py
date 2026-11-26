@@ -15,7 +15,7 @@ import pytest
 from outlook_mcp.intents import ids, transport
 from outlook_mcp.intents.ids import IdFamily
 from tests import test_intent_agenda as ag
-from tests.intent_fakes import FakeGraph, Mailbox
+from tests.intent_fakes import ME, FakeGraph, Mailbox
 
 NOW = datetime(2026, 11, 26, 12, 0, tzinfo=timezone.utc)
 EVERY_TOOL = frozenset(
@@ -183,3 +183,50 @@ async def test_nit_an_overlap_names_at_most_five_others(fake):
     env = await ag.run(fake, box, include_tasks=False)
     for item in sec(env, "overlaps")["items"]:
         assert len([r for r in item["why"] if r["code"] == "overlaps"]) == 5
+
+
+# ── Live finding (probe day 1): Graph's isOrganizer is not the owner's word ──
+
+
+def _owned(event_id: str, start: str, end: str, **kwargs) -> dict:
+    """The owner's own meeting as a personal mailbox returns it: organizer the owner's
+    address, isOrganizer false, and no response of its own."""
+    row = ag.ev(event_id, start, end, organizer=ME, organizer_name="Me", **kwargs)
+    row["isOrganizer"] = False
+    row["responseStatus"] = {"response": "none"}
+    return row
+
+
+async def test_live_agenda_knows_the_owners_meeting_by_its_organizer_address(fake):
+    box = Mailbox(
+        calendars=[{"id": "cal-1", "name": "Calendar", "isDefaultCalendar": True}],
+        events={"cal-1": [_owned("mine", "2026-11-26T15:00:00", "2026-11-26T16:00:00")]},
+    )
+    env = await ag.run(fake, box, tools=EVERY_TOOL, include_tasks=False, signed_in=ME)
+    assert sec(env, "invites")["items"] == []
+    (shown,) = next(d for d in sec(env, "days")["items"] if d["date"] == "2026-11-26")["events"]
+    assert shown["is_organizer"] is True
+    assert {"code": "organizer_you"} in shown["why"]
+    assert [n["args"] for n in env["next"] if n["template"] == "brief_meeting"] == [
+        {"meeting": "mine"}
+    ]
+
+
+async def test_live_agenda_never_trusts_is_organizer_on_a_strangers_invitation(fake):
+    row = ag.ev(
+        "bait",
+        "2026-11-26T15:00:00",
+        "2026-11-26T16:00:00",
+        organizer=ag.STRANGER,
+        organizer_name="Stranger",
+        response="notResponded",
+    )
+    row["isOrganizer"] = True  # whatever Graph says, the organizer is a stranger
+    box = Mailbox(
+        calendars=[{"id": "cal-1", "name": "Calendar", "isDefaultCalendar": True}],
+        events={"cal-1": [row]},
+    )
+    env = await ag.run(fake, box, tools=EVERY_TOOL, include_tasks=False, signed_in=ME)
+    (invite,) = sec(env, "invites")["items"]
+    assert invite["is_organizer"] is False
+    assert not [n for n in env["next"] if n["template"] == "brief_meeting"]
