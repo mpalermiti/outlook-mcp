@@ -1,0 +1,20 @@
+# redo-todo-dates-use-configured-timezone
+**What it does:** The earlier fix that makes To Do due dates, reminders and repeat rules use the time zone in your settings, instead of always UTC, carried onto the latest main unchanged. To Do keeps only the date of a non-repeating task, so there the zone decides which day is stored.
+**Pictures:** not needed — this changes what is sent to Microsoft; nothing on a screen in this project changes.
+## Behaviours
+1. The change sits on the latest main, including the calendar online-meeting fix, with both changelog entries under Unreleased and nothing else in the code altered from the reviewed version — proof: the text of CHANGELOG.md and `git diff` against the kept branch (only CHANGELOG.md differs)
+2. A due date with no zone, on a new task or an updated one that does not repeat, goes out as written and labelled with your configured zone; changing a repeating task's due keeps the zone it is stored in — proof: test_a_zone_less_due_is_labelled_with_the_configured_zone, test_a_bare_date_is_labelled_with_the_configured_zone, test_update_task_labels_a_zone_less_due_with_the_configured_zone, test_updating_a_repeating_tasks_due_keeps_its_stored_zone
+3. A due date that names its own moment (a `Z` or an offset) keeps that exact moment, shown as local time in your zone — proof: test_a_z_due_becomes_wall_clock_in_the_configured_zone, test_an_offset_due_becomes_wall_clock_in_the_configured_zone, test_update_task_converts_a_z_due_to_the_configured_zone
+4. A relative due date such as "in 7 days" is worked out before sending, instead of the literal text going to Microsoft, and the same exact time is sent across both clock changes — proof: test_a_relative_due_is_resolved_before_it_is_sent
+5. A reminder uses the same time and zone as the due date — proof: test_a_reminder_matches_the_due_time_and_zone
+6. A repeat rule carries your configured zone, unless the caller already named one — proof: test_recurrence_carries_the_configured_zone, test_recurrence_without_a_due_carries_the_configured_zone, test_a_recurrence_zone_the_caller_named_is_kept
+7. A server left on the default UTC setting sends the same repeat rule and the same zone-less due as before; a due with an offset goes out as that moment's UTC time — proof: test_a_utc_config_leaves_the_recurrence_as_it_was, test_a_utc_config_sends_a_zone_less_due_as_written, test_a_utc_config_sends_an_offset_due_as_utc_wall_clock
+8. An old zone name Microsoft refuses (such as EST) falls back to UTC, as calendar events do; a misspelt zone is refused before anything is sent — proof: test_a_legacy_config_zone_falls_back_to_utc, test_a_config_zone_that_does_not_exist_is_refused_before_sending
+9. Reading a task says which zone its due date is in, and says nothing when there is no due or no zone — proof: test_list_tasks_reports_the_zone_beside_due, test_get_task_reports_the_zone_beside_due, test_a_task_without_a_due_reports_no_zone, test_a_due_without_a_zone_reports_no_zone
+10. The settings docs say the zone applies to To Do tasks as well as events, and that a To Do due is the exception to "responses are UTC" — proof: the text of README.md, SKILL.md and the `timezone` field in config.py
+11. Whether Microsoft honours the zone on a real task is left as live tests for Michael to run: a plain task west and east of UTC, a repeating task's rule, and moving a repeating task's due — proof: test_a_plain_tasks_due_is_midnight_on_the_written_day_in_the_zone, test_a_repeating_task_keeps_the_zone_on_its_rule, test_moving_a_repeating_tasks_due_keeps_its_stored_zone (written, not run)
+## Not covered
+- Completing a task: the completion time is the present moment, already correct in UTC.
+- A repeat rule's start date is still the caller's; it is not cross-checked against the due date as calendar events are.
+- Converting on read: a task's `due` comes back as Microsoft stored it, with its zone beside it.
+- The open question of whether a non-repeating task should keep sending the zone is still parked for Michael; this redo does not answer it.
