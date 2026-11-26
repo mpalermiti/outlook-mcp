@@ -23,6 +23,11 @@ from outlook_mcp.tools._recurrence import (
 )
 
 _START = "2026-09-07T12:30:00Z"  # a Monday
+_FIRST_MONDAY = {"type": "relativeMonthly", "daysOfWeek": ["monday"], "index": "first"}
+_WEEKDAYS_PATTERN = {
+    "type": "weekly",
+    "daysOfWeek": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+}
 _FULL = {
     "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday", "friday"]},
     "range": {"type": "noEnd", "startDate": "2026-09-07"},
@@ -459,6 +464,201 @@ class TestMovePattern:
                 old=date(2026, 11, 5),
                 new=date(2026, 11, 4),
             )
+
+
+class TestLandsOn:
+    """Whether a pattern schedules a day, from its own fields (#98).
+
+    `True` and `False` are answers; `None` means the fields cannot say, and the
+    callers treat it as "not known to land", never as either answer.
+    """
+
+    @pytest.mark.parametrize(
+        ("pattern", "day", "expected"),
+        [
+            ({"type": "daily", "interval": 3}, date(2026, 10, 31), True),
+            ({"type": "weekly", "daysOfWeek": ["monday"]}, date(2026, 11, 2), True),
+            ({"type": "Weekly", "daysOfWeek": ["Monday"]}, date(2026, 11, 2), True),
+            # A weekday pattern begun on a Saturday: its first occurrence is later.
+            (
+                {"type": "weekly", "daysOfWeek": ["monday", "tuesday", "friday"]},
+                date(2026, 10, 31),
+                False,
+            ),
+            ({"type": "absoluteMonthly", "dayOfMonth": "15"}, date(2026, 11, 15), True),
+            ({"type": "absoluteMonthly", "dayOfMonth": 15}, date(2026, 11, 16), False),
+            ({"type": "absoluteYearly", "dayOfMonth": 15, "month": 11}, date(2026, 11, 15), True),
+            ({"type": "absoluteYearly", "dayOfMonth": 15, "month": 12}, date(2026, 11, 15), False),
+            # The first Monday of November and of December 2026, and a Monday that is not.
+            (_FIRST_MONDAY, date(2026, 11, 2), True),
+            (_FIRST_MONDAY, date(2026, 12, 7), True),
+            (_FIRST_MONDAY, date(2026, 11, 9), False),
+            ({**_FIRST_MONDAY, "index": "fourth"}, date(2026, 11, 23), True),
+            # November 2026 has five Mondays: the 30th is the last, the 23rd is not.
+            ({**_FIRST_MONDAY, "index": "last"}, date(2026, 11, 30), True),
+            ({**_FIRST_MONDAY, "index": "last"}, date(2026, 11, 23), False),
+            ({**_FIRST_MONDAY, "type": "relativeYearly", "month": 12}, date(2026, 11, 2), False),
+            # "The first weekday of the month": not judged from the fields.
+            ({**_FIRST_MONDAY, "daysOfWeek": ["monday", "tuesday"]}, date(2026, 11, 2), None),
+            (None, date(2026, 11, 2), None),
+        ],
+    )
+    def test_it_answers_from_the_patterns_own_fields(self, pattern, day, expected):
+        from outlook_mcp.tools._recurrence import lands_on
+
+        assert lands_on(pattern, day) is expected
+
+
+def _moved(pattern, old, new, rng=None):
+    from outlook_mcp.tools._recurrence import move_series
+
+    payload = {"pattern": pattern, "range": rng or {"type": "numbered", "numberOfOccurrences": 3}}
+    return move_series(payload, old=old, new=new)
+
+
+class TestMoveSeries:
+    """A series' own recurrence for a start moved to another day in the same zone (#98)."""
+
+    @pytest.mark.parametrize(
+        ("pattern", "old", "new"),
+        [
+            (_WEEKDAYS_PATTERN, date(2026, 11, 2), date(2026, 11, 4)),
+            (
+                {"type": "weekly", "daysOfWeek": ["monday", "thursday"]},
+                date(2026, 11, 2),
+                date(2026, 11, 5),
+            ),
+            ({"type": "daily", "interval": 2}, date(2026, 11, 2), date(2026, 11, 3)),
+            ({"type": "absoluteMonthly", "dayOfMonth": 15}, date(2026, 11, 15), date(2026, 12, 15)),
+            (_FIRST_MONDAY, date(2026, 11, 2), date(2026, 12, 7)),
+        ],
+        ids=[
+            "weekdays-to-wednesday",
+            "mon-thu-to-thursday",
+            "daily",
+            "monthly-next-month",
+            "first-monday",
+        ],
+    )
+    def test_a_day_the_pattern_already_lands_on_keeps_it(self, pattern, old, new):
+        moved = _moved(pattern, old, new)
+        assert moved["pattern"] == pattern
+        assert "startDate" not in moved["range"]
+
+    def test_a_one_day_pattern_moves_to_the_new_day(self):
+        moved = _moved(
+            {"type": "weekly", "daysOfWeek": ["monday"]}, date(2026, 11, 2), date(2026, 11, 3)
+        )
+        assert moved["pattern"]["daysOfWeek"] == ["tuesday"]
+
+    @pytest.mark.parametrize(
+        ("pattern", "new"),
+        [
+            ({"type": "weekly", "daysOfWeek": ["monday", "thursday"]}, date(2026, 11, 3)),
+            (_WEEKDAYS_PATTERN, date(2026, 11, 7)),
+            ({"type": "weekly", "daysOfWeek": ["Monday", "monday", "Thursday"]}, date(2026, 11, 3)),
+        ],
+        ids=["mon-thu-to-tuesday", "weekdays-to-saturday", "mixed-case"],
+    )
+    def test_several_weekdays_moved_to_a_day_they_skip_are_refused(self, pattern, new):
+        from outlook_mcp.errors import OutlookMCPError
+
+        with pytest.raises(OutlookMCPError) as excinfo:
+            _moved(pattern, date(2026, 11, 2), new)
+        assert excinfo.value.code == "series_days_ambiguous"
+        assert "pattern.daysOfWeek" in str(excinfo.value)
+        assert "Nothing was modified" in str(excinfo.value)
+
+    def test_an_end_date_moves_as_far_as_the_start(self):
+        """Three Mondays to 2026-11-16 moved to Tuesday stay three, to the 17th."""
+        rng = {"type": "endDate", "startDate": "2026-11-02", "endDate": "2026-11-16"}
+        moved = _moved(
+            {"type": "weekly", "daysOfWeek": ["monday"]}, date(2026, 11, 2), date(2026, 11, 3), rng
+        )
+        assert moved["range"] == {"type": "endDate", "endDate": "2026-11-17"}
+
+    def test_a_numbered_range_keeps_its_echoed_placeholder_end(self):
+        """A numbered read-back carries `endDate: 0001-01-01`; it is not an end to move."""
+        rng = {"type": "numbered", "numberOfOccurrences": 3, "endDate": "0001-01-01"}
+        moved = _moved({"type": "daily"}, date(2026, 11, 2), date(2026, 11, 3), rng)
+        assert moved["range"]["endDate"] == "0001-01-01"
+
+
+class TestMovePatternAcrossMonths:
+    def test_the_same_day_of_a_later_month_needs_no_move(self):
+        """N1: the 15th from November to December was refused as "a different month"."""
+        from outlook_mcp.tools._recurrence import move_pattern
+
+        payload = {"pattern": {"type": "absoluteMonthly", "dayOfMonth": 15}, "range": {}}
+        assert move_pattern(payload, old=date(2026, 11, 15), new=date(2026, 12, 15)) == payload
+
+    def test_another_day_of_a_later_month_is_still_refused_and_says_nothing_was_sent(self):
+        from outlook_mcp.tools._recurrence import move_pattern
+
+        payload = {"pattern": {"type": "absoluteMonthly", "dayOfMonth": 15}, "range": {}}
+        with pytest.raises(ValueError, match="different month") as excinfo:
+            move_pattern(payload, old=date(2026, 11, 15), new=date(2026, 12, 16))
+        assert "Nothing was modified" in str(excinfo.value)
+
+
+class TestDescribeRecurrence:
+    @pytest.mark.parametrize(
+        ("payload", "words"),
+        [
+            (
+                {
+                    "pattern": {
+                        "type": "weekly",
+                        "interval": 1,
+                        "daysOfWeek": ["friday", "monday"],
+                    },
+                    "range": {
+                        "type": "numbered",
+                        "startDate": "2026-11-02",
+                        "numberOfOccurrences": 6,
+                    },
+                },
+                "every week on Monday, Friday, from 2026-11-02, 6 times",
+            ),
+            (
+                {
+                    "pattern": {
+                        "type": "weekly",
+                        "interval": 2,
+                        "daysOfWeek": ["sunday", "monday"],
+                    },
+                    "range": {
+                        "type": "numbered",
+                        "startDate": "2026-11-08",
+                        "numberOfOccurrences": 4,
+                    },
+                },
+                "every 2 weeks on Monday, Sunday (weeks from Sunday), from 2026-11-08, 4 times",
+            ),
+            (
+                {
+                    "pattern": {"type": "absoluteMonthly", "interval": 2, "dayOfMonth": 15},
+                    "range": {
+                        "type": "endDate",
+                        "startDate": "2026-12-15",
+                        "endDate": "2027-06-15",
+                    },
+                },
+                "every 2 months on day 15, from 2026-12-15 until 2027-06-15",
+            ),
+            (
+                {
+                    "pattern": {**_FIRST_MONDAY, "type": "relativeYearly", "month": 12},
+                    "range": {"type": "noEnd", "startDate": "2026-12-07"},
+                },
+                "every year on the first Monday of December, from 2026-12-07, with no end",
+            ),
+        ],
+    )
+    def test_it_names_the_days_and_the_range(self, payload, words):
+        from outlook_mcp.tools._recurrence import describe_recurrence
+
+        assert describe_recurrence(payload) == words
 
 
 class TestSamePattern:

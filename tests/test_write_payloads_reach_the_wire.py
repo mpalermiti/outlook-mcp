@@ -626,6 +626,183 @@ class TestCalendarWrite:
             '"timeZone": "America/Los_Angeles"',
         )
 
+    async def test_a_series_moved_to_another_day_puts_its_moved_days_on_the_wire(self):
+        """#98: a same-zone date move with no `recurrence` still sends the series' own.
+
+        Without it Graph answers `updated` and leaves every occurrence on the
+        old day. Monday 09:00 New York moved to Tuesday has to go out as a
+        Tuesday series starting that Tuesday, in the event's own zone.
+        """
+        from outlook_mcp.tools._recurrence import build_event_recurrence
+
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
+        current = MagicMock(type=MagicMock(value="seriesMaster"))
+        current.start = MagicMock(date_time="2026-11-02T14:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "America/New_York"
+        current.original_end_time_zone = "America/New_York"
+        current.is_all_day = False
+        current.additional_data = {"@odata.etag": 'W/"key"'}
+        current.cancelled_occurrences = []
+        current.exception_occurrences = []
+        current.recurrence = build_event_recurrence(
+            {
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                "range": {"type": "numbered", "numberOfOccurrences": 3},
+            },
+            start="2026-11-02T09:00:00",
+            zone="America/New_York",
+        )
+        builder.get = AsyncMock(return_value=current)
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await calendar_write.update_event(
+            client,
+            event_id="AAMkAG123=",
+            start="2026-11-03T09:00:00",
+            end="2026-11-03T09:30:00",
+            config=_CFG,
+        )
+
+        assert_on_wire(
+            builder.patch.call_args[0][0],
+            '"daysOfWeek": ["tuesday"]',
+            '"startDate": "2026-11-03"',
+            '"numberOfOccurrences": 3',
+            '"dateTime": "2026-11-03T09:00:00"',
+            '"timeZone": "America/New_York"',
+        )
+
+    async def test_weekdays_started_on_a_wednesday_go_out_as_weekdays(self):
+        """#98 review: the days are kept, the range moves, and so does its `endDate`.
+
+        Two weeks of weekdays to Friday 2026-11-13, started two days later, go
+        out as weekdays from Wednesday the 4th to Sunday the 15th. The stored
+        range carries `recurrenceTimeZone`; it must not reach the wire.
+        """
+        from outlook_mcp.tools._recurrence import build_event_recurrence
+
+        weekdays = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
+        current = MagicMock(type=MagicMock(value="seriesMaster"))
+        current.start = MagicMock(date_time="2026-11-02T14:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "America/New_York"
+        current.original_end_time_zone = "America/New_York"
+        current.is_all_day = False
+        current.additional_data = {"@odata.etag": 'W/"key"'}
+        current.cancelled_occurrences = []
+        current.exception_occurrences = []
+        current.recurrence = build_event_recurrence(
+            {
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": weekdays},
+                "range": {
+                    "type": "endDate",
+                    "endDate": "2026-11-13",
+                    "recurrenceTimeZone": "Eastern Standard Time",
+                },
+            },
+            start="2026-11-02T09:00:00",
+            zone="America/New_York",
+        )
+        builder.get = AsyncMock(return_value=current)
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await calendar_write.update_event(
+            client,
+            event_id="AAMkAG123=",
+            start="2026-11-04T09:00:00",
+            end="2026-11-04T09:30:00",
+            config=_CFG,
+        )
+
+        body = wire(builder.patch.call_args[0][0])
+        assert '"daysOfWeek": ["monday", "tuesday", "wednesday", "thursday", "friday"]' in body
+        assert '"startDate": "2026-11-04"' in body
+        assert '"endDate": "2026-11-15"' in body
+        assert "recurrenceTimeZone" not in body
+        # `assert_on_wire`'s other half, on the same single serialization.
+        pairs = _walk_keys(body)
+        assert not [k for k, v in pairs if v is None or ("_" in k and not k.startswith("@"))]
+
+    @pytest.mark.parametrize(
+        ("days", "given", "start", "sent"),
+        [
+            # The ordinary read-modify-write: the shorthand handed back, started Wednesday.
+            (
+                ["monday", "tuesday", "wednesday", "thursday", "friday"],
+                "weekdays",
+                "2026-11-04",
+                '"daysOfWeek": ["monday", "tuesday", "wednesday", "thursday", "friday"]',
+            ),
+            # The refusal's remedy for a day the pattern skips: the same days, from Tuesday.
+            (
+                ["monday", "thursday"],
+                {
+                    "pattern": {
+                        "type": "weekly",
+                        "interval": 1,
+                        "daysOfWeek": ["monday", "thursday"],
+                    },
+                    "range": {"type": "numbered", "numberOfOccurrences": 3},
+                },
+                "2026-11-03",
+                '"daysOfWeek": ["monday", "thursday"]',
+            ),
+        ],
+        ids=["weekdays-to-wednesday", "mon-thu-to-tuesday"],
+    )
+    async def test_several_days_passed_with_a_move_go_out_as_written(
+        self, days, given, start, sent
+    ):
+        """#98 re-review S1: days the caller wrote are never shifted.
+
+        Equal to the stored pattern, they used to be moved with the start: weekdays
+        went out Wednesday to Sunday, Monday and Thursday as Tuesday and Friday.
+        Now exactly those days go out, the range starting on the new start.
+        """
+        from outlook_mcp.tools._recurrence import build_event_recurrence
+
+        builder = MagicMock()
+        builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
+        current = MagicMock(type=MagicMock(value="seriesMaster"))
+        current.start = MagicMock(date_time="2026-11-02T14:00:00.0000000", time_zone="UTC")
+        current.original_start_time_zone = "America/New_York"
+        current.original_end_time_zone = "America/New_York"
+        current.is_all_day = False
+        current.additional_data = {"@odata.etag": 'W/"key"'}
+        current.cancelled_occurrences = []
+        current.exception_occurrences = []
+        current.recurrence = build_event_recurrence(
+            {
+                "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": days},
+                "range": {"type": "numbered", "numberOfOccurrences": 3},
+            },
+            start="2026-11-02T09:00:00",
+            zone="America/New_York",
+        )
+        builder.get = AsyncMock(return_value=current)
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+
+        await calendar_write.update_event(
+            client,
+            event_id="AAMkAG123=",
+            start=f"{start}T09:00:00",
+            end=f"{start}T09:30:00",
+            recurrence=given,
+            config=_CFG,
+        )
+
+        assert_on_wire(
+            builder.patch.call_args[0][0],
+            sent,
+            f'"startDate": "{start}"',
+            '"timeZone": "America/New_York"',
+        )
+
     async def test_update_event_remove_recurrence_is_an_explicit_null(self):
         builder = MagicMock()
         builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
