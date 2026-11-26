@@ -2,7 +2,7 @@
 
 Changelog: 2026-11-26. Every change to a rule or override routes `far_reaching`, `undo` included; `undo` reads events live; the act tools check attendees and route against live state every run; the plan store claims `running` atomically and releases it in a `finally`, keeps a finished plan's receipt until expiry, and prunes on every access; "reversible" is defined; `CLAUDE.md` text is proposed (§17). Open items before later steps are tracked in §18.
 
-Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3 is built in `src/outlook_mcp/intents/`: `outlook_find` is registered in the opt-in `intents` group, off by default, as an early preview.
+Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3 is built in `src/outlook_mcp/intents/`: `outlook_find` is registered in the opt-in `intents` group, off by default, as an early preview. Step 4 is under way: `outlook_agenda` is registered the same way.
 
 These contracts define the interfaces every intent tool builds on: the answer envelope, the resolver, typed times, mail selections, plans and acting, undo receipts, the `catch_up` cursor, the follow-up marker, the approval and permission mapping, and how the tool set ships. They are meant to be precise enough to implement and to test against. Where they depart from the intent-tool design, §15 says so.
 
@@ -97,7 +97,7 @@ Reason / Warning
 
 | Tool kind | Values |
 | --- | --- |
-| Read: catch_up, open_loops, agenda, brief | `answered`; brief and open_loops can also return `candidates` when a person or meeting is ambiguous (§2.5) |
+| Read: catch_up, open_loops, agenda, brief | `answered`; brief and open_loops can also return `candidates` when a person or meeting is ambiguous (§2.5). As built, also `incomplete`: a section was skipped for budget or time, or failed, so the answer is not the whole of it; `failed_sections` names which |
 | find | `exact`, `single`, `candidates`, `nothing_found`; and, as built, `incomplete`: the search ran out of requests or time, or a list it read was cut at its cap, and it matched nothing in what it read. `understood.not_searched` says what was left out. `nothing_found` is only for a finished search, and a capped search is never `single` |
 | Private: compose, capture_task, follow_up, save_contact | `done`, `candidates` (a name was ambiguous: nothing written) |
 | Plan: schedule, change_meeting, clear_time, answer_invites, tidy, undo | `planned`, `blocked` (5.8), `candidates`, `nothing_to_do` |
@@ -1984,6 +1984,12 @@ Rank: To before Cc; then sender known (count, descending); then waiting longest 
   - agenda loads no sent table, so invites carry the organizer's address but no `known` flag or `stranger_invite`. catch_up and answer_invites do carry them.
 - **tasks_due:** To Do (skipping `flaggedEmails`), not completed, with a due date in the window's local dates, plus overdue tasks when the window includes today. Cap 30.
 - **More than 5 calendars:** `understood.not_covered` gains `calendars_beyond_5` with the count.
+- **As built:**
+  - an all-day event is read as a floating local date (Graph writes it as midnight to midnight in the reply's zone), and the view is read a day wider on each side so one at the window's edge is not missed;
+  - the count is `understood.calendars_beyond_5`; `not_covered` also names `events_beyond_300` and `task_lists_beyond_8`/`tasks_beyond_100` when a cap cut a read, which sets `partial`;
+  - `include_tasks: false` leaves the `tasks_due` section out and reads no To Do list;
+  - a day item carries `events_total`, and its events are concise (times local, no organizer);
+  - free time never starts before now, so a past day has none.
 
 **understood:** `window`, `zone`, day bounds, and `calendars: list[{id, is_default}]`. Calendar names are under `others_wrote`, because a shared calendar is named by its owner.
 

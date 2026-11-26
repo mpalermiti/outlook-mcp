@@ -466,8 +466,10 @@ class Mailbox:
     # Calendar
 
     def _calendar_view(self, seen: Seen, match) -> Any:
-        start = seen.params.get("startDateTime", "")
-        end = seen.params.get("endDateTime", "")
+        # A followed nextLink carries only the page token, as the window is Graph's to
+        # remember: an unbounded read here stands in for that.
+        start = seen.params.get("startDateTime", "0000")
+        end = seen.params.get("endDateTime", "9999")
         events = [
             e
             for e in self.events.get(match.group(1), [])

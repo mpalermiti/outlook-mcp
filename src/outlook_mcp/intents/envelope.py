@@ -38,8 +38,12 @@ _UNCAPPED_KEYS = ("plan", "receipt", "cursor")
 # `incomplete` for find is a deviation from the contracts' four outcomes: a search that
 # did not finish, or was capped, and matched nothing in what it read. It is never
 # `nothing_found`, which only a finished search may say (review S4).
+# The read tools answer `answered`, and `incomplete` when a section was skipped for
+# budget or time, or failed: the same deviation, so an answer that could not finish
+# never reads as an empty one.
 OUTCOMES = {
     "outlook_find": frozenset({"exact", "single", "candidates", "nothing_found", "incomplete"}),
+    "outlook_agenda": frozenset({"answered", "incomplete"}),
 }
 
 SECTION_STATUSES = frozenset({"ok", "failed", "skipped_budget", "skipped_time"})
@@ -173,6 +177,9 @@ def is_safe_value(value: Any) -> bool:
     """
     if isinstance(value, bool | int) or value is None:
         return True
+    if isinstance(value, list | tuple):
+        # A list of safe values: `answer`'s `event_ids` (§1.7).
+        return all(isinstance(v, str) and is_safe_value(v) for v in value)
     if not isinstance(value, str):
         return False
     if _UTC_RE.fullmatch(value) or is_domain(value):

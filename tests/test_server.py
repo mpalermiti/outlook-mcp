@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from outlook_mcp import toolsets
 from outlook_mcp.errors import GraphAPIError, ToolInputError
 from outlook_mcp.server import _rule_write_hint, _wrap_tool_errors, mcp
 from tests.test_calendar_write import reads_no_times
@@ -109,9 +110,12 @@ EXPECTED_TOOLS = [
     "outlook_export_message",
     # Contact photos (1) — the opt-in `contact_photos` group
     "outlook_set_contact_photo",
-    # Intent tools (1) — the opt-in `intents` group, an early preview
+    # Intent tools — the opt-in `intents` group, an early preview
     "outlook_find",
+    "outlook_agenda",
 ]
+
+INTENT_TOOLS = {name for name, group in toolsets.TOOL_GROUPS.items() if group == toolsets.INTENTS}
 
 
 RULE_TOOLS = {
@@ -154,13 +158,12 @@ def _expected_tool_names() -> set[str]:
         expected.discard("outlook_export_message")
     if "outlook_set_contact_photo" not in mcp._tool_manager._tools:
         expected.discard("outlook_set_contact_photo")
-    if "outlook_find" not in mcp._tool_manager._tools:
-        expected.discard("outlook_find")
+    expected -= INTENT_TOOLS - set(mcp._tool_manager._tools)
     return expected
 
 
 def test_tool_count():
-    """71 tools by default, up to 79 with all opt-in groups loaded."""
+    """71 tools by default, up to 80 with all opt-in groups loaded."""
     registered = set(mcp._tool_manager._tools.keys())
     assert len(registered) == len(_expected_tool_names())
 

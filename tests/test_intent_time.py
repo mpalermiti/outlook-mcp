@@ -176,3 +176,31 @@ def test_a_phrase_is_answered_with_the_typed_time_to_pass_instead():
 def test_control_characters_are_refused():
     with pytest.raises(ValueError):
         resolve_window("today\x00", "UTC", now=NOW)
+
+
+# ── Clock times (§3.1 `clock`): agenda's day_start and day_end ─────────────
+
+
+@pytest.mark.parametrize(
+    ("value", "minutes"), [("00:00", 0), ("09:00", 540), ("18:30", 1110), ("23:59", 1439)]
+)
+def test_a_clock_is_minutes_after_midnight(value, minutes):
+    from outlook_mcp.validation import validate_clock
+
+    assert validate_clock(value) == minutes
+
+
+def test_twenty_four_hundred_is_only_a_days_end():
+    from outlook_mcp.validation import validate_clock
+
+    assert validate_clock("24:00", end_of_day=True) == 1440
+    with pytest.raises(ValueError, match="24:00"):
+        validate_clock("24:00")
+
+
+@pytest.mark.parametrize("value", ["9:00", "09:60", "25:00", "24:01", "0900", "noon", "", " 09:00"])
+def test_anything_else_is_refused(value):
+    from outlook_mcp.validation import validate_clock
+
+    with pytest.raises(ValueError, match="HH:MM"):
+        validate_clock(value, end_of_day=True)

@@ -490,18 +490,31 @@ def test_contact_photos_surface_has_its_own_budget_and_preserves_default_schemas
 # tokens: its 369-character description and ten arguments, `kind` an enum of nine. The
 # design gives the eighteen intent tools 4,750 together, about 264 each (intent
 # contracts §10.11), so the group's own ceiling grows by a deliberate raise per tool.
-# Default + intents is 72 / 11,443; `intents` alone (find and the two account tools) is
+# Default + intents was 72 / 11,443; `intents` alone (find and the two account tools)
 # 3 / 342. All groups: 79 / 12,597. The default and every other ceiling are unchanged.
-INTENT_TOOLS_CEILING = 245
-INTENTS_SELECTION_CEILING = 11_550
+#
+# `outlook_agenda` (§12.4) is 225: a 413-character description and seven arguments,
+# none required. Find and agenda together are 462; default + intents is 73 / 11,668;
+# `intents` alone 4 / 567; all groups 80 / 12,822. Raised from 245 and 11,550, by the
+# one tool, with ~1% headroom.
+INTENT_TOOLS_CEILING = 470
+INTENTS_SELECTION_CEILING = 11_800
 
 
 def test_the_intent_tools_fit_their_own_ceiling_and_leave_the_default_alone():
-    enabled, find = _assert_one_opt_in_tool_on_an_unchanged_default("intents", "outlook_find")
-    assert find["annotations"]["readOnlyHint"] is True
-    intent_tools = [e for e in enabled if toolsets.TOOL_GROUPS.get(e["name"]) == "intents"]
+    default = _advertised_tools(_DEFAULT_GROUPS)
+    enabled = _advertised_tools(_DEFAULT_GROUPS | {"intents"})
+    intent_names = {n for n, g in toolsets.TOOL_GROUPS.items() if g == "intents"}
+    intent_tools = [e for e in enabled if e["name"] in intent_names]
+    assert len(default) == 71
+    assert {e["name"] for e in intent_tools} == intent_names
+    assert [e for e in enabled if e["name"] not in intent_names] == default
+    assert _proxy_tokens(default) <= DEFAULT_SURFACE_CEILING
+    assert all(e["annotations"]["readOnlyHint"] is True for e in intent_tools)
     assert _proxy_tokens(intent_tools) <= INTENT_TOOLS_CEILING, (
         f"The intent tools cost {_proxy_tokens(intent_tools)} proxy tokens, over their "
         f"{INTENT_TOOLS_CEILING} ceiling."
     )
     assert _proxy_tokens(enabled) <= INTENTS_SELECTION_CEILING
+    # Each read tool's description is at most 450 characters (contracts §12).
+    assert all(len(e["description"]) <= 450 for e in intent_tools)
