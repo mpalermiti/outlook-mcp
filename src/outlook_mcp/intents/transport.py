@@ -31,8 +31,10 @@ from urllib.parse import parse_qsl, quote, urlsplit
 import httpx
 
 from outlook_mcp.errors import GraphAPIError, graph_json, wrap_http_status_error
-from outlook_mcp.intents.budget import LIMITER, RequestBudget, WeightedLimiter, batch_units
-from outlook_mcp.intents.ids import ID_FAMILY, IdFamily, combine_prefer
+from outlook_mcp.intents import budget as _budget
+from outlook_mcp.intents import ids as _ids
+from outlook_mcp.intents.budget import RequestBudget, WeightedLimiter, batch_units
+from outlook_mcp.intents.ids import IdFamily, combine_prefer
 from outlook_mcp.throttle import retry_throttled_subrequests, send_with_retry
 from outlook_mcp.tools._delta import require_graph_url
 
@@ -90,13 +92,14 @@ class IntentGraph:
         credential: Any,
         budget: RequestBudget,
         *,
-        id_family: IdFamily = ID_FAMILY,
-        limiter: WeightedLimiter = LIMITER,
+        id_family: IdFamily | None = None,
+        limiter: WeightedLimiter | None = None,
     ) -> None:
         self.credential = credential
         self.budget = budget
-        self.id_family = id_family
-        self.limiter = limiter
+        # The process-wide family and limiter unless given, looked up per call.
+        self.id_family = id_family or _ids.ID_FAMILY
+        self.limiter = limiter or _budget.LIMITER
         # Every `$filter` and `$search` value sent, in order, for `understood.queries`.
         self.queries: list[str] = []
         self._client: httpx.AsyncClient | None = None
@@ -241,6 +244,7 @@ class _Counted:
         return _Counted(self._target(*args, **kwargs), self._budget, self._limiter)
 
 
-def counted(sdk_client: Any, budget: RequestBudget, limiter: WeightedLimiter = LIMITER) -> Any:
-    """``sdk_client`` with every request counted against ``budget`` and held on ``limiter``."""
-    return _Counted(sdk_client, budget, limiter)
+def counted(sdk_client: Any, budget: RequestBudget, limiter: WeightedLimiter | None = None) -> Any:
+    """``sdk_client`` with every request counted against ``budget`` and held on ``limiter``
+    (the process limiter unless given)."""
+    return _Counted(sdk_client, budget, limiter or _budget.LIMITER)

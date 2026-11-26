@@ -401,3 +401,17 @@ async def test_a_waiter_cancelled_in_the_queue_gives_nothing_back_twice():
 async def _hold_briefly(limiter, units):
     async with limiter.hold(units):
         await asyncio.sleep(0)
+
+
+async def test_a_feature_the_mailbox_refuses_is_not_supported_not_an_error():
+    async def refused():
+        raise budget.NotSupported(GraphAPIError(403, "ErrorAccessDenied", "Access is denied."))
+
+    results = await run_sections([("matches", refused)])
+    assert results[0].status == "failed"
+    assert results[0].failure == {
+        "section": "matches",
+        "reason": "not_supported",
+        "code": "ErrorAccessDenied",
+        "message": "Access is denied.",
+    }

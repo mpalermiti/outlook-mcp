@@ -53,6 +53,15 @@ class BudgetExhausted(Exception):  # noqa: N818 - the contracts' name; never rea
         self.limit = limit
 
 
+class NotSupported(Exception):  # noqa: N818 - a section outcome, not a failure
+    """A section the mailbox refuses as a feature, such as inbox rules on some personal
+    accounts (a 403). Reported as ``not_supported``, never raised to the client."""
+
+    def __init__(self, error: GraphAPIError):
+        super().__init__(error.message)
+        self.error = error
+
+
 class RequestBudget:
     """The counted Graph requests one intent call may make."""
 
@@ -188,6 +197,16 @@ async def run_sections(
                     "skipped_budget",
                     failure=_failure(
                         name, "budget", None, f"Stopped at the {error.limit}-request limit."
+                    ),
+                )
+            )
+        elif isinstance(error, NotSupported):
+            results.append(
+                SectionResult(
+                    name,
+                    "failed",
+                    failure=_failure(
+                        name, "not_supported", error.error.error_code, error.error.message
                     ),
                 )
             )

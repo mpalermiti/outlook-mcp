@@ -41,8 +41,11 @@ ALLOWED: dict[str, str] = {
     f"{PACKAGE}.intents": _INTENTS_AHEAD_OF_REGISTRATION,
     f"{PACKAGE}.intents.budget": _INTENTS_AHEAD_OF_REGISTRATION,
     f"{PACKAGE}.intents.envelope": _INTENTS_AHEAD_OF_REGISTRATION,
+    f"{PACKAGE}.intents.find": _INTENTS_AHEAD_OF_REGISTRATION,
     f"{PACKAGE}.intents.ids": _INTENTS_AHEAD_OF_REGISTRATION,
     f"{PACKAGE}.intents.people": _INTENTS_AHEAD_OF_REGISTRATION,
+    f"{PACKAGE}.intents.resolver": _INTENTS_AHEAD_OF_REGISTRATION,
+    f"{PACKAGE}.intents.selection": _INTENTS_AHEAD_OF_REGISTRATION,
     f"{PACKAGE}.intents.transport": _INTENTS_AHEAD_OF_REGISTRATION,
 }
 
