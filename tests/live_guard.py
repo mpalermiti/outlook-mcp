@@ -293,6 +293,19 @@ def _host(url: str) -> str:
     return (urlsplit(url).hostname or "").lower()
 
 
+def _reads_only(url: str, parts: list[str]) -> bool:
+    """A POST that reads and changes nothing: ``/me/translateExchangeIds`` on Graph.
+
+    It turns ids from one format into another. ``outlook_find`` needs it because a
+    ``$search`` hands back regular ids while lists hand back immutable ones (live
+    round 1, 2026-11-26). Only that path, on Graph, through ``/me``.
+    """
+    return _host(url) == "graph.microsoft.com" and [p.lower() for p in parts] == [
+        "me",
+        "translateexchangeids",
+    ]
+
+
 def _addresses(entries) -> tuple[str, ...]:
     found = []
     for entry in entries or []:
@@ -455,6 +468,8 @@ class ReadOnly:
         if method in _READS or _host(url) in SIGN_IN_HOSTS:
             return
         parts = _segments(url)
+        if method == "POST" and _reads_only(url, parts):
+            return
         if method == "POST" and parts and parts[-1] == "$batch":
             requests = (_folded(body) or {}).get("requests") if isinstance(body, Mapping) else None
             if requests and all(

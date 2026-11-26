@@ -47,7 +47,6 @@ from outlook_mcp.intents.reading import (
     local_midnight,
     open_tasks,
     outcome_of,
-    owner_organizes,
     read_view,
     response_of,
     show_as_of,
@@ -152,11 +151,11 @@ def _wall(day: date, minutes: int, tz: tzinfo) -> datetime:
     return wall.replace(tzinfo=tz).astimezone(timezone.utc)
 
 
-def _concise(row: dict, calendar: int, tz: tzinfo, now: datetime, me: frozenset[str]) -> dict:
+def _concise(row: dict, calendar: int, tz: tzinfo, now: datetime) -> dict:
     """A day's event: when, which calendar (its place in ``understood.calendars``), and
     how it stands, without the organizer."""
     start, end = event_span(row, tz)
-    full = event_item(row, calendar=calendar, tz=tz, zone_name="", now=now, me=me)
+    full = event_item(row, calendar=calendar, tz=tz, zone_name="", now=now)
     return {
         "kind": "event",
         "id": row.get("id"),
@@ -166,7 +165,7 @@ def _concise(row: dict, calendar: int, tz: tzinfo, now: datetime, me: frozenset[
         "calendar": calendar,
         "show_as": show_as_of(row),
         "response": response_of(row),
-        "is_organizer": full["is_organizer"],
+        "is_organizer": row.get("isOrganizer") is True,
         "is_cancelled": row.get("isCancelled") is True,
         "why": full["why"],
         "warnings": full["warnings"],
@@ -227,9 +226,6 @@ async def read_agenda(
     wanted = _check_calendars(calendars)
     days = local_dates(start, end, tz)
     today = moment.astimezone(tz).date()
-    # The owner's own address: who organizes a meeting is read from its organizer, never
-    # from Graph's isOrganizer (live finding, probe day 1).
-    me = frozenset({signed_in.strip().lower()}) if signed_in and signed_in.strip() else frozenset()
 
     spent = RequestBudget(budget.CEILINGS[TOOL])
     chosen_calendars: list[Any] = []
@@ -314,15 +310,14 @@ async def read_agenda(
                 min_free,
                 place=place,
                 read_until=read_until,
-                me=me,
             )
             for d in days
         ]
-        overlap_items = _overlap_items(events, tz, zone_name, moment, me)
+        overlap_items = _overlap_items(events, tz, zone_name, moment)
         invites = [
-            event_item(row, calendar=cal, tz=tz, zone_name=zone_name, now=moment, me=me)
+            event_item(row, calendar=cal, tz=tz, zone_name=zone_name, now=moment)
             for row, cal in events
-            if is_open_invite(row, me) and _starts_in(row, tz, start, end)
+            if is_open_invite(row) and _starts_in(row, tz, start, end)
         ]
         exact = read_until is None
         sections += [
@@ -330,7 +325,7 @@ async def read_agenda(
             section("overlaps", overlap_items, cap=CAPS["overlaps"], total_exact=exact),
             section("invites", invites, cap=CAPS["invites"], total_exact=exact),
         ]
-        suggestions += _suggestions(invites, events, tz, moment, me)
+        suggestions += _suggestions(invites, events, tz, moment)
     else:
         for name in ("days", "overlaps", "invites"):
             sections.append(section(name, [], cap=CAPS[name], status=calendar_result.status))
@@ -443,7 +438,6 @@ def _day_item(
     *,
     place: dict[str, int],
     read_until: datetime | None,
-    me: frozenset[str],
 ) -> dict:
     """One local date: its events, the free blocks between day_start and day_end, and
     the minutes busy events take inside those bounds. No time at or after
@@ -479,7 +473,7 @@ def _day_item(
         for s, e in free  # type: ignore[misc]
         if _minutes((s, e)) >= min_free
     ]
-    shown = [_concise(row, place.get(cal, 0), tz, now, me) for row, cal in on_day]
+    shown = [_concise(row, place.get(cal, 0), tz, now) for row, cal in on_day]
     return {
         "kind": "day",
         "id": day.isoformat(),
@@ -495,7 +489,7 @@ def _day_item(
 
 
 def _overlap_items(
-    events: list[tuple[dict, str]], tz: tzinfo, zone_name: str, now: datetime, me: frozenset[str]
+    events: list[tuple[dict, str]], tz: tzinfo, zone_name: str, now: datetime
 ) -> list[dict]:
     """Busy events that overlap another busy event, each with whom it overlaps."""
     busy = []
@@ -513,7 +507,7 @@ def _overlap_items(
     for row, cal, _ in busy:
         if row["id"] not in partners:
             continue
-        item = event_item(row, calendar=cal, tz=tz, zone_name=zone_name, now=now, me=me)
+        item = event_item(row, calendar=cal, tz=tz, zone_name=zone_name, now=now)
         # At most OVERLAP_PARTNERS reasons: a day of back-to-back meetings would otherwise
         # repeat every other id on every item.
         found = partners[row["id"]]
@@ -544,11 +538,7 @@ def _tasks_due(pairs: list[tuple[dict, str]], days: list[date], today: date) -> 
 
 
 def _suggestions(
-    invites: list[dict],
-    events: list[tuple[dict, str]],
-    tz: tzinfo,
-    now: datetime,
-    me: frozenset[str],
+    invites: list[dict], events: list[tuple[dict, str]], tz: tzinfo, now: datetime
 ) -> list[dict]:
     """``answer`` for the first invite; ``brief_meeting`` for the next meeting."""
     offers = []
@@ -569,7 +559,7 @@ def _suggestions(
             # The owner's own, or one they accepted: agenda reads no sent mail, so it
             # can't tell a stranger's invitation, whose subject and attendees a brief
             # would then search for (review A4).
-            and (owner_organizes(row, me) or response_of(row) == "accepted")
+            and (row.get("isOrganizer") is True or response_of(row) == "accepted")
         ):
             offers.append(suggestion("brief_meeting", "outlook_brief", {"meeting": row["id"]}))
             break
