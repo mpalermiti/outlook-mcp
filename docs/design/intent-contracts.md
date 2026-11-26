@@ -478,7 +478,7 @@ Other kinds:
 | kind | Queries |
 | --- | --- |
 | message, thread | With words: `$search` on `/me/messages`, or on the folder when given. KQL = `sanitize_kql(words)` (reuse), then `from:<addr>` (filters.from resolved first; if that person is ambiguous the outcome is `candidates` for the person), `received>=YYYY-MM-DD`, `received<=…` and `hasAttachments:true`, with `$top=25`. `$select` is `SUMMARY_SELECT` plus `toRecipients,ccRecipients,parentFolderId`. With no words, `$filter` mode (§4). A thread is the latest message per `conversationId` |
-| file | the message query with `hasAttachments`, plus a second search with KQL `attachment:<word>` for each plain word (P-AT1; a 400 leaves the first search alone), then one `$batch` of `GET /me/messages/{id}/attachments?$select=id,name,size,contentType,isInline` for the top 10 messages. Non-inline attachments are matched on `file_name`. The second search reaches files whose names are the only place the words appear: a search's default properties are the sender, subject and body |
+| file | the message query with `hasAttachments`, then one `$batch` of `GET /me/messages/{id}/attachments?$select=id,name,size,contentType,isInline` for the top 10 messages. Non-inline attachments are matched on `file_name`. Live (P-AT1), plain words find a file by the first word of its name, and KQL `attachment:` adds nothing (it matches only a name's start), so no second search is sent; a word inside a name is found only by the local match on the fetched names |
 | event | `calendarView` per calendar over `window` (default now − 30 d to now + 180 d). `$select=id,subject,start,end,isAllDay,isOrganizer,organizer,responseStatus,isCancelled,showAs,seriesMasterId,type,attendees`, `$top=100`, at most 3 pages × 5 calendars. Matched locally on subject, attendee names and addresses, since Graph has no `$search` on events [repo-live `list_events`] |
 | task | `GET /me/todo/lists`, skipping `wellknownListName = flaggedEmails` (those duplicate flagged mail, §8), then per list `…/tasks?$filter=status ne 'completed'&$top=100` (P-H1a; without that filter, filter locally), at most 8 lists. Matched on title |
 | draft | `$search` in `drafts`, or the newest 25 |
@@ -1187,6 +1187,7 @@ Fields a `was` may restore. Anything else in a receipt is refused (`receipt_inva
 - **One place.**
   - A kiota middleware on the process's Graph client adds the header to every SDK request.
   - The raw paths (delta pages, `$batch` envelopes, and every `$batch` sub-request's `headers`) add it too.
+  - As built after live round 1: a `$search` answers with regular ids whatever the header asked for (P-SR1). In such a process every search whose ids are handed out, `find`'s and the classic `outlook_search_mail` and `outlook_search_contacts` alike, translates them with one `POST /me/translateExchangeIds`. A search reply never votes on the family; a failed translation counts as regular ids.
   - The preference is **combined** with any existing `Prefer` value, comma-separated (`odata.maxpagesize=50, IdType="ImmutableId"`; `outlook.timezone="…", IdType="ImmutableId"`), never assigned over it.
 - **Detected at run time**:
   - The first Outlook response in the process sets `id_family`: `"immutable"` if `Preference-Applied` contains `IdType="ImmutableId"`, otherwise `"rest"`.
@@ -1784,14 +1785,15 @@ Every page uses the same conventions:
 | Kind | Requests |
 | --- | --- |
 | person | 22 (2.6) |
-| message or thread with `sender` | 5 + 1 + 5 header reads = 11 |
-| file with `sender` | 5 + 2 + 10 attachment lists + 5 = 22 |
+| message or thread with `sender` | 6 + 1 search + 1 id translation + up to 5 header reads for rows without headers = 13 |
+| file with `sender` | 6 + 1 + 1 + 10 attachment lists + up to 5 header reads = 23 |
 | event | 1 + 15 |
 | task | 1 + 8 |
-| draft, rule | 1 |
+| draft | 1 search + 1 id translation = 2 |
+| rule | 1 |
 | folder | ≤ 2 |
 
-Maximum **22**, under a ceiling of 30.
+Maximum **23**, under a ceiling of 30. As built since live round 1, every `$search` whose ids are handed out (Q2, and the message, thread, file and draft searches) is followed by one `POST /me/translateExchangeIds`: live, a `$search` returns regular ids while lists return immutable ones (P-SR1). The light path is then at most 6.
 
 **Docstring** (at most 450 characters): what each kind finds; that words are names or search words, never roles; that a single match is acted on only when it's an exact id or address or someone you've written to, and otherwise candidates come back.
 
@@ -1871,7 +1873,8 @@ The **look-ahead** H = max(end of today, local time, window end), capped at now 
 
 **As built:**
 - The owner's mail is what is in Sent Items: a later message that only claims the owner's address is neither `you_replied` (F2) nor an arrival. An arrival from one of the owner's addresses is counted in `understood.arrivals.from_your_address`, not dropped silently.
-- A resync bootstraps from `cursor.made` less the 2-minute overlap, the same threshold arrivals use, so nothing in the overlap is lost. G2 and G6 count a refused or stale first request inside their own 4 and 2, so a fallback doesn't pass the ceiling.
+- A resync bootstraps from `cursor.made` less the 2-minute overlap, the same threshold arrivals use, so nothing in the overlap is lost. G2 and G6 count a refused or stale first request inside their own 4 and 2. That bounds G2 and G6 only: other fallbacks (P-SI1's cast, P-H1a's, now one request per call, and P-D3a's three-folder scan) add to the total, and two at once can reach the ceiling, which answers `incomplete` (review A2).
+- **Review fixes (#283):** a flag's `reply_from_them` names the replier (`address`, `known`) and counts only a confirmed reply (§8.2 as built under open_loops); `clear_follow_up` is offered only for one from someone the owner writes to. G5 checks the 5 earliest-due flags and G3 reads 8 headers, to make room for the confirmations (2 folder ids, up to 5 header reads): worst case 38. `draft_reply` needs a sender check that ran and did not fail. Arrivals and the owner's letters by conversation tell meeting messages by type only. `cal.since` is carried across a call that did not read the calendar and is the base for a roll, a resync or a first read (review D1). Unread arrivals (`has_more`) make the mail sections inexact and the answer `incomplete` (D2). The cursor's mail link must be the Inbox's, and its times may not lie in the future (D3). P-D3a's fallback adds `flags_fallback_scan`, and `flags_older_than_scan` with `incomplete` when a scanned folder had more (D4). G7 is read in start order: invites are inexact when it is cut, and the answer is `incomplete` if the cut falls before today ends. With a cursor a window that lies ahead is accepted, for the look-ahead. A nested, oversized or `v: true` cursor is refused or reset.
 - `cal` gains `since`: while a round that began as a fresh snapshot (a first read, a roll, a resync) is unfinished, only events modified after it count as changes. `mail.bootstrap_from` also carries the arrival threshold forward when a call didn't read mail (`focus`), or a round is unfinished (`arrivals.has_more`). An empty link means that source starts on the next call.
 - `calendar_changes` is in the answer only with a usable cursor. `answer` is offered for the first invitation without a blocking warning; `stranger_invite` blocks.
 - F1 also selects the recipients and the subject; P-D3a's fallback scans the Inbox, Sent Items and the Archive.
@@ -1944,6 +1947,12 @@ Rank: To before Cc; then sender known (count, descending); then waiting longest 
 
 **As built:**
 - The owner's mail is what is in Sent Items (find's review, B1). A message elsewhere whose `from` is one of the owner's addresses, a copy of a note to self or a forgery, is left out of who wrote last: it can neither end a wait nor start one. F2 counts a later message as `you_replied` only from Sent Items.
+- F2 counts a later message as their reply (review B1) only when it is from someone the flagged message waits on (a letter's recipients, a received message's sender), outside Junk and Deleted Items (their ids read once, in one batch), and its headers show a verified sender and no automatic or bulk mail (`Auto-Submitted`, `Precedence`, `X-Autoreply`, a `multipart/report` bounce, list headers). The first such candidate per flag is read. Anything short of that leaves the follow-up open, in `understood.replies_unconfirmed`.
+- Meeting messages are told by type only (`@odata.type`, `meetingMessageType`) everywhere mail is listed or counted; the subject-prefix backstop is for the sent table alone (review B2).
+- L6 reads the 8 top-ranked waits, known senders included (review C1), and `draft_reply` goes only to a wait whose check ran and did not fail. L9 reads 4 conversations, the newest 3 messages each, and judges a conversation by its latest message that is not a draft.
+- When a window read is cut at its cap, only conversations whose latest message is at least as new as the oldest message read from every capped folder are judged; `understood.judged_since` and `conversations_not_judged` say so, and the answer is `incomplete` (review C2).
+- One deadline from the start of the call covers the person and word lookups and the core read too (review C3).
+- Worst case 36 requests (L7 3-5, L8 1, L1 3, L2 3, L3 1, L9 4, L4 1, L5 5, the two folder ids, 5 confirmations, L6 8); 38 with both P-SI1 fallbacks.
 - A conversation whose latest message is a meeting message is skipped, not read by its message before.
 - L1 also selects `parentFolderId`, `subject`, `bodyPreview` and the eventMessage cast (P-SI1, read again without the cast on a 400). F1 also selects the recipients and the subject, so a flagged letter says whom it waits on.
 - P-D3a's fallback scans Sent Items only (open_loops reads flags only for sent letters), and the section's `total_exact` is false.
@@ -2009,7 +2018,13 @@ Rank: To before Cc; then sender known (count, descending); then waiting longest 
   - the count is `understood.calendars_beyond_5`; `not_covered` also names `events_beyond_300` and `task_lists_beyond_8`/`tasks_beyond_100` when a cap cut a read, which sets `partial`;
   - `include_tasks: false` leaves the `tasks_due` section out and reads no To Do list;
   - a day item carries `events_total`, and its events are concise (times local, no organizer);
-  - free time never starts before now, so a past day has none.
+  - free time never starts before now, so a past day has none;
+  - each view is read with `$orderby=start/dateTime`, so a capped read is the window's head; past the last event read on a capped calendar nothing is free, `understood.events_read_until` says where, the calendar sections are `total_exact: false` and the answer is `incomplete`;
+  - a day's events name their calendar by its index in `understood.calendars`; when the answer is too long, day events lose their location, then the last days lose their events (counted in `events_total`), before the envelope's own trim;
+  - an overlap item names at most five others;
+  - P-H1a's refusal is remembered for the call, so the fallback costs one request;
+  - `brief_meeting` is offered only for a meeting the owner organizes or has accepted.
+  - "The owner organizes it" is Graph's `isOrganizer`, never the organizer's address (live round 1, P-SI1 (b): the owner's own events read true; a received meeting naming the owner reads false with response `organizer`). In catch_up and brief, that response on a meeting the owner doesn't organize carries `stranger_invite`, as in find.
 
 **understood:** `window`, `zone`, day bounds, and `calendars: list[{id, is_default}]`. Calendar names are under `others_wrote`, because a shared calendar is named by its owner.
 
@@ -2112,7 +2127,9 @@ Sections:
 - M3's search is built from the subject, which someone else may have written: it runs, but is not echoed in `understood.queries` (`understood.queries_not_echoed` counts it). A message matches when one of the event's people other than the owner is on it.
 - `others_wrote` gains `company`, `job_title`, `phones` and `birthday` for a saved contact's details. Attendee items are people (§2.4's `Who`) with `response` and `type`.
 - `recent` and `open_loops` mark `total_exact` false (P3 is a search). A task matches a person when its title holds their name after `norm_name`, and a topic when it holds every word.
-- An ambiguous person or meeting answers in a `candidates` section, with `choose` only for known, unblocked candidates.
+- An ambiguous person or meeting answers in a `candidates` section, with `choose` only for known, unblocked candidates. A resolution that could not finish answers `incomplete` with `understood.not_searched` (review E4), and one that ran out of time or requests marks every section so (C3: one deadline from the call's start).
+- **Live round 1 (#284):** P3's letters, M3's messages and T1's hits come from `$search`, which hands back regular ids; each set is translated with one `POST /me/translateExchangeIds` (find's `_immutable`), after a list reply has set the id family, so a message never reaches the agent under two ids. Each is skipped when nothing was kept. The paths stay within their tests' counts (person 38, meeting 25, topic 22). open_loops' L8 keeps only its hits' conversations, so it hands out no search id and translates nothing; catch_up makes no search. A tripwire test holds every intents module that sends `$search` (find's resolver and open_loops aside) to one `_immutable` per search; the classic tools use `ids.translate_search_ids`, find's SDK-side twin.
+- **Review fixes (#284):** P2 leaves out Junk and Deleted Items (their ids read once), and the messages `next` may point at (the newest, and the latest waiting on the owner) get a header read first; `draft_reply` and `open` need a check that ran and did not fail (E1). Message items carry `folder_id`. P5 reads 3 messages' files and P6 5 lists, to make room: the person path stays within 40 with P-H1a's fallback. A content type is shown only when it is a plain MIME type of at most 100 characters, here and in find (E2). Capped task, calendar and attachment reads go into `not_covered` and make their sections inexact (E3). `brief_person` is never offered for the owner. Meeting messages are told by type only.
 
 **Docstring** (at most 450 characters): the three forms; that a meeting brief lists who answered; that notes or decisions exist only if someone emailed them.
 
@@ -2192,7 +2209,7 @@ Fetched 2026-11-26. "Allowed" means the "Delegated (personal Microsoft account)"
 
 ## 14. Live probes to run later
 
-**37 probes.** They run only on two test accounts the project owns, never on a maintainer's own mailbox.
+**38 probes.** They run only on two test accounts the project owns, never on a maintainer's own mailbox.
 
 **Cautions:**
 - WRITE probes use throwaway items.
@@ -2204,7 +2221,7 @@ Fetched 2026-11-26. "Allowed" means the "Delegated (personal Microsoft account)"
 | --- | --- | --- | --- | --- |
 | **P-UI1** | client | In **Claude Code and Claude Desktop**, against the test server, reach the approval prompt of `outlook_send`, `outlook_carry_out` (100-item tidy) and `outlook_carry_out_far_reaching` (a 1-item cancel, and a tidy that adds a rule); decline at the prompt. Screenshot each. Record Cursor and OpenClaw when available | `summary` is visible in full without expanding anything; the tool name is shown; whether "always allow" is offered and at what scope | **step-6 gate** (§9.2) |
 | **P-LAT1** | WRITE | On a seeded mailbox of 20,000+ messages: time Q1 (300 sent), Q5 for a recent sender, catch_up end to end, carry_out with 100 and 200 moves, and 20 and 50 responses (between the accounts) | median and p95 per item | the caps in 5.9; D6; Q5's timeout |
-| **P-SI1** | WRITE | A accepts, and then declines, B's invites with `sendResponse: true`; then answers a third with `sendResponse: false`. GET A's Sent Items with `$top=5`, plus `$select=microsoft.graph.eventMessage/meetingMessageType` | which items land there, and their `@odata.type`; with `sendResponse: false`, B's inbox count must not change. As built, also release-gating: (a) whether responses carry `@odata.type` or the `microsoft.graph.eventMessage/meetingMessageType` cast in Sent Items, since a localized subject with neither is still read as a letter (the English prefixes are only a backstop); (b) that `isOrganizer` stays false on an incoming invitation that names the user as organizer | the sent table's letters-only rule (H4, 2.6) |
+| **P-SI1** | WRITE | A accepts, and then declines, B's invites with `sendResponse: true`; then answers a third with `sendResponse: false`. GET A's Sent Items with `$top=5`, plus `$select=microsoft.graph.eventMessage/meetingMessageType` | which items land there, and their `@odata.type`; with `sendResponse: false`, B's inbox count must not change. As built, also release-gating: (a) whether responses carry `@odata.type` or the `microsoft.graph.eventMessage/meetingMessageType` cast in Sent Items, since a localized subject with neither is still read as a letter (the English prefixes are only a backstop); (b) that `isOrganizer` stays false on an incoming invitation that names the user as organizer | the sent table's letters-only rule (H4, 2.6). **Live, 2026-11-26:** (b) holds, since the user's own event reads `isOrganizer: true` and a received meeting naming the user as organizer reads `false` (response `organizer`). (a) holds for received meeting messages (`@odata.type` and the cast). Sent Items responses are still unprobed, so this stays a release gate |
 | **P-DL1** | WRITE | Bootstrap an Inbox delta with `changeType=created`. Then on A: mark a message read, flag one, categorize one, move one in from Junk, and have B send one. Run the round | Only B's new message comes back means created-only works; extra items mean the received-time rule must filter (it does either way); a 400 means the fallback | §7.3 |
 | **P-A8** | WRITE | With an immutable id: POST `/move`, PATCH `categories`, and both inside `$batch` | 2xx with the same id family returned | §6.3 |
 | **P-A9** | WRITE | Move a message to `archive` with the header; GET by the same id | 200 in Archive means stable | §6.3 |
@@ -2232,19 +2249,20 @@ Fetched 2026-11-26. "Allowed" means the "Delegated (personal Microsoft account)"
 | P-F2c | GET | **Seed at least 1,500 messages** matching one term (scripted sends from B), then `$search` it and follow every nextLink | a total near 275 keeps "250+"; near 1,500 raises `SEARCH_STOPS_AFTER` | §4.3 |
 | P-F4b | GET | the `categories/any` filter | 200 or 400 | §4.2 |
 | P-F4c | GET | the `hasAttachments` filter | 200 or 400 | §4.2 |
-| P-F5 | GET | `internetMessageHeaders` in a list `$select` and in a delta `$select` | headers present or absent | §2.6 Q6, §4.3, §12.2 G3 |
+| P-F5 | GET | `internetMessageHeaders` in a list `$select` and in a delta `$select` | headers present or absent | §2.6 Q6, §4.3, §12.2 G3. **Live, 2026-11-26:** present on lists, `$search` and delta replies; a message without the key has no headers at all (a draft), and its single read lacks it too. The resolver reads headers off the row, with the single read kept as a fallback |
 | P-F7 | WRITE | With the header: create a draft to B, send, wait 5 s, GET the same id | 200 with `isDraft: false` in Sent Items | §9.3 |
 | P-H1a | GET | To Do `status ne 'completed'` | 200 or 400 | §2.6, §12 |
 | P-H1b | GET | To Do due filter | 200 or 400; nice to have | — |
-| P-SE1 | GET | Seed letters to `probe@example.com`, to `probe@example.com.example`, and to `pro.be@example.com`. `$search="recipients:probe@example.com"` | which ones come back. Q7 counts only exact address matches either way; this shows whether KQL needs that local filter | §2.6 Q7 |
+| P-SE1 | GET | Seed letters to `probe@example.com`, to `probe@example.com.example`, and to `pro.be@example.com`. `$search="recipients:probe@example.com"` | which ones come back. Q7 counts only exact address matches either way; this shows whether KQL needs that local filter | §2.6 Q7. **Live, 2026-11-26:** `recipients:probe@example.com` also returns the letter to `probe@example.com.example` (not the dotted local part); the quotes are required. Q7's exact local filter stays |
 | P-T1 | WRITE | POST the same event twice with one `transactionId` | never two events | §5.12 |
-| **P-AT1** (new) | GET | `$search="attachment:<word> hasAttachments:true"` on `/me/messages`, with a word from a file's name that appears nowhere else in the message | the message comes back means names are searched; a 400 means `find` keeps to the words search, as it does on that answer | §2.6 file |
+| **P-AT1** (new) | GET | `$search="attachment:<word> hasAttachments:true"` on `/me/messages`, with a word from a file's name that appears nowhere else in the message | the message comes back means names are searched; a 400 means `find` keeps to the words search, as it does on that answer | §2.6 file. **Live, 2026-11-26:** accepted, never a 400, but it matches only the start of a file's name, which the plain words search finds too; the second search was removed |
+| **P-SR1** (new, live round 1) | GET, then POST | `$search` on messages and contacts with `Prefer: IdType="ImmutableId"`; then `POST /me/translateExchangeIds` (restId to restImmutableEntryId) on a hit | **Live, 2026-11-26:** `$search` returns regular ids while `Preference-Applied` says immutable; the translation returns the list's immutable id for messages. Contact translation is unprobed: the live guard `test_q2_contact_search_finds_a_contact_by_name` settles it | §2.6, §6.3 |
 
 **Which probes gate which step:**
 
 | Step | Probes |
 | --- | --- |
-| 3 (find) | P-SI1, P-SE1, P-F5, P-AT1 |
+| 3 (find) | P-SI1, P-SE1, P-F5, P-AT1, P-SR1 |
 | 4 (read tools) | P-DL1, P-D3a, P-C2, P-LAT1's read timings |
 | 6 (plans and acting) | **P-UI1**, P-EC1, P-B1, P-B6, P-S2, P-F7, P-T1, P-MK1, P-E1 |
 | 7 (tidy) | P-RL1, P-F1, P-F4b, P-F4c, P-F2c, P-LAT1's move timings |

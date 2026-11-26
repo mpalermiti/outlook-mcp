@@ -83,7 +83,9 @@ async def test_b1_a_received_message_from_the_owners_address_is_checked_and_not_
     assert candidate.item["from"]["known"] is False
     assert candidate.item["from"]["sender_auth"]["result"] == "failed"
     assert "sender_failed" in codes(candidate)
-    assert header_reads(fake, "spoof"), "the sender check must run on it"
+    # The check ran on the headers the search returned (P-F5), so no separate read.
+    search = next(s for s in fake.operations if s.search)
+    assert "internetMessageHeaders" in search.params["$select"]
 
 
 async def test_b1_the_owners_real_sent_copy_is_known_by_its_folder(fake):
@@ -199,8 +201,11 @@ async def test_s2_a_failed_header_read_is_not_checked_and_never_single(fake):
             )
         ],
     )
+    # No headers on the search reply, so the single-message fallback read is made,
+    # and that read fails.
+    box.headers_on_lists = False
     box.install(fake)
-    fake.on(r"/me/messages/spoof", lambda seen, m: error(503, "ServiceUnavailable"))
+    fake.on(r"/me/messages/(\S+)", lambda seen, m: error(503, "ServiceUnavailable"))
     spent = RequestBudget(30)
     async with open_lookup(fake.graph_client(), spent, now=NOW, zone="UTC", signed_in=ME) as lk:
         resolution = await resolve(lk, "message", "invoice overdue", Filters(), "act", 5)

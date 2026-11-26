@@ -49,7 +49,7 @@ from outlook_mcp.intents.flags import (
 from outlook_mcp.intents.people import (
     SentTable,
     build_sent_table,
-    is_meeting_message,
+    is_meeting_type,
     parse_time,
     recipients,
     sender_of,
@@ -88,10 +88,11 @@ SENT_PAGES = 3  # L1
 INBOX_PAGES = 3  # L2
 ARCHIVE_PAGES = 1  # L3
 FLAG_CHECKS = 5  # L5
-HEADER_READS = 10  # L6
+HEADER_READS = 8  # L6: the top-ranked waits, whoever they claim to be from (review C1)
 PERSON_LIMIT = 5  # L7
 SEARCH_TOP = 25  # L8
-LATEST_READS = 9  # L9
+LATEST_READS = 4  # L9 (9 in §12.3: the reply checks' confirmations took the rest)
+LATEST_TOP = 3  # the newest three, so a draft on top doesn't hide the conversation
 # L1's list, plus `parentFolderId` (the Sent Items folder's id, for L9 and the flags)
 # and the subject and preview the item shows. The eventMessage cast asks for the
 # meeting-message type (P-SI1), and Sent Items refusing it is read without it.
@@ -105,7 +106,7 @@ RECEIVED_SELECT = (
     "id,conversationId,from,toRecipients,ccRecipients,receivedDateTime,"
     "inferenceClassification,importance,subject,bodyPreview,parentFolderId"
 )
-LATEST_SELECT = RECEIVED_SELECT + ",sentDateTime,flag"
+LATEST_SELECT = RECEIVED_SELECT + ",sentDateTime,flag,isDraft"
 SEARCH_SELECT = "id,conversationId"
 NOT_COVERED = ["rule_filed_folders", "junk", "older_than_window_unless_flagged_or_searched"]
 _OFFSET = re.compile(r"^-?(\d{1,5})([mhdw])$", re.IGNORECASE)
@@ -145,6 +146,13 @@ class _Core:
     sent_folder: str | None
     conversations: dict[str, list[_Mail]] = field(default_factory=dict)
     capped: list[str] = field(default_factory=list)
+    # When a window read was cut at its cap, only conversations whose latest message is
+    # at least this new can be judged: an older one may have a later message in the part
+    # not read (review C2).
+    judged_since: datetime | None = None
+    not_judged: int = 0
+    searched_unread: int = 0
+    searched_unjudged: int = 0
 
 
 def _conversation_of(row: dict) -> str:
@@ -205,37 +213,56 @@ async def read_open_loops(
     async with open_lookup(
         graph_client, spent, now=moment, zone=zone, signed_in=signed_in
     ) as lookup:
-        resolved: str | None = None
-        if person is not None:
-            # L7: the light path. A name nobody matches raises; several are candidates,
-            # and then nothing else is gathered.
-            light = await _people(lookup, person, PERSON_LIMIT, light=True)
-            people = _finish(lookup, "person", person, Filters(), PERSON_LIMIT, light)
-            chosen = people.proceed("read")
-            if chosen is None:
-                return _candidates(people, person, moment, spent, loaded_tools, lookup)
-            resolved = chosen.item["address"]
-
-        searched: set[str] | None = None
-        if words is not None:
-            # L8: one search over all mail; its conversations are the ones kept.
-            body = await lookup.graph.get(
-                "/me/messages",
-                {"$search": f'"{kql_words(words)}"', "$select": SEARCH_SELECT, "$top": SEARCH_TOP},
-            )
-            searched = {_conversation_of(r) for r in body.get("value") or []}
-
-        async def gather() -> _Core:
-            return await _gather(lookup, start, searched)
-
-        (core_result,) = await run_sections([("core", gather)])
-        remaining = max(0.0, INTENT_DEADLINE_S - (time.monotonic() - started))
-
         names = [
             n
             for n, d in (("waiting_on_me", "on_me"), ("waiting_on_them", "on_them"))
             if direction in (d, "both")
         ]
+
+        async def lookups():
+            """L7 and L8: who and which words narrow the answer."""
+            found: str | None = None
+            if person is not None:
+                # L7: the light path. A name nobody matches raises; several are
+                # candidates, and then nothing else is gathered.
+                light = await _people(lookup, person, PERSON_LIMIT, light=True)
+                people = _finish(lookup, "person", person, Filters(), PERSON_LIMIT, light)
+                chosen = people.proceed("read")
+                if chosen is None:
+                    return people, None, None
+                found = chosen.item["address"]
+            hits: set[str] | None = None
+            if words is not None:
+                # L8: one search over all mail; its conversations are the ones kept.
+                body = await lookup.graph.get(
+                    "/me/messages",
+                    {
+                        "$search": f'"{kql_words(words)}"',
+                        "$select": SEARCH_SELECT,
+                        "$top": SEARCH_TOP,
+                    },
+                )
+                hits = {_conversation_of(r) for r in body.get("value") or []}
+            return None, found, hits
+
+        # One deadline for the whole call, from its start: the lookups and the core
+        # read too, not only the sections (review C3).
+        (pre,) = await run_sections([("lookups", lookups)], deadline_s=_remaining(started))
+        resolved: str | None = None
+        searched: set[str] | None = None
+        if pre.status == "ok":
+            people, resolved, searched = pre.value
+            if people is not None:
+                return _candidates(people, person, moment, spent, loaded_tools, lookup)
+
+        async def gather() -> _Core:
+            return await _gather(lookup, start, searched)
+
+        if pre.status == "ok":
+            (core_result,) = await run_sections([("core", gather)], deadline_s=_remaining(started))
+        else:
+            core_result = pre
+        remaining = _remaining(started)
         sections: list[dict] = []
         failed: list[dict] = []
         understood_extra: dict = {}
@@ -283,8 +310,20 @@ async def read_open_loops(
         queries = list(lookup.graph.queries)
 
     not_covered = list(NOT_COVERED)
+    outcome = outcome_of(sections)
     if core_result.status == "ok":
-        not_covered += core_result.value.capped
+        core = core_result.value
+        not_covered += core.capped
+        if core.judged_since is not None:
+            # A window read was cut: older conversations were not judged (review C2).
+            understood_extra["judged_since"] = utc(core.judged_since)
+            understood_extra["conversations_not_judged"] = core.not_judged
+            outcome = "incomplete"
+        if core.searched_unread:
+            not_covered.append("searched_conversations_unread")
+            understood_extra["searched_conversations_unread"] = core.searched_unread
+        if core.searched_unjudged:
+            understood_extra["searched_conversations_unjudged"] = core.searched_unjudged
     not_covered += understood_extra.pop("not_covered", [])
     understood = {
         "window": window_echo(window, start, end, zone),
@@ -298,7 +337,7 @@ async def read_open_loops(
     }
     return build_envelope(
         tool=TOOL,
-        outcome=outcome_of(sections),
+        outcome=outcome,
         as_of=moment,
         understood=understood,
         sections=sections,
@@ -307,6 +346,7 @@ async def read_open_loops(
         next=build_next(_suggestions(sections), loaded_tools),
         capped=len(not_covered) > len(NOT_COVERED)
         or bool(understood.get("reply_checks_failed"))
+        or bool(understood.get("replies_unconfirmed"))
         or not exact,
     )
 
@@ -385,6 +425,18 @@ async def _gather(lookup: Lookup, start: datetime, searched: set[str] | None) ->
 
     table = build_sent_table(sent_rows, signed_in=lookup.signed_in)
     core = _Core(table=table, sent_folder=table.sent_folder, capped=capped)
+    cut_at = [
+        _oldest(rows, key)
+        for rows, more, key in (
+            (sent_rows, sent_more, "sentDateTime"),
+            (inbox, inbox_more, "receivedDateTime"),
+            (archive, archive_more, "receivedDateTime"),
+        )
+        if more
+    ]
+    cut_at = [t for t in cut_at if t is not None]
+    if cut_at:
+        core.judged_since = max(cut_at)
     for row in sent_rows:
         core.conversations.setdefault(_conversation_of(row), []).append(
             _Mail(row, mine=True, at=parse_time(row.get("sentDateTime")))
@@ -406,7 +458,7 @@ async def _gather(lookup: Lookup, start: datetime, searched: set[str] | None) ->
                         {
                             "$filter": _conversation_filter(c),
                             "$orderby": "receivedDateTime desc",
-                            "$top": 1,
+                            "$top": LATEST_TOP,
                             "$select": LATEST_SELECT,
                         },
                     )
@@ -416,9 +468,15 @@ async def _gather(lookup: Lookup, start: datetime, searched: set[str] | None) ->
             for conversation, reply in zip(outside, replies, strict=True):
                 rows = (reply.get("body") or {}).get("value") or []
                 if not 200 <= (reply.get("status") or 0) < 300:
-                    capped.append(f"searched_conversation_unread:{conversation}")
+                    core.searched_unread += 1
                     continue
-                for row in rows[:1]:
+                # A draft is not a message anyone sent: the conversation is judged by its
+                # latest message that is not one (review nit).
+                sent = [r for r in rows if r.get("isDraft") is not True]
+                if not sent:
+                    core.searched_unjudged += 1
+                    continue
+                for row in sent[:1]:
                     if core.sent_folder is not None and row.get("parentFolderId") == (
                         core.sent_folder
                     ):
@@ -428,6 +486,24 @@ async def _gather(lookup: Lookup, start: datetime, searched: set[str] | None) ->
                     else:
                         _add_received(core, row)
     return core
+
+
+def _remaining(started: float) -> float:
+    """What is left of the call's deadline (read at call time, so tests can shorten it)."""
+    return max(0.0, INTENT_DEADLINE_S - (time.monotonic() - started))
+
+
+def _oldest(rows: list[dict], key: str) -> datetime | None:
+    times = [t for t in (parse_time(r.get(key)) for r in rows) if t is not None]
+    return min(times) if times else None
+
+
+def _judged(core: _Core, latest: _Mail) -> bool:
+    """Whether a conversation can be judged on the mail read (review C2)."""
+    if core.judged_since is None or (latest.at is not None and latest.at >= core.judged_since):
+        return True
+    core.not_judged += 1
+    return False
 
 
 def _add_received(core: _Core, row: dict) -> None:
@@ -455,10 +531,12 @@ async def _waiting_on_me(lookup: Lookup, core: _Core, keep, waited: timedelta) -
         latest = _latest(mails)
         if latest is None or latest.mine or not keep(conversation, mails):
             continue
+        if not _judged(core, latest):
+            continue
         row = latest.row
         line = to_me(row, me)
         if (
-            is_meeting_message(row)
+            is_meeting_type(row)
             or line == "none"
             or row.get("inferenceClassification") == "other"
             or (latest.at is not None and lookup.now - latest.at < waited)
@@ -473,13 +551,13 @@ async def _waiting_on_me(lookup: Lookup, core: _Core, keep, waited: timedelta) -
         return (0 if line == "to" else 1, -count, latest.at, _conversation_of(latest.row))
 
     found.sort(key=rank)
-    unknown = [
-        latest.row["id"]
-        for latest, _ in found
-        if core.table.get(sender_of(latest.row)[0] or "") is None
-        and isinstance(latest.row.get("id"), str)
-    ][:HEADER_READS]
-    reads = await header_reads(lookup, unknown)
+    # L6: the sender check and the bulk check for the waits shown first, whoever they
+    # claim to be from: a spoof of someone the owner writes to ranks high, so it is the
+    # one that most needs reading (review C1).
+    top = [latest.row["id"] for latest, _ in found if isinstance(latest.row.get("id"), str)][
+        :HEADER_READS
+    ]
+    reads = await header_reads(lookup, top)
 
     items = []
     for latest, line in found:
@@ -522,7 +600,9 @@ async def _waiting_on_them(
         latest = _latest(mails)
         if latest is None or not latest.mine or not keep(conversation, mails):
             continue
-        if is_meeting_message(latest.row):
+        if not _judged(core, latest):
+            continue
+        if is_meeting_type(latest.row):
             continue
         if not recipients_of(latest.row, ("toRecipients", "ccRecipients"), me):
             continue  # a letter only to oneself waits on no one
@@ -542,7 +622,7 @@ async def _waiting_on_them(
             or at is None
             or at >= start
             or conversation in core.conversations
-            or is_meeting_message(row)
+            or is_meeting_type(row)
             or lookup.now - at < waited
             or (searched is not None and conversation not in searched)
             or (resolved is not None and resolved not in _people_in([_Mail(row, True, at)]))
@@ -558,17 +638,23 @@ async def _waiting_on_them(
         notes["not_covered"].append(f"flagged_letters_beyond_{FLAG_CHECKS}")
     checked = older[:FLAG_CHECKS]
     checks = await reply_checks(lookup, checked, sent_folder=sent_folder, me=me)
-    failed_checks = []
+    failed_checks, unconfirmed = [], []
     for row, at in checked:
         check = checks[str(row.get("id"))]
         if not check.checked:
             # Not checked is not "no reply": the letter stays, and the answer says so.
             failed_checks.append(row.get("id"))
-        elif check.from_them:
-            continue  # they answered
+        elif check.reply is not None:
+            continue  # they answered: a checked reply from whom it went to (review B1)
+        elif check.unconfirmed:
+            # Something came back that could not be confirmed as their reply: the
+            # follow-up stays open, and the answer says so.
+            unconfirmed.append(row.get("id"))
         found.append((row, at))
     if failed_checks:
         notes["reply_checks_failed"] = failed_checks
+    if unconfirmed:
+        notes["replies_unconfirmed"] = unconfirmed
 
     items = []
     for row, at in sorted(
@@ -611,12 +697,18 @@ def _suggestions(sections: list[dict]) -> list[dict]:
         for i in (on_me + on_them)[:2]
         if i.get("conversation_id")
     ]
-    if on_me and on_me[0].get("last_message_id"):
+    # A reply is offered only where the sender check ran and did not fail (review C1).
+    checked = [
+        i
+        for i in on_me
+        if i["sender_auth"]["result"] in ("verified", "unverified") and i.get("last_message_id")
+    ]
+    if checked:
         offers.append(
             suggestion(
                 "draft_reply",
                 "outlook_compose",
-                {"mode": "reply", "message_id": on_me[0]["last_message_id"]},
+                {"mode": "reply", "message_id": checked[0]["last_message_id"]},
                 ["body"],
             )
         )
@@ -635,22 +727,26 @@ def _suggestions(sections: list[dict]) -> list[dict]:
 def _candidates(
     people, words: str, moment: datetime, spent: RequestBudget, loaded_tools, lookup: Lookup
 ) -> dict:
-    """An ambiguous person: the candidates, and nothing gathered (§12.3, §2.2)."""
+    """An ambiguous person: the candidates, and nothing gathered (§12.3, §2.2). A search
+    that could not finish answers ``incomplete``, never an empty ``candidates``."""
     items = [c.item for c in people.candidates]
     offers = [
         suggestion("choose", TOOL, {"person": c.item["address"]})
         for c in people.candidates
         if c.known and not c.blocking
     ]
+    understood = {
+        "person": sanitize_output(words),
+        "matched_kind": "person",
+        "queries": list(lookup.graph.queries),
+    }
+    if people.outcome == "incomplete":
+        understood["not_searched"] = list(people.not_searched)
     return build_envelope(
         tool=TOOL,
-        outcome="candidates",
+        outcome="incomplete" if people.outcome == "incomplete" else "candidates",
         as_of=moment,
-        understood={
-            "person": sanitize_output(words),
-            "matched_kind": "person",
-            "queries": list(lookup.graph.queries),
-        },
+        understood=understood,
         sections=[section("candidates", items, cap=CAPS["candidates"], total=people.total)],
         failed_sections=[],
         graph_requests=spent.spent,

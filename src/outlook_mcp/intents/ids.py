@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection, Mapping
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +181,12 @@ def hear_reply(url: object, status: object, headers: Any) -> None:
     """
     if not IMMUTABLE_IDS or status not in (200, 201) or not carries_outlook_ids(url):
         return
+    if any(key == "$search" for key, _ in parse_qsl(urlsplit(str(url)).query)):
+        # Live round 1: a `$search` hands back regular ids while its Preference-Applied
+        # says immutable, so the header is no evidence. Its ids are never handed out
+        # as they came: `translate_search_ids` turns them into the process's family,
+        # and a translation that fails is what counts as regular ids.
+        return
     ID_FAMILY.observe(_header_value(headers, "Preference-Applied"))
 
 
@@ -215,3 +221,60 @@ def sdk_client() -> Any:
     return GraphClientFactory.create_with_default_middleware(
         client=client, options=getattr(graph_request_adapter, "options", None)
     )
+
+
+async def translate_search_ids(sdk_client: Any, found: list[str]) -> dict[str, str]:
+    """The immutable id of each regular id a classic ``$search`` returned, when the
+    process asks for immutable ids; otherwise an empty map and no request at all.
+
+    Live round 1: a ``$search`` answers with regular ids whatever the request asked
+    for, while lists and filters answer with immutable ones. In a process that loads
+    an intent tool, ``outlook_search_mail`` and ``outlook_search_contacts`` therefore
+    send one ``POST /me/translateExchangeIds`` (restId to restImmutableEntryId; it
+    reads and changes nothing), as ``outlook_find`` does through its own path.
+
+    Skipped when the family is ``rest`` (Graph ignoring the preference: the search
+    ids already match). A failed or partial translation leaves those ids as they were
+    and makes the family ``mixed``, so the mismatch is on record; the search itself
+    still answers.
+    """
+    wanted = [i for i in found if isinstance(i, str) and i]
+    if not IMMUTABLE_IDS or not wanted or ID_FAMILY.family == "rest":
+        return {}
+    import json
+
+    import httpx
+    from kiota_abstractions.api_error import APIError
+    from kiota_abstractions.method import Method
+    from kiota_abstractions.request_information import RequestInformation
+    from msgraph.generated.models.o_data_errors.o_data_error import ODataError
+
+    # The body exactly as probed live (camelCase). The SDK's typed builder writes
+    # these names in PascalCase, a spelling no probe has tried.
+    request = RequestInformation()
+    request.url = "https://graph.microsoft.com/v1.0/me/translateExchangeIds"
+    request.http_method = Method.POST
+    request.headers.try_add("Content-Type", "application/json")
+    request.headers.try_add("Accept", "application/json")
+    request.content = json.dumps(
+        {"inputIds": wanted, "sourceIdType": "restId", "targetIdType": "restImmutableEntryId"}
+    ).encode("utf-8")
+    try:
+        raw = await sdk_client.request_adapter.send_primitive_async(
+            request, "bytes", {"XXX": ODataError}
+        )
+        reply = json.loads(raw or b"")
+    except (APIError, httpx.HTTPError, ValueError):
+        ID_FAMILY.observe(None)
+        return {}
+    mapping = {
+        r.get("sourceId"): r.get("targetId")
+        for r in (reply.get("value") if isinstance(reply, dict) else None) or []
+        if isinstance(r, dict)
+        and isinstance(r.get("sourceId"), str)
+        and isinstance(r.get("targetId"), str)
+        and r.get("targetId")
+    }
+    if any(i not in mapping for i in wanted):
+        ID_FAMILY.observe(None)
+    return mapping

@@ -23,8 +23,11 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
+from outlook_mcp.errors import ForeignCursorError
 from outlook_mcp.tools._delta import require_graph_url
 
 logger = logging.getLogger(__name__)
@@ -33,6 +36,8 @@ PREFIX = "cu1."
 VERSION = 1
 WARN_BYTES = 8 * 1024
 MAX_BYTES = 16 * 1024
+# Clock skew a cursor's times may have over now before they are refused.
+FUTURE_ALLOWANCE = timedelta(minutes=5)
 _UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 INVALID = "Invalid catch_up cursor. Call again without cursor to start from a window."
 
@@ -107,7 +112,8 @@ def encode(state: CursorState) -> str | None:
 
 
 def _decode(cursor: object) -> dict:
-    if not isinstance(cursor, str) or not cursor.startswith(PREFIX):
+    # Longer than any cursor this server issues: refused unread (review nit).
+    if not isinstance(cursor, str) or not cursor.startswith(PREFIX) or len(cursor) > MAX_BYTES:
         raise ValueError(INVALID)
     body = cursor[len(PREFIX) :]
     if not body or not re.fullmatch(r"[A-Za-z0-9_-]+", body):
@@ -115,7 +121,7 @@ def _decode(cursor: object) -> dict:
     try:
         raw = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4))
         data = json.loads(raw.decode())
-    except (binascii.Error, ValueError, UnicodeDecodeError):
+    except (binascii.Error, ValueError, UnicodeDecodeError, RecursionError):
         raise ValueError(INVALID) from None
     if not isinstance(data, dict):
         raise ValueError(INVALID)
@@ -131,14 +137,36 @@ def _text(node: Any, key: str, *, optional: bool = False, utc: bool = False) -> 
     return value
 
 
+_INBOX = re.compile(r"/v1\.0/me/mailFolders(?:/inbox|\('inbox'\))/messages/delta$", re.I | re.A)
+
+
 def _link(value: str, resource: str) -> str:
-    """A stored link, checked to be Graph's own delta endpoint before anything uses it."""
+    """A stored link, checked to be Graph's own delta endpoint before anything uses it.
+
+    A mail link must also be the Inbox's: the cursor is unsigned, so a link to another
+    folder's delta (Junk, say) would have that folder read as Inbox arrivals (review
+    D3). Graph answers in the spelling it was asked in, ``mailFolders('inbox')``."""
     if value == "":
         return value
-    return require_graph_url(value, source="cursor", resource=resource)
+    checked = require_graph_url(value, source="cursor", resource=resource)
+    if resource == "mail" and not _INBOX.search(urlsplit(checked).path):
+        raise ForeignCursorError("cursor", checked, resource)
+    return checked
 
 
-def read(cursor: str | None, *, username: str | None) -> tuple[CursorState | None, str]:
+def _not_after(value: str | None, now: datetime | None) -> str | None:
+    """A time from the cursor, refused when it lies past now: a cursor from the future
+    would hide every arrival (review D3)."""
+    if value is not None and now is not None:
+        moment = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        if moment > now + FUTURE_ALLOWANCE:
+            raise ValueError(INVALID)
+    return value
+
+
+def read(
+    cursor: str | None, *, username: str | None, now: datetime | None = None
+) -> tuple[CursorState | None, str]:
     """The state in ``cursor`` and ``understood.cursor``: ``none`` without one,
     ``reset_*`` when it can't be used (start from the window), ``ok`` otherwise.
 
@@ -148,7 +176,8 @@ def read(cursor: str | None, *, username: str | None) -> tuple[CursorState | Non
     if cursor is None:
         return None, NONE
     data = _decode(cursor)
-    if data.get("v") != VERSION:
+    version = data.get("v")
+    if type(version) is not int or version != VERSION:  # `True == 1`, but it is no version
         return None, RESET_UNRECOGNISED
     if data.get("acct") != account_tag(username):
         return None, RESET_OTHER_ACCOUNT
@@ -160,17 +189,17 @@ def read(cursor: str | None, *, username: str | None) -> tuple[CursorState | Non
         raise ValueError(INVALID)
     state = CursorState(
         acct=_text(data, "acct"),
-        made=_text(data, "made", utc=True),
+        made=_not_after(_text(data, "made", utc=True), now),
         mail=MailState(
             link=_link(_text(mail, "link"), "mail"),
             created_only=created_only,
-            bootstrap_from=_text(mail, "bootstrap_from", optional=True, utc=True),
+            bootstrap_from=_not_after(_text(mail, "bootstrap_from", optional=True, utc=True), now),
         ),
         cal=CalState(
             link=_link(_text(cal, "link"), "calendar"),
             start=_text(cal, "start", utc=True),
             end=_text(cal, "end", utc=True),
-            since=_text(cal, "since", optional=True, utc=True),
+            since=_not_after(_text(cal, "since", optional=True, utc=True), now),
         ),
     )
     return state, OK
