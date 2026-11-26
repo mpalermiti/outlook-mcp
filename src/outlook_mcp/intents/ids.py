@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection, Mapping
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +180,11 @@ def hear_reply(url: object, status: object, headers: Any) -> None:
     raw paths (delta pages, each ``$batch`` sub-response) all report here.
     """
     if not IMMUTABLE_IDS or status not in (200, 201) or not carries_outlook_ids(url):
+        return
+    if any(key == "$search" for key, _ in parse_qsl(urlsplit(str(url)).query)):
+        # Live round 1: a `$search` hands back regular ids while its Preference-Applied
+        # says immutable. The header is not evidence there; the ids are regular.
+        ID_FAMILY.observe(None)
         return
     ID_FAMILY.observe(_header_value(headers, "Preference-Applied"))
 

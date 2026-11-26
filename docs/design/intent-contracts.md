@@ -478,7 +478,7 @@ Other kinds:
 | kind | Queries |
 | --- | --- |
 | message, thread | With words: `$search` on `/me/messages`, or on the folder when given. KQL = `sanitize_kql(words)` (reuse), then `from:<addr>` (filters.from resolved first; if that person is ambiguous the outcome is `candidates` for the person), `received>=YYYY-MM-DD`, `received<=…` and `hasAttachments:true`, with `$top=25`. `$select` is `SUMMARY_SELECT` plus `toRecipients,ccRecipients,parentFolderId`. With no words, `$filter` mode (§4). A thread is the latest message per `conversationId` |
-| file | the message query with `hasAttachments`, plus a second search with KQL `attachment:<word>` for each plain word (P-AT1; a 400 leaves the first search alone), then one `$batch` of `GET /me/messages/{id}/attachments?$select=id,name,size,contentType,isInline` for the top 10 messages. Non-inline attachments are matched on `file_name`. The second search reaches files whose names are the only place the words appear: a search's default properties are the sender, subject and body |
+| file | the message query with `hasAttachments`, then one `$batch` of `GET /me/messages/{id}/attachments?$select=id,name,size,contentType,isInline` for the top 10 messages. Non-inline attachments are matched on `file_name`. Live (P-AT1), plain words find a file by the first word of its name, and KQL `attachment:` adds nothing (it matches only a name's start), so no second search is sent; a word inside a name is found only by the local match on the fetched names |
 | event | `calendarView` per calendar over `window` (default now − 30 d to now + 180 d). `$select=id,subject,start,end,isAllDay,isOrganizer,organizer,responseStatus,isCancelled,showAs,seriesMasterId,type,attendees`, `$top=100`, at most 3 pages × 5 calendars. Matched locally on subject, attendee names and addresses, since Graph has no `$search` on events [repo-live `list_events`] |
 | task | `GET /me/todo/lists`, skipping `wellknownListName = flaggedEmails` (those duplicate flagged mail, §8), then per list `…/tasks?$filter=status ne 'completed'&$top=100` (P-H1a; without that filter, filter locally), at most 8 lists. Matched on title |
 | draft | `$search` in `drafts`, or the newest 25 |
@@ -1782,14 +1782,15 @@ Every page uses the same conventions:
 | Kind | Requests |
 | --- | --- |
 | person | 22 (2.6) |
-| message or thread with `sender` | 5 + 1 + 5 header reads = 11 |
-| file with `sender` | 5 + 2 + 10 attachment lists + 5 = 22 |
+| message or thread with `sender` | 6 + 1 search + 1 id translation + up to 5 header reads for rows without headers = 13 |
+| file with `sender` | 6 + 1 + 1 + 10 attachment lists + up to 5 header reads = 23 |
 | event | 1 + 15 |
 | task | 1 + 8 |
-| draft, rule | 1 |
+| draft | 1 search + 1 id translation = 2 |
+| rule | 1 |
 | folder | ≤ 2 |
 
-Maximum **22**, under a ceiling of 30.
+Maximum **23**, under a ceiling of 30. As built since live round 1, every `$search` whose ids are handed out (Q2, and the message, thread, file and draft searches) is followed by one `POST /me/translateExchangeIds`: live, a `$search` returns regular ids while lists return immutable ones (P-SR1). The light path is then at most 6.
 
 **Docstring** (at most 450 characters): what each kind finds; that words are names or search words, never roles; that a single match is acted on only when it's an exact id or address or someone you've written to, and otherwise candidates come back.
 
@@ -2169,7 +2170,7 @@ Fetched 2026-11-26. "Allowed" means the "Delegated (personal Microsoft account)"
 
 ## 14. Live probes to run later
 
-**37 probes.** They run only on two test accounts the project owns, never on a maintainer's own mailbox.
+**38 probes.** They run only on two test accounts the project owns, never on a maintainer's own mailbox.
 
 **Cautions:**
 - WRITE probes use throwaway items.
@@ -2181,7 +2182,7 @@ Fetched 2026-11-26. "Allowed" means the "Delegated (personal Microsoft account)"
 | --- | --- | --- | --- | --- |
 | **P-UI1** | client | In **Claude Code and Claude Desktop**, against the test server, reach the approval prompt of `outlook_send`, `outlook_carry_out` (100-item tidy) and `outlook_carry_out_far_reaching` (a 1-item cancel, and a tidy that adds a rule); decline at the prompt. Screenshot each. Record Cursor and OpenClaw when available | `summary` is visible in full without expanding anything; the tool name is shown; whether "always allow" is offered and at what scope | **step-6 gate** (§9.2) |
 | **P-LAT1** | WRITE | On a seeded mailbox of 20,000+ messages: time Q1 (300 sent), Q5 for a recent sender, catch_up end to end, carry_out with 100 and 200 moves, and 20 and 50 responses (between the accounts) | median and p95 per item | the caps in 5.9; D6; Q5's timeout |
-| **P-SI1** | WRITE | A accepts, and then declines, B's invites with `sendResponse: true`; then answers a third with `sendResponse: false`. GET A's Sent Items with `$top=5`, plus `$select=microsoft.graph.eventMessage/meetingMessageType` | which items land there, and their `@odata.type`; with `sendResponse: false`, B's inbox count must not change. As built, also release-gating: (a) whether responses carry `@odata.type` or the `microsoft.graph.eventMessage/meetingMessageType` cast in Sent Items, since a localized subject with neither is still read as a letter (the English prefixes are only a backstop); (b) that `isOrganizer` stays false on an incoming invitation that names the user as organizer | the sent table's letters-only rule (H4, 2.6) |
+| **P-SI1** | WRITE | A accepts, and then declines, B's invites with `sendResponse: true`; then answers a third with `sendResponse: false`. GET A's Sent Items with `$top=5`, plus `$select=microsoft.graph.eventMessage/meetingMessageType` | which items land there, and their `@odata.type`; with `sendResponse: false`, B's inbox count must not change. As built, also release-gating: (a) whether responses carry `@odata.type` or the `microsoft.graph.eventMessage/meetingMessageType` cast in Sent Items, since a localized subject with neither is still read as a letter (the English prefixes are only a backstop); (b) that `isOrganizer` stays false on an incoming invitation that names the user as organizer | the sent table's letters-only rule (H4, 2.6). **Live, 2026-11-26:** (b) holds, since the user's own event reads `isOrganizer: true` and a received meeting naming the user as organizer reads `false` (response `organizer`). (a) holds for received meeting messages (`@odata.type` and the cast). Sent Items responses are still unprobed, so this stays a release gate |
 | **P-DL1** | WRITE | Bootstrap an Inbox delta with `changeType=created`. Then on A: mark a message read, flag one, categorize one, move one in from Junk, and have B send one. Run the round | Only B's new message comes back means created-only works; extra items mean the received-time rule must filter (it does either way); a 400 means the fallback | §7.3 |
 | **P-A8** | WRITE | With an immutable id: POST `/move`, PATCH `categories`, and both inside `$batch` | 2xx with the same id family returned | §6.3 |
 | **P-A9** | WRITE | Move a message to `archive` with the header; GET by the same id | 200 in Archive means stable | §6.3 |
@@ -2209,19 +2210,20 @@ Fetched 2026-11-26. "Allowed" means the "Delegated (personal Microsoft account)"
 | P-F2c | GET | **Seed at least 1,500 messages** matching one term (scripted sends from B), then `$search` it and follow every nextLink | a total near 275 keeps "250+"; near 1,500 raises `SEARCH_STOPS_AFTER` | §4.3 |
 | P-F4b | GET | the `categories/any` filter | 200 or 400 | §4.2 |
 | P-F4c | GET | the `hasAttachments` filter | 200 or 400 | §4.2 |
-| P-F5 | GET | `internetMessageHeaders` in a list `$select` and in a delta `$select` | headers present or absent | §2.6 Q6, §4.3, §12.2 G3 |
+| P-F5 | GET | `internetMessageHeaders` in a list `$select` and in a delta `$select` | headers present or absent | §2.6 Q6, §4.3, §12.2 G3. **Live, 2026-11-26:** present on lists, `$search` and delta replies; a message without the key has no headers at all (a draft), and its single read lacks it too. The resolver reads headers off the row, with the single read kept as a fallback |
 | P-F7 | WRITE | With the header: create a draft to B, send, wait 5 s, GET the same id | 200 with `isDraft: false` in Sent Items | §9.3 |
 | P-H1a | GET | To Do `status ne 'completed'` | 200 or 400 | §2.6, §12 |
 | P-H1b | GET | To Do due filter | 200 or 400; nice to have | — |
-| P-SE1 | GET | Seed letters to `probe@example.com`, to `probe@example.com.example`, and to `pro.be@example.com`. `$search="recipients:probe@example.com"` | which ones come back. Q7 counts only exact address matches either way; this shows whether KQL needs that local filter | §2.6 Q7 |
+| P-SE1 | GET | Seed letters to `probe@example.com`, to `probe@example.com.example`, and to `pro.be@example.com`. `$search="recipients:probe@example.com"` | which ones come back. Q7 counts only exact address matches either way; this shows whether KQL needs that local filter | §2.6 Q7. **Live, 2026-11-26:** `recipients:probe@example.com` also returns the letter to `probe@example.com.example` (not the dotted local part); the quotes are required. Q7's exact local filter stays |
 | P-T1 | WRITE | POST the same event twice with one `transactionId` | never two events | §5.12 |
-| **P-AT1** (new) | GET | `$search="attachment:<word> hasAttachments:true"` on `/me/messages`, with a word from a file's name that appears nowhere else in the message | the message comes back means names are searched; a 400 means `find` keeps to the words search, as it does on that answer | §2.6 file |
+| **P-AT1** (new) | GET | `$search="attachment:<word> hasAttachments:true"` on `/me/messages`, with a word from a file's name that appears nowhere else in the message | the message comes back means names are searched; a 400 means `find` keeps to the words search, as it does on that answer | §2.6 file. **Live, 2026-11-26:** accepted, never a 400, but it matches only the start of a file's name, which the plain words search finds too; the second search was removed |
+| **P-SR1** (new, live round 1) | GET, then POST | `$search` on messages and contacts with `Prefer: IdType="ImmutableId"`; then `POST /me/translateExchangeIds` (restId to restImmutableEntryId) on a hit | **Live, 2026-11-26:** `$search` returns regular ids while `Preference-Applied` says immutable; the translation returns the list's immutable id for messages. Contact translation is unprobed: the live guard `test_q2_contact_search_finds_a_contact_by_name` settles it | §2.6, §6.3 |
 
 **Which probes gate which step:**
 
 | Step | Probes |
 | --- | --- |
-| 3 (find) | P-SI1, P-SE1, P-F5, P-AT1 |
+| 3 (find) | P-SI1, P-SE1, P-F5, P-AT1, P-SR1 |
 | 4 (read tools) | P-DL1, P-D3a, P-C2, P-LAT1's read timings |
 | 6 (plans and acting) | **P-UI1**, P-EC1, P-B1, P-B6, P-S2, P-F7, P-T1, P-MK1, P-E1 |
 | 7 (tidy) | P-RL1, P-F1, P-F4b, P-F4c, P-F2c, P-LAT1's move timings |
