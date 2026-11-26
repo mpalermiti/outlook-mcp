@@ -14,12 +14,15 @@ passed because the SDK was mocked. A 30-second curl against the live
 endpoint would have caught it. This script is that 30-second curl,
 codified.
 
-Usage:
+Usage, as a release step, against the project's test account:
+    scripts/live-tests.sh preflight
+
+Run directly, it reads whichever account is signed in on this host:
     uv run python scripts/preflight.py
 
-Requires that `outlook-mcp auth` has been run successfully — the
-script reuses the cached token. Exits 0 on success, non-zero on any
-endpoint failure.
+Either way it makes only GET requests, and it reuses the cached token
+(`outlook-mcp auth` must have run in that settings directory). Exits 0
+on success, non-zero on any endpoint failure.
 """
 
 from __future__ import annotations

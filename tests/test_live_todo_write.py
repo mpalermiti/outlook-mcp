@@ -7,7 +7,7 @@ in a `finally` and titled with LIVE_WRITE_NAME.
 Read-back goes through get_task (single task, $expand=checklistItems) or
 list_tasks (overview shape). The default list is scanned up to 100 entries.
 
-    OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write -v
+    scripts/live-tests.sh live_write   (RELEASING.md 1d)
 """
 
 from __future__ import annotations

@@ -2,15 +2,47 @@
 
 Checklist for cutting a new release.
 
-## 1. Smoke-test against the live Graph API
+## 1. Live checks: in a container, against the test accounts
+
+Steps 1 to 1e reach a real mailbox. They run against the project's two throwaway test accounts, a main account and its pair, and never against a maintainer's own mailbox. Each account is signed in once, inside Docker, and the sign-in lives only in that account's Docker volume. `scripts/live-tests.sh` builds an image from the working tree with every extra, mounts both volumes, and runs a tier inside the container:
 
 ```bash
-uv run python scripts/preflight.py
+export OUTLOOK_MCP_LIVE_ENV_FILE=/path/outside/the/repo/live-tests.env
+scripts/live-tests.sh status        # both accounts signed in?
 ```
 
-Hits every Graph endpoint family the tools depend on with the locally-cached token. Flags any endpoint that returns 403 or 501 — the "not supported for this account type" signal that mocked unit tests can't catch.
+Nothing in this repository names the accounts. The runner reads their addresses and volume names from an env file kept outside the repository (`--env-file`, or `OUTLOOK_MCP_LIVE_ENV_FILE`), and refuses one inside it. Docker needs the Claude Code sandbox off. Never sign a test account in on the host.
 
-Read-only. No writes, no sends, no mailbox state changes.
+Every live test refuses to start unless `/me` answers with one of the two accounts, and the saved sign-in record agrees (`tests/live_guard.py`). If `/me` fails, the test refuses; the record alone is never enough. The one exception is the optional own-mailbox `live` check in 1b. While a live test runs, every request it makes is held to its tier's rule before it leaves: `live` and `integration` may only read, `live_write` may change the mailbox but never send, and `live_send` sends only to the pair. That covers requests through the SDK, through a tool's own client, and raw `httpx` or `requests` calls. After a tier that writes, the runner lists any item a run left behind. `scripts/live-tests.sh clean` deletes those items, except any whose deletion would send mail.
+
+**Without the test accounts** (a contributor, or anyone who has not set up a pair):
+
+- Run the offline suite, `uv run pytest` (step 2). With Docker you can also run it on any Python: `scripts/live-tests.sh --python 3.10 offline`. Neither needs an env file or an account.
+- Optionally, run the read-only `live` tier against your own mailbox (1b, "Optional"). That is the only live run allowed outside the container.
+- You can't run `preflight`, `integration`, `live_write` or `live_send`. The runner needs the env file and the accounts' volumes, and on the host those tiers refuse to start. Say in your PR that they were not run; a maintainer runs them before the release.
+
+**Setting up a pair of test accounts** (once). Create two new Outlook.com accounts for this purpose only, never accounts anyone uses, and an Azure app registration for personal accounts (README, "Azure AD App Registration"). Then, for each account:
+
+```bash
+scripts/live-tests.sh --python 3.13 offline -- --co -q >/dev/null   # builds outlook-mcp-live:py3.13
+docker volume create outlook-mcp-test-a
+docker run --rm -i -v outlook-mcp-test-a:/config outlook-mcp-live:py3.13 sh -c 'cat > /config/config.json' <<'JSON'
+{"client_id": "<your app's client id>", "tenant_id": "consumers", "allow_unencrypted_token_cache": true}
+JSON
+docker run --rm -it -v outlook-mcp-test-a:/config outlook-mcp-live:py3.13 outlook-mcp auth   # sign in as that account
+```
+
+Repeat for the pair with a second volume. Then write the env file outside the repository, with the keys the header of `scripts/live-tests.sh` lists, and check both accounts with `scripts/live-tests.sh status`. A new account cannot send until its owner verifies it on the web, and Outlook.com locks one that sends too much too soon. Leave `OUTLOOK_MCP_TEST_PAIR_CAN_SEND` unset until the pair can send.
+
+## 1a. Preflight: does every endpoint family answer?
+
+```bash
+scripts/live-tests.sh preflight
+```
+
+Hits every Graph endpoint family the tools depend on with the cached token. Flags any endpoint that returns 403 or 501 — the "not supported for this account type" signal that mocked unit tests can't catch.
+
+Read-only. No writes, no sends, no mailbox state changes. It makes only GET requests, and it does not check which account it runs as. Run directly on a host (`uv run python scripts/preflight.py`), it reads whichever account is signed in there. That is allowed but not a release step: before tagging, run it through the runner, against the test account.
 
 If the script reports failures, do not tag. Either fix the affected tools or remove them from the release. v1.7.0 shipped four tools backed by `/me/mailboxSettings/*` that Microsoft Graph does not support on personal accounts; v1.7.1 yanked them. This script would have caught it in 30 seconds.
 
@@ -19,7 +51,7 @@ When adding a new tool that hits a Graph endpoint family not yet covered, add a 
 ## 1b. Live query-shape tests
 
 ```bash
-uv run pytest -m live -v
+scripts/live-tests.sh live
 ```
 
 Preflight answers "does this endpoint exist and respond?" — it treats a 400 as a non-blocking SKIP. This tier answers the different question: **does Graph accept and correctly evaluate the queries we actually build?**
@@ -32,14 +64,22 @@ That gap shipped three bugs in 1.12.0, all under a fully green mock suite:
 
 The second failure mode is the dangerous one: a silent 200 with wrong data. Mocks assert what we *send*; only a live call sees what Graph *does*. These tests assert on returned data, not just absence of an exception.
 
-Read-only, and mailbox-independent — they harvest their own fixtures and skip cleanly when the mailbox lacks the needed data. Auto-skipped without a cached token.
+Read-only, and mailbox-independent — they harvest their own fixtures and skip cleanly when the mailbox lacks the needed data.
 
 If you change how any `$filter`, `$orderby` or `$search` string is built, run this before tagging.
+
+**Optional: the same tier against your own mailbox.** The test mailbox is small. A real, lived-in mailbox has the volume and variety that some query shapes need, so this tier, and only this read-only one, can also run on the host against whichever account is signed in there. Opt in explicitly:
+
+```bash
+OUTLOOK_MCP_LIVE_OWN_MAILBOX=1 uv run pytest -m live -v
+```
+
+It is a smoke check, not a release step. It skips the account check, and nothing but reads can leave: any other request is refused before it is sent. The opt-in covers this tier alone. Without the opt-in, a live test on a host that names no test account refuses to start before it reads any sign-in. On macOS the token cache is a Keychain item, so an interpreter the item does not trust will ask for the Keychain password.
 
 ## 1c. Integration smoke tests
 
 ```bash
-uv run pytest -m integration -v
+scripts/live-tests.sh integration
 ```
 
 Response-shape checks for each tool family. Read-only.
@@ -49,14 +89,30 @@ Response-shape checks for each tool family. Read-only.
 ## 1d. Write-tier guards (calendar, contacts, To Do, unsent drafts)
 
 ```bash
-OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write -v
+scripts/live-tests.sh live_write
 ```
 
-The only tier that writes. It creates marked items on the authenticated mailbox — short, bounded, attendee-free events (recurring ones included, with keys and attachments), contacts, tasks and drafts that are never sent — and deletes each one in a `finally`.
+It creates marked items on the main test account — short, bounded, attendee-free events (recurring ones included, with keys and attachments), contacts, tasks and drafts that are never sent — and deletes each one in a `finally`.
 
 It exists because recurrence cannot be validated any other way: a `PatternedRecurrence` that is well-formed to the SDK still 400s with `ErrorInvalidRecurrenceRange` if the range disagrees with the series master's start. `outlook_create_event` accepted a `recurrence` argument and silently discarded it for fourteen minor versions (#41) under a fully green mock suite — mocks assert what we *build*.
 
-Double-gated on purpose: the marker is deselected by default **and** the tier skips without `OUTLOOK_MCP_LIVE_WRITE=1`, so a cached token alone can never write to a calendar. Run it if you changed a write path it covers: `tools/_recurrence.py`, `calendar_write.py`, `calendar_attachments.py`, `contacts.py`, `todo.py`, `todo_attachments.py` or `mail_drafts.py`. See the rules at the top of `tests/conftest.py` before adding to it.
+Double-gated on purpose: the marker is deselected by default **and** the tier skips without `OUTLOOK_MCP_LIVE_WRITE=1`, which the runner sets for this tier alone. A cached token alone can never write to a calendar. Nothing in this tier, or in 1b or 1c, can send. Every request a test makes is checked before it leaves, and anything that would mail someone is refused: a send, reply, forward or RSVP; an invitation; a change to or deletion of a meeting with attendees (the guard reads an event's attendees before letting a change to it through); a forwarding rule; automatic replies; a calendar share. 1b and 1c are held to reads only. Run it if you changed a write path it covers: `tools/_recurrence.py`, `calendar_write.py`, `calendar_attachments.py`, `contacts.py`, `todo.py`, `todo_attachments.py` or `mail_drafts.py`. See the rules at the top of `tests/conftest.py` before adding to it.
+
+A create can succeed while its reply is lost (a dropped connection). The item then stays behind, because the test never learnt its id. The runner's check after the tier lists such items; run `scripts/live-tests.sh clean` to delete them.
+
+## 1e. Send tier (mail and invitations between the two accounts)
+
+```bash
+scripts/live-tests.sh live_send --sends 3
+```
+
+The only tier that sends. It sends real mail and an invitation from the main test account to its pair, and to nobody else. It finds each one in the pair's mailbox, then deletes everything it sent or received from both mailboxes. Every request its Graph client makes is checked before it leaves: each recipient of a message and each attendee of a meeting must be the pair, and a send whose recipients the request does not name is refused. `--sends N` is the run's budget, at most 10. Each test reserves the sends it needs before it makes any, and skips if the budget cannot cover them, so a test never stops halfway with an invitation it cannot cancel. The run ends by printing how many real sends it made.
+
+Tests that need the pair to answer (a reply, an acceptance) skip until the env file sets `OUTLOOK_MCP_TEST_PAIR_CAN_SEND=1`: a new Outlook.com account cannot send until its owner verifies it. If the pair account cannot be reached at all, every test here skips and nothing is sent. New accounts have very low sending limits, and Outlook.com blocks an account that sends too much too soon, so keep budgets small. Run this tier if you changed a send or invitation path: `mail_write.py`, `send_draft` in `mail_drafts.py`, or attendees and deletes in `calendar_write.py`.
+
+### Another Python
+
+Any tier runs on another Python with `--python`, for example `scripts/live-tests.sh --python 3.10 live`. `scripts/live-tests.sh --python 3.10 offline` runs the offline suite in that Python, with no network and no account.
 
 ## 2. Tests + lint
 
@@ -69,7 +125,7 @@ uv run ruff check src/ tests/ scripts/
 uv run ruff format --check src/ tests/ scripts/
 ```
 
-The default run is the offline unit suite only — `addopts` deselects the `integration`, `live` and `live_write` markers, so this needs no network or token. Expect zero failures; the deselected count is those three tiers, and grows as they do.
+The default run is the offline unit suite only — `addopts` deselects the `integration`, `live`, `live_write` and `live_send` markers, so this needs no network or token. Expect zero failures; the deselected count is those four tiers, and grows as they do.
 
 ## 3. Version bump
 
@@ -136,7 +192,7 @@ gh pr create --base release/X.Y.x                            # CI runs on it lik
 gh release create vX.Y.Z+1 --target release/X.Y.x --title "vX.Y.Z+1" --notes-file <notes>
 ```
 
-Run steps 1–1c from the hotfix branch, not `main`. After publishing, open a PR against `main` that moves the fix's CHANGELOG entry out of `[Unreleased]` into a `## [X.Y.Z+1]` section. Leave `main`'s `pyproject.toml` and `server.json` versions alone; the next release from `main` bumps past both. ClawHub (§6) publishes from a checkout of the hotfix branch — mind §6b's `--slug`.
+Run steps 1–1e from the hotfix branch, not `main`. After publishing, open a PR against `main` that moves the fix's CHANGELOG entry out of `[Unreleased]` into a `## [X.Y.Z+1]` section. Leave `main`'s `pyproject.toml` and `server.json` versions alone; the next release from `main` bumps past both. ClawHub (§6) publishes from a checkout of the hotfix branch — mind §6b's `--slug`.
 
 ## 6. Publish to ClawHub (the one manual channel)
 

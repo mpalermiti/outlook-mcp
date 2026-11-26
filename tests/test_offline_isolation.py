@@ -36,6 +36,7 @@ from tests.conftest import (
     needs_dns,
     selects_a_live_tier,
 )
+from tests.live_guard import OWN_MAILBOX_ENV
 
 CLIENT_ID = "00000000-0000-0000-0000-000000000000"
 REAL_SETTINGS = os.path.realpath(os.path.expanduser("~/.outlook-mcp"))
@@ -252,10 +253,12 @@ def test_the_guard_exempts_exactly_the_tiers_the_default_run_deselects(request):
         ("live", True),
         ("integration", True),
         ("live_write", True),
+        ("live_send", True),
         ("live or integration", True),
         ("not live", True),  # still selects integration
-        ("not integration and not live and not live_write", False),
-        ("not (integration or live or live_write)", False),
+        ("not integration and not live and not live_write", True),  # still selects live_send
+        ("not integration and not live and not live_write and not live_send", False),
+        ("not (integration or live or live_write or live_send)", False),
         ("asyncio", False),
         ("real_credential", False),
     ],
@@ -393,26 +396,48 @@ def child_suite(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     (project / "conftest.py").write_text(
-        "from tests.conftest import *  # noqa: F403 — the hooks under test\n", encoding="utf-8"
+        "import os\n"
+        "from tests.conftest import *  # noqa: F403 — the hooks under test\n"
+        "import tests.conftest\n"
+        "# Stands in for /me: the account the run is signed in as, when a test names one.\n"
+        "if os.environ.get('CHILD_SIGNED_IN'):\n"
+        "    tests.conftest._identity['who'] = os.environ['CHILD_SIGNED_IN']\n",
+        encoding="utf-8",
     )
     markers = "".join(f"    {marker}: x\n" for marker in (*LIVE_MARKERS, "real_credential"))
     (project / "pytest.ini").write_text(f"[pytest]\nmarkers =\n{markers}", encoding="utf-8")
     (project / "test_hooks.py").write_text(_CHILD_TESTS, encoding="utf-8")
 
-    env = {key: value for key, value in os.environ.items() if key != "OUTLOOK_MCP_TOOLSETS"}
+    # None of the live tiers' own settings (tests/live_guard.py) reach the child: each
+    # run below says what it wants.
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "OUTLOOK_MCP_TOOLSETS"
+        and not key.startswith(("OUTLOOK_MCP_TEST_", "OUTLOOK_MCP_LIVE_"))
+    }
     env.update(
         {
             CONFIG_DIR_ENV: str(stand_in),
             "STAND_IN_REAL_SETTINGS": os.path.abspath(stand_in),
             "PYTHONPATH": os.pathsep.join(filter(None, [str(REPO), env.get("PYTHONPATH")])),
+            # The stand-in is "your own mailbox": the opt-in that lets the read-only
+            # `live` tier run against it without naming a test account.
+            OWN_MAILBOX_ENV: "1",
         }
     )
 
-    def run(markexpr: str) -> subprocess.CompletedProcess:
+    def run(markexpr: str, **overrides: str | None) -> subprocess.CompletedProcess:
+        child_env = dict(env)
+        for key, value in overrides.items():
+            if value is None:
+                child_env.pop(key, None)
+            else:
+                child_env[key] = value
         return subprocess.run(
             [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-rA", "-m", markexpr],
             cwd=project,
-            env=env,
+            env=child_env,
             capture_output=True,
             text=True,
             timeout=180,
@@ -422,7 +447,7 @@ def child_suite(tmp_path):
 
 
 def test_an_offline_run_isolates_from_import_and_fails_a_swallowed_breach(child_suite):
-    result = child_suite("not integration and not live and not live_write")
+    result = child_suite("not integration and not live and not live_write and not live_send")
     out = result.stdout
     assert "PASSED test_hooks.py::test_offline_never_sees_the_real_directory_or_its_config" in out
     assert "FAILED test_hooks.py::test_a_swallowed_breach_still_fails" in out
@@ -436,3 +461,40 @@ def test_a_live_run_keeps_the_real_directory_and_installs_no_guard(child_suite):
     assert "PASSED test_hooks.py::test_live_keeps_the_real_directory_and_runs_unguarded" in out
     assert "1 passed, 2 deselected" in out, out
     assert result.returncode == 0
+
+
+def test_a_live_run_with_no_test_account_and_no_opt_in_is_refused_before_any_sign_in(
+    child_suite,
+):
+    """Without a test account named or the own-mailbox opt-in, a live test does not
+    start: it errors in setup, before a fixture could read a sign-in."""
+    result = child_suite("live", **{OWN_MAILBOX_ENV: None})
+    out = result.stdout
+    assert "ERROR test_hooks.py::test_live_keeps_the_real_directory_and_runs_unguarded" in out
+    assert "Refusing to run: no test account is named" in out, out
+    assert result.returncode != 0
+
+
+@pytest.mark.parametrize(
+    ("signed_in", "allowed"),
+    [("stranger@example.org", False), ("main-test@example.com", True)],
+)
+def test_a_live_run_checks_the_signed_in_account(child_suite, signed_in, allowed):
+    """With test accounts named, the account the run is signed in as decides,
+    through the same hook a real run uses (its /me lookup stood in for)."""
+    result = child_suite(
+        "live",
+        **{
+            OWN_MAILBOX_ENV: None,
+            "OUTLOOK_MCP_TEST_ACCOUNT": "main-test@example.com",
+            "OUTLOOK_MCP_TEST_PAIR": "pair-test@example.com",
+            "CHILD_SIGNED_IN": signed_in,
+        },
+    )
+    out = result.stdout
+    if allowed:
+        assert "PASSED test_hooks.py::test_live_keeps_the_real_directory" in out, out
+    else:
+        assert "ERROR test_hooks.py::test_live_keeps_the_real_directory" in out, out
+        assert "is not one of the test accounts" in out
+        assert signed_in not in out  # the refusal never prints the address

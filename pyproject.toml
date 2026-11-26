@@ -111,14 +111,17 @@ select = ["E", "F", "I", "N", "W", "UP"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # Default run is the offline unit suite. The credentialed tiers are opt-in via
-# `-m integration` / `-m live` (a CLI -m overrides this one). Without this they
-# run for real on any machine that happens to hold a cached token, and merely
-# *skip* in CI — which reads as "covered" when nothing was exercised.
-addopts = "-m 'not integration and not live and not live_write'"
+# `-m integration` / `-m live` / `-m live_write` / `-m live_send` (a CLI -m overrides
+# this one), and run against the project's test accounts through
+# scripts/live-tests.sh. Without this they would be selected on any machine that
+# happens to hold a cached token, and merely *skip* in CI — which reads as
+# "covered" when nothing was exercised.
+addopts = "-m 'not integration and not live and not live_write and not live_send'"
 markers = [
-    "integration: marks tests that require real Azure AD auth (deselect with '-m \"not integration\"')",
-    "live: query-shape guards that call real Graph — the mock suite cannot see a query Graph rejects or mis-evaluates (run with '-m live'; see RELEASING.md)",
-    "live_write: the one tier that WRITES to a real calendar — creates and deletes events to prove Graph accepts a payload the mocks can only assert we built (run with '-m live_write' AND OUTLOOK_MCP_LIVE_WRITE=1; see tests/conftest.py)",
+    "integration: read-only response-shape smoke tests against a test account (scripts/live-tests.sh integration; see RELEASING.md)",
+    "live: query-shape guards that call real Graph — the mock suite cannot see a query Graph rejects or mis-evaluates (scripts/live-tests.sh live; see RELEASING.md)",
+    "live_write: WRITES to the test mailbox — creates and deletes events, contacts, tasks and unsent drafts to prove Graph accepts a payload the mocks can only assert we built (scripts/live-tests.sh live_write; see tests/conftest.py)",
+    "live_send: the one tier that SENDS — real mail and invitations from the main test account to its pair only, counted against a per-run budget (scripts/live-tests.sh live_send --sends N; see tests/conftest.py)",
     "real_credential: an offline test that builds a real DeviceCodeCredential on purpose, with its `_get_app` replaced; the offline guard in tests/conftest.py still fails it if it reaches MSAL, the token cache or the network (#267)",
 ]
 

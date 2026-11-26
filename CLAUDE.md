@@ -11,21 +11,35 @@ Works with any MCP client (OpenClaw, Claude Code, Cursor).
 - Testing: pytest + pytest-asyncio
 
 ## Commands
-- `uv run pytest` — run tests (offline unit suite; `integration`/`live`/`live_write` markers are deselected by default). The PDF/XLSX parser tests skip unless `uv sync --all-extras` installed the `documents` extra
+- `uv run pytest` — run tests (offline unit suite; the `integration`/`live`/`live_write`/`live_send` markers are deselected by default). The PDF/XLSX parser tests skip unless `uv sync --all-extras` installed the `documents` extra
 - `OUTLOOK_MCP_TOOLSETS="$(uv run python -c 'from outlook_mcp import toolsets; print(",".join(sorted(set(toolsets.TOOL_GROUPS.values()))))')" uv run pytest -q` — the same suite with every toolset loaded, the opt-in groups included, as CI also runs it
-- `uv run pytest -m live -v` — live query-shape guards; run before tagging if you changed any `$filter`/`$orderby`/`$search` construction (see `RELEASING.md` 1b)
-- `uv run pytest -m integration -v` — live response-shape smoke tests
+- `scripts/live-tests.sh <tier>` — the live tiers, in a container, against the project's two test accounts (`RELEASING.md` 1–1e; needs Docker, so the sandbox off, and an env file outside the repo, `OUTLOOK_MCP_LIVE_ENV_FILE`). Tiers: `preflight`; `live`, the query-shape guards (run before tagging if you changed any `$filter`/`$orderby`/`$search` construction); `integration`, the response-shape smoke tests; `live_write`; `live_send --sends N`; plus `status`, `leftovers`, `clean`, and `offline` (`--python X.Y` for another Python)
+- `OUTLOOK_MCP_LIVE_OWN_MAILBOX=1 uv run pytest -m live -v` — optional: the read-only `live` tier against your own signed-in mailbox, on the host (no account check; anything but a read is refused before it leaves). The only live test run that may happen outside the container. `uv run python scripts/preflight.py` on the host also still works, GET-only, against whatever account is signed in there, but the release step is the runner's `preflight`
+- Without the test accounts: run the offline suite (`uv run pytest`, or `scripts/live-tests.sh --python X.Y offline` with Docker) and, optionally, the own-mailbox `live` check. `preflight`, `integration`, `live_write` and `live_send` need the accounts, and refuse on the host; say in the PR they were not run. Setting up a pair: `RELEASING.md` §1
 - `uv run ruff check src/ tests/ scripts/` — lint
 - `uv run ruff format src/ tests/ scripts/` — format (CI runs `ruff format --check` on the same paths and fails on any file it would change)
 - `uv run outlook-mcp` — start server (stdio; `OUTLOOK_MCP_TRANSPORT=streamable-http` serves HTTP instead, see the README)
-- `uv run python scripts/preflight.py` — pre-release Graph smoke test (must pass before tagging; see `RELEASING.md`)
+- `scripts/live-tests.sh preflight` — pre-release Graph smoke test (must pass before tagging; see `RELEASING.md`)
 
 ## Releasing
 Publishing is automated — do **not** run `uv publish` or `mcp-publisher` by hand.
 Publishing a GitHub release triggers `.github/workflows/publish.yml`, which re-checks
 the version lockstep, runs tests and lint, builds, and publishes to PyPI and the MCP
 registry via GitHub OIDC (no stored credentials). Full process in `RELEASING.md`.
-Still manual by design: the live tier (run it *before* tagging) and ClawHub.
+Still manual by design: the live tiers (run them *before* tagging) and ClawHub.
+
+## Live tests and the test accounts
+The live tiers run against two throwaway Outlook.com accounts the project owns: a main account and its pair, the only address mail may be sent to. They are signed in only inside Docker volumes, and `scripts/live-tests.sh` is the way in. The image copies an allow-list of paths from the checkout, never the whole of it (`docker/`, held by `tests/test_live_image.py`). Rules for any session working here:
+- **No test-account address in the repository**: not in code, tests, docs, commit messages or PRs. The addresses reach a run only from the env file outside the repo (`tests/live_guard.py` reads `OUTLOOK_MCP_TEST_ACCOUNT`/`OUTLOOK_MCP_TEST_PAIR`); output from the guards and helpers names roles (`account`, `pair`), never addresses. Scratch files that hold one stay outside the repo too.
+- **Never sign a test account in on the host**, and never run a live tier there (the one exception is the own-mailbox `live` opt-in above). On macOS, with azure-identity below 1.27, every outlook-mcp token cache on a machine shares one Keychain item, so a test-account sign-in on the host would replace the maintainer's own.
+- Each live test refuses to start unless `/me` names one of the two accounts and the saved sign-in record agrees. A failed `/me` refuses, and the record alone never stands in for it. The exception is the own-mailbox `live` opt-in. While a live test runs, every HTTP request the process makes, through the SDK, a tool's own client, or raw `httpx` or `requests`, is held to its tier's guard before it leaves (`live_guard.guarding`):
+  - `live` and `integration` may only read (`ReadOnly`).
+  - `live_write` may write but never send (`NeverSends`). That rules out sends, replies, forwards, RSVPs, invitations, changes to meetings with attendees, forwarding rules, automatic replies and calendar sharing.
+  - `live_send` sends only to the pair, within the run's `--sends` budget of at most 10 (`SendGuard`).
+  - `tests/test_live_tiers_never_send.py` also checks the files.
+  - A child process is not covered: `tests/live_mailbox.py` keeps its own rules.
+  - New accounts have tiny sending limits, and Outlook.com locks one that sends too fast. Keep budgets small, and never send to the fictional people in seeded mail.
+- Everything a writing tier creates carries a marker (`LIVE_WRITE_SUBJECT`, `LIVE_WRITE_NAME`, `LIVE_SEND_SUBJECT`); the runner lists leftovers after the run and `scripts/live-tests.sh clean` removes them. Live tests must leave the accounts as they found them: the mailboxes also hold a seeded scenario that other evaluation work relies on.
 
 ## Architecture
 - `src/outlook_mcp/server.py` — `MCPServer` entry point, lifespan context
@@ -81,7 +95,7 @@ Still manual by design: the live tier (run it *before* tagging) and ClawHub.
   never ran. If you add one, wire it to the tool path in the same commit.
 - No telemetry, no local caching, no third-party calls (carve-out: the To Do default-list
   id is resolved once per Graph client and kept — an id, not content)
-- Tests: TDD, pytest, mock Graph client for unit tests. Four offline guards against the silent-no-op class that produced #41 — a call that succeeds and does nothing: `test_no_dead_parameters.py` (parameter declared, never read), `test_no_dead_modules.py` (module nothing imports), `test_sdk_fields_exist.py` (attribute assigned on an SDK model that has no such field — the SDK drops it silently), `test_write_payloads_reach_the_wire.py` (each write argument must appear in the *serialized* payload, not just on the model). Fix the finding or justify an allowlist entry in the file; never weaken the guard. Separately, `tests/conftest.py` keeps the offline suite off the real settings and sign-in (#267): a run whose `-m` selects no live tier gets an empty `OUTLOOK_MCP_CONFIG_DIR` before `outlook_mcp` is imported, and each test without a live marker gets a fresh empty directory of its own (every `DEFAULT_CONFIG_DIR` in the package, the `load_config`/`save_config` defaults and child processes point there); building a real `DeviceCodeCredential` or MSAL client, opening the token cache, a DNS lookup, or connecting or sending off loopback fails the test (`real_credential` marks the few that build a credential on purpose, its `_get_app` replaced). Mocks assert what we *send* — they cannot see a query Graph rejects or silently mis-evaluates, so anything that builds a `$filter`/`$orderby`/`$search` string also needs a `@pytest.mark.live` guard
+- Tests: TDD, pytest, mock Graph client for unit tests. Four offline guards against the silent-no-op class that produced #41 — a call that succeeds and does nothing: `test_no_dead_parameters.py` (parameter declared, never read), `test_no_dead_modules.py` (module nothing imports), `test_sdk_fields_exist.py` (attribute assigned on an SDK model that has no such field — the SDK drops it silently), `test_write_payloads_reach_the_wire.py` (each write argument must appear in the *serialized* payload, not just on the model). Fix the finding or justify an allowlist entry in the file; never weaken the guard. The live tiers' guards (whose mailbox, who may get mail) are tested offline in `test_live_guards.py`. Separately, `tests/conftest.py` keeps the offline suite off the real settings and sign-in (#267): a run whose `-m` selects no live tier gets an empty `OUTLOOK_MCP_CONFIG_DIR` before `outlook_mcp` is imported, and each test without a live marker gets a fresh empty directory of its own (every `DEFAULT_CONFIG_DIR` in the package, the `load_config`/`save_config` defaults and child processes point there); building a real `DeviceCodeCredential` or MSAL client, opening the token cache, a DNS lookup, or connecting or sending off loopback fails the test (`real_credential` marks the few that build a credential on purpose, its `_get_app` replaced). Mocks assert what we *send* — they cannot see a query Graph rejects or silently mis-evaluates, so anything that builds a `$filter`/`$orderby`/`$search` string also needs a `@pytest.mark.live` guard
 - Errors: raise OutlookMCPError subclasses, never return error dicts. They inherit the SDK's
   `ToolError` — an *anticipated* failure, whose text the SDK forwards to the model. Anything
   inheriting plain `Exception` is treated as a crash and reaches the model as

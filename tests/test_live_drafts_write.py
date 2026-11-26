@@ -9,13 +9,17 @@ checks that a draft's result names the draft it made: its saved subject and its 
 on the web link (#268).
 
 Nothing is sent: no test here calls a send, and every draft is deleted in a
-``finally`` (``tests/test_live_write_never_sends.py`` holds that line). Every draft,
+``finally`` (``tests/test_live_tiers_never_send.py`` holds that line). Every draft,
 new, reply or forward, is addressed to ``live.write.guard@example.com`` with
 LIVE_WRITE_SUBJECT as its subject, replacing the sender and "RE:" subject Graph picks
 for a reply, so no draft names a real correspondent and anything a crash leaks is
 greppable in Drafts. Each test checks the draft Graph made carries both.
 
-    OUTLOOK_MCP_LIVE_WRITE=1 uv run pytest -m live_write -v tests/test_live_drafts_write.py
+Creating a reply or forward draft marks the original as read: Exchange does that as
+part of the create. The original's read state is put back after each test, so the
+mailbox is left as it was found.
+
+    scripts/live-tests.sh live_write -- tests/test_live_drafts_write.py
 """
 
 from __future__ import annotations
@@ -42,8 +46,28 @@ _HTML = (
 )
 
 
+# The messages a test drafted a reply or forward from: (client, id, was it read).
+_ORIGINALS: list[tuple[object, str, bool]] = []
+
+
+@pytest.fixture(autouse=True)
+async def _originals_keep_their_read_state():
+    """Put back the read state a reply or forward draft took from its original."""
+    yield
+    from msgraph.generated.models.message import Message
+
+    while _ORIGINALS:
+        sdk, message_id, was_read = _ORIGINALS.pop()
+        if not was_read:
+            await sdk.me.messages.by_message_id(message_id).patch(Message(is_read=False))
+
+
 async def _recent_inbox_message(sdk, content_type: str):
-    """One of the 25 newest Inbox messages whose body is ``content_type``."""
+    """One of the 25 newest Inbox messages whose body is ``content_type``.
+
+    Remembered, so `_originals_keep_their_read_state` can undo what drafting from
+    it does to its read state.
+    """
     from msgraph.generated.users.item.mail_folders.item.messages.messages_request_builder import (
         MessagesRequestBuilder,
     )
@@ -52,7 +76,7 @@ async def _recent_inbox_message(sdk, content_type: str):
 
     config = build_request_config(
         MessagesRequestBuilder.MessagesRequestBuilderGetQueryParameters,
-        {"$top": 25, "$select": "id,body,conversationId"},
+        {"$top": 25, "$select": "id,body,conversationId,isRead"},
     )
     page = await sdk.me.mail_folders.by_mail_folder_id("inbox").messages.get(
         request_configuration=config
@@ -63,6 +87,7 @@ async def _recent_inbox_message(sdk, content_type: str):
             and message.body.content_type
             and message.body.content_type.value == content_type
         ):
+            _ORIGINALS.append((sdk, message.id, bool(message.is_read)))
             return message
     pytest.skip(f"None of the 25 newest Inbox messages has a {content_type} body")
 
