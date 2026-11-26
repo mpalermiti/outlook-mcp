@@ -936,3 +936,24 @@ async def test_live_brief_a_letter_found_by_search_carries_its_immutable_id(fake
     env = await br.run(fake, person=br.SAM, tools=EVERY_TOOL)
     letters = [i for i in sec(env, "recent")["items"] if i["from"]["address"] == ME]
     assert letters and all(not i["id"].startswith("rest-") for i in letters)
+
+
+def test_live_every_intent_search_translates_its_ids():
+    """Tripwire (live round 1): an intents module that sends `$search` calls find's
+    `_immutable` at least as often, so no search id leaves it untranslated. The
+    exceptions: the resolver (find's own, with its own tests) and open_loops, whose word
+    search keeps only conversation ids (guarded above)."""
+    from pathlib import Path
+
+    import outlook_mcp.intents as intents
+
+    exempt = {"resolver.py", "open_loops.py"}
+    checked = []
+    for path in sorted(Path(intents.__file__).parent.glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        searches = text.count('"$search":')  # a request's parameter, not a mention
+        if not searches or path.name in exempt:
+            continue
+        checked.append(path.name)
+        assert text.count("await _immutable(") >= searches, path.name
+    assert checked == ["brief.py"]
