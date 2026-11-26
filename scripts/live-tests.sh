@@ -10,7 +10,7 @@
 #                and unsent drafts on the main test account          (1d)
 #   live_send    real mail and invitations from the main test account
 #                to its pair, and nobody else; needs --sends N       (1e)
-#   preflight    scripts/preflight.py, the read-only endpoint sweep  (1)
+#   preflight    scripts/preflight.py, the read-only endpoint sweep  (1a)
 #   leftovers    lists any marked item a run left on either account (read-only)
 #   clean        deletes those, where deleting one sends nothing (a meeting with
 #                attendees is listed, not deleted), then lists what is left
