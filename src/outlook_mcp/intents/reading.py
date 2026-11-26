@@ -395,15 +395,23 @@ class HeaderRead:
 
 def _bulk_and_auto(headers: list[tuple[str, str]]) -> tuple[bool, bool]:
     """``bulk_sender``: ``List-Unsubscribe``, ``List-Id`` or ``Precedence: bulk|list``.
-    ``auto_generated``: ``Auto-Submitted`` other than ``no``. Names in any case."""
+    ``auto_generated``: ``Auto-Submitted`` other than ``no``, ``Precedence:
+    auto_reply|junk``, an ``X-Autoreply``/``X-Autorespond`` header (out-of-office
+    replies), or a ``multipart/report`` body (a bounce). Names in any case."""
     bulk = auto = False
     for name, value in headers:
-        key = name.strip().lower()
+        key, said = name.strip().lower(), value.strip().lower()
         if key in ("list-unsubscribe", "list-id"):
             bulk = True
-        elif key == "precedence" and value.strip().lower() in ("bulk", "list"):
+        elif key == "precedence" and said in ("bulk", "list"):
             bulk = True
-        elif key == "auto-submitted" and value.strip().lower() != "no":
+        elif key == "precedence" and said in ("auto_reply", "junk"):
+            auto = True
+        elif key == "auto-submitted" and said != "no":
+            auto = True
+        elif key in ("x-autoreply", "x-autorespond"):
+            auto = True
+        elif key == "content-type" and said.startswith("multipart/report"):
             auto = True
     return bulk, auto
 

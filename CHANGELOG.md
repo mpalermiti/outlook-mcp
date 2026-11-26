@@ -41,7 +41,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **`outlook_open_loops`, an intent tool, as an opt-in early preview.** Conversations waiting on
   you, whose latest message is someone else's sent to you, and conversations waiting on someone
   else, whose latest message is your own letter, over a look-back window (14 days unless you say
-  otherwise, at most 90); plus flagged letters from before the window that no reply followed.
+  otherwise, at most 90); plus flagged letters from before the window that no reply settled: a
+  reply counts only when it is from someone the letter went to, outside Junk and Deleted Items,
+  with a verified sender, and not an automatic reply, a bounce or bulk mail.
   Mailing-list and automatic mail, what Focused Inbox puts in Other, meeting messages and letters
   only to yourself are left out. Your mail is what is in Sent Items: a message elsewhere that only
   claims your address can't end or start a wait. `older_than`, `person` and `words` narrow the
