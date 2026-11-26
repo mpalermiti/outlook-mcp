@@ -326,6 +326,25 @@ class Config(BaseModel):
             "persisting a reusable Graph token in plaintext."
         ),
     )
+    # Not a safety key: absent means the default set of tools, which is what
+    # every release before this one loaded. Names are checked where the
+    # selection is made (server.py warns, `outlook-mcp toolsets` refuses), so a
+    # file written for a newer release still boots this one.
+    toolsets: str | None = Field(
+        default=None,
+        description=(
+            'Which tool groups this server loads: a comma-separated list such as "mail,calendar", '
+            'or "classic" for the default set. OUTLOOK_MCP_TOOLSETS overrides it when set and '
+            "not blank."
+        ),
+    )
+    show_tips: bool = Field(
+        default=True,
+        description=(
+            "Allow the server to add one short tip, once per run, to a tool's result when a "
+            "newer tool does that job in fewer calls. false turns it off."
+        ),
+    )
 
     @model_validator(mode="before")
     @classmethod

@@ -6,6 +6,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **The tool groups can be chosen in config.json, and `outlook-mcp toolsets` shows or sets
+  them.** `"toolsets": "mail,calendar"` in config.json works like `OUTLOOK_MCP_TOOLSETS`, which
+  still wins when it is set and not blank. `classic` names the default set (with `rules` when
+  `mailbox_settings_write` is on), so `outlook-mcp toolsets classic` is the way back.
+  `outlook-mcp toolsets <groups>` writes that one key and leaves the rest of the file as it is;
+  on its own, it and `outlook-mcp status` show the groups that load, where the choice came from
+  and the tool count. A name that is not a group still loads nothing, and the server now says so
+  at start, naming where it came from. Nothing changes for an existing install: no config.json
+  has the key, and every value of the variable loads what it did, except `classic`, which loaded
+  only the two account tools. A new `show_tips` setting (`OUTLOOK_MCP_SHOW_TIPS`) is in place
+  for a one-time tip in tool results; no release shows one yet.
+
 ### Fixed
 
 - **Ending a repeating event and moving it in the same call is no longer refused (#97).**

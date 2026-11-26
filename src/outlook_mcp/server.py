@@ -117,6 +117,87 @@ async def lifespan(server):
     yield {"config": config, "auth": auth}
 
 
+# ── Which tools load ────────────────────────────────────
+# Decided once, at import, before anything registers: the INSTRUCTIONS below
+# depend on it, and `MCPServer` takes them at construction. The selection is
+# OUTLOOK_MCP_TOOLSETS when it is set and not blank, else config.json's
+# `toolsets`, else the default set (`toolsets.resolve_selection`), and
+# `mailbox_settings_write` adds the opt-in `rules` group back when nothing was
+# named — turning rule management on is itself the request for those tools,
+# but not a reason to override a client's own list.
+
+
+def _mailbox_settings_write_is_on() -> bool:
+    """Whether the config asks for the rule-management scope.
+
+    Read here rather than in the lifespan because tool selection is a one-time
+    decision made at import, before any session exists. A config that will not
+    load counts as off: the lifespan reports that failure properly, and this
+    answer only decides whether the opt-in tool group is advertised.
+    """
+    try:
+        # getattr, not attribute access: a config written before this key existed
+        # is a normal state — the setting is off unless a release that has it loads
+        # it, and this answer only decides whether the opt-in group is advertised.
+        # `quiet=True`: this is an import-time peek at one key, not the
+        # start-up load. Warning here printed every config warning a second time
+        # on every start, including the legacy-encoding note.
+        return bool(getattr(load_config(quiet=True), "mailbox_settings_write", False))
+    except (ValidationError, OSError, ValueError):
+        return False
+
+
+def _toolsets_from_config() -> str | None:
+    """config.json's ``toolsets``, read quietly at import like the flag above.
+
+    A config that will not load gives None, so the server loads the default
+    set — never only the two account tools. The lifespan reports the failure.
+    """
+    try:
+        return load_config(quiet=True).toolsets
+    except (ValidationError, OSError, ValueError):
+        return None
+
+
+SELECTION, SELECTION_SOURCE = toolsets.resolve_selection(
+    os.environ.get(toolsets.TOOLSETS_ENV), _toolsets_from_config()
+)
+LOADED_GROUPS = toolsets.resolve_groups(SELECTION, _mailbox_settings_write_is_on())
+# What `toolsets.configure` keeps at the bottom of this module, known before any
+# tool registers (`test_toolset_selection.py` holds the two equal).
+LOADED_TOOLS = toolsets.loaded_tools(LOADED_GROUPS)
+
+
+def _warn_about_the_selection(
+    enabled: set[str] | None, source: str, loaded: frozenset[str]
+) -> None:
+    """Name any selected name that is not a group, and its source, on stderr.
+
+    Accepted rather than refused, as an unknown config key is: a selection
+    written for a newer release must still start this one. A selection that
+    then loads nothing beyond the account tools gets a second line saying so.
+    """
+    unknown = toolsets.unknown_toolset_names(enabled)
+    if not unknown:
+        return
+    where = toolsets.SOURCE_NAMES[source]
+    groups = sorted(set(toolsets.TOOL_GROUPS.values()))
+    logger.warning(
+        "%s names tool groups this release does not have, so they load nothing: %s. "
+        "Known names: %s, and %s for the default set.",
+        where,
+        ", ".join(repr(name) for name in sorted(unknown)),
+        ", ".join(groups),
+        " or ".join(sorted(toolsets.ALIASES)),
+    )
+    if all(toolsets.TOOL_GROUPS.get(name) in toolsets.ALWAYS_ON_GROUPS for name in loaded):
+        logger.warning(
+            "%s loads nothing beyond the two account tools (outlook_auth_status and "
+            "outlook_whoami).",
+            where,
+        )
+
+
 # Sent once at connect, to every client, in every session — so it is the right
 # home for the conventions that span tools. Each rule below answers a mistake
 # visible in two months of real trajectories: 115 calls spent re-checking an
@@ -172,7 +253,7 @@ Working rules, each of which saves a round trip:
   know. Addresses are on outlook_get_contact only, and writing one replaces it wholesale, so
   giving a new contact an address is create, then read, then update with every part.
 """
-if "documents" in (toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")) or set()):
+if "outlook_read_attachment" in LOADED_TOOLS:
     INSTRUCTIONS += (
         "- Read document attachments with outlook_read_attachment (PDF/XLSX/text). "
         "Only PDF output quotes extracted lines; "
@@ -181,10 +262,11 @@ if "documents" in (toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS"
 
 # SEP-2549: tell the client how long `tools/list` stays fresh, so it can stop
 # re-fetching ~13k chars/4 proxy tokens of schemas. The set is fixed at import —
-# toolset
-# gating reads its env var once — so it cannot change while the process lives.
+# the selection is read once at import, from the environment or config.json —
+# so it cannot change while the process lives.
 # Five minutes rather than an hour because it *can* change across a restart,
-# which is exactly what someone editing OUTLOOK_MCP_TOOLSETS just did. Private:
+# which is exactly what someone editing OUTLOOK_MCP_TOOLSETS, or running
+# `outlook-mcp toolsets`, just did. Private:
 # the advertised set depends on this install's configuration, so it is not a
 # shared intermediary's to hand to someone else.
 TOOL_LIST_CACHE = CacheHint(ttl_ms=5 * 60 * 1000, scope="private")
@@ -307,6 +389,36 @@ def _rule_write_hint(
     return err
 
 
+# Set the first time a result carries `server_tip`, and never cleared: one tip
+# per process, whichever tool and session it lands in. Action state, not a cache
+# of mailbox data, and gone when the process exits.
+_tip_shown = False
+
+
+def _with_server_tip(tool_name: str, result: Any, ctx: Any) -> Any:
+    """``result``, plus a top-level ``server_tip`` when one is due; otherwise ``result`` itself.
+
+    Due means: no tip yet in this process, a dict result, a tip
+    `toolsets.tip_for` gives for this tool and what this process loaded, and
+    ``show_tips`` on in the config the session runs with. A context without
+    that config shows nothing.
+    """
+    global _tip_shown
+    if _tip_shown or not isinstance(result, dict):
+        return result
+    tip = toolsets.tip_for(tool_name, LOADED_TOOLS)
+    if tip is None:
+        return result
+    try:
+        show = _get_config(ctx).show_tips is True
+    except (AttributeError, KeyError, TypeError):
+        show = False
+    if not show:
+        return result
+    _tip_shown = True
+    return {**result, "server_tip": tip}
+
+
 def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap an async tool function to translate Graph SDK errors.
 
@@ -327,6 +439,8 @@ def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     - Replace any lone surrogate in the result (#186), which would otherwise make
       the reply impossible to write. Error text gets the same in
       ``OutlookMCPError.__str__``.
+    - Add the one-time ``server_tip`` to a result when one is due
+      (`_with_server_tip`; none is, until the first intent tool exists).
 
     Every tool passes through here, so it also dedents the docstring the SDK
     publishes as the tool's description.
@@ -335,7 +449,7 @@ def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(func)
     async def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
-            return _without_lone_surrogates(await func(*args, **kwargs))
+            result = _without_lone_surrogates(await func(*args, **kwargs))
         except GraphAPIError as exc:
             # Before the general case below: a tool that raises one itself never
             # reached the translation there, so `outlook_create_rule` — which
@@ -362,6 +476,7 @@ def _wrap_tool_errors(func: Callable[..., Any]) -> Callable[..., Any]:
                 # Not a Graph SDK error — bubble the original.
                 raise exc from None
             raise _rule_write_hint(err, func.__name__) from exc
+        return _with_server_tip(func.__name__, result, kwargs.get("ctx", args[0] if args else None))
 
     # Python 3.13 strips a docstring's indentation when it compiles it; 3.10-3.12
     # keep it, and the SDK sends `__doc__` as it finds it. Without this, clients
@@ -2192,38 +2307,10 @@ async def outlook_get_mail_tips(ctx: Context, emails: list[str]) -> dict:
 
 # ── Annotations + config-gated toolsets ───────────────────────────────
 # Applied once, after every @mcp.tool above has registered. Sets read-only /
-# destructive annotations on all tools, then decides which groups to advertise:
-# OUTLOOK_MCP_TOOLSETS names the groups a client wants (unset means every group
-# except the opt-in ones), and `mailbox_settings_write` adds the opt-in `rules`
-# group back when nothing was named — turning rule management on is itself the
-# request for those tools, but not a reason to override a client's own list.
-def _mailbox_settings_write_is_on() -> bool:
-    """Whether the config asks for the rule-management scope.
-
-    Read here rather than in the lifespan because tool selection is a one-time
-    decision made at import, before any session exists. A config that will not
-    load counts as off: the lifespan reports that failure properly, and this
-    answer only decides whether the opt-in tool group is advertised.
-    """
-    try:
-        # getattr, not attribute access: a config written before this key existed
-        # is a normal state — the setting is off unless a release that has it loads
-        # it, and this answer only decides whether the opt-in group is advertised.
-        # `quiet=True`: this is an import-time peek at one key, not the
-        # start-up load. Warning here printed every config warning a second time
-        # on every start, including the legacy-encoding note.
-        return bool(getattr(load_config(quiet=True), "mailbox_settings_write", False))
-    except (ValidationError, OSError, ValueError):
-        return False
-
-
-toolsets.configure(
-    mcp,
-    toolsets.resolve_groups(
-        toolsets.parse_toolsets(os.environ.get("OUTLOOK_MCP_TOOLSETS")),
-        _mailbox_settings_write_is_on(),
-    ),
-)
+# destructive annotations on all tools, then keeps the groups chosen near the
+# top of this module (`LOADED_GROUPS`, under "Which tools load").
+toolsets.configure(mcp, LOADED_GROUPS)
+_warn_about_the_selection(SELECTION, SELECTION_SOURCE, LOADED_TOOLS)
 
 
 def main():

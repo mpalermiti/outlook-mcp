@@ -11,8 +11,10 @@ Three server-side optimizations applied once after all tools are registered
 2. **Config-gated toolsets** — the full tool schemas cost chars/4 proxy tokens
    of client context every turn (the budget test's yardstick and its header
    hold the measured number). A client that only needs mail + calendar can set
-   ``OUTLOOK_MCP_TOOLSETS=mail,calendar`` and load just those groups (~half the
-   tokens for a mail+calendar agent). Account/auth tools are always available.
+   ``OUTLOOK_MCP_TOOLSETS=mail,calendar``, or ``"toolsets": "mail,calendar"`` in
+   config.json, and load just those groups (~half the tokens for a
+   mail+calendar agent). The variable wins when it is set and not blank
+   (`resolve_selection`). Account/auth tools are always available.
 
 3. **Lean input schemas** — `lean_input_schema` drops what Pydantic writes into
    every schema that the model cannot use: a ``title`` restating each input's
@@ -27,13 +29,40 @@ is added without a group.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from typing import Any
 
 from mcp.types import ToolAnnotations
 
-# Toolset groups a client can enable via OUTLOOK_MCP_TOOLSETS. The "account"
-# group (auth/identity) is always available regardless of selection.
+from outlook_mcp.errors import LEAVE_SETTINGS_TO_THE_USER
+
+# Toolset groups a client can enable via OUTLOOK_MCP_TOOLSETS or config.json's
+# `toolsets`. The "account" group (auth/identity) is always available
+# regardless of selection.
 ALWAYS_ON_GROUPS = {"account"}
+
+# Names a selection may use that are not groups. `classic` is what an unset
+# selection loads, so a person can name the default and come back to it.
+# `resolve_groups` expands it, which keeps `mailbox_settings_write` adding
+# `rules` to it as it does to an unset selection, and lets `classic,documents`
+# mean the default plus the document reader.
+ALIASES = frozenset({"classic"})
+
+# The variable that names a selection, read by server.py at import and by the CLI.
+TOOLSETS_ENV = "OUTLOOK_MCP_TOOLSETS"
+
+# Where a selection came from, as `resolve_selection` reports it, and how a
+# warning names each source.
+SOURCE_NAMES = {
+    "env": TOOLSETS_ENV,
+    "config": "config.json toolsets",
+    "default": "the default",
+}
+
+# The home group of the request-level tools that are being built. No tool has
+# it yet, so it is not a known name: a selection that asks for it is warned
+# about and loads nothing, exactly as before it was named here.
+INTENTS = "intents"
 
 # Groups a stock install does not pay for: not loaded unless
 # OUTLOOK_MCP_TOOLSETS names them. `documents` is main's opt-in reader; `rules`
@@ -227,28 +256,77 @@ DESTRUCTIVE: set[str] = {
 }
 
 
+def toolset_names(value: str | None) -> list[str]:
+    """The names in a selection, in the order given, each once.
+
+    The one grammar for ``OUTLOOK_MCP_TOOLSETS``, config.json's ``toolsets``
+    and ``outlook-mcp toolsets``: comma-separated, lowercased and stripped;
+    empty parts are skipped.
+    """
+    names: list[str] = []
+    for part in (value or "").split(","):
+        name = part.strip().lower()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def parse_toolsets(value: str | None) -> set[str] | None:
-    """Parse ``OUTLOOK_MCP_TOOLSETS`` into a set of group names.
+    """Parse a selection into a set of names.
 
     ``None`` (unset) or an empty/blank value means "all default toolsets" — the
     backward-compatible default. Otherwise a comma-separated list, lowercased
     and stripped. Unknown group names simply match no tools.
     """
-    if value is None:
-        return None
-    groups = {part.strip().lower() for part in value.split(",") if part.strip()}
-    return groups or None
+    return set(toolset_names(value)) or None
+
+
+def resolve_selection(env_value: str | None, file_value: str | None) -> tuple[set[str] | None, str]:
+    """The selection in force and where it came from: ``"env"``, ``"config"`` or ``"default"``.
+
+    ==========================  ==========================  ===============
+    ``OUTLOOK_MCP_TOOLSETS``    config.json ``toolsets``    selection
+    ==========================  ==========================  ===============
+    set, not blank              anything                    the variable's
+    unset or blank              set, not blank              the file's
+    unset or blank              absent or blank             ``None``
+    ==========================  ==========================  ===============
+
+    ``None`` is the default set, as it always was. A blank variable falls
+    through to the file rather than meaning "the default" outright: before the
+    file key existed the two were the same, and a launch template that passes
+    an empty value through should not hide the person's own setting.
+    """
+    enabled = parse_toolsets(env_value)
+    if enabled is not None:
+        return enabled, "env"
+    enabled = parse_toolsets(file_value)
+    if enabled is not None:
+        return enabled, "config"
+    return None, "default"
+
+
+def known_toolset_names() -> set[str]:
+    """Every name a selection can use: each group with tools, and the aliases."""
+    return set(TOOL_GROUPS.values()) | ALIASES
+
+
+def unknown_toolset_names(enabled: set[str] | None) -> set[str]:
+    """The names in ``enabled`` that are neither a group nor an alias; they load nothing."""
+    return set(enabled or ()) - known_toolset_names()
 
 
 def resolve_groups(enabled: set[str] | None, mailbox_settings_write: bool) -> set[str]:
-    """Enabled groups, from the env selection and the config flag.
+    """Enabled groups, from the selection and the config flag.
 
-    ``enabled`` is what ``OUTLOOK_MCP_TOOLSETS`` said: ``None`` means "no
+    ``enabled`` is the selection `resolve_selection` found: ``None`` means "no
     selection", which resolves to every group **except** ``OFF_BY_DEFAULT``.
     ``mailbox_settings_write`` adds ``SETTINGS_WRITE_ADDS`` back, but only when
     nothing else was named: an agent gated down to ``mail`` must not have
     ``rules`` handed back by a shared config it did not write, with no way to
-    ask for the narrower surface.
+    ask for the narrower surface. ``classic`` names that same unset default, so
+    it is replaced by it here, flag included, and anything named beside it is
+    added on top.
 
     Always a set. A ``None`` return would mean "everything" to
     ``select_kept_tools``, which would silently keep every off-by-default group
@@ -259,7 +337,10 @@ def resolve_groups(enabled: set[str] | None, mailbox_settings_write: bool) -> se
         if mailbox_settings_write:
             groups |= SETTINGS_WRITE_ADDS
         return groups
-    return set(enabled)
+    groups = set(enabled) - ALIASES
+    if set(enabled) & ALIASES:
+        groups |= resolve_groups(None, mailbox_settings_write)
+    return groups
 
 
 def select_kept_tools(names: list[str], enabled: set[str] | None) -> set[str]:
@@ -280,6 +361,77 @@ def select_kept_tools(names: list[str], enabled: set[str] | None) -> set[str]:
         if group is None or group in ALWAYS_ON_GROUPS or group in enabled:
             keep.add(name)
     return keep
+
+
+def loaded_tools(groups: set[str]) -> frozenset[str]:
+    """The tools a process loads for ``groups``, from the classification alone.
+
+    `configure` keeps the same tools on a registered server. This answers the
+    question before any tool registers (``server.LOADED_TOOLS``) and without
+    importing the server at all (``outlook-mcp status``).
+    """
+    return frozenset(select_kept_tools(list(TOOL_GROUPS), groups))
+
+
+# ── The tip in classic results ────────────────────────────────────────────
+#
+# A classic tool's result may carry one short tip, once per process, naming the
+# newer tool that does the same job in fewer calls. The server adds it (the
+# `_wrap_tool_errors` wrapper in server.py) as a top-level `server_tip` key;
+# tool modules never do, and mail text sits inside result fields, so it can
+# neither create nor imitate that key. A tool whose result is not a dict
+# (`outlook_export_message`) has no entry.
+#
+# `tip_for` names a tool only if this release has it, so no result carries a
+# tip until the first of them lands. Addressed to the person: switching changes
+# the server's settings, which an agent leaves to the user.
+TIP_MAP: dict[str, str] = {
+    "outlook_list_inbox": "outlook_catch_up",
+    "outlook_list_inbox_delta": "outlook_catch_up",
+    "outlook_changes_since": "outlook_catch_up",
+    "outlook_search_mail": "outlook_find",
+    "outlook_search_contacts": "outlook_find",
+    "outlook_find_event_by_key": "outlook_find",
+    "outlook_list_events": "outlook_agenda",
+    "outlook_list_events_delta": "outlook_agenda",
+    "outlook_create_event": "outlook_schedule",
+    "outlook_update_event": "outlook_change_meeting",
+    "outlook_delete_event": "outlook_change_meeting",
+    "outlook_rsvp": "outlook_answer_invites",
+    "outlook_send_message": "outlook_compose",
+    "outlook_reply": "outlook_compose",
+    "outlook_forward": "outlook_compose",
+    "outlook_create_draft": "outlook_compose",
+    "outlook_batch_triage": "outlook_tidy",
+    "outlook_move_message": "outlook_tidy",
+    "outlook_delete_message": "outlook_tidy",
+    "outlook_flag_message": "outlook_follow_up",
+    "outlook_create_task": "outlook_capture_task",
+    "outlook_create_contact": "outlook_save_contact",
+    "outlook_update_contact": "outlook_save_contact",
+}
+
+TIP_TEXT = (
+    "Tip for the user: outlook-mcp's intent tools do this in fewer calls ({intent_tool} "
+    "here). To switch, the user runs `outlook-mcp toolsets intents` and restarts the "
+    "client. " + LEAVE_SETTINGS_TO_THE_USER
+)
+
+
+def tip_for(tool: str, loaded: Collection[str]) -> str | None:
+    """The tip ``tool``'s result may carry in a process that loaded ``loaded``, or None.
+
+    None unless ``tool`` is in `TIP_MAP`, the tool it names exists in this
+    release, and the process loaded no tool of that group: someone already
+    using the newer tools has nothing to switch to. Whether the tip was
+    already shown, and ``show_tips``, are the server's to check.
+    """
+    newer = TIP_MAP.get(tool)
+    if newer is None or TOOL_GROUPS.get(newer) != INTENTS:
+        return None
+    if any(TOOL_GROUPS.get(name) == INTENTS for name in loaded):
+        return None
+    return TIP_TEXT.format(intent_tool=newer)
 
 
 # Tools a client may safely repeat with the same arguments — each one PATCHes an
