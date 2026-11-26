@@ -403,7 +403,7 @@ async def test_the_zone_reads_the_window_and_shows_the_times(fake):
 async def test_a_failed_calendar_read_fails_its_sections_and_keeps_the_tasks(fake):
     box = mailbox()
     box.install(fake)
-    fake.on(r"/me/calendars/cal-2/calendarView", lambda s, m: error(503, "ServiceUnavailable"))
+    fake.on(r"/me/calendars/cal-2/calendarView", lambda s, m: error(500, "InternalServerError"))
     env = await read_agenda(
         fake.graph_client(), config_zone="UTC", loaded_tools=frozenset(), now=NOW
     )
@@ -422,7 +422,7 @@ async def test_every_section_failing_raises(fake):
     from outlook_mcp.errors import GraphAPIError
 
     mailbox().install(fake)
-    fake.on(r"/me/calendars/cal-1/calendarView", lambda s, m: error(503, "ServiceUnavailable"))
+    fake.on(r"/me/calendars/cal-1/calendarView", lambda s, m: error(500, "InternalServerError"))
     with pytest.raises(GraphAPIError):
         await read_agenda(
             fake.graph_client(),

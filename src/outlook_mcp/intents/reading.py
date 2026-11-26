@@ -16,14 +16,16 @@ and sort what came back into sections. The pieces they have in common live here:
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from typing import Any
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+from outlook_mcp import sender_auth
 from outlook_mcp.errors import GraphAPIError
-from outlook_mcp.intents.envelope import others_wrote, utc, warn, why
-from outlook_mcp.intents.people import SentTable, sender_of
+from outlook_mcp.intents.envelope import others_wrote, sender_auth_result, utc, warn, why
+from outlook_mcp.intents.people import SentTable, is_valid_address, recipients, sender_of
 from outlook_mcp.intents.resolver import (
     _RESPONSES,
     _SHOW_AS,
@@ -32,8 +34,10 @@ from outlook_mcp.intents.resolver import (
     _due,
     _enum,
     _graph_time,
+    _headers_of,
     _list_name,
     _sender_warnings,
+    _verdict_warnings,
 )
 from outlook_mcp.tools.todo import fetch_all_task_lists
 from outlook_mcp.validation import CONFIG_REMEDY_TEXT, _first_instant_of_local_day, resolve_timezone
@@ -354,3 +358,139 @@ def failed_like(name: str, failure: dict) -> dict:
 
 def as_str(value: Any) -> str | None:
     return value if isinstance(value, str) else None
+
+
+# ── Mail: sender checks, bulk mail, and threads ───────────────────────────
+
+HEADER_SELECT = "id,from,internetMessageHeaders"
+
+
+@dataclass
+class HeaderRead:
+    """One message's headers, read: Microsoft's verdict on its From domain, and whether
+    it is mailing-list or machine mail (§4.3)."""
+
+    verdict: dict
+    bulk: bool
+    auto: bool
+
+
+def _bulk_and_auto(headers: list[tuple[str, str]]) -> tuple[bool, bool]:
+    """``bulk_sender``: ``List-Unsubscribe``, ``List-Id`` or ``Precedence: bulk|list``.
+    ``auto_generated``: ``Auto-Submitted`` other than ``no``. Names in any case."""
+    bulk = auto = False
+    for name, value in headers:
+        key = name.strip().lower()
+        if key in ("list-unsubscribe", "list-id"):
+            bulk = True
+        elif key == "precedence" and value.strip().lower() in ("bulk", "list"):
+            bulk = True
+        elif key == "auto-submitted" and value.strip().lower() != "no":
+            auto = True
+    return bulk, auto
+
+
+async def header_reads(lookup: Lookup, message_ids: list[str]) -> dict[str, HeaderRead]:
+    """Each message's headers, by id: one batch of single-message reads, which select
+    headers as documented (contracts F5). A read that failed is left out, so it reads
+    as not checked."""
+    wanted = [m for m in message_ids if isinstance(m, str)]
+    if not wanted:
+        return {}
+    replies = await lookup.graph.batch(
+        [f"/me/messages/{quote(m, safe='')}?$select={HEADER_SELECT}" for m in wanted]
+    )
+    found: dict[str, HeaderRead] = {}
+    for message_id, reply in zip(wanted, replies, strict=True):
+        body = reply.get("body") if isinstance(reply.get("body"), dict) else {}
+        if 200 <= (reply.get("status") or 0) < 300 and "internetMessageHeaders" in body:
+            headers = _headers_of(body)
+            address, _ = sender_of(body)
+            bulk, auto = _bulk_and_auto(headers)
+            verdict = sender_auth.sender_authentication(headers, address or "")
+            found[message_id] = HeaderRead(verdict=verdict, bulk=bulk, auto=auto)
+    return found
+
+
+def recipients_of(row: dict, keys: tuple[str, ...], me: frozenset[str]) -> list[str]:
+    """Valid addresses on ``keys`` (To first, then Cc), the owner's own left out."""
+    seen: list[str] = []
+    for address, _ in recipients(row, keys):
+        if address not in me and is_valid_address(address) and address not in seen:
+            seen.append(address)
+    return seen
+
+
+def to_me(row: dict, me: frozenset[str]) -> str:
+    if any(a in me for a, _ in recipients(row, ("toRecipients",))):
+        return "to"
+    if any(a in me for a, _ in recipients(row, ("ccRecipients",))):
+        return "cc"
+    return "none"
+
+
+def written_reason(address: str | None, table: SentTable, basis: str) -> dict | None:
+    """``sender_written_to {count, last, basis}`` for a sender the owner writes to."""
+    entry = table.get(address) if address and address not in table.me else None
+    if entry is None:
+        return None
+    params: dict = {"count": entry.count, "basis": basis}
+    if entry.last is not None:
+        params["last"] = utc(entry.last)
+    return why("sender_written_to", **params)
+
+
+def thread_item(
+    latest: dict,
+    *,
+    waits_on: str,
+    at: datetime | None,
+    table: SentTable,
+    read: HeaderRead | None,
+    reasons: list[dict],
+    waiting_for: list[str] | None = None,
+) -> dict:
+    """The thread item of §1.4, for the conversation whose latest message is ``latest``.
+
+    ``waits_on`` is ``"them"`` when ``latest`` is the owner's own letter (in Sent
+    Items), and ``"me"`` when it is someone else's; then ``read`` is its header read,
+    or ``None`` when it was not checked.
+    """
+    address, name = sender_of(latest)
+    valid = _address(address)
+    mine = waits_on == "them"
+    warnings: list[dict] = []
+    if mine:
+        known: bool = True
+        auth = sender_auth_result(None)
+    else:
+        known = bool(valid and valid not in table.me and table.get(valid) is not None)
+        auth = sender_auth_result(read.verdict if read else None)
+        warnings += _verdict_warnings(auth["result"])
+        warnings += _sender_warnings(valid, name, table)
+        if address and not valid:
+            warnings.append(warn("invalid_address"))
+    conversation = latest.get("conversationId") or latest.get("id")
+    item = {
+        "kind": "thread",
+        "id": conversation,
+        "conversation_id": conversation,
+        "last_message_id": latest.get("id"),
+        "last_from": {"address": valid, "known": known},
+        "last_at": utc(at) if at else None,
+        "message_count": None,
+        "waits_on": waits_on,
+        "waiting_since": utc(at) if at else None,
+        "sender_auth": auth,
+        "why": reasons,
+        "warnings": warnings,
+        "others_wrote": others_wrote(
+            subject=latest.get("subject"),
+            preview=latest.get("bodyPreview"),
+            name=name,
+            address_text=address if address and not valid else None,
+        ),
+    }
+    if waiting_for is not None:
+        item["waiting_for"] = waiting_for
+    return item

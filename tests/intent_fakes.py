@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 import httpx
 
@@ -315,7 +315,52 @@ def _paged(items: list[dict], seen: Seen, path: str, size: int | None = None) ->
     start = int(seen.params.get("$skiptoken") or 0)
     chunk = items[start : start + top]
     more = start + top < len(items)
-    return page(chunk, f"{GRAPH}{path}?$skiptoken={start + top}&$top={top}" if more else None)
+    if not more:
+        return page(chunk)
+    # The link keeps the request's other options, as Graph's do, so a filtered list
+    # pages through the same rows.
+    kept = {k: v for k, v in seen.params.items() if k not in ("$skiptoken", "$top")}
+    query = "&".join(f"{k}={quote(v, safe='')}" for k, v in kept.items())
+    link = f"{GRAPH}{path}?$skiptoken={start + top}&$top={top}" + (f"&{query}" if query else "")
+    return page(chunk, link)
+
+
+_TIME_CLAUSE = re.compile(r"^(receivedDateTime|sentDateTime) (ge|gt|le|lt) (\S+)$")
+_FLAGGED = "flag/flagStatus eq 'flagged'"
+# Well-known folder names, and the parentFolderId the rows here carry for each.
+WELL_KNOWN = {"inbox": "inbox-id", "archive": "archive-id"}
+
+
+def filtered(rows: list[dict], text: str | None) -> list[dict]:
+    """The time and flag clauses of a `$filter`, applied; other clauses are routed
+    by the handlers themselves."""
+    for clause in (text or "").split(" and "):
+        clause = clause.strip()
+        if (timed := _TIME_CLAUSE.match(clause)) is not None:
+            field_name, op, bound = timed.groups()
+
+            def keep(row, field_name=field_name, op=op, bound=bound[:19]):
+                value = str(row.get(field_name) or "")[:19]
+                return (
+                    bool(value)
+                    and {
+                        "ge": value >= bound,
+                        "gt": value > bound,
+                        "le": value <= bound,
+                        "lt": value < bound,
+                    }[op]
+                )
+
+            rows = [r for r in rows if keep(r)]
+        elif clause == _FLAGGED:
+            rows = [r for r in rows if (r.get("flag") or {}).get("flagStatus") == "flagged"]
+    return rows
+
+
+def ordered(rows: list[dict], seen: Seen, default: str = "receivedDateTime") -> list[dict]:
+    orderby = seen.params.get("$orderby") or f"{default} desc"
+    field_name, _, direction = orderby.partition(" ")
+    return sorted(rows, key=lambda r: r.get(field_name) or "", reverse=direction != "asc")
 
 
 @dataclass
@@ -373,11 +418,17 @@ class Mailbox:
         if seen.search:
             hits = [r for r in self.sent if kql_matches(seen.search, r)]
             return page(hits[: int(seen.params.get("$top") or 25)])
-        newest = sorted(self.sent, key=lambda r: r.get("sentDateTime") or "", reverse=True)
+        rows = filtered(self.sent, seen.filter)
+        newest = ordered(rows, seen, "sentDateTime")
         return _paged(newest, seen, "/me/mailFolders/sentitems/messages", 100)
 
+    def _all_mail(self) -> list[dict]:
+        """`/me/messages` covers every folder: received mail and the letters in Sent
+        Items that carry an id (the sent table's bare rows here have none)."""
+        return self.received + [r for r in self.sent if "id" in r]
+
     def _messages(self, seen: Seen, match) -> Any:
-        rows = self.received
+        rows = self._all_mail()
         if seen.search:
             if "attachment:" in seen.search and not self.attachment_search_supported:
                 return error(400, "BadRequest", "Invalid search query")
@@ -395,6 +446,7 @@ class Mailbox:
             hits = [r for r in rows if _people_text(r, ("from",)).split(" ")[0] == address]
         else:
             hits = list(rows)
+        hits = filtered(hits, wanted)
         descending = "desc" in (seen.params.get("$orderby") or "desc")
         hits.sort(key=lambda r: r.get("receivedDateTime") or "", reverse=descending)
         top = int(seen.params.get("$top") or 10)
@@ -416,12 +468,17 @@ class Mailbox:
         if folder == "drafts":
             rows = [r for r in self.received if r.get("isDraft")]
         else:
-            rows = [r for r in self.received if r.get("parentFolderId") == folder]
+            ids = {folder, WELL_KNOWN.get(folder.lower(), folder)}
+            rows = [r for r in self.received if r.get("parentFolderId") in ids]
+        if seen.filter and not seen.search:
+            path = f"/me/mailFolders/{folder}/messages"
+            hits = [_select(r, seen) for r in ordered(filtered(rows, seen.filter), seen)]
+            return _paged(hits, seen, path, 10)
         hits = [r for r in rows if not seen.search or kql_matches(seen.search, r)]
         return page([_select(r, seen) for r in hits[: int(seen.params.get("$top") or 10)]])
 
     def _message(self, seen: Seen, match) -> Any:
-        for row in self.received:
+        for row in self._all_mail():
             if row["id"] == match.group(1):
                 return _select(row, seen)
         return error(404, "ErrorItemNotFound", "The specified object was not found in the store.")

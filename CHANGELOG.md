@@ -35,6 +35,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `intents`. An answer that ran out of requests or time, or lost a section to an error, says
   `incomplete` rather than showing empty days.
 
+- **`outlook_open_loops`, an intent tool, as an opt-in early preview.** Conversations waiting on
+  you, whose latest message is someone else's sent to you, and conversations waiting on someone
+  else, whose latest message is your own letter, over a look-back window (14 days unless you say
+  otherwise, at most 90); plus flagged letters from before the window that no reply followed.
+  Mailing-list and automatic mail, what Focused Inbox puts in Other, meeting messages and letters
+  only to yourself are left out. Your mail is what is in Sent Items: a message elsewhere that only
+  claims your address can't end or start a wait. `older_than`, `person` and `words` narrow the
+  answer; a name that several people match comes back as `candidates`. The results are
+  candidates to judge, not verdicts. It only reads, and is in the opt-in `intents` group.
+
 - **The tool groups can be chosen in config.json, and `outlook-mcp toolsets` shows or sets
   them.** `"toolsets": "mail,calendar"` in config.json works like `OUTLOOK_MCP_TOOLSETS`, which
   still wins when it is set and not blank. `classic` names the default set (with `rules` when
