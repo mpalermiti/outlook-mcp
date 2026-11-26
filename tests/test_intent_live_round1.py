@@ -141,9 +141,10 @@ async def test_a_search_reply_on_the_intent_path_never_votes(fake):
     assert family.family == "rest", "a search reply's header is not evidence"
 
 
-def test_a_search_reply_elsewhere_counts_as_regular_ids(monkeypatch):
-    """The SDK hook and the classic raw paths: a `$search` reply votes `rest`,
-    whatever its header says, so a classic search in an intents process shows up."""
+def test_a_search_reply_elsewhere_does_not_vote(monkeypatch):
+    """The SDK hook and the classic raw paths: a `$search` reply's header is no
+    evidence, and its ids are translated before they're handed out
+    (test_classic_search_ids.py), so it doesn't vote; a failed translation does."""
     monkeypatch.setattr(ids, "IMMUTABLE_IDS", True)
     ids.hear_reply(
         "https://graph.microsoft.com/v1.0/me/messages", 200, {"Preference-Applied": IMMUTABLE}
@@ -151,9 +152,9 @@ def test_a_search_reply_elsewhere_counts_as_regular_ids(monkeypatch):
     ids.hear_reply(
         "https://graph.microsoft.com/v1.0/me/messages?$search=%22budget%22",
         200,
-        {"Preference-Applied": IMMUTABLE},
+        {"Preference-Applied": None},
     )
-    assert ids.ID_FAMILY.family == "mixed"
+    assert ids.ID_FAMILY.family == "immutable"
 
 
 # ── P-AT1 ─────────────────────────────────────────────────────────────────
