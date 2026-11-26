@@ -23,6 +23,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   shows the series' zone rather than the one passed. Nothing about the call changed; the README,
   SKILL.md and the code's own notes now say so.
 
+- **`outlook_create_draft` says that a reply or forward draft marks the original as read.**
+  Exchange marks the message read when the draft is created, so drafting a reply for review takes
+  away an unread message's unread state. Nothing about the call changed; the tool's description,
+  the README and SKILL.md now say so, and `outlook_mark_read` with `is_read=False` puts it back.
+
 ## [1.34.0] — 2026-11-25
 
 An event time given in UTC or with an offset keeps the event's time zone, including zones Outlook

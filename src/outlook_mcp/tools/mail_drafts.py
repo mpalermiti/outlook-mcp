@@ -218,7 +218,9 @@ async def create_draft(
     instead, through createReply / createReplyAll / createForward: Graph
     quotes the original below the body and, for a reply, picks the
     recipients and subject. Recipients, subject, Reply-To and importance
-    passed with it replace Graph's. Nothing is sent.
+    passed with it replace Graph's. Nothing is sent. Exchange marks the
+    original read as part of the create (seen in the live write tier, whose
+    draft tests put an unread original back); nothing here restores it.
 
     Pass ``deferred_send_datetime`` (ISO 8601, UTC preferred) to schedule the
     draft for delayed delivery. The value is set as the
