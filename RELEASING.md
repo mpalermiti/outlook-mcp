@@ -34,6 +34,8 @@ docker run --rm -it -v outlook-mcp-test-a:/config outlook-mcp-live:py3.13 outloo
 
 Repeat for the pair with a second volume. Then write the env file outside the repository, with the keys the header of `scripts/live-tests.sh` lists, and check both accounts with `scripts/live-tests.sh status`. A new account cannot send until its owner verifies it on the web, and Outlook.com locks one that sends too much too soon. Leave `OUTLOOK_MCP_TEST_PAIR_CAN_SEND` unset until the pair can send.
 
+If something else also uses the accounts and can tell when Microsoft locks one, or blocks its sending, have it write a stop file then, and name that file in the env file (`OUTLOOK_MCP_LIVE_STOP_FILE`, an absolute path). While the file exists, every tier but `offline` refuses to start, `status` included: each request to a locked account, a sign-in check too, is more of what locked it. Unlock the account at outlook.com in a browser (a phone number on it helps), then delete the file.
+
 ## 1a. Preflight: does every endpoint family answer?
 
 ```bash
