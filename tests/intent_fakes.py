@@ -394,10 +394,12 @@ class Mailbox:
         on(r"/me/messages/([^/]+)", self._message)
         on(r"/me/messages/([^/]+)/attachments", self._attachments)
         on("/me/contacts", self._contacts)
+        on(r"/me/contacts/([^/]+)", self._contact)
         on("/me/calendars", lambda seen, m: _paged(self.calendars, seen, "/me/calendars", 100))
         on(r"/me/calendars/([^/]+)/calendarView", self._calendar_view)
         on("/me/calendarView", self._primary_view)
         on(r"/me/events/([^/]+)", self._event)
+        on(r"/me/events/([^/]+)/attachments", self._attachments)
         on("/me/todo/lists", lambda seen, m: page(self.task_lists))
         on(r"/me/todo/lists/([^/]+)/tasks", self._tasks)
         on(r"/me/todo/lists/([^/]+)/tasks/([^/]+)", self._task)
@@ -520,6 +522,12 @@ class Mailbox:
                 ]
             )
         return page(self.contacts)
+
+    def _contact(self, seen: Seen, match) -> Any:
+        for row in self.contacts:
+            if row["id"] == match.group(1):
+                return row
+        return error(404, "ErrorItemNotFound")
 
     # Calendar
 

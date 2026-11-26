@@ -2,7 +2,7 @@
 
 Changelog: 2026-11-26. Every change to a rule or override routes `far_reaching`, `undo` included; `undo` reads events live; the act tools check attendees and route against live state every run; the plan store claims `running` atomically and releases it in a `finally`, keeps a finished plan's receipt until expiry, and prunes on every access; "reversible" is defined; `CLAUDE.md` text is proposed (§17). Open items before later steps are tracked in §18.
 
-Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3 is built in `src/outlook_mcp/intents/`: `outlook_find` is registered in the opt-in `intents` group, off by default, as an early preview. Step 4 is under way: `outlook_agenda`, `outlook_open_loops` and `outlook_catch_up` are registered the same way.
+Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3 is built in `src/outlook_mcp/intents/`: `outlook_find` is registered in the opt-in `intents` group, off by default, as an early preview. Step 4's four read tools, `outlook_agenda`, `outlook_open_loops`, `outlook_catch_up` and `outlook_brief`, are registered the same way; its probes (P-DL1, P-D3a, P-C2, P-LAT1's read timings) have not run.
 
 These contracts define the interfaces every intent tool builds on: the answer envelope, the resolver, typed times, mail selections, plans and acting, undo receipts, the `catch_up` cursor, the follow-up marker, the approval and permission mapping, and how the tool set ships. They are meant to be precise enough to implement and to test against. Where they depart from the intent-tool design, §15 says so.
 
@@ -2103,6 +2103,14 @@ Sections:
 | tasks | title contains the words | 10 |
 
 **next:** `draft_reply` for the latest message waiting on me; `open` for the top recent message; `brief_person` for an attendee who isn't known.
+
+**As built:**
+- M0 reuses the resolver's event search (up to 3 pages on each of 5 calendars, and the sent table), so the meeting path is at most 25, not 15. The topic path also reads the sent table (Q1), so a sender's `known` and the lookalike checks are real: at most 22, not 19.
+- P3 keeps only letters that list the exact address (P-SE1) and fall within the window. The owner's mail is what is in Sent Items; a message elsewhere that only claims the owner's address is on neither side of a loop.
+- M3's search is built from the subject, which someone else may have written: it runs, but is not echoed in `understood.queries` (`understood.queries_not_echoed` counts it). A message matches when one of the event's people other than the owner is on it.
+- `others_wrote` gains `company`, `job_title`, `phones` and `birthday` for a saved contact's details. Attendee items are people (§2.4's `Who`) with `response` and `type`.
+- `recent` and `open_loops` mark `total_exact` false (P3 is a search). A task matches a person when its title holds their name after `norm_name`, and a topic when it holds every word.
+- An ambiguous person or meeting answers in a `candidates` section, with `choose` only for known, unblocked candidates.
 
 **Docstring** (at most 450 characters): the three forms; that a meeting brief lists who answered; that notes or decisions exist only if someone emailed them.
 
