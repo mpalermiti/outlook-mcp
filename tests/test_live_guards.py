@@ -19,18 +19,21 @@ from outlook_mcp.tools.calendar_write import create_event, delete_event
 from outlook_mcp.tools.mail_write import send_message
 from tests.live_guard import (
     ACCOUNT_ENV,
+    MAX_SEND_BUDGET,
     OWN_MAILBOX_ENV,
     PAIR_ENV,
     SEND_BUDGET_ENV,
     SEND_ENV,
     LiveSettings,
     NeverSends,
+    ReadOnly,
     SendGuard,
     SendRefused,
+    WriteRefused,
     account_refusal,
     classify,
+    guarding,
     identity_of,
-    install,
     refusal,
     settings_from,
 )
@@ -74,7 +77,7 @@ def test_settings_come_from_the_environment_casefolded():
     assert not settings.own_mailbox
 
 
-@pytest.mark.parametrize("budget", ["", "three", "-1"])
+@pytest.mark.parametrize("budget", ["", "three", "-1", str(MAX_SEND_BUDGET + 1)])
 def test_a_budget_that_is_not_a_count_is_no_budget(budget):
     assert settings_from({SEND_BUDGET_ENV: budget}).send_budget is None
 
@@ -147,6 +150,17 @@ def test_identity_needs_every_source_to_agree():
     assert identity_of({"userPrincipalName": MAIN, "mail": PAIR}, None) is None
     assert identity_of({"userPrincipalName": MAIN}, PAIR) is None
     assert identity_of({}, None) is None
+
+
+def test_a_failed_me_is_never_made_up_from_the_saved_record():
+    """/me that did not answer leaves the account unknown, which refuses: the
+    saved sign-in record alone is not enough (fail closed)."""
+    assert identity_of({}, MAIN) is None
+    assert identity_of(None, MAIN) is None
+    assert identity_of({"error": {"code": "TooManyRequests"}}, MAIN) is None
+    assert "could not tell which account" in account_refusal(
+        identity_of({}, MAIN), WRITE, TEST_PAIR
+    )
 
 
 # ── Who may get mail: what counts as a send ───────────────────────────────
@@ -274,24 +288,107 @@ def test_an_unreserved_send_is_refused():
         guard.authorize("sendMail", [PAIR])
 
 
-def test_the_send_tier_deletes_only_meetings_it_made():
+def test_the_send_tier_changes_only_events_it_made():
     guard = SendGuard(pair=PAIR, budget=1)
-    with pytest.raises(SendRefused, match="deletes only meetings it created"):
-        guard.before("DELETE", f"{GRAPH}/me/events/someone-elses", None)
+    for method in ("DELETE", "PATCH"):
+        with pytest.raises(SendRefused, match="only events it created"):
+            guard.before(method, f"{GRAPH}/me/events/someone-elses", {"subject": "x"})
     guard.created("mine", (PAIR,))
     guard.reserve(1)
     guard.before("DELETE", f"{GRAPH}/me/events/mine", None)
     assert guard.log == ["a meeting cancellation"]
 
 
-# ── On the wire: the real tools through the real SDK ──────────────────────
+# ── More that sends: qualified names, rules, automatic replies, sharing ───
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("me/microsoft.graph.sendMail", {"message": {"toRecipients": _who(STRANGER)}}),
+        ("users/u1/sendMail", {"message": {"toRecipients": _who(STRANGER)}}),
+        ("me/messages/m1/microsoft.graph.send", {}),
+        ("me/messages('m1')/microsoft.graph.reply", {}),
+    ],
+)
+def test_send_actions_are_caught_in_every_spelling_graph_accepts(path, body):
+    assert classify("POST", f"{GRAPH}/{path}", body)
+    with pytest.raises(SendRefused):
+        NeverSends().before("POST", f"{GRAPH}/{path}", body)
+
+
+@pytest.mark.parametrize("action", ["forwardTo", "redirectTo", "forwardAsAttachmentTo"])
+def test_a_rule_that_forwards_or_redirects_is_refused_in_every_tier(action):
+    body = {"displayName": "r", "actions": {action: _who(STRANGER)}}
+    for method, path in (
+        ("POST", "me/mailFolders/inbox/messageRules"),
+        ("PATCH", "me/mailFolders/inbox/messageRules/r1"),
+    ):
+        with pytest.raises(SendRefused):
+            NeverSends().before(method, f"{GRAPH}/{path}", body)
+        guard = SendGuard(pair=PAIR, budget=1)
+        guard.reserve(1)
+        with pytest.raises(SendRefused, match="cannot be checked"):
+            guard.before(method, f"{GRAPH}/{path}", body)
+
+
+def test_a_rule_that_only_files_mail_is_not_a_send():
+    body = {"actions": {"moveToFolder": "f1", "markAsRead": True}}
+    assert classify("POST", f"{GRAPH}/me/mailFolders/inbox/messageRules", body) is None
+
+
+def test_automatic_replies_are_refused_in_every_tier():
+    body = {"automaticRepliesSetting": {"status": "alwaysEnabled"}}
+    with pytest.raises(SendRefused, match="automatic replies"):
+        NeverSends().before("PATCH", f"{GRAPH}/me/mailboxSettings", body)
+    assert classify("PATCH", f"{GRAPH}/me/mailboxSettings", {"timeZone": "UTC"}) is None
+
+
+def test_sharing_a_calendar_is_refused():
+    body = {"emailAddress": {"address": STRANGER}, "role": "read"}
+    with pytest.raises(SendRefused, match="sharing"):
+        NeverSends().before("POST", f"{GRAPH}/me/calendar/calendarPermissions", body)
+
+
+def test_a_meeting_named_in_parentheses_is_still_that_meeting():
+    meetings = {"AAMk=": (PAIR,)}
+    sent = classify("DELETE", f"{GRAPH}/me/events('AAMk%3D')", None, meetings)
+    assert sent.what == "a meeting cancellation"
+
+
+# ── Read-only tiers ───────────────────────────────────────────────────────
+
+
+def test_the_read_only_tiers_send_nothing_but_reads():
+    guard = ReadOnly(tier="live")
+    guard.before("GET", f"{GRAPH}/me/messages", None)
+    guard.before("POST", "https://login.microsoftonline.com/consumers/oauth2/v2.0/token", None)
+    batch = {"requests": [{"id": "1", "method": "GET", "url": "/me/messages/m1"}]}
+    guard.before("POST", f"{GRAPH}/$batch", batch)
+    for method, path, body in (
+        ("PATCH", "me/messages/m1", {"isRead": True}),
+        ("DELETE", "me/events/e1", None),
+        ("POST", "me/messages", {"subject": "a draft"}),
+        ("POST", "$batch", {"requests": [{"id": "1", "method": "PATCH", "url": "/me/x"}]}),
+        ("PUT", "me/contacts/c1/photo/$value", None),
+    ):
+        with pytest.raises(WriteRefused, match="live is read-only"):
+            guard.before(method, f"{GRAPH}/{path}", body)
+
+
+# ── Through `guarding`: the real tools, the real SDK, and raw calls ───────
 
 
 class _Recorder:
-    """A Graph endpoint that records what reached it and answers like Graph."""
+    """A Graph endpoint that records what reached it and answers like Graph.
 
-    def __init__(self) -> None:
+    ``events`` holds the attendees of events that already exist, for the
+    guard's look before it lets a change through.
+    """
+
+    def __init__(self, events: dict | None = None) -> None:
         self.seen: list[tuple[str, str]] = []
+        self.events = events or {}
 
     def __call__(self, request):
         import httpx
@@ -300,21 +397,14 @@ class _Recorder:
         if request.method == "POST" and request.url.path.endswith("/events"):
             sent = json.loads(request.content)
             return httpx.Response(201, json={"id": "meeting-1", "subject": sent.get("subject")})
+        if request.method == "GET" and "/events/" in request.url.path:
+            event_id = request.url.path.rsplit("/", 1)[-1]
+            if event_id not in self.events:
+                return httpx.Response(404, json={"error": {"code": "ErrorItemNotFound"}})
+            if self.events[event_id] is None:
+                return httpx.Response(503, json={"error": {"code": "ServiceUnavailable"}})
+            return httpx.Response(200, json={"attendees": _who(*self.events[event_id])})
         return httpx.Response(202 if request.method == "POST" else 204)
-
-
-class _Wrapper:
-    """Shaped like outlook_mcp.graph.GraphClient: what `install` hooks into."""
-
-    def __init__(self, sdk) -> None:
-        self.sdk_client = sdk
-
-
-def _client(guard):
-    graph = _Recorder()
-    wrapper = _Wrapper(_graph_client_over(graph))
-    install(wrapper, guard)
-    return wrapper.sdk_client, graph
 
 
 _CONFIG = Config(timezone="UTC")
@@ -323,38 +413,42 @@ _CONFIG = Config(timezone="UTC")
 async def test_the_send_tool_cannot_reach_a_stranger():
     guard = SendGuard(pair=PAIR, budget=1)
     guard.reserve(1)
-    sdk, graph = _client(guard)
-    with pytest.raises(SendRefused):
-        await send_message(sdk, to=[PAIR], cc=[STRANGER], subject="s", body="b", config=_CONFIG)
-    assert graph.seen == [] and guard.used == 0
+    graph = _Recorder()
+    sdk = _graph_client_over(graph)
+    with guarding(guard):
+        with pytest.raises(SendRefused):
+            await send_message(sdk, to=[PAIR], cc=[STRANGER], subject="s", body="b", config=_CONFIG)
+        assert graph.seen == [] and guard.used == 0
 
-    await send_message(sdk, to=[PAIR], subject="s", body="b", config=_CONFIG)
+        await send_message(sdk, to=[PAIR], subject="s", body="b", config=_CONFIG)
     assert graph.seen == [("POST", "/v1.0/me/sendMail")] and guard.used == 1
 
 
 async def test_an_invitation_and_its_cancellation_are_both_counted():
     guard = SendGuard(pair=PAIR, budget=2)
     guard.reserve(2)
-    sdk, graph = _client(guard)
-    created = await create_event(
-        sdk,
-        subject="s",
-        start="2030-01-07T17:00:00",
-        end="2030-01-07T17:30:00",
-        timezone="UTC",
-        attendees=[PAIR],
-        config=_CONFIG,
-    )
-    assert guard.meetings == {created["event_id"]: (PAIR,)}
-    await delete_event(sdk, created["event_id"], config=_CONFIG)
+    sdk = _graph_client_over(_Recorder())
+    with guarding(guard):
+        created = await create_event(
+            sdk,
+            subject="s",
+            start="2030-01-07T17:00:00",
+            end="2030-01-07T17:30:00",
+            timezone="UTC",
+            attendees=[PAIR],
+            config=_CONFIG,
+        )
+        assert guard.meetings == {created["event_id"]: (PAIR,)}
+        await delete_event(sdk, created["event_id"], config=_CONFIG)
     assert guard.log == ["an invitation", "a meeting cancellation"]
     assert guard.used == 2
 
 
 async def test_an_invitation_beyond_the_budget_never_leaves():
     guard = SendGuard(pair=PAIR, budget=0)
-    sdk, graph = _client(guard)
-    with pytest.raises(SendRefused):
+    graph = _Recorder()
+    sdk = _graph_client_over(graph)
+    with guarding(guard), pytest.raises(SendRefused):
         await create_event(
             sdk,
             subject="s",
@@ -367,8 +461,110 @@ async def test_an_invitation_beyond_the_budget_never_leaves():
     assert graph.seen == []
 
 
-async def test_the_shared_live_client_refuses_any_send():
-    sdk, graph = _client(NeverSends(tier="live_write"))
-    with pytest.raises(SendRefused):
+async def test_the_send_tier_changes_no_event_it_did_not_create():
+    guard = SendGuard(pair=PAIR, budget=1)
+    guard.reserve(1)
+    graph = _Recorder()
+    with guarding(guard), pytest.raises(SendRefused, match="only events it created"):
+        await _graph_client_over(graph).me.events.by_event_id("foreign").patch(_subject("x"))
+    assert graph.seen == []
+
+
+def _subject(text):
+    from msgraph.generated.models.event import Event
+
+    return Event(subject=text)
+
+
+async def test_the_write_tier_sends_nothing_through_the_sdk():
+    graph = _Recorder()
+    sdk = _graph_client_over(graph)
+    with guarding(NeverSends(tier="live_write")), pytest.raises(SendRefused):
         await send_message(sdk, to=[PAIR], subject="s", body="b", config=_CONFIG)
     assert graph.seen == []
+
+
+async def test_the_write_tier_may_not_change_an_existing_meeting():
+    """An event the run did not create may be someone's meeting: its attendees are
+    read first, and a change that would mail them is refused."""
+    graph = _Recorder(events={"meeting": (STRANGER,), "plain": (), "flaky": None})
+    sdk = _graph_client_over(graph)
+    with guarding(NeverSends(tier="live_write")) as guard:
+        with pytest.raises(SendRefused, match="a meeting update"):
+            await sdk.me.events.by_event_id("meeting").patch(_subject("moved"))
+        with pytest.raises(SendRefused, match="a meeting cancellation"):
+            await delete_event(sdk, "meeting", config=_CONFIG)
+        with pytest.raises(SendRefused, match="could not read the attendees"):
+            await delete_event(sdk, "flaky", config=_CONFIG)
+        await sdk.me.events.by_event_id("plain").patch(_subject("fine"))
+        await delete_event(sdk, "gone", config=_CONFIG)  # 404 on the look: no one to tell
+
+        created = await create_event(
+            sdk,
+            subject="s",
+            start="2030-01-07T17:00:00",
+            end="2030-01-07T17:30:00",
+            timezone="UTC",
+            config=_CONFIG,
+        )
+        await delete_event(sdk, created["event_id"], config=_CONFIG)  # its own: no look
+    assert ("PATCH", "/v1.0/me/events/meeting") not in graph.seen
+    assert ("DELETE", "/v1.0/me/events/meeting") not in graph.seen
+    assert created["event_id"] in guard.known
+    assert graph.seen.count(("GET", "/v1.0/me/events/meeting-1")) == 0
+
+
+async def test_a_raw_async_httpx_call_is_held_too():
+    import httpx
+
+    graph = _Recorder()
+    client = httpx.AsyncClient(transport=httpx.MockTransport(graph))
+    body = {"message": {"toRecipients": _who(STRANGER)}}
+    with guarding(NeverSends(tier="live_write")), pytest.raises(SendRefused):
+        await client.post(f"{GRAPH}/me/sendMail", json=body)
+    with guarding(ReadOnly(tier="live")), pytest.raises(WriteRefused):
+        await client.patch(f"{GRAPH}/me/messages/m1", json={"isRead": True})
+    assert graph.seen == []
+    await client.aclose()
+
+
+def test_a_raw_sync_httpx_call_is_held_too():
+    import httpx
+
+    graph = _Recorder()
+    client = httpx.Client(transport=httpx.MockTransport(graph))
+    with guarding(NeverSends(tier="live_write")), pytest.raises(SendRefused):
+        client.post(f"{GRAPH}/me/messages/m1/reply", json={"comment": "x"})
+    assert graph.seen == []
+
+
+def test_a_raw_requests_call_is_held_too():
+    import requests
+
+    session = requests.Session()
+    body = {"message": {"toRecipients": _who(STRANGER)}}
+    with guarding(NeverSends(tier="live_write")), pytest.raises(SendRefused):
+        session.post(f"{GRAPH}/me/sendMail", json=body)
+    with guarding(ReadOnly(tier="live")), pytest.raises(WriteRefused):
+        session.delete(f"{GRAPH}/me/messages/m1")
+
+
+def test_guarding_puts_everything_back():
+    import httpx
+    import requests
+
+    before = (httpx.AsyncClient.send, httpx.Client.send, requests.Session.send)
+    with guarding(ReadOnly()):
+        assert httpx.Client.send is not before[1]
+    assert (httpx.AsyncClient.send, httpx.Client.send, requests.Session.send) == before
+
+
+def test_the_send_guard_wants_a_real_pair_and_a_small_budget():
+    with pytest.raises(ValueError):
+        SendGuard(pair="", budget=1)
+    with pytest.raises(ValueError):
+        SendGuard(pair=PAIR, budget=MAX_SEND_BUDGET + 1)
+    guard = SendGuard(pair=PAIR, budget=1)
+    guard.reserve(1)
+    with pytest.raises(SendRefused):
+        guard.authorize("sendMail", [""])

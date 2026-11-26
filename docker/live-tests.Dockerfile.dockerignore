@@ -1,14 +1,24 @@
-# Only what the image needs: the package, its tests and scripts, the lockfile, and
-# the workflow files the offline suite checks.
-.git
-.venv
-.worktrees
+# An allow-list: the build sees nothing but what is re-included below, so a
+# publishing token, an env file, .git or a worktree never leaves the checkout.
+# Keep it in step with the Dockerfile's COPY lines (tests/test_live_image.py).
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!LICENSE
+!CHANGELOG.md
+!RELEASING.md
+!ROADMAP.md
+!SKILL.md
+!server.json
+!src
+!scripts
+!tests
+!.github
+# Inside those, still never: caches, and anything shaped like a secret.
 **/__pycache__
-.pytest_cache
-.ruff_cache
-dist
-build
-agent
-# An env file never goes into an image, wherever it was left.
-*.env
-.env*
+**/*.pyc
+**/.pytest_cache
+**/.env*
+**/*.env
+**/.mcpregistry_*

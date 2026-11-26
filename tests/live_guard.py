@@ -13,22 +13,28 @@ can pin them offline; ``tests/conftest.py`` wires them in:
    ``live`` tier only — the owner's explicit opt-in to run it against their own
    mailbox (``OUTLOOK_MCP_LIVE_OWN_MAILBOX=1``).
 2. **Is the signed-in account one of them?** (:func:`account_refusal`) Decided from
-   ``/me`` and the saved sign-in record, which must agree.
-3. **May this request go out?** (:class:`NeverSends`, :class:`SendGuard`) Every
-   request the live tiers' Graph client makes passes through :func:`install`. A
-   request that makes Exchange send mail — ``sendMail``, a send or reply action, an
-   invitation, an update or cancellation of a meeting — is refused in every tier but
-   ``live_send``. There, each recipient must be the paired test account, checked on
-   the request itself before it leaves, and each send is counted against the run's
-   budget.
+   ``/me``, which must answer, and the saved sign-in record, which must agree with it.
+   If ``/me`` fails, the test refuses: the record alone is never enough.
+3. **May this request go out?** (:class:`ReadOnly`, :class:`NeverSends`,
+   :class:`SendGuard`) While a live test runs, every HTTP request the process makes,
+   through the SDK, a tool's own client or a raw ``httpx``/``requests`` call, passes
+   through :func:`guarding` first. ``live`` and ``integration`` may only read.
+   ``live_write`` may change the mailbox but not send: no ``sendMail`` or send,
+   reply, forward or RSVP action, no invitation, no change to a meeting with
+   attendees, no forwarding rule, automatic reply or calendar sharing.
+   ``live_send`` may send, but each recipient must be the paired test account,
+   checked on the request itself before it leaves, and each send is counted
+   against the run's budget.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import pytest
 
@@ -41,6 +47,10 @@ PAIR_CAN_SEND_ENV = "OUTLOOK_MCP_TEST_PAIR_CAN_SEND"
 OWN_MAILBOX_ENV = "OUTLOOK_MCP_LIVE_OWN_MAILBOX"
 SEND_ENV = "OUTLOOK_MCP_LIVE_SEND"
 SEND_BUDGET_ENV = "OUTLOOK_MCP_LIVE_SEND_BUDGET"
+
+# The most real sends one run may make. New Outlook.com accounts have very low
+# sending limits, and one that sends too much too soon is locked.
+MAX_SEND_BUDGET = 10
 
 # Every tier that reaches a real mailbox. tests/conftest.py's offline isolation
 # leaves exactly these alone.
@@ -89,7 +99,7 @@ def settings_from(environ: Mapping[str, str]) -> LiveSettings:
         budget = int(budget_text) if budget_text else None
     except ValueError:
         budget = None
-    if budget is not None and budget < 0:
+    if budget is not None and not 0 <= budget <= MAX_SEND_BUDGET:
         budget = None
     return LiveSettings(
         account=_address(environ.get(ACCOUNT_ENV)),
@@ -145,23 +155,26 @@ def refusal(tiers: frozenset[str], settings: LiveSettings) -> str | None:
     return f"Refusing to run: no test account is named ({ACCOUNT_ENV}). " + _HOW_TO_RUN
 
 
-def identity_of(me: Mapping, record_username: str | None) -> str | None:
-    """The signed-in address, or None when the sources disagree or say nothing.
+def identity_of(me: Mapping | None, record_username: str | None) -> str | None:
+    """The signed-in address, or None: when ``/me`` named no one, or the sources disagree.
 
     A personal account reports its address as ``userPrincipalName``; ``mail`` is
-    often null. The saved sign-in record names the account the token cache
-    belongs to. Every one of them that is present must agree.
+    often null. ``/me`` must name the account: it is what the token can reach, and
+    a failed or empty answer (pass ``{}`` or None) means unknown, never "trust the
+    record". The saved sign-in record, which names the account the token cache
+    belongs to, must agree when present.
     """
-    found = {
+    me = me if isinstance(me, Mapping) else {}
+    from_me = {
         value
-        for value in (
-            _address(me.get("userPrincipalName")),
-            _address(me.get("mail")),
-            _address(record_username),
-        )
+        for value in (_address(me.get("userPrincipalName")), _address(me.get("mail")))
         if value
     }
-    return found.pop() if len(found) == 1 else None
+    if len(from_me) != 1:
+        return None
+    who = from_me.pop()
+    record = _address(record_username)
+    return who if record is None or record == who else None
 
 
 def account_refusal(identity: str | None, tiers: frozenset[str], settings: LiveSettings) -> str:
@@ -170,8 +183,8 @@ def account_refusal(identity: str | None, tiers: frozenset[str], settings: LiveS
         return ""
     if identity is None:
         return (
-            "Refusing to run: could not tell which account is signed in (/me and the "
-            "saved sign-in record are missing or disagree)."
+            "Refusing to run: could not tell which account is signed in (/me did not "
+            "answer with one, or it disagrees with the saved sign-in record)."
         )
     if "live_send" in tiers and identity != settings.account:
         return (
@@ -187,15 +200,23 @@ def account_refusal(identity: str | None, tiers: frozenset[str], settings: LiveS
     )
 
 
-# ── 3: who may get mail ───────────────────────────────────────────────────
+# ── 3: what may leave ─────────────────────────────────────────────────────
 
 
-class SendRefused(pytest.fail.Exception):
-    """A request would have sent mail it may not send.
+class Refused(pytest.fail.Exception):
+    """A request the live guards stopped before it left.
 
     A pytest failure, which is a BaseException, so a tool's ``except Exception``
     cannot turn it into "the message may have been sent".
     """
+
+
+class SendRefused(Refused):
+    """The request would have sent mail it may not send."""
+
+
+class WriteRefused(Refused):
+    """A read-only tier tried to change something."""
 
 
 @dataclass(frozen=True)
@@ -224,6 +245,19 @@ _SENDING_ACTIONS = {
     "tentativelyaccept": "tentatively accept an invitation",
 }
 _RESPONSES = {"accept", "decline", "tentativelyaccept"}
+# A rule that forwards or redirects sends every matching message on, for good.
+_FORWARDING_ACTIONS = ("forwardto", "redirectto", "forwardasattachmentto")
+
+# Token requests go here, as POSTs; they are not Graph and are never mail.
+SIGN_IN_HOSTS = frozenset(
+    {"login.microsoftonline.com", "login.live.com", "login.windows.net", "login.microsoft.com"}
+)
+_READS = frozenset({"GET", "HEAD"})
+
+# Graph accepts an action by its qualified name (`microsoft.graph.sendMail`) and a
+# key in parentheses (`events('id')`); both are read as the plain form.
+_QUALIFIER = "microsoft.graph."
+_KEYED = re.compile(r"^([^()]+)\((.*)\)$")
 
 
 def _folded(value):
@@ -235,12 +269,28 @@ def _folded(value):
     return value
 
 
+def _segment(raw: str) -> list[str]:
+    part = unquote(raw)
+    keyed = _KEYED.match(part)
+    if keyed:
+        name, key = keyed.group(1), keyed.group(2)
+        if len(key) >= 2 and key[0] == key[-1] == "'":
+            key = key[1:-1]
+        found = [name] + ([key] if key else [])
+    else:
+        found = [part]
+    return [p[len(_QUALIFIER) :] if p.lower().startswith(_QUALIFIER) else p for p in found]
+
+
 def _segments(url: str) -> list[str]:
-    path = urlsplit(url).path
-    parts = [unquote(p) for p in path.split("/") if p]
+    parts = [p for raw in urlsplit(url).path.split("/") if raw for p in _segment(raw)]
     if parts and parts[0].lower() in ("v1.0", "beta"):
         parts = parts[1:]
     return parts
+
+
+def _host(url: str) -> str:
+    return (urlsplit(url).hostname or "").lower()
 
 
 def _addresses(entries) -> tuple[str, ...]:
@@ -262,13 +312,14 @@ def _event_id(parts: list[str]) -> str | None:
 
 def wants_body(method: str, url: str) -> bool:
     """Whether :func:`classify` needs this request's body to decide."""
-    if method.upper() not in ("POST", "PATCH"):
+    if method.upper() not in ("POST", "PATCH", "PUT"):
         return False
-    parts = _segments(url)
-    return bool(parts) and (
-        parts[-1].lower() in ("sendmail", "$batch", "events")
-        or _event_id(parts) is not None
-        or parts[-1].lower() in _RESPONSES
+    names = [p.lower() for p in _segments(url)]
+    return bool(names) and (
+        names[-1] in ("sendmail", "$batch", "events", "mailboxsettings")
+        or "events" in names
+        or "messagerules" in names
+        or names[-1] in _RESPONSES
     )
 
 
@@ -280,15 +331,17 @@ def classify(
 ) -> Send | None:
     """The mail this request makes Exchange send, or None when it sends none.
 
-    ``meetings`` are the meetings this run created, by id, with their attendees:
-    changing or deleting one sends them an update or a cancellation.
+    ``meetings`` are meetings that have attendees, by id: ones this run created,
+    or ones the guard looked up before letting a change through. Changing or
+    deleting one sends them an update or a cancellation.
     """
     method = method.upper()
     meetings = meetings or {}
     parts = _segments(url)
     if not parts:
         return None
-    last = parts[-1].lower()
+    names = [p.lower() for p in parts]
+    last = names[-1]
     # Graph reads property names without regard to case, and the SDK writes some
     # capitalised ({"Message": ..., "SaveToSentItems": ...}): compare them folded.
     body = _folded(body) if isinstance(body, Mapping) else {}
@@ -321,6 +374,16 @@ def classify(
         recipients += _addresses(message.get("replyto"))
         return Send("sendMail", recipients)
 
+    if method in ("POST", "PATCH", "PUT") and "messagerules" in names:
+        actions = body.get("actions") if isinstance(body.get("actions"), Mapping) else {}
+        if any(actions.get(k) for k in _FORWARDING_ACTIONS):
+            return Send("a rule that forwards or redirects mail", None)
+    if method in ("PATCH", "PUT", "POST") and last == "mailboxsettings":
+        if "automaticrepliessetting" in body:
+            return Send("automatic replies", None)
+    if method in ("POST", "PATCH") and "calendarpermissions" in names:
+        return Send("a calendar sharing invitation", None)
+
     event_id = _event_id(parts)
     if method == "POST" and last in _SENDING_ACTIONS:
         if last in _RESPONSES and body.get("sendresponse") is False:
@@ -340,34 +403,96 @@ def classify(
         if attendees or event_id in meetings:
             return Send("a meeting update", attendees + meetings.get(event_id, ()))
         return None
-    if method == "DELETE" and event_id in meetings:
+    if method == "DELETE" and parts[-1] == event_id and event_id in meetings:
         return Send("a meeting cancellation", meetings[event_id])
     return None
 
 
-def deletes_an_event(method: str, url: str) -> str | None:
-    """The event id a DELETE (or cancel) removes, else None."""
+def event_write_target(method: str, url: str) -> str | None:
+    """The event a request changes or removes (a PATCH, DELETE or cancel of the
+    event itself, not of its attachments), else None."""
     parts = _segments(url)
     event_id = _event_id(parts)
     if event_id is None:
         return None
-    if method.upper() == "DELETE" and parts[-1] == event_id:
+    method = method.upper()
+    if method in ("PATCH", "DELETE") and parts[-1] == event_id:
         return event_id
-    if method.upper() == "POST" and parts[-1].lower() == "cancel":
+    if method == "POST" and parts[-1].lower() == "cancel":
         return event_id
     return None
 
 
+def attendees_url(url: str, event_id: str) -> str:
+    """Where to read the attendees of the event ``url`` changes."""
+    split = urlsplit(url)
+    raw = [r for r in split.path.split("/") if r]
+    for i in range(len(raw) - 1, -1, -1):
+        name = unquote(raw[i]).split("(", 1)[0].lower()
+        if name.removeprefix(_QUALIFIER) == "events":
+            path = "/".join(raw[:i] + ["events", quote(event_id, safe="")])
+            break
+    else:  # pragma: no cover - event_write_target found an events segment
+        path = "/".join(raw)
+    return f"{split.scheme}://{split.netloc}/{path}?$select=attendees"
+
+
+class ReadOnly:
+    """``live`` and ``integration``, the own-mailbox smoke check included: reads only.
+
+    Anything but a GET (or a ``$batch`` of GETs) to anything but the sign-in
+    service is refused before it leaves.
+    """
+
+    def __init__(self, tier: str = "this tier") -> None:
+        self.tier = tier
+
+    def lookup(self, method: str, url: str) -> str | None:
+        return None
+
+    def before(self, method: str, url: str, body: Mapping | None, existing=None) -> None:
+        method = method.upper()
+        if method in _READS or _host(url) in SIGN_IN_HOSTS:
+            return
+        parts = _segments(url)
+        if method == "POST" and parts and parts[-1] == "$batch":
+            requests = (_folded(body) or {}).get("requests") if isinstance(body, Mapping) else None
+            if requests and all(
+                isinstance(r, Mapping) and str(r.get("method", "")).upper() in _READS
+                for r in requests
+            ):
+                return
+        raise WriteRefused(
+            f"Refused before it left: {self.tier} is read-only, and this is a {method}. "
+            "A test that changes the mailbox belongs in live_write."
+        )
+
+    def created(self, event_id: str, attendees: tuple[str, ...]) -> None:
+        """Nothing is created in a read-only tier."""
+
+
 class NeverSends:
-    """Every tier but ``live_send``: no request may send mail."""
+    """``live_write``: it may change the mailbox, but no request may send mail.
+
+    An event it did not create this run may be someone's meeting, where a change
+    or delete would mail the attendees: before one goes, :func:`guarding` reads
+    the event's attendees, and the change is refused if it has any.
+    """
 
     meetings: Mapping[str, tuple[str, ...]] = {}
 
     def __init__(self, tier: str = "this tier") -> None:
         self.tier = tier
+        self.known: set[str] = set()  # attendee-free events this run created
 
-    def before(self, method: str, url: str, body: Mapping | None) -> None:
-        sent = classify(method, url, body)
+    def lookup(self, method: str, url: str) -> str | None:
+        target = event_write_target(method, url)
+        return target if target is not None and target not in self.known else None
+
+    def before(self, method: str, url: str, body: Mapping | None, existing=None) -> None:
+        if _host(url) in SIGN_IN_HOSTS:
+            return
+        sent = classify(method, url, body, existing)
         if sent:
             raise SendRefused(
                 f"Refused before it left: {self.tier} may not send mail, and this request "
@@ -375,7 +500,7 @@ class NeverSends:
             )
 
     def created(self, event_id: str, attendees: tuple[str, ...]) -> None:
-        """Nothing to remember: an invitation never gets this far."""
+        self.known.add(event_id)
 
 
 @dataclass
@@ -392,7 +517,16 @@ class SendGuard:
     used: int = 0
     reserved: int = 0
     meetings: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    known: set[str] = field(default_factory=set)
     log: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        pair = _address(self.pair)
+        if not pair or "@" not in pair:
+            raise ValueError("SendGuard needs the pair account's address")
+        if not 0 <= self.budget <= MAX_SEND_BUDGET:
+            raise ValueError(f"the send budget must be 0 to {MAX_SEND_BUDGET}")
+        self.pair = pair
 
     def reserve(self, sends: int) -> str:
         """Hold ``sends`` for the calling test; the reason it cannot, else ""."""
@@ -421,7 +555,7 @@ class SendGuard:
         recipients = tuple(_address(r) or "" for r in recipients)
         if not recipients:
             raise SendRefused(f"Refused before it left: {what} names no recipient.")
-        strangers = [r for r in recipients if r != allowed]
+        strangers = [r for r in recipients if not r or r != allowed]
         if strangers:
             raise SendRefused(
                 f"Refused before it left: {what} is addressed to {len(strangers)} "
@@ -436,62 +570,161 @@ class SendGuard:
         self.used += 1
         self.log.append(what)
 
-    def before(self, method: str, url: str, body: Mapping | None) -> None:
+    def lookup(self, method: str, url: str) -> str | None:
+        return None  # an event it did not create is refused outright
+
+    def before(self, method: str, url: str, body: Mapping | None, existing=None) -> None:
+        if _host(url) in SIGN_IN_HOSTS:
+            return
         sent = classify(method, url, body, self.meetings)
         if sent is None:
-            event_id = deletes_an_event(method, url)
-            if event_id is not None and event_id not in self.meetings:
-                # On the test account only this tier organizes meetings, but an
-                # event it did not create could still be someone's meeting.
+            target = event_write_target(method, url)
+            if target is not None and target not in self.meetings and target not in self.known:
                 raise SendRefused(
-                    "Refused before it left: the send tier deletes only meetings it created "
-                    "this run, and this event is not one of them."
+                    "Refused before it left: the send tier changes or deletes only events it "
+                    "created this run, and this is not one of them: it could be someone's "
+                    "meeting, and the change would mail its attendees."
                 )
             return
         self.authorize(sent.what, sent.recipients)
 
     def created(self, event_id: str, attendees: tuple[str, ...]) -> None:
-        self.meetings[event_id] = attendees
+        if attendees:
+            self.meetings[event_id] = attendees
+        else:
+            self.known.add(event_id)
 
 
-def install(graph_client, guard) -> None:
-    """Hold every request ``graph_client`` makes to ``guard`` before it leaves.
+# ── Holding every request to the guard ────────────────────────────────────
 
-    Hooks on the SDK's own httpx client, so a tool cannot route around it. The
-    response hook remembers each meeting the tier created, so changing or deleting
-    it later is counted as the update or cancellation it sends.
+
+def _json(content) -> Mapping | None:
+    if not content:
+        return None
+    try:
+        value = json.loads(content)
+    except (ValueError, UnicodeDecodeError):
+        return {"<unreadable body>": True}
+    return value if isinstance(value, Mapping) else {"<not an object>": True}
+
+
+def _attendees_found(event_id: str, status: int, content) -> dict[str, tuple[str, ...]]:
+    """What a lookup of the event's attendees says, as ``meetings`` for classify."""
+    if status == 404:
+        return {}  # gone: there is no one to tell
+    if not 200 <= status < 300:
+        raise SendRefused(
+            f"Refused before it left: could not read the attendees of the event it would "
+            f"change (HTTP {status}), so it cannot tell whether the change would mail them."
+        )
+    attendees = _addresses((_folded(_json(content)) or {}).get("attendees"))
+    return {event_id: attendees} if attendees else {}
+
+
+def _created_event(method: str, url: str, body: Mapping | None, status: int):
+    """The attendees of an event this request created, or None if it created none."""
+    parts = _segments(url)
+    if method.upper() != "POST" or not parts or parts[-1].lower() != "events":
+        return None
+    if not 200 <= status < 300:
+        return None
+    return _addresses((_folded(body) or {}).get("attendees") if isinstance(body, Mapping) else None)
+
+
+def _remember(guard, content, attendees) -> None:
+    created = _json(content)
+    if isinstance(created, Mapping) and isinstance(created.get("id"), str):
+        guard.created(created["id"], attendees)
+
+
+def _authorization(headers) -> dict[str, str]:
+    value = headers.get("Authorization") if headers is not None else None
+    return {"Authorization": value} if value else {}
+
+
+@contextlib.contextmanager
+def guarding(guard):
+    """Hold every HTTP request this process makes to ``guard`` before it leaves.
+
+    Patches the send methods of ``httpx.AsyncClient``, ``httpx.Client`` and
+    ``requests.Session``, so it covers the SDK's client, the clients the tools
+    open themselves (``$batch``, delta, MIME, upload sessions) and any raw call a
+    test makes. A child process is not covered: ``tests/live_mailbox.py``, the
+    only one the tiers start, keeps its own rules. A created event is remembered,
+    so a later change or delete of it is judged for what it sends.
     """
-    http = graph_client.sdk_client.request_adapter._http_client
+    import httpx
 
-    async def body_of(message) -> Mapping | None:
-        content = await message.aread()
-        if not content:
-            return None
-        try:
-            return json.loads(content)
-        except ValueError:
-            return {"<unreadable body>": True}
+    patch = pytest.MonkeyPatch()
+    async_send = httpx.AsyncClient.send
+    sync_send = httpx.Client.send
 
-    async def on_request(request) -> None:
-        url = str(request.url)
-        body = await body_of(request) if wants_body(request.method, url) else None
-        guard.before(request.method, url, body)
-        request.extensions["live_guard_body"] = body
+    async def guarded_async(client, request, *args, **kwargs):
+        method, url = request.method, str(request.url)
+        body = _json(await request.aread()) if wants_body(method, url) else None
+        existing = {}
+        target = guard.lookup(method, url)
+        if target is not None:
+            look = client.build_request(
+                "GET", attendees_url(url, target), headers=_authorization(request.headers)
+            )
+            found = await async_send(client, look)
+            existing = _attendees_found(target, found.status_code, found.content)
+        guard.before(method, url, body, existing)
+        response = await async_send(client, request, *args, **kwargs)
+        attendees = _created_event(method, url, body, response.status_code)
+        if attendees is not None:
+            _remember(guard, await response.aread(), attendees)
+        return response
 
-    async def on_response(response) -> None:
-        request = response.request
-        body = request.extensions.get("live_guard_body")
-        if request.method != "POST" or not body or not response.is_success:
-            return
-        url = str(request.url)
-        if _segments(url)[-1].lower() != "events":
-            return
-        attendees = _addresses(_folded(body).get("attendees"))
-        if not attendees:
-            return
-        created = await body_of(response)
-        if isinstance(created, Mapping) and isinstance(created.get("id"), str):
-            guard.created(created["id"], attendees)
+    def guarded_sync(client, request, *args, **kwargs):
+        method, url = request.method, str(request.url)
+        body = _json(request.read()) if wants_body(method, url) else None
+        existing = {}
+        target = guard.lookup(method, url)
+        if target is not None:
+            look = client.build_request(
+                "GET", attendees_url(url, target), headers=_authorization(request.headers)
+            )
+            found = sync_send(client, look)
+            existing = _attendees_found(target, found.status_code, found.content)
+        guard.before(method, url, body, existing)
+        response = sync_send(client, request, *args, **kwargs)
+        attendees = _created_event(method, url, body, response.status_code)
+        if attendees is not None:
+            _remember(guard, response.read(), attendees)
+        return response
 
-    http.event_hooks["request"].append(on_request)
-    http.event_hooks["response"].append(on_response)
+    patch.setattr(httpx.AsyncClient, "send", guarded_async)
+    patch.setattr(httpx.Client, "send", guarded_sync)
+
+    try:
+        import requests
+    except ImportError:  # pragma: no cover - msal depends on it
+        requests = None
+    if requests is not None:
+        session_send = requests.Session.send
+
+        def guarded_requests(session, request, **kwargs):
+            method, url = (request.method or "GET"), request.url
+            body = _json(request.body) if wants_body(method, url) else None
+            existing = {}
+            target = guard.lookup(method, url)
+            if target is not None:
+                look = requests.Request(
+                    "GET", attendees_url(url, target), headers=_authorization(request.headers)
+                ).prepare()
+                found = session_send(session, look, timeout=30)
+                existing = _attendees_found(target, found.status_code, found.content)
+            guard.before(method, url, body, existing)
+            response = session_send(session, request, **kwargs)
+            attendees = _created_event(method, url, body, response.status_code)
+            if attendees is not None:
+                _remember(guard, response.content, attendees)
+            return response
+
+        patch.setattr(requests.Session, "send", guarded_requests)
+    try:
+        yield guard
+    finally:
+        patch.undo()

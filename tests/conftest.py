@@ -34,7 +34,9 @@ lived-in mailbox.
     account to its pair, and nobody else. See "Sending" below.
 
 Tiers 1 and 2 are READ-ONLY: never add a fixture or test there that writes to
-the mailbox — no sends, drafts, category or folder mutations, no deletes.
+the mailbox — no sends, drafts, category or folder mutations, no deletes. They
+are held to it: while one runs, any request but a read is refused before it
+leaves (``live_guard.ReadOnly``).
 
 Rules for ``live_write``, which exists precisely because it breaks that:
 
@@ -45,7 +47,8 @@ Rules for ``live_write``, which exists precisely because it breaks that:
   have no outward side effect. Nothing here may send, and a stray send is not
   recoverable: a draft is created, read back and deleted, never sent
   (``tests/test_live_tiers_never_send.py`` checks the tier's files for a send,
-  and the Graph client the live tiers share refuses one on the wire).
+  and every request a live_write test makes is refused before it leaves if it
+  would send: ``live_guard.NeverSends``, see "What may leave" below).
 * No attendees, ever. A recurring invite emails real people on every
   occurrence.
 * Bounded ranges only (``numbered``/``endDate``) — never ``noEnd``.
@@ -58,11 +61,11 @@ Sending (``live_send``), the one place a send is allowed:
 * Triple-gated: the marker, ``OUTLOOK_MCP_LIVE_SEND=1``, and a send budget for
   the run (``OUTLOOK_MCP_LIVE_SEND_BUDGET``; ``scripts/live-tests.sh live_send
   --sends N`` sets both). It runs only as the main test account.
-* Recipients: only the pair. Every request its Graph client makes is checked
-  before it leaves (``live_guard.SendGuard``): each recipient of a ``sendMail``,
-  each attendee of an invitation, the attendees of a meeting it updates or
-  cancels. A send whose recipients the request does not name (a reply, a
-  draft's send) is refused, as is deleting any event the tier did not create.
+* Recipients: only the pair. Every request the test makes is checked before
+  it leaves (``live_guard.SendGuard``): each recipient of a ``sendMail``, each
+  attendee of an invitation, the attendees of a meeting it updates or cancels.
+  A send whose recipients the request does not name (a reply, a draft's send)
+  is refused, as is changing or deleting any event the tier did not create.
 * Counted: a test reserves the sends it will make before making any, and
   skips if the run's budget cannot cover them, so a test never stops halfway
   with an invitation it cannot cancel.
@@ -95,11 +98,13 @@ from tests.live_guard import (  # the markers are re-exported for the live test 
     LIVE_SEND_SUBJECT,  # noqa: F401
     LIVE_WRITE_NAME,  # noqa: F401
     LIVE_WRITE_SUBJECT,  # noqa: F401
+    MAX_SEND_BUDGET,
     NeverSends,
+    ReadOnly,
     SendGuard,
     account_refusal,
+    guarding,
     identity_of,
-    install,
     live_tiers_of,
     own_mailbox_allows,
     refusal,
@@ -144,7 +149,7 @@ def real_auth(real_config):
 
 
 @pytest.fixture
-def real_graph_client(real_auth, request):
+def real_graph_client(real_auth):
     """Real Graph client built from the cached credential.
 
     Function-scoped on purpose: the underlying kiota/httpx transport binds to
@@ -155,12 +160,7 @@ def real_graph_client(real_auth, request):
     """
     from outlook_mcp.graph import GraphClient
 
-    client = GraphClient(real_auth.get_credential())
-    # Every tier that uses this client is one that never sends: a request that
-    # would (a send, a reply, an invitation, a meeting update) is refused before
-    # it leaves. The send tier has its own client, `send_graph_client`.
-    install(client, NeverSends(tier=", ".join(sorted(live_tiers_of(request.node))) or "this tier"))
-    return client
+    return GraphClient(real_auth.get_credential())
 
 
 # Every personal Microsoft account lives in this one well-known tenant; a work
@@ -305,7 +305,12 @@ def _signed_in_identity() -> str | None:
         headers={"Authorization": f"Bearer {token}"},
         timeout=30,
     )
-    me = response.json() if response.is_success else {}
+    # Fail closed: a /me that did not answer leaves the account unknown, which
+    # refuses. The saved record alone never stands in for it.
+    try:
+        me = response.json() if response.is_success else {}
+    except ValueError:
+        me = {}
     record = _load_auth_record()
     _identity["who"] = identity_of(me, getattr(record, "username", None))
     return _identity["who"]
@@ -332,6 +337,32 @@ def pytest_runtest_setup(item):
         _refuse_to_run(item, reason)
 
 
+# ── What may leave (tests/live_guard.py) ──────────────────────────────────
+#
+# For the whole of each live test, fixtures included, every HTTP request the
+# process makes (the SDK's, a tool's own client's, a raw httpx or requests call)
+# is held to the tier's guard before it leaves: `live` and `integration`, the
+# own-mailbox smoke check among them, may only read; `live_write` may change the
+# mailbox but not send; `live_send` sends only to the pair, counted.
+
+
+@pytest.fixture(autouse=True)
+def _what_may_leave(request):
+    tiers = live_tiers_of(request.node)
+    if not tiers:
+        yield
+        return
+    label = ", ".join(sorted(tiers))
+    if "live_send" in tiers:
+        guard = request.getfixturevalue("send_guard")
+    elif "live_write" in tiers:
+        guard = NeverSends(tier=label)
+    else:
+        guard = ReadOnly(tier=label)
+    with guarding(guard):
+        yield
+
+
 # ── The send tier ─────────────────────────────────────────────────────────
 
 # Every SendGuard this run made, for the summary line.
@@ -348,7 +379,10 @@ def send_guard():
             "OUTLOOK_MCP_LIVE_SEND=1 and the run's send budget"
         )
     if settings.send_budget is None:
-        pytest.skip("No send budget for this run — set OUTLOOK_MCP_LIVE_SEND_BUDGET to a count")
+        pytest.skip(
+            "No send budget for this run — set OUTLOOK_MCP_LIVE_SEND_BUDGET to a count "
+            f"from 0 to {MAX_SEND_BUDGET}"
+        )
     guard = SendGuard(pair=settings.pair, budget=settings.send_budget)
     _send_guards.append(guard)
     return guard
@@ -363,12 +397,11 @@ def sends(send_guard):
 
 @pytest.fixture
 def send_graph_client(real_auth, send_guard):
-    """A Graph client whose every request is held to the send tier's rule."""
+    """A Graph client for the send tier. Like every request a live_send test makes,
+    its requests are held to the send guard (`_what_may_leave`)."""
     from outlook_mcp.graph import GraphClient
 
-    client = GraphClient(real_auth.get_credential())
-    install(client, send_guard)
-    return client
+    return GraphClient(real_auth.get_credential())
 
 
 @pytest.fixture

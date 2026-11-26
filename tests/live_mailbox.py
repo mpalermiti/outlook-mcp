@@ -194,7 +194,10 @@ class Mailbox:
             return False
         if response.is_success:
             return True
-        response = self.http.delete(f"/me/messages/{message_id}")  # soft, where unsupported
+        if response.status_code not in (400, 405, 501):
+            response.raise_for_status()  # throttled or failing: say so, don't settle for less
+        # The account does not support permanentDelete: a plain DELETE instead.
+        response = self.http.delete(f"/me/messages/{message_id}")
         if response.status_code == 404:
             return False
         response.raise_for_status()

@@ -1,8 +1,9 @@
 # The live tiers' container: this working tree, every extra, and a chosen Python.
 #
 # Built and run by scripts/live-tests.sh, which mounts a test account's signed-in
-# settings at /config and its pair's at /pair. The image itself holds no sign-in
-# and names no account. Build context: the repository root.
+# settings at /config (and, for the tiers that need it, its pair's at /pair). The
+# image itself holds no sign-in and names no account. Build context: the
+# repository root, narrowed by live-tests.Dockerfile.dockerignore.
 ARG PYTHON_VERSION=3.13
 FROM python:${PYTHON_VERSION}-slim
 
@@ -23,7 +24,15 @@ WORKDIR /src
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --locked --all-extras --no-install-project
 
-COPY . .
+# The rest, by name: an allow-list, so nothing else in a checkout (a publishing
+# token, an env file, .git, other worktrees) can reach the image, whatever the
+# ignore file or the builder does. tests/test_live_image.py holds the two lists
+# together. The documents are read by the offline suite's docs checks.
+COPY LICENSE CHANGELOG.md RELEASING.md ROADMAP.md SKILL.md server.json ./
+COPY src ./src
+COPY scripts ./scripts
+COPY tests ./tests
+COPY .github ./.github
 RUN uv sync --locked --all-extras
 
 # The mounted account is the settings directory and HOME: on Linux, azure-identity
