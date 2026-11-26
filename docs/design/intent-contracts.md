@@ -2,7 +2,7 @@
 
 Changelog: 2026-11-26. Every change to a rule or override routes `far_reaching`, `undo` included; `undo` reads events live; the act tools check attendees and route against live state every run; the plan store claims `running` atomically and releases it in a `finally`, keeps a finished plan's receipt until expiry, and prunes on every access; "reversible" is defined; `CLAUDE.md` text is proposed (§17). Open items before later steps are tracked in §18.
 
-Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3 is built in `src/outlook_mcp/intents/`: `outlook_find` is registered in the opt-in `intents` group, off by default, as an early preview. Step 4's four read tools, `outlook_agenda`, `outlook_open_loops`, `outlook_catch_up` and `outlook_brief`, are registered the same way; its probes (P-DL1, P-D3a, P-C2, P-LAT1's read timings) have not run.
+Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3 is built in `src/outlook_mcp/intents/`: `outlook_find` is registered in the opt-in `intents` group, off by default, as an early preview. Step 4's four read tools, `outlook_agenda`, `outlook_open_loops`, `outlook_catch_up` and `outlook_brief`, are registered the same way; its probes (P-DL1, P-D3a, P-C2, P-LAT1's read timings) have not run. The follow-up core (§10.5), the INSTRUCTIONS bullets (§10.9) and the prompt variants and gating (§10.10) are built for the tools that exist.
 
 These contracts define the interfaces every intent tool builds on: the answer envelope, the resolver, typed times, mail selections, plans and acting, undo receipts, the `catch_up` cursor, the follow-up marker, the approval and permission mapping, and how the tool set ships. They are meant to be precise enough to implement and to test against. Where they depart from the intent-tool design, §15 says so.
 
@@ -1653,6 +1653,7 @@ A test, in a subprocess per selection, checks that the registered set after `con
   - keep receipts to undo;
   - replace the catch_up cursor; never merge it.
 - **Size:** at most 4,000 characters under `intents`.
+- **As built:** a selection without an intent tool gets the classic text byte for byte, documents bullet included, and is not filtered (that would change what existing selections are told). Under `intents`, a bullet's `requires` is read from its own text. The intent bullets are the `others_wrote` sentence, the typed time forms, `candidates` and `incomplete`, and the catch_up cursor; the plan, act and receipt bullets wait for their tools. Measured: 2,504 characters under `intents`, 3,923 under `classic,intents`.
 - Under `classic`, the text is byte-for-byte today's.
 
 ### 10.10 Prompts
@@ -1667,6 +1668,7 @@ A prompt is registered only when every tool of at least one of its variants is l
 
 - **The `catch_up` prompt keeps its name.** Prompts and tools are separate MCP lists, so the prompt `catch_up` and the tool `outlook_catch_up` can't collide. Renaming the prompt would break clients that call it by name.
 - **Behaviour change:** a prompt whose tools aren't loaded is no longer offered. Today `morning_brief` names `outlook_list_events` even under `OUTLOOK_MCP_TOOLSETS=mail`, where it isn't loaded.
+- **As built:** the gating applies only under `intents`, so every selection without it is offered main's three prompts as before. `triage_folder` has no intents variant until `outlook_tidy` exists; under `intents` alone it is not offered. The intents `morning_brief` takes no argument; the intents `catch_up` keeps `since` as its first window.
 
 ### 10.11 Budget and CI
 

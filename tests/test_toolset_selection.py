@@ -20,8 +20,11 @@ It now loads the default set, which is what the name says.
 
 ``intents`` became a group when ``outlook_find`` landed. It is off by default, so
 the frozen copy below lists it with the other opt-in groups, and a selection that
-doesn't name it loads what it did. One that names it now gets ``outlook_find``:
-it was a name that matched nothing before, warned about at every start.
+doesn't name it loads what it did. One that names it now gets the intent tools:
+it was a name that matched nothing before, warned about at every start. Since the
+follow-up core (contracts §10.5), it also brings the seven classic tools the intent
+tools' suggestions point to (``toolsets.FOLLOW_UP_CORE``): ``_on_main_or_core`` adds
+them for a value that names ``intents``, and for nothing else.
 """
 
 from __future__ import annotations
@@ -106,6 +109,19 @@ EXISTING_ENV_VALUES: list[str | None] = [
 ]
 
 
+def _names_intents(env_value: str | None) -> bool:
+    return env_value is not None and "intents" in {
+        part.strip().lower() for part in env_value.split(",")
+    }
+
+
+def _on_main_or_core(env_value: str | None, mailbox_settings_write: bool) -> set[str]:
+    """Main's selection, plus the follow-up core for a value that names ``intents``:
+    the one deliberate change since, and it reaches no other value."""
+    found = _on_main(env_value, mailbox_settings_write)
+    return found | toolsets.FOLLOW_UP_CORE if _names_intents(env_value) else found
+
+
 def _now(env_value: str | None, file_value: str | None, mailbox_settings_write: bool) -> set[str]:
     """What this branch loads, through the same calls server.py makes at import."""
     enabled, _ = toolsets.resolve_selection(env_value, file_value)
@@ -116,14 +132,16 @@ def _now(env_value: str | None, file_value: str | None, mailbox_settings_write: 
 @pytest.mark.parametrize("env_value", EXISTING_ENV_VALUES)
 def test_every_existing_environment_value_loads_what_it_did(env_value, settings_write):
     """No existing config has a ``toolsets`` key, so the file value is None."""
-    assert _now(env_value, None, settings_write) == _on_main(env_value, settings_write)
+    assert _now(env_value, None, settings_write) == _on_main_or_core(env_value, settings_write)
 
 
 @pytest.mark.parametrize("settings_write", [False, True])
 @pytest.mark.parametrize("file_value", [None, "", "  ", ","])
 def test_a_blank_file_value_is_the_same_as_none(file_value, settings_write):
     for env_value in EXISTING_ENV_VALUES:
-        assert _now(env_value, file_value, settings_write) == _on_main(env_value, settings_write)
+        assert _now(env_value, file_value, settings_write) == _on_main_or_core(
+            env_value, settings_write
+        )
 
 
 # ── The table: environment over file over default ────────────────────────
@@ -196,14 +214,18 @@ def test_intents_is_an_opt_in_group_that_adds_the_intent_tools(settings_write):
     assert "intents" in toolsets.known_toolset_names()
     assert toolsets.unknown_toolset_names({"intents"}) == set()
     assert not intent_tools & _now(None, None, settings_write)
-    assert _now("intents", None, settings_write) == ACCOUNT_TOOLS | intent_tools
+    core = toolsets.FOLLOW_UP_CORE
+    assert _now("intents", None, settings_write) == ACCOUNT_TOOLS | intent_tools | core
+    # The core is in the default set already, so `classic,intents` gains only the intents.
     assert (
         _now(None, "classic,intents", settings_write)
         == _on_main(None, settings_write) | intent_tools
     )
     assert _now("intents,mail", None, settings_write) == _on_main("mail", settings_write) | (
-        intent_tools
+        intent_tools | core
     )
+    # Not named: the core's tools load by their home groups only.
+    assert _now("todo", None, settings_write) == _on_main("todo", settings_write)
 
 
 def test_a_group_with_tools_called_intents_must_be_off_by_default():

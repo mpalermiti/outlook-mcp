@@ -13,6 +13,7 @@ tool added or removed reddens a test instead of quietly making a doc wrong.
 Prose descriptions are deliberately not pinned. Only facts the code settles are.
 """
 
+import inspect
 import json
 import os
 import re
@@ -23,7 +24,7 @@ from pathlib import Path
 import pytest
 from mcp.client import Client
 
-from outlook_mcp import server, toolsets
+from outlook_mcp import guidance, server, toolsets
 from outlook_mcp.permissions import VALID_CATEGORIES
 from outlook_mcp.server import mcp
 
@@ -214,11 +215,20 @@ def test_the_readme_category_table_is_the_accepted_set():
 
 @pytest.mark.asyncio
 async def test_the_documented_prompts_are_the_registered_ones():
+    """The docs describe the classic prompts, which every selection without `intents`
+    registers; under `intents` some take their intents form (README "Prompts")."""
+    classic = {
+        v.name: set(inspect.signature(v.render).parameters)
+        for v in guidance.choose_prompts(frozenset())
+    }
     async with Client(mcp) as client:
-        prompts = {
+        registered = {
             p.name: {a.name for a in p.arguments or []}
             for p in (await client.list_prompts()).prompts
         }
+    if not guidance.intents_loaded(server.LOADED_TOOLS):
+        assert registered == classic
+    prompts = classic
 
     table = _section(README, "Prompts")
     readme = {

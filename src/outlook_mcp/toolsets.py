@@ -190,6 +190,38 @@ TOOL_GROUPS: dict[str, str] = {
     "outlook_reclassify_message": "admin",
 }
 
+# The follow-up core (intent contracts §10.5): classic tools that the intent tools'
+# `next` suggestions point to, or that an agent needs to act on what they find
+# (open a message or a thread, read several at once, download a file, update or
+# complete a task, list drafts). They keep their home group in `TOOL_GROUPS`, so
+# every classification and drift guard keeps its meaning, and also belong to
+# `intents`, so a selection that names `intents` alone never suggests a tool it
+# lacks. A selection that doesn't name `intents` loads exactly what it did.
+FOLLOW_UP_CORE = frozenset(
+    {
+        "outlook_read_message",
+        "outlook_read_messages",
+        "outlook_list_thread",
+        "outlook_download_attachment",
+        "outlook_update_task",
+        "outlook_complete_task",
+        "outlook_list_drafts",
+    }
+)
+EXTRA_GROUPS: dict[str, frozenset[str]] = {name: frozenset({INTENTS}) for name in FOLLOW_UP_CORE}
+
+
+def groups_of(name: str) -> frozenset[str]:
+    """Every group ``name`` belongs to: its home group, and `intents` for the core.
+
+    The only place a tool's groups are read when choosing what loads, on both the
+    unset path and the named one, so the two cannot disagree (the "one set, not
+    two" bug above).
+    """
+    home = TOOL_GROUPS.get(name)
+    return (frozenset({home}) if home else frozenset()) | EXTRA_GROUPS.get(name, frozenset())
+
+
 # Tools that only read — no mailbox/calendar mutation. (download_attachment is
 # deliberately excluded: it writes a local file, so it isn't read-only.)
 READ_ONLY: set[str] = {
@@ -359,18 +391,21 @@ def select_kept_tools(names: list[str], enabled: set[str] | None) -> set[str]:
     """Return the subset of ``names`` to keep given the enabled toolsets.
 
     ``enabled=None`` keeps every group except the off-by-default ones. Otherwise
-    keep a tool when its group is enabled or is an always-on group
-    (account/auth). A name with no known group is kept (fail-open — gating must
-    never silently drop an unclassified tool).
+    keep a tool when one of its groups (`groups_of`) is enabled, or its group is
+    an always-on one (account/auth). A name with no known group is kept (fail-open
+    — gating must never silently drop an unclassified tool).
     """
-    if enabled is None:
-        # Same set the default path subtracts: with only `documents` here, this
-        # kept the four rule tools for a caller that meant the stock surface.
-        return {name for name in names if TOOL_GROUPS.get(name) not in OFF_BY_DEFAULT}
     keep: set[str] = set()
     for name in names:
         group = TOOL_GROUPS.get(name)
-        if group is None or group in ALWAYS_ON_GROUPS or group in enabled:
+        if group is None or group in ALWAYS_ON_GROUPS:
+            keep.add(name)  # fail-open for an unclassified tool, as ever
+        elif enabled is None:
+            # Same set the default path subtracts: with only `documents` here, this
+            # kept the four rule tools for a caller that meant the stock surface.
+            if groups_of(name) - OFF_BY_DEFAULT:
+                keep.add(name)
+        elif groups_of(name) & enabled:
             keep.add(name)
     return keep
 

@@ -15,6 +15,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -41,7 +42,11 @@ async def main():
         tools = {t.name: t.model_dump(exclude_none=True, by_alias=True)
                  for t in (await c.list_tools()).tools}
         instructions = c.instructions or ""
-    print(json.dumps({"tools": tools, "instructions": instructions,
+        prompts = {}
+        for p in (await c.list_prompts()).prompts:
+            got = await c.get_prompt(p.name, {})
+            prompts[p.name] = " ".join(m.content.text for m in got.messages)
+    print(json.dumps({"tools": tools, "instructions": instructions, "prompts": prompts,
                       "immutable_ids": ids.IMMUTABLE_IDS}))
 asyncio.run(main())
 """
@@ -99,9 +104,11 @@ def test_classic_intents_is_the_default_plus_the_intent_tools(processes):
     assert both["instructions"].startswith(default["instructions"])
 
 
-def test_intents_alone_is_the_intent_tools_and_the_account_tools(processes):
+def test_intents_alone_is_the_intent_tools_their_core_and_the_account_tools(processes):
     alone = processes["intents"]
-    assert set(alone["tools"]) == {"outlook_auth_status", "outlook_whoami"} | INTENT_TOOLS
+    assert set(alone["tools"]) == (
+        {"outlook_auth_status", "outlook_whoami"} | INTENT_TOOLS | toolsets.FOLLOW_UP_CORE
+    )
     assert alone["immutable_ids"] is True
 
 
@@ -372,3 +379,28 @@ def test_brief_passes_the_zone_the_saved_username_and_the_loaded_tools(monkeypat
         None,
         "30d",
     )
+
+
+# ── What a served session names (contracts §10.9, §10.10) ─────────────────
+
+
+@pytest.mark.parametrize("selection", ["intents", "classic,intents"])
+def test_a_served_intents_session_names_only_tools_it_has(processes, selection):
+    """The real server, in a fresh process: every tool its instructions or prompts
+    name is in its own `tools/list`."""
+    served = processes[selection]
+    tools = set(served["tools"])
+    named = set(re.findall(r"outlook_[a-z_]+", served["instructions"]))
+    for text in served["prompts"].values():
+        named |= set(re.findall(r"outlook_[a-z_]+", text))
+    assert named <= tools, sorted(named - tools)
+
+
+def test_the_served_prompts_follow_the_selection(processes):
+    assert set(processes[None]["prompts"]) == {"morning_brief", "triage_folder", "catch_up"}
+    assert "outlook_list_events" in processes[None]["prompts"]["morning_brief"]
+    assert set(processes["intents"]["prompts"]) == {"morning_brief", "catch_up"}
+    assert "outlook_agenda" in processes["intents"]["prompts"]["morning_brief"]
+    assert "outlook_catch_up" in processes["classic,intents"]["prompts"]["catch_up"]
+    assert "outlook_list_inbox" in processes["classic,intents"]["prompts"]["triage_folder"]
+    assert set(processes["mail"]["prompts"]) == {"morning_brief", "triage_folder", "catch_up"}
