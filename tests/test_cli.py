@@ -67,6 +67,62 @@ def test_status_surfaces_a_named_remedy_instead_of_the_generic_line(capsys, monk
     assert "Run: outlook-mcp auth" not in out
 
 
+def test_status_says_plainly_that_microsoft_locked_the_account(capsys, monkeypatch):
+    """A locked account reports the same AADSTS70000 code as the consent dead end.
+
+    Status must say the account is locked and how to unlock it, not the consent
+    story: signing in again fails the same way until the account is unlocked.
+    """
+    from unittest.mock import patch
+
+    from azure.core.exceptions import ClientAuthenticationError
+
+    from outlook_mcp import auth as auth_module
+
+    monkeypatch.setattr(cli, "load_config", lambda: Config(client_id="test-id"))
+    locked = ClientAuthenticationError(
+        "Authentication failed: AADSTS70000: User account is found to be in service "
+        "abuse mode. Trace ID: 0000"
+    )
+
+    def _refresh_refused(self):
+        # The startup path's own sorting, on the refusal Microsoft sends.
+        self.startup_error = auth_module.error_for_failed_refresh(locked)
+        return False
+
+    with patch.object(cli.AuthManager, "try_cached_token", _refresh_refused):
+        cli.cmd_status()
+
+    out = capsys.readouterr().out
+    assert "not authenticated" in out
+    assert "locked" in out
+    assert "outlook.com" in out
+    assert "outlook-mcp auth" in out
+    assert "grant the client application access" not in out
+    assert "Run: outlook-mcp auth" not in out
+
+
+def test_auth_on_a_locked_account_prints_the_unlock_remedy(capsys, monkeypatch):
+    """`outlook-mcp auth` on a locked account exits 1 with the plain remedy."""
+    from outlook_mcp.errors import AccountLockedError
+
+    monkeypatch.setattr(cli, "load_config", lambda: Config(client_id="test-id"))
+
+    def _locked(self):
+        raise AccountLockedError()
+
+    monkeypatch.setattr(cli.AuthManager, "login_interactive", _locked)
+    with pytest.raises(SystemExit) as exc:
+        cli.cmd_auth()
+
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "locked" in err
+    assert "outlook.com" in err
+    assert "app registration" not in err
+    assert "Traceback" not in err
+
+
 def test_auth_without_config_exits_with_the_fix(capsys, monkeypatch):
     monkeypatch.setattr(cli, "load_config", lambda: Config())
     with pytest.raises(SystemExit) as exc:

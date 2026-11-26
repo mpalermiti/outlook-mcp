@@ -16,6 +16,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   leaves a single event at the new time, in the new zone when one is given. Any other change to
   the times or repeat rule of such a series is still refused.
 
+- **An account Microsoft has locked is reported as locked, not as a sign-in to redo.** Microsoft
+  refuses a locked account's sign-ins with the same code, `AADSTS70000`, as a session that can
+  never be granted its permissions, and the server read every `AADSTS70000` as the latter: it said
+  to log in again, which fails the same way until the account is unlocked. When Microsoft's text
+  says the account is "in service abuse mode", `outlook-mcp status`, `outlook-mcp auth`,
+  `outlook_auth_status` and a tool call whose token refresh fails now say that Microsoft has locked
+  the account, to sign in at outlook.com in a browser to unlock it, and then to run
+  `outlook-mcp auth` again.
+
 ### Documentation
 
 - **`timezone` on one occurrence of a series is described as it behaves (#97).** The time given

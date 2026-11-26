@@ -26,6 +26,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from outlook_mcp.config import Config
 from outlook_mcp.errors import (
+    AccountLockedError,
     AccountMismatchError,
     AuthRequiredError,
     GraphAPIError,
@@ -73,6 +74,11 @@ async def _text_the_model_sees(raiser) -> tuple[bool, str]:
             AuthRequiredError,
             ["Not authenticated", "outlook-mcp auth"],
             id="auth_required",
+        ),
+        pytest.param(
+            AccountLockedError,
+            ["locked", "outlook.com", "outlook-mcp auth"],
+            id="account_locked",
         ),
         pytest.param(
             lambda: ReadOnlyError("outlook_send_message"),
@@ -407,6 +413,11 @@ _CONSENT_DEAD_END = ClientAuthenticationError(
     "Authentication failed: AADSTS70000: The requested user must first sign-in and grant "
     "the client application access."
 )
+# The same code, when Microsoft has locked the account.
+_ACCOUNT_LOCKED = ClientAuthenticationError(
+    "Authentication failed: AADSTS70000: User account is found to be in service abuse mode. "
+    "Trace ID: 0000"
+)
 # azure-identity's own wording (`_persistent_cache.py`), as its wrapper re-types it.
 _NO_SAFE_CACHE = ClientAuthenticationError(
     "Authentication failed: Cache encryption is impossible because libsecret dependencies "
@@ -425,6 +436,9 @@ _NO_SAFE_CACHE = ClientAuthenticationError(
         pytest.param(_INTERACTION_REQUIRED, ["outlook-mcp auth"], id="interaction_required"),
         pytest.param(
             _CONSENT_DEAD_END, ["Log in again", "outlook-mcp auth"], id="consent_dead_end"
+        ),
+        pytest.param(
+            _ACCOUNT_LOCKED, ["locked", "outlook.com", "outlook-mcp auth"], id="account_locked"
         ),
         pytest.param(_NO_SAFE_CACHE, ["cleartext", "libsecret"], id="no_safe_token_cache"),
     ],

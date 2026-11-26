@@ -21,6 +21,7 @@ import pytest
 from outlook_mcp.auth import AuthManager
 from outlook_mcp.config import Config
 from outlook_mcp.errors import (
+    AccountLockedError,
     AuthRequiredError,
     ConfigLoadError,
     StaleConsentError,
@@ -97,6 +98,25 @@ async def test_auth_status_names_the_70000_dead_end_and_says_log_in_again():
     assert result["authenticated"] is False
     assert "AADSTS70000" in result["action_required"]
     assert "Log in again" in result["action_required"]
+
+
+@pytest.mark.asyncio
+async def test_auth_status_says_plainly_that_microsoft_locked_the_account():
+    """The same code, a different exit: unlock the account first, then sign in.
+
+    Told "log in again", the user signs in and is refused the same way, because
+    Microsoft refuses every sign-in until the account is unlocked in a browser.
+    """
+    auth = AuthManager(Config(client_id="x"))
+    auth.startup_error = AccountLockedError()
+
+    result = await outlook_auth_status(_ctx(auth))
+
+    assert result["authenticated"] is False
+    assert "locked" in result["action_required"]
+    assert "outlook.com" in result["action_required"]
+    assert "outlook-mcp auth" in result["action_required"]
+    assert "grant the client application access" not in result["action_required"]
 
 
 # ── A config the server cannot load fails with the fix, never a traceback ──
