@@ -221,7 +221,12 @@ def event_item(
         row, today=now.astimezone(tz).date(), start=start, tz=tz, known=known
     )
     if table is not None and not is_organizer:
-        if not known and response_of(row) in ("none", "notResponded"):
+        # Live round 1, P-SI1 (b): the owner's own event reads isOrganizer true; a
+        # received meeting that names the owner as organizer reads false with response
+        # `organizer`. So isOrganizer stays the test, never the organizer's address, and
+        # that response on a meeting the owner doesn't organize is a stranger's
+        # invitation too (as in find).
+        if not known and response_of(row) in ("none", "notResponded", "organizer"):
             warnings.append(warn("stranger_invite"))
         warnings += _sender_warnings(organizer, organizer_name, table)
     attendees = row.get("attendees")

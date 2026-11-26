@@ -1996,6 +1996,7 @@ Rank: To before Cc; then sender known (count, descending); then waiting longest 
   - an overlap item names at most five others;
   - P-H1a's refusal is remembered for the call, so the fallback costs one request;
   - `brief_meeting` is offered only for a meeting the owner organizes or has accepted.
+  - "The owner organizes it" is Graph's `isOrganizer`, never the organizer's address (live round 1, P-SI1 (b): the owner's own events read true; a received meeting naming the owner reads false with response `organizer`). In catch_up and brief, that response on a meeting the owner doesn't organize carries `stranger_invite`, as in find.
 
 **understood:** `window`, `zone`, day bounds, and `calendars: list[{id, is_default}]`. Calendar names are under `others_wrote`, because a shared calendar is named by its owner.
 

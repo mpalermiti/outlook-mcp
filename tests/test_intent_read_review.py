@@ -15,7 +15,7 @@ import pytest
 from outlook_mcp.intents import ids, transport
 from outlook_mcp.intents.ids import IdFamily
 from tests import test_intent_agenda as ag
-from tests.intent_fakes import FakeGraph, Mailbox
+from tests.intent_fakes import ME, FakeGraph, Mailbox
 
 NOW = datetime(2026, 11, 26, 12, 0, tzinfo=timezone.utc)
 EVERY_TOOL = frozenset(
@@ -183,3 +183,56 @@ async def test_nit_an_overlap_names_at_most_five_others(fake):
     env = await ag.run(fake, box, include_tasks=False)
     for item in sec(env, "overlaps")["items"]:
         assert len([r for r in item["why"] if r["code"] == "overlaps"]) == 5
+
+
+# ── Live round 1, P-SI1 (b): isOrganizer is the owner's word, not an address ──
+
+
+def _forged(event_id: str, start: str, end: str) -> dict:
+    """The recorded shape of a received meeting that names the owner as organizer:
+    isOrganizer false, response `organizer`."""
+    row = ag.ev(event_id, start, end, organizer=ME, organizer_name="Me", response="organizer")
+    row["isOrganizer"] = False
+    return row
+
+
+async def test_live_agenda_a_received_meeting_naming_the_owner_is_not_theirs(fake):
+    box = Mailbox(
+        calendars=[{"id": "cal-1", "name": "Calendar", "isDefaultCalendar": True}],
+        events={"cal-1": [_forged("forged", "2026-11-26T15:00:00", "2026-11-26T16:00:00")]},
+    )
+    env = await ag.run(fake, box, tools=EVERY_TOOL, include_tasks=False)
+    (shown,) = next(d for d in sec(env, "days")["items"] if d["date"] == "2026-11-26")["events"]
+    assert shown["is_organizer"] is False
+    assert {"code": "organizer_you"} not in shown["why"]
+    assert not [n for n in env["next"] if n["template"] == "brief_meeting"]
+
+
+def test_live_an_organizer_response_on_a_meeting_not_the_owners_is_a_stranger_invite():
+    from outlook_mcp.intents.people import SentTable
+    from outlook_mcp.intents.reading import event_item
+
+    row = _forged("forged", "2026-11-26T15:00:00", "2026-11-26T16:00:00")
+    item = event_item(
+        row,
+        calendar=None,
+        tz=timezone.utc,
+        zone_name="UTC",
+        now=ag.NOW,
+        table=SentTable(me=frozenset({ME})),
+    )
+    assert item["is_organizer"] is False
+    assert {"code": "stranger_invite"} in item["warnings"]
+    # The recorded own-event shape: isOrganizer true, response `organizer`.
+    mine = ag.ev("mine", "2026-11-26T15:00:00", "2026-11-26T16:00:00")
+    own = event_item(
+        mine,
+        calendar=None,
+        tz=timezone.utc,
+        zone_name="UTC",
+        now=ag.NOW,
+        table=SentTable(me=frozenset({ME})),
+    )
+    assert own["is_organizer"] is True
+    assert {"code": "organizer_you"} in own["why"]
+    assert {"code": "stranger_invite"} not in own["warnings"]
