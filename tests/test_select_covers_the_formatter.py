@@ -28,7 +28,7 @@ import textwrap
 
 import pytest
 
-from outlook_mcp.tools import calendar_read, contacts, mail_read
+from outlook_mcp.tools import calendar_read, contacts, mail_drafts, mail_read
 
 # (label, formatter function, the $select string that feeds it, where that
 # string lives — `module._NAME`, relative to `outlook_mcp.tools`)
@@ -60,6 +60,10 @@ from outlook_mcp.tools import calendar_read, contacts, mail_read
 # test: #73 asserted that concise mode does not pay for `showAs`, and this
 # guard's second direction says that generally, for every field, so the one-off
 # could go.
+#
+# The draft row pins the read-back every reply or forward draft makes, and an
+# update falls back on, against the one formatter every draft result goes
+# through, so a field added to the result is asked for on that read too (#268).
 _PAIRS = [
     (
         "mail summary",
@@ -90,6 +94,12 @@ _PAIRS = [
         calendar_read._format_event_attachment,
         calendar_read._ATTACHMENT_SELECT,
         "calendar_read._ATTACHMENT_SELECT",
+    ),
+    (
+        "draft result",
+        mail_drafts._draft_result,
+        mail_drafts._DRAFT_RESULT_SELECT,
+        "mail_drafts._DRAFT_RESULT_SELECT",
     ),
 ]
 

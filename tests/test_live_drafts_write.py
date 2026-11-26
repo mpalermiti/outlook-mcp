@@ -4,11 +4,13 @@ The mock and wire tests prove what we send. Only Graph can say where a reply dra
 text ends up and what happens to the quoted original: ``comment`` on createReply joins
 a multi-line text's lines with spaces on an HTML message, and ``message.body`` replaces
 the quote (checked against an Exchange Online mailbox). So these create real reply and
-forward drafts of recent Inbox messages, read each back, and delete it.
+forward drafts of recent Inbox messages, read each back, and delete it. One more class
+checks that a draft's result names the draft it made: its saved subject and its Outlook
+on the web link (#268).
 
 Nothing is sent: no test here calls a send, and every draft is deleted in a
 ``finally`` (``tests/test_live_write_never_sends.py`` holds that line). Every draft,
-reply or forward, is addressed to ``live.write.guard@example.com`` with
+new, reply or forward, is addressed to ``live.write.guard@example.com`` with
 LIVE_WRITE_SUBJECT as its subject, replacing the sender and "RE:" subject Graph picks
 for a reply, so no draft names a real correspondent and anything a crash leaks is
 greppable in Drafts. Each test checks the draft Graph made carries both.
@@ -24,7 +26,7 @@ from html.parser import HTMLParser
 
 import pytest
 
-from outlook_mcp.tools.mail_drafts import create_draft, delete_draft
+from outlook_mcp.tools.mail_drafts import create_draft, delete_draft, update_draft
 from tests.conftest import LIVE_WRITE_SUBJECT
 
 pytestmark = [pytest.mark.live_write, pytest.mark.asyncio]
@@ -66,14 +68,21 @@ async def _recent_inbox_message(sdk, content_type: str):
 
 
 @asynccontextmanager
-async def _draft(client, config, **kwargs):
+async def _created(client, config, **kwargs):
+    """A guard draft's create result; the draft is deleted on the way out."""
     created = await create_draft(
         client.sdk_client, to=_GUARD_TO, subject=LIVE_WRITE_SUBJECT, config=config, **kwargs
     )
     try:
-        yield created["draft_id"]
+        yield created
     finally:
         await delete_draft(client.sdk_client, created["draft_id"], config=config)
+
+
+@asynccontextmanager
+async def _draft(client, config, **kwargs):
+    async with _created(client, config, **kwargs) as created:
+        yield created["draft_id"]
 
 
 async def _read(sdk, draft_id: str):
@@ -221,3 +230,41 @@ class TestThreadDraftBodies:
         content = draft.body.content.replace("\r\n", "\n")
         assert content.startswith(_TEXT + "\n"), content[:300]
         assert content.endswith(quote.replace("\r\n", "\n").lstrip("\n"))
+
+
+def _assert_names_the_draft(result: dict, subject: str) -> None:
+    """The subject Graph saved, and a link to the draft in Outlook on the web (#268)."""
+    assert result["subject"] == subject
+    link = result["web_link"]
+    assert isinstance(link, str) and link.startswith("https://"), link
+
+
+class TestDraftResultsNameTheDraft:
+    """#268: Graph fills ``subject`` and ``webLink`` where the result takes them from.
+
+    The mocks prove both are asked for and passed on; only Graph can say they come
+    back: on the answer to the create call, on the read-back of a draft made in a
+    thread, and on the answer to an update's PATCH.
+    """
+
+    async def test_a_new_draft_and_its_update(self, real_graph_client, live_write_config):
+        async with _created(real_graph_client, live_write_config, body="b") as created:
+            _assert_names_the_draft(created, LIVE_WRITE_SUBJECT)
+
+            renamed = f"{LIVE_WRITE_SUBJECT} (updated)"
+            updated = await update_draft(
+                real_graph_client.sdk_client,
+                created["draft_id"],
+                subject=renamed,
+                config=live_write_config,
+            )
+            _assert_names_the_draft(updated, renamed)
+
+    @pytest.mark.parametrize("action", ["reply_to_message_id", "forward_message_id"])
+    async def test_a_thread_draft(self, real_graph_client, live_write_config, action):
+        source = (await _recent_inbox_message(real_graph_client.sdk_client, "html")).id
+
+        async with _created(
+            real_graph_client, live_write_config, body="b", **{action: source}
+        ) as created:
+            _assert_names_the_draft(created, LIVE_WRITE_SUBJECT)

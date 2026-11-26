@@ -6,6 +6,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **`outlook_create_draft` and `outlook_update_draft` return the draft's `subject` and
+  `web_link` (#268, reported by @benjamin-di).** `subject` is the one Graph saved, so a reply's
+  or forward's `RE:`/`FW:` subject no longer takes a separate read. It is cleaned the same way the
+  read tools clean a subject. `web_link` is Graph's link to open the draft in Outlook on the web,
+  for a user who reviews a draft before it is sent. Either is `null` when Graph's answer leaves it
+  out. A new draft and an update take both from Graph's answer to the write; a reply or forward
+  draft gets them from the read it already makes for its recipients. No new parameters.
+
 ### Fixed
 
 - **`outlook_update_contact` with `add_emails` or `remove_emails` no longer fails right after the
