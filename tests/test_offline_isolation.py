@@ -45,7 +45,7 @@ def test_building_a_real_credential_fails_the_test():
 
 @pytest.mark.real_credential
 def test_a_test_marked_real_credential_may_build_one_and_nothing_more():
-    credential = DeviceCodeCredential(client_id=CLIENT_ID, authority="127.0.0.1:9")
+    credential = DeviceCodeCredential(client_id=CLIENT_ID, authority="https://127.0.0.1:9")
     with expect_breach():
         credential._get_app()  # the MSAL client is still refused
 
