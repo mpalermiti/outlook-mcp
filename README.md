@@ -255,8 +255,9 @@ The consent screen lists the full read-write set (`Mail.ReadWrite`, `Mail.Send`,
 Other CLI commands (prefix `uv run` from a source checkout):
 
 ```bash
-outlook-mcp status   # Check auth status
+outlook-mcp status   # Check auth status, and which tool groups load
 outlook-mcp logout   # Remove this instance's auth record (the OS token cache is left to age out)
+outlook-mcp toolsets # Show which tool groups load; `outlook-mcp toolsets mail,calendar` sets them
 outlook-mcp serve    # Start MCP server (default; stdio, or HTTP with OUTLOOK_MCP_TRANSPORT)
 ```
 
@@ -396,7 +397,7 @@ Server-side rules: they run whether or not any Outlook client is open. A rule is
 
 The three write tools are gated by the `mail_rules` permission category — add it to `allow_categories` (or leave `allow_categories` unset for a full read-write install).
 
-The four rule tools are opt-in, off in a stock install: with `OUTLOOK_MCP_TOOLSETS` unset none of them is loaded — not even `outlook_list_rules` — and the surface every user pays for is unchanged. Name `rules` in `OUTLOOK_MCP_TOOLSETS` to load them, or set `mailbox_settings_write: true`, which adds them only when `OUTLOOK_MCP_TOOLSETS` is unset — an explicit selection is what you asked for, so it wins.
+The four rule tools are opt-in, off in a stock install: with `OUTLOOK_MCP_TOOLSETS` unset none of them is loaded — not even `outlook_list_rules` — and the surface every user pays for is unchanged. Name `rules` in `OUTLOOK_MCP_TOOLSETS` (or config.json's `toolsets`) to load them, or set `mailbox_settings_write: true`, which adds them only when no selection is made, or the selection is `classic` — an explicit selection is what you asked for, so it wins.
 
 A rule hides as well as forwards, and the hiding needs no permission beyond `mail_rules`: a rule at sequence 1 that deletes, marks read and stops processing on "security", "sign-in" or "password" removes that mail before any later rule sees it. Read the rules of a mailbox you did not configure before trusting what it shows you.
 
@@ -470,7 +471,7 @@ Creating, updating or deleting a rule also needs `MailboxSettings.ReadWrite` on 
 | Tool | Description |
 |------|-------------|
 | `outlook_list_drafts` | List draft messages with pagination. |
-| `outlook_create_draft` | Create a draft, with an HTML (`is_html=True`) or Markdown (`is_markdown=True`) body if wanted. With `reply_to_message_id` (`reply_all=True` for reply-all) or `forward_message_id`, the draft is created in that message's thread with the original quoted below, and nothing is sent; Graph fills a reply's recipients and subject, and a forward needs `to`. Supports scheduled delivery via `deferred_send_datetime` (server-side, Outlook-desktop-compatible "Delay Delivery"). Returns the draft's `subject` (a reply's or forward's is the one Graph wrote) and `web_link`, each `null` when Graph gives none. |
+| `outlook_create_draft` | Create a draft, with an HTML (`is_html=True`) or Markdown (`is_markdown=True`) body if wanted. With `reply_to_message_id` (`reply_all=True` for reply-all) or `forward_message_id`, the draft is created in that message's thread with the original quoted below, and nothing is sent; Graph fills a reply's recipients and subject, and a forward needs `to`. Creating a reply or forward draft marks the original message as read: Exchange does that as part of the create, and the draft does not put it back, so use `outlook_mark_read` with `is_read=False` if it should stay unread. Supports scheduled delivery via `deferred_send_datetime` (server-side, Outlook-desktop-compatible "Delay Delivery"). Returns the draft's `subject` (a reply's or forward's is the one Graph wrote) and `web_link`, each `null` when Graph gives none. |
 | `outlook_update_draft` | Update draft fields. Accepts `is_html=True` for HTML bodies, `is_markdown=True` for Markdown ones, and `deferred_send_datetime` to set or clear the scheduled delivery time. Returns the draft's `subject` and `web_link` (opens it in Outlook on the web), each `null` when Graph gives none. |
 | `outlook_send_draft` | Send an existing draft. |
 | `outlook_delete_draft` | Delete a draft. |
@@ -625,6 +626,8 @@ Config lives at `~/.outlook-mcp/config.json` (created with `0600` permissions on
 | `attachments_dir` | `string` | `"~/.outlook-mcp/attachments"` | The only directory the attachment tools may read from or write to. Every path an agent supplies is resolved and must land inside it — a symlink out or a `..` is refused. Widen it only if you understand that anything reachable can be emailed, and that downloads can add new files there. It must be an absolute path (a leading `~` is expanded), and it cannot be your home folder, a folder that contains it, or a folder that contains the settings folder; a subfolder of any of them is fine. A config that breaks these rules fails to load: the server starts in its safe state and `outlook-mcp` prints a repair line. Fix it by choosing a folder of its own. |
 | `allow_categories` | `list[string]` | `[]` | Optional. Restrict write tools to specific categories (see below). Empty list = all writes allowed when `read_only: false`. |
 | `allow_unencrypted_token_cache` | `bool` | `false` | Permit the OAuth token cache to be written in cleartext when the platform has no encrypted store (Linux without libsecret). Off by default: authentication stops with an explanation rather than silently persisting a reusable Graph token in plaintext. macOS and Windows always encrypt and are unaffected. |
+| `toolsets` | `string` | `null` | Which tool groups this server loads, as a comma-separated list such as `"mail,calendar"`, or `"classic"` for the default set. `OUTLOOK_MCP_TOOLSETS` overrides it when set and not blank. Unset loads the default set, as before. A value that is not a string is ignored with a warning. See [Toolset selection](#toolset-selection-optional--outlook_mcp_toolsets); `outlook-mcp toolsets` sets it for you. |
+| `show_tips` | `bool` | `true` | Lets the server add one short tip, once per run, to a tool's result when a newer tool does that job in fewer calls. This release has no such tips; `false` turns them off ahead of time. |
 
 A `config.json` that repeats a key inside one object is refused, because the file would not say which value is meant.
 
@@ -646,9 +649,11 @@ No override is automatically written back to the file.
 | `OUTLOOK_MCP_ALLOW_CATEGORIES` | JSON array of category names | May narrow the permitted categories; cannot widen them |
 | `OUTLOOK_MCP_ATTACHMENTS_DIR` | Directory path | Must resolve to the configured directory or a descendant |
 | `OUTLOOK_MCP_ALLOW_UNENCRYPTED_TOKEN_CACHE` | `true` or `false` | May prohibit plaintext storage; cannot enable it unless the file already permits it |
+| `OUTLOOK_MCP_SHOW_TIPS` | `true` or `false` | Overrides `show_tips`, either way; blank counts as unset |
 
 Unset variables do nothing. A supported variable set to an empty value refuses startup,
-including an empty Compose `${VAR}` pass-through. Booleans accept only `true`/`false`
+including an empty Compose `${VAR}` pass-through. The one exception is `OUTLOOK_MCP_SHOW_TIPS`,
+which only decides whether a tip may appear and treats blank as unset. Booleans accept only `true`/`false`
 (case-insensitive, surrounding whitespace allowed); list input must be JSON, for example
 `["mail_drafts","contacts_write"]`.
 
@@ -671,9 +676,17 @@ anyone who controls it can also retarget the settings file with `OUTLOOK_MCP_CON
 ### Toolset selection (optional) — `OUTLOOK_MCP_TOOLSETS`
 
 The 71 default tool schemas load into the client's context every turn (the chars/4 proxy `test_tool_surface_budget.py` measures with; a different yardstick than the ~8.6k o200k figure in ROADMAP for the 62-tool surface). A client that only needs part of the surface can set the `OUTLOOK_MCP_TOOLSETS` environment variable to a comma-separated list of tool groups, and only those load. The `account` group (auth / identity) is always available.
-Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`, `documents`, `rules`, `mime`, and `contact_photos`. Unset loads every group except the opt-in ones — `documents`, `rules`, `mime`, and `contact_photos` — so a stock install gets 71 of the 78 tools. Name `rules` here, or set `mailbox_settings_write: true` with `OUTLOOK_MCP_TOOLSETS` unset, to get the four rule tools; that setting is itself the request for rule management. A selection here always wins: the flag does not add `rules` to a narrower list. For example, `OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"` loads 31 tools instead of 71, cutting the per-turn schema cost to about 40% of the default.
+Groups: `mail`, `drafts`, `attachments`, `calendar`, `contacts`, `todo`, `folders`, `digest`, `delta`, `admin`, `documents`, `rules`, `mime`, and `contact_photos`. Unset loads every group except the opt-in ones — `documents`, `rules`, `mime`, and `contact_photos` — so a stock install gets 71 of the 78 tools. Name `rules` here, or set `mailbox_settings_write: true` with no selection made (or `classic`), to get the four rule tools; that setting is itself the request for rule management. A selection here always wins: the flag does not add `rules` to a narrower list. For example, `OUTLOOK_MCP_TOOLSETS="mail,calendar,digest,delta"` loads 31 tools instead of 71, cutting the per-turn schema cost to about 40% of the default.
 
 Naming any group loads only the groups named, plus `account`, and a name that is not a group matches nothing. To add all opt-in groups to the default set, name the default groups and the opt-ins: `OUTLOOK_MCP_TOOLSETS=mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime,contact_photos`.
+
+**In config.json instead.** The same list can live in config.json as `"toolsets": "mail,calendar"`. `OUTLOOK_MCP_TOOLSETS` wins when it is set and not blank; a blank value counts as unset, so the file's list applies. With neither, the default set loads, as before. Earlier releases never read this key, so if your config.json already has one, it takes effect when you upgrade; the server names it on stderr at every start (`Tool groups from config.json toolsets: ...`). `classic` names that default set: `"toolsets": "classic"` loads what an unset selection loads (with `rules` when `mailbox_settings_write` is on), and `classic,documents` adds the document reader to it.
+
+- `outlook-mcp toolsets mail,calendar` writes the key for you and keeps every other key and value, rewriting the file as indented JSON; `outlook-mcp toolsets classic` goes back to the default. Restart your MCP client afterwards: tools are chosen at start.
+- `outlook-mcp toolsets` on its own, and `outlook-mcp status`, show which groups load, where that choice came from, and the tool count.
+- A name that is not a group loads nothing. The server says so on stderr at start, naming where the name came from, and `outlook-mcp toolsets` refuses to write it.
+- Earlier releases ignore the config key (with a warning), and read `classic` in `OUTLOOK_MCP_TOOLSETS` as an unknown name that loads only the account tools. Upgrade before using either.
+- These are your settings. An agent that thinks another group would help should tell you, not run the command.
 
 The groups are not the headings of the Tool Reference. `mail` holds the mail read, write and triage tools, `outlook_list_thread`, `outlook_copy_message` and `outlook_batch_triage`, but `outlook_list_folders` is in `folders`; the Focused Inbox tools (`outlook_reclassify_message` and the three override tools) are in `admin`, with categories and mail tips; the three `*_delta` tools are in `delta` and `outlook_changes_since` in `digest`; `outlook_list_calendars` is in `calendar`; the two draft-attachment tools are in `drafts`, `outlook_read_attachment` in `documents`, and the four rule tools in `rules`, MIME export in `mime`, and `outlook_set_contact_photo` in `contact_photos`; and `account` is `outlook_auth_status` and `outlook_whoami`.
 

@@ -12,6 +12,7 @@ from outlook_mcp import auth as auth_module
 from outlook_mcp.auth import AuthManager, _unencrypted_fallback_will_be_used
 from outlook_mcp.config import Config
 from outlook_mcp.errors import (
+    AccountLockedError,
     AuthRequiredError,
     StaleConsentError,
     UnencryptedTokenCacheError,
@@ -601,6 +602,91 @@ class TestStaleConsentRemedy:
         assert auth.startup_error is None  # AuthRequiredError on use, not this
         with pytest.raises(AuthRequiredError):
             auth.get_credential()
+
+
+# Microsoft's refusal for an account it has locked, as azure-identity raises it
+# and as the token endpoint writes it. Same code as the consent dead end.
+ACCOUNT_LOCKED_REFUSALS = [
+    pytest.param(
+        "Authentication failed: AADSTS70000: User account is found to be in service "
+        "abuse mode. Trace ID: 0000 Correlation ID: 0000 Timestamp: 2026-11-26 00:00:00Z",
+        id="azure_identity_text",
+    ),
+    pytest.param(
+        'Authentication failed: {"error":"invalid_grant","error_description":'
+        '"AADSTS70000: User account is found to be in service abuse mode. Trace ID: 0000"}',
+        id="token_endpoint_json",
+    ),
+]
+
+
+def _assert_says_the_account_is_locked(text: str) -> None:
+    """The remedy for a locked account, and none of the consent story."""
+    assert "locked" in text
+    assert "outlook.com" in text
+    assert "outlook-mcp auth" in text
+    # The consent dead end's wording would send the user round a sign-in that
+    # fails the same way until the account is unlocked.
+    assert "grant the client application access" not in text
+    assert "consent" not in text
+
+
+class TestAccountLockedRemedy:
+    """AADSTS70000 also means "Microsoft locked this account": say that, plainly."""
+
+    RECORD = TestStaleConsentRemedy.RECORD
+
+    @pytest.mark.parametrize("refusal", ACCOUNT_LOCKED_REFUSALS)
+    def test_a_mid_session_refusal_says_the_account_is_locked(self, refusal):
+        error = auth_module.error_for_failed_refresh(ClientAuthenticationError(refusal))
+
+        assert isinstance(error, AccountLockedError)
+        _assert_says_the_account_is_locked(str(error))
+
+    def test_the_consent_dead_end_keeps_its_own_remedy(self):
+        error = auth_module.error_for_failed_refresh(TestStaleConsentRemedy.AADSTS70000_REFUSAL)
+
+        assert isinstance(error, StaleConsentError)
+
+    @pytest.mark.real_credential
+    @pytest.mark.parametrize("refusal", ACCOUNT_LOCKED_REFUSALS)
+    def test_a_refusal_at_startup_sets_the_locked_error(self, refusal):
+        """Through a real credential's token path, as a live refusal travels."""
+        auth = AuthManager(Config(client_id="test-id"))
+        with (
+            patch("outlook_mcp.auth._load_auth_record", return_value=self.RECORD),
+            patch(
+                "outlook_mcp.auth._unencrypted_fallback_will_be_used",
+                return_value=False,
+            ),
+            patch.object(
+                DeviceCodeCredential, "_get_app", side_effect=ClientAuthenticationError(refusal)
+            ),
+        ):
+            assert auth.try_cached_token() is False
+
+        assert auth.is_authenticated() is False
+        assert isinstance(auth.startup_error, AccountLockedError)
+        _assert_says_the_account_is_locked(str(auth.startup_error))
+        with pytest.raises(AccountLockedError):
+            auth.get_credential()
+
+    @pytest.mark.real_credential
+    def test_a_refusal_during_sign_in_says_the_account_is_locked(self):
+        """`outlook-mcp auth` on a locked account gets the same plain remedy."""
+        auth = AuthManager(Config(client_id="test-id"))
+        refusal = ClientAuthenticationError(ACCOUNT_LOCKED_REFUSALS[0].values[0])
+        with (
+            patch(
+                "outlook_mcp.auth._unencrypted_fallback_will_be_used",
+                return_value=False,
+            ),
+            patch.object(DeviceCodeCredential, "_get_app", side_effect=refusal),
+            pytest.raises(AccountLockedError) as exc,
+        ):
+            auth.login_interactive()
+
+        _assert_says_the_account_is_locked(str(exc.value))
 
 
 class TestSavedSignInBelongsToTheConfiguredApp:

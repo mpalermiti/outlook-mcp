@@ -1,16 +1,29 @@
-"""CLI entry point: `outlook-mcp auth` and `outlook-mcp serve`."""
+"""CLI entry point: `outlook-mcp serve`, `auth`, `status`, `logout` and `toolsets`."""
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import sys
+from pathlib import Path
+from typing import NoReturn
 
 from azure.core.exceptions import ClientAuthenticationError
 from pydantic import ValidationError
 
+from outlook_mcp import toolsets
 from outlook_mcp.auth import AuthManager
-from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config, config_repair_lines, load_config
+from outlook_mcp.config import (
+    DEFAULT_CONFIG_DIR,
+    Config,
+    _ensure_dir,
+    atomic_write,
+    config_repair_lines,
+    load_config,
+)
 from outlook_mcp.errors import OutlookMCPError
+from outlook_mcp.toolsets import TOOLSETS_ENV
 
 # The AADSTS65xxx consent refusals (65001 user or admin has not consented,
 # 65004 user declined, 65005 the app asks for permissions the resource never
@@ -52,6 +65,135 @@ def _print_usage() -> None:
     print("  auth     Authenticate with Microsoft (device code flow)")
     print("  status   Check authentication status")
     print("  logout   Clear cached credentials")
+    print("  toolsets Show the tool groups this server loads; with names, set them")
+
+
+def _selection_lines(config: Config) -> list[str]:
+    """The tool selection in force, where it came from, and what it loads.
+
+    The same resolution the server makes at import, from the same two inputs,
+    so this can answer without importing (and registering) the server.
+    """
+    enabled, source = toolsets.resolve_selection(os.environ.get(TOOLSETS_ENV), config.toolsets)
+    loaded = toolsets.loaded_tools(toolsets.resolve_groups(enabled, config.mailbox_settings_write))
+    if source == "default":
+        selection = f'classic, the default ({TOOLSETS_ENV} and config.json "toolsets" are not set)'
+    else:
+        where = TOOLSETS_ENV if source == "env" else 'config.json "toolsets"'
+        selection = f"{', '.join(sorted(enabled or ()))} (from {where})"
+    lines = [
+        f"Toolsets:  {selection}",
+        f"Groups:    {', '.join(sorted({toolsets.TOOL_GROUPS[name] for name in loaded}))}",
+        f"Tools:     {len(loaded)} of {len(toolsets.TOOL_GROUPS)}",
+    ]
+    unknown = toolsets.unknown_toolset_names(enabled)
+    if unknown:
+        names = ", ".join(repr(name) for name in sorted(unknown))
+        what = "not a tool group" if len(unknown) == 1 else "not tool groups"
+        load = "it loads" if len(unknown) == 1 else "they load"
+        lines.append(f"Unknown:   {names} ({what} in this release; {load} nothing)")
+    return lines
+
+
+def _known_names_line() -> str:
+    groups = ", ".join(sorted(set(toolsets.TOOL_GROUPS.values())))
+    return f"Tool groups: {groups}; or {' or '.join(sorted(toolsets.ALIASES))} for the default set."
+
+
+def _refuse(code: int, *lines: str) -> NoReturn:
+    for line in lines:
+        print(line, file=sys.stderr)
+    sys.exit(code)
+
+
+def _write_toolsets(value: str) -> Path:
+    """Set ``toolsets`` in config.json to ``value``, and nothing else.
+
+    An existing file must be a regular file that loads with the normal loader;
+    its other keys and values stay as written, in their order, with no defaults
+    filled in, though the file is rewritten as indented JSON. A missing file is
+    created holding only this key. The file is written atomically and owner-only
+    (0600), like every settings file. A missing directory is created owner-only
+    (0700); an existing one keeps the mode the person gave it, so a directory
+    they locked against writing refuses the write instead of being unlocked.
+    """
+    config_dir = DEFAULT_CONFIG_DIR
+    path = Path(config_dir) / "config.json"
+    # Before loading: the loader refuses a symlink too, but reading a FIFO
+    # would block, and a directory here is a settings mistake, not a config.
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        _refuse(
+            1,
+            f"Refusing to change {path}: it is a symlink or not a regular file.",
+            "Replace it with a real file, then run this again. Nothing was written.",
+        )
+    try:
+        load_config(config_dir)
+    except (ValidationError, OSError, ValueError) as exc:
+        _refuse(1, *config_repair_lines(exc), "Nothing was written.")
+    settings: dict = {}
+    if path.exists():
+        try:
+            # UTF-8 only. The loader still reads a file saved in this machine's
+            # code page (as releases before #99 did), but writing one back here
+            # would change the bytes of every other value in it, so the person
+            # is asked to re-save it as UTF-8 first (UnicodeDecodeError's repair).
+            settings = json.loads(path.read_bytes().decode("utf-8-sig"))
+        except (OSError, ValueError) as exc:
+            _refuse(1, *config_repair_lines(exc), "Nothing was written.")
+    settings["toolsets"] = value
+    try:
+        # allow_nan=False: a number JSON cannot hold (1e999 reads as infinity)
+        # would otherwise come back as `Infinity`, which is not JSON.
+        text = json.dumps(settings, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    except ValueError:
+        _refuse(
+            1,
+            f"{path} holds a number JSON cannot write back, such as 1e999, so rewriting it "
+            'would change it. Set "toolsets" by hand instead. Nothing was written.',
+        )
+    try:
+        if not Path(config_dir).is_dir():
+            _ensure_dir(config_dir)
+        atomic_write(path, text)
+    except OSError as exc:
+        _refuse(
+            1, f"Could not write {path}: {exc.strerror or exc}.", "config.json was not changed."
+        )
+    return path
+
+
+def cmd_toolsets(args: list[str]) -> None:
+    """Show the selection in force, or write config.json's ``toolsets``.
+
+    With no names: the selection, its source and the tool count. With names
+    (comma-separated, or as separate arguments): each must be a tool group or
+    ``classic``, or nothing is written and the exit code is 2 — at server start
+    an unknown name is only warned about, but here the person is choosing.
+    """
+    if not args:
+        for line in _selection_lines(_load_config_or_exit()):
+            print(line)
+        return
+    names = toolsets.toolset_names(",".join(args))
+    if not names:
+        _refuse(
+            2, "Name at least one tool group, or classic. Nothing was written.", _known_names_line()
+        )
+    unknown = [name for name in names if name not in toolsets.known_toolset_names()]
+    if unknown:
+        _refuse(
+            2,
+            f"Not a tool group in this release: {', '.join(repr(n) for n in unknown)}. "
+            "Nothing was written.",
+            _known_names_line(),
+        )
+    value = ",".join(names)
+    path = _write_toolsets(value)
+    print(f'Wrote "toolsets": "{value}" to {path}.')
+    if toolsets.parse_toolsets(os.environ.get(TOOLSETS_ENV)) is not None:
+        print(f"{TOOLSETS_ENV} is set here and overrides this file.")
+    print("Restart your MCP client to load the new tools.")
 
 
 def cmd_auth() -> None:
@@ -120,6 +262,8 @@ def cmd_status() -> None:
     print(f"Client ID: {config.client_id[:8]}...")
     print(f"Tenant:    {config.tenant_id}")
     print(f"Mode:      {'read-only' if config.read_only else 'read-write'}")
+    for line in _selection_lines(config):
+        print(line)
     print()
 
     try:
@@ -179,6 +323,8 @@ def main() -> None:
         cmd_status()
     elif args[0] == "logout":
         cmd_logout()
+    elif args[0] == "toolsets":
+        cmd_toolsets(args[1:])
     elif args[0] in ("-h", "--help", "help"):
         _print_usage()
     else:

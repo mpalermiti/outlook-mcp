@@ -16,6 +16,7 @@ from azure.identity import (
 
 from outlook_mcp.config import DEFAULT_CONFIG_DIR, Config, _ensure_dir, atomic_write
 from outlook_mcp.errors import (
+    AccountLockedError,
     AccountMismatchError,
     AuthRequiredError,
     ClientIdMismatchError,
@@ -126,13 +127,28 @@ def _is_azure_unencrypted_refusal(exc: BaseException) -> bool:
 # delegated permissions on it, and redeeming any concrete scope from that
 # session is refused with AADSTS70000 ("The requested user must first sign-in
 # and grant the client application access"). AADSTS70000 is Entra's generic
-# invalid-grant — a revoked refresh token reports it too — but every case it
-# covers is a dead end for this process with the same exit: a fresh sign-in.
-# The code embeds itself in the wrapped ClientAuthenticationError text like
-# every MSAL error does, so matching the code on str(exc) is the whole check.
+# invalid-grant — a revoked refresh token reports it too — and every case it
+# covers is a dead end for this process. All but the locked account below
+# share one exit, a fresh sign-in. The code embeds itself in the wrapped
+# ClientAuthenticationError text like every MSAL error does, so matching the
+# code on str(exc) is the whole check.
 # The refusal's own wording reads like a retryable blip, which is why the
 # remedy says "log in again" in so many words.
 _AADSTS70000_MARKER = "AADSTS70000"
+
+# One member of that family is not a dead end of the session but of the
+# account: Microsoft has locked it, and says so in the description, "User
+# account is found to be in service abuse mode". Signing in again fails the
+# same way until the owner unlocks the account in a browser, so it is checked
+# before the consent dead end and gets its own remedy. Matched on the
+# description, which is what tells the lock apart from the rest of the family,
+# and without regard to case.
+_ACCOUNT_LOCKED_MARKER = "service abuse mode"
+
+
+def _is_account_locked(exc: BaseException) -> bool:
+    """True for Microsoft's refusal of an account it has locked."""
+    return _ACCOUNT_LOCKED_MARKER in str(exc).lower()
 
 
 def _is_consent_dead_end(exc: BaseException) -> bool:
@@ -143,14 +159,17 @@ def _is_consent_dead_end(exc: BaseException) -> bool:
 def error_for_failed_refresh(exc: BaseException) -> OutlookMCPError:
     """The error a token refresh that fails mid-session surfaces as.
 
-    Startup (``try_cached_token``) sorts a failed refresh with the same two
+    Startup (``try_cached_token``) sorts a failed refresh with the same
     checks, and this gives each outcome the same remedy: the cache cannot be
-    stored safely, the session can never grant the scopes (AADSTS70000), or
-    the sign-in has simply lapsed (a revoked or idle-expired refresh token,
-    or azure-identity asking for interaction), which `outlook-mcp auth` fixes.
+    stored safely, Microsoft has locked the account, the session can never
+    grant the scopes (AADSTS70000), or the sign-in has simply lapsed (a revoked
+    or idle-expired refresh token, or azure-identity asking for interaction),
+    which `outlook-mcp auth` fixes.
     """
     if _is_azure_unencrypted_refusal(exc):
         return UnencryptedTokenCacheError()
+    if _is_account_locked(exc):
+        return AccountLockedError()
     if _is_consent_dead_end(exc):
         return StaleConsentError()
     return AuthRequiredError()
@@ -354,6 +373,10 @@ class AuthManager:
         except ClientAuthenticationError as exc:
             if _is_azure_unencrypted_refusal(exc):
                 raise UnencryptedTokenCacheError() from exc
+            if _is_account_locked(exc):
+                # Microsoft's text never says how to unlock the account;
+                # `outlook-mcp auth` prints this remedy instead.
+                raise AccountLockedError() from exc
             raise
 
         # Save the auth record for silent refresh by the MCP server
@@ -424,6 +447,12 @@ class AuthManager:
             # with the same remedy.
             if _is_azure_unencrypted_refusal(exc):
                 raise UnencryptedTokenCacheError() from exc
+            if _is_account_locked(exc):
+                # Before the consent check: same code, but signing in again
+                # fails until the account is unlocked. Surfaced the same way.
+                self.startup_error = AccountLockedError()
+                logger.warning("%s", self.startup_error)
+                return False
             if _is_consent_dead_end(exc):
                 # Name the dead end rather than offering the generic remedy:
                 # "re-run auth" reads as an optional top-up, but no refresh

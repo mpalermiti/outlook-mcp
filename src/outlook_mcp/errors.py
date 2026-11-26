@@ -203,7 +203,9 @@ class StaleConsentError(OutlookMCPError):
     cannot be redeemed from the session that skipped it. A revoked refresh
     token reports the same code, and the remedy is the same. It says "log
     in again" in those words because the error's own text never does, and
-    every less specific remedy reads as an optional top-up.
+    every less specific remedy reads as an optional top-up. An account
+    Microsoft has locked reports the code too; ``AccountLockedError`` answers
+    that one, because signing in again cannot work until it is unlocked.
     """
 
     def __init__(self):
@@ -218,6 +220,29 @@ class StaleConsentError(OutlookMCPError):
             "redeemed from it, so no retry or refresh will fix it. (A "
             "revoked refresh token reports the same code; logging in again "
             "is the remedy there too.)",
+        )
+
+
+class AccountLockedError(OutlookMCPError):
+    """Raised when Microsoft has locked the signed-in account.
+
+    Microsoft reports the lock with AADSTS70000, the code ``StaleConsentError``
+    answers, and the text "User account is found to be in service abuse mode".
+    Read as the consent dead end, it sent the user to sign in again, which
+    fails the same way: Microsoft refuses every sign-in and token refresh for
+    the account until its owner unlocks it in a browser.
+    """
+
+    def __init__(self):
+        super().__init__(
+            "account_locked",
+            "Microsoft has locked this Outlook account, so it refuses every sign-in "
+            "and token refresh (AADSTS70000: User account is found to be in service "
+            "abuse mode).",
+            "The account owner must sign in at https://outlook.com in a web browser "
+            "and follow Microsoft's steps to unlock the account, then run "
+            "`outlook-mcp auth` on the host to sign in here again. Retrying does not "
+            "help until the account is unlocked.",
         )
 
 
