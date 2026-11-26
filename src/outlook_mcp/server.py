@@ -1134,7 +1134,7 @@ async def outlook_update_event(
     call, both on midnight boundaries. Patching a time keeps the zone the event is
     anchored in; pass `timezone` (with start and end) to re-anchor it somewhere else.
     A start, end or recurrence patch to a series with edited or deleted occurrences
-    is refused, since Graph would discard them.
+    is refused, since Graph would discard them; remove_recurrence=True is not.
     Omitting an argument leaves it unchanged, so False and [] are instructions, not
     absences.
     `show_as` is Outlook's "Show as" — same values as outlook_create_event — and patches

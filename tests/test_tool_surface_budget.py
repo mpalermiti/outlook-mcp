@@ -222,6 +222,8 @@ CHARS_PER_TOKEN = 4
 # 11,178 once `outlook_create_event` says `start`/`end` take a relative offset (+5, #74).
 # Default/documents/rules/MIME: 11,178 / 11,322 / 11,999 / 11,258; every group 77 / 12,223.
 # No ceiling changes.
+# 11,200 once `outlook_update_event` says remove_recurrence=True is not refused for a
+# series' changed occurrences (+7 on 11,193, #97). No ceiling changes.
 TOOL_SURFACE_CEILING = 12_150
 DEFAULT_SURFACE_CEILING = 11_250
 

@@ -59,7 +59,7 @@ from outlook_mcp.tools import (
     todo,
     todo_attachments,
 )
-from tests.test_calendar_write import reads_no_times
+from tests.test_calendar_write import _current_event, reads_no_times
 
 _CFG = Config(client_id="test")
 
@@ -817,6 +817,101 @@ class TestCalendarWrite:
         )
 
         assert_on_wire(builder.patch.call_args[0][0], '"recurrence": null', allow_null=True)
+
+    @staticmethod
+    def _client_for(current):
+        """A client whose event reads back as ``current``, and the builder it hands out."""
+        builder = MagicMock()
+        builder.get = AsyncMock(return_value=current)
+        builder.patch = AsyncMock(return_value=MagicMock(id="E1"))
+        client = MagicMock()
+        client.me.events.by_event_id = MagicMock(return_value=builder)
+        return builder, client
+
+    async def test_a_collapse_with_a_new_zone_sends_the_zone_and_a_null_recurrence(self):
+        """#97: `timezone` beside `remove_recurrence=True` on a New York series master.
+
+        A master's zone change normally re-sends its recurrence, because Graph
+        refuses the change without it. A collapse skips that on purpose: the
+        series is ending. So the patch is the new times in the new zone beside
+        the explicit null, and nothing read from Graph is echoed back. The whole
+        body is compared, so a re-send creeping in, or the old zone, fails here.
+        Graph accepts this patch and leaves one event anchored in the new zone:
+        `test_a_series_with_an_edited_occurrence_collapses_into_one_event_in_a_new_zone`.
+        """
+        from outlook_mcp.tools._recurrence import build_event_recurrence
+
+        current = _current_event(
+            date_time="2026-11-02T14:00:00.0000000",
+            start_zone="America/New_York",
+            event_type="seriesMaster",
+            recurrence=build_event_recurrence(
+                {
+                    "pattern": {"type": "weekly", "interval": 1, "daysOfWeek": ["monday"]},
+                    "range": {"type": "numbered", "numberOfOccurrences": 3},
+                },
+                start="2026-11-02T09:00:00",
+                zone="America/New_York",
+            ),
+        )
+        builder, client = self._client_for(current)
+
+        await calendar_write.update_event(
+            client,
+            event_id="AAMkAG123=",
+            start="2026-11-02T09:00:00",
+            end="2026-11-02T09:30:00",
+            timezone="America/Los_Angeles",
+            remove_recurrence=True,
+            config=_CFG,
+        )
+
+        assert json.loads(wire(builder.patch.call_args[0][0])) == {
+            "@odata.type": "#microsoft.graph.event",
+            "start": {"dateTime": "2026-11-02T09:00:00", "timeZone": "America/Los_Angeles"},
+            "end": {"dateTime": "2026-11-02T09:30:00", "timeZone": "America/Los_Angeles"},
+            "recurrence": None,
+        }
+        # A collapse is not checked for changed occurrences, which it discards by
+        # request, and echoes nothing back, so it is neither read for them nor
+        # pinned to a change key.
+        assert builder.get.await_count == 1, "only the read for the event's zone"
+        sent = builder.patch.call_args.kwargs["request_configuration"]
+        assert not sent.headers.get("If-Match")
+
+    async def test_a_zone_on_an_occurrence_sends_only_its_new_times(self):
+        """#97: `timezone` on one occurrence of a New York series, not on the master.
+
+        An occurrence is not a master, so nothing is re-sent and there is no
+        occurrence check: one read for the zone, then the new times in the zone
+        asked for, and no `If-Match`. Graph stores that moment as an exception
+        in the series' own zone:
+        `test_a_zone_on_one_occurrence_moves_its_time_and_keeps_the_series_zone`.
+        """
+        current = _current_event(
+            date_time="2026-11-09T14:00:00.0000000",
+            start_zone="America/New_York",
+            event_type="occurrence",
+        )
+        builder, client = self._client_for(current)
+
+        await calendar_write.update_event(
+            client,
+            event_id="AAMkAG456=",
+            start="2026-11-09T09:00:00",
+            end="2026-11-09T09:30:00",
+            timezone="America/Los_Angeles",
+            config=_CFG,
+        )
+
+        assert json.loads(wire(builder.patch.call_args[0][0])) == {
+            "@odata.type": "#microsoft.graph.event",
+            "start": {"dateTime": "2026-11-09T09:00:00", "timeZone": "America/Los_Angeles"},
+            "end": {"dateTime": "2026-11-09T09:30:00", "timeZone": "America/Los_Angeles"},
+        }
+        assert builder.get.await_count == 1, "only the read for the event's zone"
+        sent = builder.patch.call_args.kwargs["request_configuration"]
+        assert not sent.headers.get("If-Match")
 
 
 # ── mail ──────────────────────────────────────────────────────────────

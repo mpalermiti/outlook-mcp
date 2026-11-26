@@ -1349,7 +1349,9 @@ async def update_event(
     independent edit. Passing it without them is refused rather than answered
     ``updated``. One zone re-anchors both ends, which is what "move this to
     Eastern" means; an event whose ends genuinely differ keeps them by omitting
-    the argument.
+    the argument. On one occurrence of a series, Graph books the time given but
+    keeps the series' zone, so reading the occurrence back shows the series'
+    zone rather than this one (measured live, #97).
 
     Changing a **series master's** zone needs its recurrence re-sent in the
     same patch. Without it Graph answers ``400 ErrorPropertyValidationFailure``,
@@ -1380,7 +1382,9 @@ async def update_event(
     Any ``start``, ``end`` or ``recurrence`` patch to a series master that has
     edited or deleted occurrences is refused, naming them. Graph restores every
     one of them when a master's times or pattern change — zone or not — and
-    reports success. Measured live; see ``_OCCURRENCE_SELECT``.
+    reports success. Measured live; see ``_OCCURRENCE_SELECT``. A collapse
+    (``remove_recurrence=True``) is not refused, with or without new times:
+    ending the series discards them, and that is what it asks for (#97).
 
     It cannot be combined with an all-day event, and that is refused rather than
     ignored: Graph stores an all-day event anchored in UTC whatever zone it is
@@ -1408,9 +1412,12 @@ async def update_event(
     to another day, as above.
 
     ``remove_recurrence=True`` turns a series master back into a single event,
-    keeping the first occurrence's time. It is a separate flag rather than a
-    sentinel value on ``recurrence`` because ``None`` there already means
-    "leave alone", and the two are mutually exclusive.
+    keeping the first occurrence's time, or taking ``start``, ``end`` and
+    ``timezone`` given in the same call: Graph accepts the collapse and the move
+    as one patch, with no recurrence re-sent (measured live, #97). It is a
+    separate flag rather than a sentinel value on ``recurrence`` because
+    ``None`` there already means "leave alone", and the two are mutually
+    exclusive.
 
     It has to go through ``additional_data``: Graph clears a series with an
     explicit ``"recurrence": null``, and ``event.recurrence = None`` does not
@@ -1606,9 +1613,13 @@ async def update_event(
 
     # Last of the checks, because it is the only one that costs a second read,
     # and only a master can have occurrences to lose. `remove_recurrence` is left
-    # out on purpose: collapsing the series is what it asks for.
-    if (start is not None or end is not None or recurrence is not None) and (
-        _is_series_master(await current_event())
+    # out on purpose, with or without new times: collapsing the series is what it
+    # asks for, and its changed occurrences go with it. It echoes nothing back
+    # either, so there is no read to pin the patch to (#97).
+    if (
+        not remove_recurrence
+        and (start is not None or end is not None or recurrence is not None)
+        and _is_series_master(await current_event())
     ):
         await _refuse_to_discard_occurrences(graph_client, event_id)
         # Both halves of this patch rest on state read before it: the check just

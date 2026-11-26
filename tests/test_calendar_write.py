@@ -1605,6 +1605,45 @@ class TestEventTimezone:
             )
         builder.patch.assert_not_called()
 
+    async def test_a_collapse_with_new_times_is_not_refused_for_its_occurrences(self):
+        """Ending a series discards its edited and deleted occurrences by request (#97).
+
+        `remove_recurrence=True` on its own was never checked, but the same
+        collapse with a new start, end and zone was refused as if it reshaped
+        the series. It does not: it ends it, and the changed occurrences go with
+        it either way. Nothing read from Graph is echoed back, so there is no
+        occurrence read and no `If-Match` pin either. Graph accepts this live:
+        `test_a_series_with_an_edited_occurrence_collapses_into_one_event_in_a_new_zone`.
+        """
+        moved = MagicMock(subject="Moved to 10", start=MagicMock(date_time="2026-11-12T03:00:00"))
+        current = _current_event(
+            date_time="2026-11-05T02:00:00.0000000",
+            start_zone="UTC",
+            event_type="seriesMaster",
+            recurrence=_thursday_utc_series(),
+            edited=[moved],
+            cancelled=["OID.AAMkAG123=.2026-11-19"],
+        )
+        builder, mock_client = _series_master_builder(None, current=current)
+
+        result = await update_event(
+            mock_client,
+            event_id="AAMkAG123=",
+            start="2026-11-04T18:00:00",
+            end="2026-11-04T18:30:00",
+            timezone="America/Los_Angeles",
+            remove_recurrence=True,
+            config=_CFG_LA,
+        )
+
+        assert result["status"] == "updated"
+        patched = builder.patch.call_args[0][0]
+        assert patched.start.time_zone == "America/Los_Angeles"
+        assert patched.additional_data == {"recurrence": None}
+        config_sent = builder.patch.call_args.kwargs["request_configuration"]
+        assert not config_sent.headers.get("If-Match")
+        assert builder.get.await_count == 1, "only the read for the event's zone"
+
     async def test_update_rejects_bad_input_without_asking_graph_anything(self):
         """Every input check belongs above the first `await`.
 
