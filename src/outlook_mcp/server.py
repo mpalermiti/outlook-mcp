@@ -40,6 +40,7 @@ from outlook_mcp.errors import (
 )
 from outlook_mcp.graph import GraphClient
 from outlook_mcp.intents import agenda as intent_agenda
+from outlook_mcp.intents import catch_up as intent_catch_up
 from outlook_mcp.intents import find as intent_find
 from outlook_mcp.intents import ids as intent_ids
 from outlook_mcp.intents import open_loops as intent_open_loops
@@ -2432,6 +2433,30 @@ async def outlook_open_loops(
         words=words,
         older_than=older_than,
         window=window,
+        zone=_get_config(ctx).timezone,
+        signed_in=auth.saved_username(),
+        loaded_tools=LOADED_TOOLS,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_catch_up(
+    ctx: Context,
+    cursor: str | None = None,
+    window: str | None = None,
+    focus: Literal["all", "mail", "calendar", "tasks"] = "all",
+) -> dict:
+    """What arrived and what needs you. First call: window (default 24h back). Later calls:
+    pass back the returned cursor, replacing the old one. Sections: needs_reply,
+    replies_to_you, follow_ups, invites, meetings_today, tasks_due, calendar_changes.
+    focus narrows to mail, calendar or tasks.
+    """
+    return await intent_catch_up.read_catch_up(
+        _get_graph_client(ctx),
+        cursor=cursor,
+        window=window,
+        focus=focus,
         zone=_get_config(ctx).timezone,
         signed_in=auth.saved_username(),
         loaded_tools=LOADED_TOOLS,

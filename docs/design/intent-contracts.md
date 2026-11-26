@@ -2,7 +2,7 @@
 
 Changelog: 2026-11-26. Every change to a rule or override routes `far_reaching`, `undo` included; `undo` reads events live; the act tools check attendees and route against live state every run; the plan store claims `running` atomically and releases it in a `finally`, keeps a finished plan's receipt until expiry, and prunes on every access; "reversible" is defined; `CLAUDE.md` text is proposed (§17). Open items before later steps are tracked in §18.
 
-Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3 is built in `src/outlook_mcp/intents/`: `outlook_find` is registered in the opt-in `intents` group, off by default, as an early preview. Step 4 is under way: `outlook_agenda` and `outlook_open_loops` are registered the same way.
+Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3 is built in `src/outlook_mcp/intents/`: `outlook_find` is registered in the opt-in `intents` group, off by default, as an early preview. Step 4 is under way: `outlook_agenda`, `outlook_open_loops` and `outlook_catch_up` are registered the same way.
 
 These contracts define the interfaces every intent tool builds on: the answer envelope, the resolver, typed times, mail selections, plans and acting, undo receipts, the `catch_up` cursor, the follow-up marker, the approval and permission mapping, and how the tool set ships. They are meant to be precise enough to implement and to test against. Where they depart from the intent-tool design, §15 says so.
 
@@ -1866,6 +1866,14 @@ The **look-ahead** H = max(end of today, local time, window end), capped at now 
 - `clear_follow_up` for follow-ups whose reply has arrived;
 - `answer` for the first invite;
 - `open_thread` for the top reply.
+
+**As built:**
+- The owner's mail is what is in Sent Items: a later message that only claims the owner's address is neither `you_replied` (F2) nor an arrival. An arrival from one of the owner's addresses is counted in `understood.arrivals.from_your_address`, not dropped silently.
+- A resync bootstraps from `cursor.made` less the 2-minute overlap, the same threshold arrivals use, so nothing in the overlap is lost. G2 and G6 count a refused or stale first request inside their own 4 and 2, so a fallback doesn't pass the ceiling.
+- `cal` gains `since`: while a round that began as a fresh snapshot (a first read, a roll, a resync) is unfinished, only events modified after it count as changes. `mail.bootstrap_from` also carries the arrival threshold forward when a call didn't read mail (`focus`), or a round is unfinished (`arrivals.has_more`). An empty link means that source starts on the next call.
+- `calendar_changes` is in the answer only with a usable cursor. `answer` is offered for the first invitation without a blocking warning; `stranger_invite` blocks.
+- F1 also selects the recipients and the subject; P-D3a's fallback scans the Inbox, Sent Items and the Archive.
+- A cursor that would pass 16 KB is `null`, with `understood.cursor = "too_large"`.
 
 **Docstring** (at most 450 characters): "What arrived and what needs you. First call: window (default 24h back). Later calls: pass back the returned cursor, replacing the old one. Sections: needs_reply, replies_to_you, follow_ups, invites, meetings_today, tasks_due, calendar_changes. focus narrows to mail, calendar or tasks."
 

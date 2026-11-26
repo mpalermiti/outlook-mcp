@@ -4,7 +4,7 @@ What loads by default does not change: ``intents`` is off by default, so a stock
 install, and every selection that doesn't name it, registers what it did, sends
 the same requests and reads the same instructions. A selection that names it
 gets the intent tools (``outlook_find``, ``outlook_agenda``,
-``outlook_open_loops``), read-only; the
+``outlook_open_loops``, ``outlook_catch_up``), read-only; the
 process asks Graph for immutable ids on every request (decision D2); and the
 instructions gain one sentence about ``others_wrote``.
 """
@@ -24,6 +24,7 @@ import pytest
 from outlook_mcp import auth, server, toolsets
 from outlook_mcp.config import Config
 from outlook_mcp.intents import agenda as intent_agenda
+from outlook_mcp.intents import catch_up as intent_catch_up
 from outlook_mcp.intents import find as intent_find
 from outlook_mcp.intents import open_loops as intent_open_loops
 
@@ -69,7 +70,9 @@ def processes() -> dict[str | None, dict]:
         return dict(zip(selections, pool.map(_process, selections), strict=True))
 
 
-@pytest.mark.parametrize("tool", ["outlook_find", "outlook_agenda", "outlook_open_loops"])
+@pytest.mark.parametrize(
+    "tool", ["outlook_find", "outlook_agenda", "outlook_open_loops", "outlook_catch_up"]
+)
 def test_each_is_an_opt_in_read_only_intent_tool(tool):
     assert toolsets.TOOL_GROUPS[tool] == toolsets.INTENTS
     assert toolsets.INTENTS in toolsets.OFF_BY_DEFAULT
@@ -274,3 +277,48 @@ def test_open_loops_passes_the_zone_the_saved_username_and_the_loaded_tools(monk
     assert seen["loaded_tools"] == server.LOADED_TOOLS
     assert (seen["direction"], seen["older_than"], seen["window"]) == ("on_them", "3d", "14d")
     assert seen["person"] is None and seen["words"] is None
+
+
+# ── outlook_catch_up ──────────────────────────────────────────────────────
+
+
+def test_the_advertised_catch_up(processes):
+    tool = processes["classic,intents"]["tools"]["outlook_catch_up"]
+    assert tool["annotations"]["readOnlyHint"] is True
+    properties = tool["inputSchema"]["properties"]
+    assert set(properties) == {"cursor", "window", "focus"}
+    assert properties["focus"]["enum"] == list(intent_catch_up.FOCUSES)
+    assert not tool["inputSchema"].get("required")
+    assert len(tool["description"]) <= 450
+
+
+def test_catch_up_takes_the_implementations_arguments():
+    tool = inspect.signature(server.outlook_catch_up).parameters
+    implementation = inspect.signature(intent_catch_up.read_catch_up).parameters
+    assert set(tool) - {"ctx"} <= set(implementation)
+    for name in set(tool) - {"ctx"}:
+        assert tool[name].default == implementation[name].default, name
+
+
+def test_catch_up_passes_the_zone_the_saved_username_and_the_loaded_tools(monkeypatch):
+    seen: dict = {}
+
+    async def fake_catch_up(graph_client, **kwargs):
+        seen.update(kwargs, graph_client=graph_client)
+        return {"tool": "outlook_catch_up"}
+
+    graph = object()
+    monkeypatch.setattr(intent_catch_up, "read_catch_up", fake_catch_up)
+    monkeypatch.setattr(server, "_get_graph_client", lambda ctx: graph)
+    monkeypatch.setattr(auth, "saved_username", lambda: "me@example.com")
+    config = Config(timezone="America/Los_Angeles")
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(lifespan_context={"config": config, "auth": None})
+    )
+    result = asyncio.run(server.outlook_catch_up(ctx, cursor="cu1.x", focus="mail"))
+    assert result == {"tool": "outlook_catch_up"}
+    assert seen["graph_client"] is graph
+    assert seen["zone"] == "America/Los_Angeles"
+    assert seen["signed_in"] == "me@example.com"
+    assert seen["loaded_tools"] == server.LOADED_TOOLS
+    assert (seen["cursor"], seen["window"], seen["focus"]) == ("cu1.x", None, "mail")

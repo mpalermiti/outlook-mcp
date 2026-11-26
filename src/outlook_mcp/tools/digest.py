@@ -82,6 +82,18 @@ def _is_sync_state_not_found(exc: Exception) -> bool:
     return False
 
 
+def is_stale_delta(status_code: int) -> bool:
+    """Whether a delta link that got ``status_code`` is stale, for ``outlook_catch_up``
+    (intent contracts §7.4): any client error except 401, 403 and 429.
+
+    Broad on purpose: Graph documents 410 and ``syncStateNotFound``, but an evicted
+    token can't be produced on demand to see what else it says (probe P-C4), and a
+    stale link is resynced from the last call, so a wrong "stale" costs a re-read,
+    never lost mail. ``changes_since`` keeps its own 410-only rule.
+    """
+    return 400 <= status_code < 500 and status_code not in (401, 403, 429)
+
+
 # ── Per-resource collectors ────────────────────────────────────────────
 
 

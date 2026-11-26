@@ -29,7 +29,12 @@ from outlook_mcp.errors import GraphAPIError
 INTENT_DEADLINE_S = 45
 
 # Counted-request ceilings per tool (§1.8). Only the tools built so far.
-CEILINGS = {"outlook_find": 30, "outlook_agenda": 30, "outlook_open_loops": 40}
+CEILINGS = {
+    "outlook_find": 30,
+    "outlook_agenda": 30,
+    "outlook_open_loops": 40,
+    "outlook_catch_up": 40,
+}
 
 # Units on the limiter: one request, an unordered `$batch` (all four slots), or a
 # `$batch` chained with dependsOn, whose sub-requests Graph sends one at a time.

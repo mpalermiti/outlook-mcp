@@ -396,6 +396,7 @@ class Mailbox:
         on("/me/contacts", self._contacts)
         on("/me/calendars", lambda seen, m: _paged(self.calendars, seen, "/me/calendars", 100))
         on(r"/me/calendars/([^/]+)/calendarView", self._calendar_view)
+        on("/me/calendarView", self._primary_view)
         on(r"/me/events/([^/]+)", self._event)
         on("/me/todo/lists", lambda seen, m: page(self.task_lists))
         on(r"/me/todo/lists/([^/]+)/tasks", self._tasks)
@@ -523,8 +524,8 @@ class Mailbox:
     # Calendar
 
     def _calendar_view(self, seen: Seen, match) -> Any:
-        # A followed nextLink carries only the page token, as the window is Graph's to
-        # remember: an unbounded read here stands in for that.
+        # A followed nextLink keeps the request's options (`_paged`); one without them
+        # reads unbounded.
         start = seen.params.get("startDateTime", "0000")
         end = seen.params.get("endDateTime", "9999")
         events = [
@@ -533,6 +534,15 @@ class Mailbox:
             if e["start"]["dateTime"][:19] < end[:19] and e["end"]["dateTime"][:19] > start[:19]
         ]
         return _paged(events, seen, f"/me/calendars/{match.group(1)}/calendarView", 10)
+
+    def _primary_view(self, seen: Seen, match) -> Any:
+        """`/me/calendarView`: the default calendar's view."""
+        default = next(
+            (c["id"] for c in self.calendars if c.get("isDefaultCalendar")),
+            self.calendars[0]["id"] if self.calendars else "",
+        )
+        view = re.match(r"(.*)", default)
+        return self._calendar_view(seen, view)
 
     def _event(self, seen: Seen, match) -> Any:
         for events in self.events.values():

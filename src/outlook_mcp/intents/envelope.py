@@ -45,6 +45,7 @@ OUTCOMES = {
     "outlook_find": frozenset({"exact", "single", "candidates", "nothing_found", "incomplete"}),
     "outlook_agenda": frozenset({"answered", "incomplete"}),
     "outlook_open_loops": frozenset({"answered", "incomplete", "candidates"}),
+    "outlook_catch_up": frozenset({"answered", "incomplete"}),
 }
 
 SECTION_STATUSES = frozenset({"ok", "failed", "skipped_budget", "skipped_time"})

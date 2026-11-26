@@ -218,8 +218,9 @@ class Lookup:
     signed_in: str | None
     _sent: SentTable | None = None
 
-    async def sent_table(self) -> SentTable:
-        """Q1, once per call and never kept after it (house rule; decision D6 is open)."""
+    async def sent_table(self, pages: int = SENT_PAGES) -> SentTable:
+        """Q1, once per call and never kept after it (house rule; decision D6 is open).
+        ``pages`` of 100 letters: three for a person, two for catch_up (G1)."""
         if self._sent is None:
             query = {"$select": SENT_SELECT, "$orderby": "sentDateTime desc", "$top": 100}
             try:
@@ -231,7 +232,7 @@ class Lookup:
                     raise
                 body = await self.graph.get(SENT_PATH, {**query, "$select": SENT_SELECT_PLAIN})
             rows = list(body.get("value") or [])
-            for _ in range(SENT_PAGES - 1):
+            for _ in range(pages - 1):
                 link = body.get("@odata.nextLink")
                 if not isinstance(link, str) or not link:
                     break

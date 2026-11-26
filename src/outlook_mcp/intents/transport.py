@@ -114,14 +114,14 @@ class IntentGraph:
             await self._client.aclose()
             self._client = None
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, prefer: str | None = None) -> dict[str, str]:
         if self._token is None:
             self._token = self.credential.get_token(GRAPH_TOKEN_SCOPE).token
         return {
             "Authorization": f"Bearer {self._token}",
             "Accept": "application/json",
             "Accept-Encoding": "gzip",
-            "Prefer": combine_prefer(None),
+            "Prefer": combine_prefer(prefer),
         }
 
     def _note(self, url: str) -> None:
@@ -129,9 +129,17 @@ class IntentGraph:
             if key in _ECHOED and value not in self.queries:
                 self.queries.append(value)
 
-    async def _send(self, method: str, url: str, *, units: int, content: str | None = None):
+    async def _send(
+        self,
+        method: str,
+        url: str,
+        *,
+        units: int,
+        content: str | None = None,
+        prefer: str | None = None,
+    ):
         assert self._client is not None, "IntentGraph is used inside `async with`"
-        headers = self._headers()
+        headers = self._headers(prefer)
         if content is not None:
             headers["Content-Type"] = "application/json"
         async with self.limiter.hold(units):
@@ -145,21 +153,30 @@ class IntentGraph:
         return response
 
     async def get(
-        self, path: str, params: Mapping[str, Any] | None = None, *, ids: bool = True
+        self,
+        path: str,
+        params: Mapping[str, Any] | None = None,
+        *,
+        ids: bool = True,
+        prefer: str | None = None,
     ) -> dict:
         """One counted GET of ``path`` (``/me/...``). ``ids`` says whether the reply carries
-        Outlook ids, and so whether its ``Preference-Applied`` speaks for the id family."""
+        Outlook ids, and so whether its ``Preference-Applied`` speaks for the id family.
+        ``prefer`` is another preference (a delta's page size), combined with the id one."""
         url = build_url(path, params)
-        return await self._get_url(GRAPH_BASE + url, ids=ids)
+        return await self._get_url(GRAPH_BASE + url, ids=ids, prefer=prefer)
 
-    async def follow(self, next_link: str, *, ids: bool = True) -> dict:
-        """One counted GET of an ``@odata.nextLink``, after checking it is a Graph URL."""
-        return await self._get_url(require_graph_url(next_link, source="@odata.nextLink"), ids=ids)
+    async def follow(self, next_link: str, *, ids: bool = True, prefer: str | None = None) -> dict:
+        """One counted GET of an ``@odata.nextLink`` (or a delta link), after checking it
+        is a Graph URL."""
+        return await self._get_url(
+            require_graph_url(next_link, source="@odata.nextLink"), ids=ids, prefer=prefer
+        )
 
-    async def _get_url(self, url: str, *, ids: bool) -> dict:
+    async def _get_url(self, url: str, *, ids: bool, prefer: str | None = None) -> dict:
         self.budget.spend(1)
         self._note(url)
-        response = await self._send("GET", url, units=1)
+        response = await self._send("GET", url, units=1, prefer=prefer)
         if ids:
             # P-A2: whether a personal mailbox honours the preference at all. Not
             # assumed either way: the reply says which family it is (ids.py).

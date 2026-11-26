@@ -501,8 +501,12 @@ def test_contact_photos_surface_has_its_own_budget_and_preserves_default_schemas
 # `outlook_open_loops` (§12.3) is 184: a 360-character description and five arguments,
 # `direction` an enum of three. The three are 646; default + intents is 74 / 11,852;
 # `intents` alone 5 / 751; all groups 81 / 13,006. Raised from 470 and 11,800.
-INTENT_TOOLS_CEILING = 655
-INTENTS_SELECTION_CEILING = 11_980
+#
+# `outlook_catch_up` (§12.2) is 145: the contracts' own 285-character description and
+# three arguments. The four are 791; default + intents is 75 / 11,997; `intents` alone
+# 6 / 896; all groups 82 / 13,151. Raised from 655 and 11,980.
+INTENT_TOOLS_CEILING = 800
+INTENTS_SELECTION_CEILING = 12_120
 
 
 def test_the_intent_tools_fit_their_own_ceiling_and_leave_the_default_alone():

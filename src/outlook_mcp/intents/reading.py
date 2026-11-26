@@ -15,6 +15,7 @@ and sort what came back into sections. The pieces they have in common live here:
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
@@ -25,7 +26,13 @@ from zoneinfo import ZoneInfo
 from outlook_mcp import sender_auth
 from outlook_mcp.errors import GraphAPIError
 from outlook_mcp.intents.envelope import others_wrote, sender_auth_result, utc, warn, why
-from outlook_mcp.intents.people import SentTable, is_valid_address, recipients, sender_of
+from outlook_mcp.intents.people import (
+    SentTable,
+    is_valid_address,
+    parse_time,
+    recipients,
+    sender_of,
+)
 from outlook_mcp.intents.resolver import (
     _RESPONSES,
     _SHOW_AS,
@@ -33,6 +40,7 @@ from outlook_mcp.intents.resolver import (
     _address,
     _due,
     _enum,
+    _flag,
     _graph_time,
     _headers_of,
     _list_name,
@@ -104,6 +112,30 @@ def local_dates(start: datetime, end: datetime, tz: tzinfo) -> list[date]:
 def outcome_of(sections: Iterable[dict]) -> str:
     """``answered`` unless a section was skipped or failed."""
     return ANSWERED if all(s["status"] == "ok" for s in sections) else INCOMPLETE
+
+
+class Once:
+    """One shared read for several sections of a call: made once, its value or error
+    kept for every caller (catch_up's sent table, which mail and calendar both need)."""
+
+    def __init__(self, make):
+        self._make = make
+        self._lock = asyncio.Lock()
+        self._done = False
+        self._value: Any = None
+        self._error: BaseException | None = None
+
+    async def get(self) -> Any:
+        async with self._lock:
+            if not self._done:
+                try:
+                    self._value = await self._make()
+                except Exception as error:  # noqa: BLE001 - kept for each caller, re-raised
+                    self._error = error
+                self._done = True
+        if self._error is not None:
+            raise self._error
+        return self._value
 
 
 # ── Events ────────────────────────────────────────────────────────────────
@@ -494,3 +526,50 @@ def thread_item(
     if waiting_for is not None:
         item["waiting_for"] = waiting_for
     return item
+
+
+def message_item(
+    row: dict,
+    *,
+    table: SentTable,
+    read: HeaderRead | None,
+    folder: str | None,
+    owner: bool = False,
+) -> dict:
+    """The message item of §1.4. ``owner``: the message is in Sent Items, so its sender
+    is the owner and there is nothing to check; otherwise ``read`` is its header read,
+    or ``None`` when it was not checked."""
+    address, name = sender_of(row)
+    valid = _address(address)
+    warnings: list[dict] = []
+    if owner:
+        known = True
+        auth = sender_auth_result(None)
+    else:
+        known = bool(valid and valid not in table.me and table.get(valid) is not None)
+        auth = sender_auth_result(read.verdict if read else None)
+        warnings += _verdict_warnings(auth["result"])
+        warnings += _sender_warnings(valid, name, table)
+        if address and not valid:
+            warnings.append(warn("invalid_address"))
+    received = parse_time(row.get("receivedDateTime"))
+    return {
+        "kind": "message",
+        "id": row.get("id"),
+        "conversation_id": row.get("conversationId"),
+        "received": utc(received) if received else None,
+        "folder": folder,
+        "from": {"address": valid, "known": known, "sender_auth": auth},
+        "to_me": to_me(row, table.me),
+        "has_attachments": row.get("hasAttachments") is True,
+        "is_read": row.get("isRead") is True,
+        "flag": _flag(row),
+        "why": [],
+        "warnings": warnings,
+        "others_wrote": others_wrote(
+            subject=row.get("subject"),
+            preview=row.get("bodyPreview"),
+            name=name,
+            address_text=address if address and not valid else None,
+        ),
+    }
