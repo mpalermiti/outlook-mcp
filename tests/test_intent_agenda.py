@@ -245,7 +245,9 @@ async def test_one_meeting_on_two_calendars_is_kept_once_from_the_default(fake):
     shown = day(env, "2026-11-26")["events"]
     assert [e["id"] for e in shown].count("ev-a") == 1
     assert "ev-a-copy" not in [e["id"] for e in shown]
-    assert next(e for e in shown if e["id"] == "ev-a")["calendar"] == "cal-1"
+    # A day's event names its calendar by its place in understood.calendars.
+    assert next(e for e in shown if e["id"] == "ev-a")["calendar"] == 0
+    assert env["understood"]["calendars"][0]["id"] == "cal-1"
 
 
 async def test_free_time_today_starts_at_now(fake):

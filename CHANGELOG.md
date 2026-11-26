@@ -33,7 +33,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   calendars only. `zone` shows the times in another place. It only reads, and is in the opt-in
   `intents` group with `outlook_find`; nothing changes for an install that doesn't name
   `intents`. An answer that ran out of requests or time, or lost a section to an error, says
-  `incomplete` rather than showing empty days.
+  `incomplete` rather than showing empty days. A calendar is read in start order, and if it
+  holds more events than are read, nothing after the last one read is called free and the
+  answer says `incomplete`. A long window keeps every day, dropping the last days' event lists
+  first when the answer would be too long.
 
 - **`outlook_open_loops`, an intent tool, as an opt-in early preview.** Conversations waiting on
   you, whose latest message is someone else's sent to you, and conversations waiting on someone

@@ -532,6 +532,8 @@ class Mailbox:
             for e in self.events.get(match.group(1), [])
             if e["start"]["dateTime"][:19] < end[:19] and e["end"]["dateTime"][:19] > start[:19]
         ]
+        if (seen.params.get("$orderby") or "").startswith("start/dateTime"):
+            events.sort(key=lambda e: e["start"]["dateTime"][:19])
         return _paged(events, seen, f"/me/calendars/{match.group(1)}/calendarView", 10)
 
     def _event(self, seen: Seen, match) -> Any:
