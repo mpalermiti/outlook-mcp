@@ -1187,6 +1187,7 @@ Fields a `was` may restore. Anything else in a receipt is refused (`receipt_inva
 - **One place.**
   - A kiota middleware on the process's Graph client adds the header to every SDK request.
   - The raw paths (delta pages, `$batch` envelopes, and every `$batch` sub-request's `headers`) add it too.
+  - As built after live round 1: a `$search` answers with regular ids whatever the header asked for (P-SR1). In such a process every search whose ids are handed out, `find`'s and the classic `outlook_search_mail` and `outlook_search_contacts` alike, translates them with one `POST /me/translateExchangeIds`. A search reply never votes on the family; a failed translation counts as regular ids.
   - The preference is **combined** with any existing `Prefer` value, comma-separated (`odata.maxpagesize=50, IdType="ImmutableId"`; `outlook.timezone="…", IdType="ImmutableId"`), never assigned over it.
 - **Detected at run time**:
   - The first Outlook response in the process sets `id_family`: `"immutable"` if `Preference-Applied` contains `IdType="ImmutableId"`, otherwise `"rest"`.

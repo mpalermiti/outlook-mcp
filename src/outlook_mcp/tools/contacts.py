@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 from outlook_mcp.config import Config
+from outlook_mcp.intents import ids
 from outlook_mcp.pagination import apply_pagination, build_request_config, wrap_nextlink
 from outlook_mcp.permissions import CATEGORY_CONTACTS_WRITE, check_permission
 from outlook_mcp.validation import (
@@ -521,6 +522,11 @@ async def search_contacts(
     response = await graph_client.me.contacts.get(request_configuration=req_config)
 
     contacts = [_format_contact_summary(c) for c in (response.value or [])]
+    # As for mail: a `$search` answers with regular ids, translated in a process that
+    # loads `intents` (live round 1, D2); nothing more anywhere else.
+    translated = await ids.translate_search_ids(graph_client, [c["id"] for c in contacts])
+    for found in contacts:
+        found["id"] = translated.get(found["id"], found["id"])
 
     return {
         "contacts": contacts,
