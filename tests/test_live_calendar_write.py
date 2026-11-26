@@ -524,25 +524,33 @@ def _utc_date_time(summary_time: str) -> str:
     return date_time[:19]
 
 
-def _spy_on_reply_reads(monkeypatch) -> list:
-    """Record each end the read-back check reads from Graph's write reply (#262 review, S2).
+def _spy_on_read_backs(monkeypatch) -> list[list]:
+    """Record what the check reads back from Graph, one list per GET (#262 review, S2).
 
-    The check fails open: a reply it cannot read means no correction and no
-    `note`, so `"note" not in result` also passes when the check never ran. The
-    list holds `(end, the UTC moment read)`; `None` there means the reply's
-    spelling was not understood.
+    The check fails open: a read that fails or cannot be parsed means no
+    correction and no `note`, so `"note" not in result` also passes when the
+    check never ran. It shipped that way once: it read the write's reply, which
+    Graph gives in the event's own zone whatever `Prefer` asks (live,
+    2026-11-25), and never parsed a time. Each GET of the event's times adds a
+    list of `(end, the UTC moment parsed)`; `None` there means the GET failed or
+    its answer was not understood.
     """
     from outlook_mcp.tools import calendar_write
 
-    reads: list = []
-    original = calendar_write._reply_instant
+    reads: list[list] = []
+    get, parse = calendar_write._times_in_utc, calendar_write._read_back_instant
 
-    def spy(reply, which):
-        got = original(reply, which)
-        reads.append((which, got))
+    async def spied_get(target):
+        reads.append([])
+        return await get(target)
+
+    def spied_parse(event, which):
+        got = parse(event, which)
+        reads[-1].append((which, got))
         return got
 
-    monkeypatch.setattr(calendar_write, "_reply_instant", spy)
+    monkeypatch.setattr(calendar_write, "_times_in_utc", spied_get)
+    monkeypatch.setattr(calendar_write, "_read_back_instant", spied_parse)
     return reads
 
 
@@ -687,7 +695,7 @@ class TestTimeZoneAnchoring:
         conversion that kept the zone but moved the event a day fails too.
         """
         monday = _anchor_monday()
-        reads = _spy_on_reply_reads(monkeypatch)
+        reads = _spy_on_read_backs(monkeypatch)
 
         async with _temporary_event(
             real_graph_client,
@@ -698,9 +706,9 @@ class TestTimeZoneAnchoring:
             end=f"{monday.isoformat()}T03:00:00Z",
             timezone=_DST_ZONE,
         ) as (event_id, created):
-            # The check read Graph's real POST reply, both ends, at the typed
-            # moments (#262 review, S2) ...
-            assert dict(reads) == {"start": _utc(monday, 2), "end": _utc(monday, 3)}, reads
+            # One GET read both ends back in UTC, at the typed moments (#262
+            # review, S2) ...
+            assert reads == [[("start", _utc(monday, 2)), ("end", _utc(monday, 3))]], reads
             # ... so no `note` means it agreed, not that it never ran.
             assert "note" not in created, created
             detail = await get_event(real_graph_client.sdk_client, event_id)
@@ -732,15 +740,15 @@ class TestTimeZoneAnchoring:
             end=f"{monday.isoformat()}T19:00:00",
             timezone=_DST_ZONE,
         ) as event_id:
-            reads = _spy_on_reply_reads(monkeypatch)
+            reads = _spy_on_read_backs(monkeypatch)
             result = await update_event(
                 real_graph_client.sdk_client,
                 event_id=event_id,
                 start=f"{new_start.isoformat()}Z",
                 config=live_write_config,
             )
-            # The PATCH reply was read, at the typed moment (#262 review, S2).
-            assert reads == [("start", new_start.replace(tzinfo=dt_timezone.utc))], reads
+            # One GET read the start back in UTC, at the typed moment (#262 review, S2).
+            assert reads == [[("start", new_start.replace(tzinfo=dt_timezone.utc))]], reads
             assert "note" not in result, result  # no corrective patch (#262)
 
             after = await get_event(real_graph_client.sdk_client, event_id)
@@ -804,16 +812,17 @@ class TestTimeZoneAnchoring:
                     "Windows-named event here to convert into"
                 )
 
-            reads = _spy_on_reply_reads(monkeypatch)
+            reads = _spy_on_read_backs(monkeypatch)
             result = await update_event(
                 sdk,
                 event_id=event_id,
                 start=f"{new_start.isoformat()}Z",
                 config=live_write_config,
             )
-            # The PATCH reply was read, at the typed moment, so no `note` means
-            # Graph agreed with the conversion through the Windows table (#262).
-            assert reads == [("start", new_start.replace(tzinfo=dt_timezone.utc))], reads
+            # One GET read the start back in UTC, at the typed moment, so no
+            # `note` means Graph agreed with the conversion through the Windows
+            # table (#262).
+            assert reads == [[("start", new_start.replace(tzinfo=dt_timezone.utc))]], reads
             assert "note" not in result, result
 
             after = await get_event(sdk, event_id)
@@ -899,7 +908,7 @@ class TestTimeZoneAnchoring:
         )
 
         subject = LIVE_WRITE_SUBJECT + " tz-dateline"
-        reads = _spy_on_reply_reads(monkeypatch)
+        reads = _spy_on_read_backs(monkeypatch)
         async with _temporary_event(
             real_graph_client,
             live_write_config,
@@ -917,8 +926,8 @@ class TestTimeZoneAnchoring:
                 "range": {"type": "numbered", "numberOfOccurrences": 2},
             },
         ) as (event_id, created):
-            # A series is not checked against the reply (#262 review, S1): it
-            # may carry the first occurrence, not the start sent.
+            # A series is not read back (#262 review, S1): its start may read
+            # as the first occurrence, not the start sent.
             assert reads == [], reads
             assert "note" not in created, created
             detail = await get_event(real_graph_client.sdk_client, event_id)
@@ -1013,10 +1022,11 @@ class TestAMovedEventIsPutBack:
 
     Graph and this host agree on every zone this tier can name, so the mismatch
     is forced: the conversion is shifted an hour late, Graph stores the event an
-    hour late, and the check has to see that in Graph's reply and send the time
-    again as typed. Asserted on a fresh read: the typed moment, and the zone the
-    `note` says it is filed in. If Graph turns out to keep the event's own zone
-    there, the event is right and the `note`'s wording is what needs changing.
+    hour late, and the check has to read that back and send the time again as
+    typed. Its own read after the correction must find the typed moments, and
+    so must a fresh read here, with the zone the `note` says it is filed in. If
+    Graph turns out to keep the event's own zone there, the event is right and
+    the `note`'s wording is what needs changing.
     """
 
     @staticmethod
@@ -1038,7 +1048,7 @@ class TestAMovedEventIsPutBack:
     ):
         monday = _anchor_monday()
         self._convert_an_hour_late(monkeypatch)
-        reads = _spy_on_reply_reads(monkeypatch)
+        reads = _spy_on_read_backs(monkeypatch)
 
         async with _temporary_event(
             real_graph_client,
@@ -1051,9 +1061,13 @@ class TestAMovedEventIsPutBack:
             end=f"{monday.isoformat()}T03:00:00Z",
             timezone=_DST_ZONE,
         ) as (event_id, created):
-            # Graph's reply put both ends an hour late, and the check read that.
-            assert dict(reads) == {"start": _utc(monday, 3), "end": _utc(monday, 4)}, reads
-            assert "note" in created, created
+            # The first GET found both ends an hour late; the GET after the
+            # corrective PATCH found them at the typed moments.
+            assert reads == [
+                [("start", _utc(monday, 3)), ("end", _utc(monday, 4))],
+                [("start", _utc(monday, 2)), ("end", _utc(monday, 3))],
+            ], reads
+            assert "so the time is right" in created.get("note", ""), created
 
             detail = await get_event(real_graph_client.sdk_client, event_id)
             assert _utc_date_time(detail["start"]) == f"{monday.isoformat()}T02:00:00"
@@ -1076,7 +1090,7 @@ class TestAMovedEventIsPutBack:
             timezone=_DST_ZONE,
         ) as event_id:
             self._convert_an_hour_late(monkeypatch)
-            reads = _spy_on_reply_reads(monkeypatch)
+            reads = _spy_on_read_backs(monkeypatch)
             sdk = real_graph_client.sdk_client
 
             # Midday Monday in Los Angeles, well clear of any clock change.
@@ -1088,8 +1102,11 @@ class TestAMovedEventIsPutBack:
                 config=live_write_config,
             )
 
-            assert dict(reads) == {"start": _utc(monday, 21), "end": _utc(monday, 22)}, reads
-            assert "note" in result, result
+            assert reads == [
+                [("start", _utc(monday, 21)), ("end", _utc(monday, 22))],
+                [("start", _utc(monday, 20)), ("end", _utc(monday, 21))],
+            ], reads
+            assert "so the time is right" in result.get("note", ""), result
 
             after = await get_event(sdk, event_id)
             assert _utc_date_time(after["start"]) == f"{monday.isoformat()}T20:00:00"

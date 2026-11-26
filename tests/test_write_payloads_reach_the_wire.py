@@ -223,6 +223,8 @@ class TestCalendarWrite:
         """The key lives in a hidden extended property, under Graph's camelCase name."""
         client = AsyncMock()
         client.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="s"))
+        # Synchronous, as the SDK's is: a converted create reads the event back.
+        client.me.events.by_event_id = MagicMock()
         await calendar_write.create_event(
             client,
             subject="s",

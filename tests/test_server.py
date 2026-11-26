@@ -544,6 +544,8 @@ class TestCalendarWriteArgumentOrder:
 
         sdk = AsyncMock()
         sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        # Synchronous, as the SDK's is: a converted create reads the event back.
+        sdk.me.events.by_event_id = MagicMock()
         client = MagicMock()
         client.sdk_client = sdk
 
@@ -586,6 +588,8 @@ class TestCalendarWriteArgumentOrder:
 
         sdk = AsyncMock()
         sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        # Synchronous, as the SDK's is: a converted create reads the event back.
+        sdk.me.events.by_event_id = MagicMock()
         client = MagicMock()
         client.sdk_client = sdk
         config = Config(client_id="test", timezone="Asia/Tokyo")
@@ -626,6 +630,8 @@ class TestCalendarWriteArgumentOrder:
 
         sdk = AsyncMock()
         sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        # Synchronous, as the SDK's is: a converted create reads the event back.
+        sdk.me.events.by_event_id = MagicMock()
         client = MagicMock()
         client.sdk_client = sdk
 
@@ -661,6 +667,8 @@ class TestCalendarWriteArgumentOrder:
 
         sdk = AsyncMock()
         sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        # Synchronous, as the SDK's is: a converted create reads the event back.
+        sdk.me.events.by_event_id = MagicMock()
         client = MagicMock()
         client.sdk_client = sdk
 
@@ -761,6 +769,8 @@ class TestCalendarWriteArgumentOrder:
 
         sdk = AsyncMock()
         sdk.me.events.post = AsyncMock(return_value=MagicMock(id="E1", subject="Review"))
+        # Synchronous, as the SDK's is: a converted create reads the event back.
+        sdk.me.events.by_event_id = MagicMock()
         client = MagicMock()
         client.sdk_client = sdk
 
