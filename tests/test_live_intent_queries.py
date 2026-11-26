@@ -29,7 +29,7 @@ from outlook_mcp.intents.budget import RequestBudget
 from outlook_mcp.intents.find import find_items
 from outlook_mcp.intents.people import parse_time, recipients, sender_of
 from outlook_mcp.intents.resolver import open_lookup
-from outlook_mcp.intents.selection import MailSelection, attachment_kql, search_kql
+from outlook_mcp.intents.selection import MailSelection, search_kql
 from outlook_mcp.tools.todo import fetch_all_task_lists
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
@@ -134,7 +134,10 @@ async def test_q2_contact_search_finds_a_contact_by_name(lookup):
             "$top": resolver.SEARCH_TOP,
         },
     )
-    assert contact["id"] in {c.get("id") for c in body.get("value") or []}
+    # Contacts from a search come back with regular ids too; translated, they must be
+    # the list's (this is also the unprobed half of P-SR1).
+    translated = await resolver._immutable(lookup, body.get("value") or [])
+    assert contact["id"] in {c.get("id") for c in translated}
 
 
 async def test_q3_contact_filter_matches_only_the_exact_address(lookup):
@@ -275,6 +278,8 @@ async def test_q8_to_search_finds_a_recipient_by_name(lookup):
 
 
 async def _search(lookup, selection: MailSelection) -> list[dict]:
+    """A selection's search, its hits translated to immutable ids as the resolver does:
+    live, a `$search` hands back regular ids while lists hand back immutable ones."""
     body = await lookup.graph.get(
         "/me/messages",
         {
@@ -283,7 +288,29 @@ async def _search(lookup, selection: MailSelection) -> list[dict]:
             "$top": resolver.SEARCH_TOP,
         },
     )
-    return body.get("value") or []
+    return await resolver._immutable(lookup, body.get("value") or [])
+
+
+async def test_search_ids_are_regular_until_translated_to_the_list_ids(lookup):
+    """Live round 1: a `$search` hit's id differs from the same message's list id even
+    with the immutable-id preference, and translateExchangeIds maps one to the other.
+    If Graph ever returns immutable ids on `$search`, the first assertion says so."""
+    for row in await _received(lookup):
+        word = _word_of(row.get("subject"))
+        if word:
+            break
+    else:
+        pytest.skip("no received message with a plain word in its subject")
+    body = await lookup.graph.get(
+        "/me/messages",
+        {"$search": f'"{word}"', "$select": "id,internetMessageId", "$top": resolver.SEARCH_TOP},
+    )
+    hits = body.get("value") or []
+    assert hits, f"{word!r} found nothing, though a message with it exists"
+    assert row["id"] not in {h["id"] for h in hits}, "search ids now match list ids"
+    translated = await resolver._immutable(lookup, hits)
+    assert row["id"] in {h["id"] for h in translated}
+    assert lookup.graph.id_family.family == "immutable"
 
 
 async def test_a_search_with_a_sender_returns_only_their_mail(lookup):
@@ -340,12 +367,10 @@ async def test_has_attachments_narrows_a_search(lookup):
     assert all(h.get("hasAttachments") is True for h in hits)
 
 
-async def test_p_at1_attachment_search_finds_a_file_by_its_name(lookup):
-    """KQL `attachment:` must reach attachment names, or find falls back without it.
-
-    Graph refusing it (400) is P-AT1's other answer: the resolver then searches the
-    words alone, so that skips with the reason rather than failing.
-    """
+async def test_p_at1_the_words_search_finds_a_file_by_the_start_of_its_name(lookup):
+    """P-AT1, settled live: KQL `attachment:` matches only the start of a file's name,
+    and plain words find that too, so find sends the words search alone. This holds
+    the part find relies on: a file's first word finds its message."""
     for row in await _received(lookup):
         if not row.get("hasAttachments"):
             continue
@@ -355,26 +380,20 @@ async def test_p_at1_attachment_search_finds_a_file_by_its_name(lookup):
         )
         names = [a.get("name") for a in body.get("value") or [] if a.get("isInline") is False]
         word = next(
-            (w for n in names for w in re.split(r"[^A-Za-z]+", n or "") if _WORD.fullmatch(w)),
+            (
+                first
+                for n in names
+                if (first := (re.split(r"[^A-Za-z]+", n or "") or [""])[0])
+                and _WORD.fullmatch(first)
+            ),
             None,
         )
         if word:
             break
     else:
-        pytest.skip("no received message with a file whose name has a plain word")
-    query = attachment_kql(MailSelection(words=word, has_attachments=True))
-    try:
-        hits = (
-            await lookup.graph.get(
-                "/me/messages",
-                {"$search": query, "$select": resolver.MESSAGE_SELECT, "$top": resolver.SEARCH_TOP},
-            )
-        ).get("value") or []
-    except GraphAPIError as error:
-        if error.status_code == 400:
-            pytest.skip("P-AT1: Graph refuses `attachment:` here; find searches the words alone")
-        raise
-    assert hits, f"attachment:{word} found nothing, though a file of that name exists"
+        pytest.skip("no received message with a file whose name starts with a plain word")
+    hits = await _search(lookup, MailSelection(words=word, has_attachments=True))
+    assert row["id"] in {h["id"] for h in hits}, f"{word!r} did not find the file's message"
     assert all(h.get("hasAttachments") is True for h in hits)
 
 
@@ -443,7 +462,7 @@ async def test_find_answers_every_kind_within_its_ceiling(real_graph_client, kin
         loaded_tools=frozenset(),
     )
     assert env["tool"] == "outlook_find"
-    assert env["outcome"] in ("exact", "single", "candidates", "nothing_found")
+    assert env["outcome"] in ("exact", "single", "candidates", "nothing_found", "incomplete")
     assert env["graph_requests"] <= 30
     for failure in env["failed_sections"]:
         # Only a mailbox that refuses inbox rules may leave the section unanswered.

@@ -66,7 +66,6 @@ from outlook_mcp.intents.people import (
 )
 from outlook_mcp.intents.selection import (
     MailSelection,
-    attachment_kql,
     kql_words,
     matches_locally,
     search_kql,
@@ -108,7 +107,14 @@ HEADER_SELECT = "id,from,internetMessageHeaders"
 HEADER_READS = 5
 # `isDraft` beyond the contract's list: a draft is not a message anyone sent, so it
 # is left out of message, thread and file results (``find(kind="draft")`` finds it).
-MESSAGE_SELECT = SUMMARY_SELECT + ",toRecipients,ccRecipients,parentFolderId,isDraft"
+# `internetMessageHeaders` too: live (P-F5), lists and `$search` return it, so the sender
+# check reads it off the row instead of reading each message again.
+MESSAGE_SELECT = (
+    SUMMARY_SELECT + ",toRecipients,ccRecipients,parentFolderId,isDraft,internetMessageHeaders"
+)
+# A `$search` hands back regular ids whatever the request asked for (live round 1); this
+# turns them into the immutable ids every other reply carries, one request per search.
+TRANSLATE_PATH = "/me/translateExchangeIds"
 FILE_MESSAGES = 10
 ATTACHMENT_SELECT = "id,name,size,contentType,isInline"
 EVENT_SELECT = (
@@ -489,16 +495,36 @@ def _headers_of(row: dict) -> list[tuple[str, str]]:
     return found
 
 
-async def _header_verdicts(lookup: Lookup, rows: list[dict]) -> dict[str, dict]:
-    """Microsoft's verdict on the From domain of each message, by id: one batch of
-    single-message reads, which select headers as documented (contracts F5)."""
-    wanted = [r["id"] for r in rows if isinstance(r.get("id"), str)]
+async def _verdicts(
+    lookup: Lookup, rows: list[dict], *, read_missing: bool = True
+) -> dict[str, dict]:
+    """Microsoft's verdict on each message's From domain, by message id.
+
+    P-F5, settled live: ``internetMessageHeaders`` comes back on lists, ``$search``
+    and delta replies, so the verdict is read off the row. A row without the key is
+    read on its own, the documented single-message read, at most ``HEADER_READS`` of
+    them; live, only a message with no headers at all (a draft) lacks the key, and its
+    own read lacks it too, so that row stays unchecked.
+    """
+    verdicts: dict[str, dict] = {}
+    missing: list[str] = []
+    for row in rows:
+        message_id = row.get("id")
+        if not isinstance(message_id, str):
+            continue
+        if "internetMessageHeaders" in row:
+            address, _ = sender_of(row)
+            verdicts[message_id] = sender_auth.sender_authentication(
+                _headers_of(row), address or ""
+            )
+        else:
+            missing.append(message_id)
+    wanted = missing[:HEADER_READS] if read_missing else []
     if not wanted:
-        return {}
+        return verdicts
     replies = await lookup.graph.batch(
         [f"/me/messages/{quote(m, safe='')}?$select={HEADER_SELECT}" for m in wanted]
     )
-    verdicts: dict[str, dict] = {}
     for message_id, reply in zip(wanted, replies, strict=True):
         body = reply.get("body") if isinstance(reply.get("body"), dict) else {}
         if 200 <= (reply.get("status") or 0) < 300 and "internetMessageHeaders" in body:
@@ -507,6 +533,45 @@ async def _header_verdicts(lookup: Lookup, rows: list[dict]) -> dict[str, dict]:
                 _headers_of(body), address or ""
             )
     return verdicts
+
+
+async def _immutable(lookup: Lookup, rows: list[dict]) -> list[dict]:
+    """``rows`` from a ``$search`` with their ids in the process's id family.
+
+    Live round 1: a ``$search`` hands back regular ids even when its
+    Preference-Applied says immutable, while lists and filters hand back immutable
+    ones, so one message could reach the agent under two ids. One
+    ``POST /me/translateExchangeIds`` (restId to restImmutableEntryId; it reads and
+    changes nothing) turns them into the ids the rest of the process hands out.
+    Skipped when Graph gives this mailbox regular ids everywhere (family ``rest``). A
+    failed or partial translation keeps the regular ids and makes the family
+    ``mixed``, so the mismatch is on record rather than silent. Contact ids go the
+    same way; that translation is unprobed (contracts §14, P-SR1).
+    """
+    wanted = [r["id"] for r in rows if isinstance(r.get("id"), str)]
+    if not wanted or lookup.graph.id_family.family == "rest":
+        return rows
+    try:
+        body = await lookup.graph.post(
+            TRANSLATE_PATH,
+            {
+                "inputIds": wanted,
+                "sourceIdType": "restId",
+                "targetIdType": "restImmutableEntryId",
+            },
+        )
+    except GraphAPIError:
+        lookup.graph.id_family.observe(None)
+        return rows
+    targets = {
+        v.get("sourceId"): v.get("targetId")
+        for v in body.get("value") or []
+        if isinstance(v, dict) and isinstance(v.get("targetId"), str) and v.get("targetId")
+    }
+    translated = [{**r, "id": targets[r["id"]]} if r.get("id") in targets else r for r in rows]
+    if any(isinstance(r.get("id"), str) and r["id"] not in targets for r in rows):
+        lookup.graph.id_family.observe(None)
+    return translated
 
 
 # ── People (§2.6 Q1-Q8) ───────────────────────────────────────────────────
@@ -642,7 +707,7 @@ async def _people(lookup: Lookup, words: str, limit: int, *, light: bool) -> _Fo
             "/me/contacts",
             {"$search": search, "$select": CONTACT_SEARCH_SELECT, "$top": SEARCH_TOP},
         )
-        for row in body.get("value") or []:
+        for row in await _immutable(lookup, body.get("value") or []):
             display = row.get("displayName") if isinstance(row.get("displayName"), str) else None
             given_surname = " ".join(
                 str(row.get(k) or "") for k in ("givenName", "surname")
@@ -780,8 +845,9 @@ async def _enrich(lookup: Lookup, chosen: list[_Person], words: str) -> None:
                 # documented single-message read (contracts §2.6 Q6).
                 needs_read.append((row["id"], p))
         elif slot == "letters":
-            # P-SE1: KQL `recipients:` may match more than the exact address. Only
-            # letters that really list it count, and meeting messages never do.
+            # P-SE1, settled live: KQL `recipients:probe@example.com` also returns a
+            # letter to `probe@example.com.example`. Only letters that really list the
+            # address count, and meeting messages never do.
             letters = [
                 row
                 for row in rows
@@ -799,7 +865,7 @@ async def _enrich(lookup: Lookup, chosen: list[_Person], words: str) -> None:
                             p.trusted_name = True
                             p.sent_name = p.sent_name or name
     if needs_read:
-        verdicts = await _header_verdicts(lookup, [{"id": m} for m, _ in needs_read])
+        verdicts = await _verdicts(lookup, [{"id": m} for m, _ in needs_read])
         for message_id, p in needs_read:
             p.verdict = verdicts.get(message_id)
             p.check_failed = p.verdict is None
@@ -922,8 +988,9 @@ async def _mail(
                 )
             if kind == "message":
                 table = await lookup.sent_table()
+                verdicts = await _verdicts(lookup, _others([row], table), read_missing=False)
                 return _Found(
-                    ranked=[_mail_candidate(row, table, {}, words, None, search=False)],
+                    ranked=[_mail_candidate(row, table, verdicts, words, None, search=False)],
                     exact=True,
                     sources=["mail"],
                 )
@@ -946,7 +1013,10 @@ async def _mail(
             if rows:
                 table = await lookup.sent_table()
                 count = None if body.get("@odata.nextLink") else len(rows)
-                candidate = _thread_candidate(rows, table, {}, words, search=False, count=count)
+                verdicts = await _verdicts(lookup, _others(rows, table), read_missing=False)
+                candidate = _thread_candidate(
+                    rows, table, verdicts, words, search=False, count=count
+                )
                 return _Found(ranked=[candidate], exact=True, sources=["mail"])
     if kind == "message" and words.startswith("<") and words.endswith(">") and "@" in words:
         # The shape of `mail_read.resolve_message_id` (reuse of its query), read here so
@@ -958,7 +1028,8 @@ async def _mail(
         )
         table = await lookup.sent_table()
         rows = body.get("value") or []
-        ranked = [_mail_candidate(r, table, {}, words, None, search=False) for r in rows]
+        verdicts = await _verdicts(lookup, _others(rows, table), read_missing=False)
+        ranked = [_mail_candidate(r, table, verdicts, words, None, search=False) for r in rows]
         return _Found(ranked=ranked, exact=len(rows) == 1, sources=["mail"])
 
     # The sender, through the light path unless it's an address.
@@ -1000,15 +1071,20 @@ async def _mail(
     not_searched: list[str] = []
     if body.get("@odata.nextLink"):
         not_searched.append(f"matches after the first {SEARCH_TOP}")
-    if kind == "file":
-        rows += await _named_in_attachments(lookup, path, select, selection, rows, not_searched)
+    # P-AT1, settled live: KQL `attachment:` matches only the start of a file's name,
+    # which this words search finds too, so no second search is sent. A word inside a
+    # name is found only by the local match on the fetched attachment names below.
     notes = {"selection": selection.echo(), "sender_resolved": senders[0] if senders else None}
     if kind == "draft":
         # The owner's own: no sent table is needed to know them.
+        rows = await _immutable(lookup, rows)
         ranked = [_draft_candidate(r, words) for r in rows if r.get("isDraft") is not False]
         return _Found(ranked=ranked, sources=["drafts"], notes=notes, not_searched=not_searched)
     rows = [r for r in rows if r.get("isDraft") is not True]
+    # The sent table's list reply comes first, so the id family is known before the
+    # search's ids are translated into it.
     table = await lookup.sent_table()
+    rows = await _immutable(lookup, rows)
     sources = ["mail"]
 
     # Provisional order, to choose whose headers are read.
@@ -1021,7 +1097,7 @@ async def _mail(
             max(group, key=lambda r: r.get("receivedDateTime") or "") for group in threads.values()
         ]
         latest.sort(key=lambda r: _mail_sort(r, words, table))
-        verdicts = await _header_verdicts(lookup, _others(latest, table)[:HEADER_READS])
+        verdicts = await _verdicts(lookup, _others(latest, table))
         ranked = [
             _thread_candidate(
                 threads[str(r.get("conversationId") or r.get("id"))],
@@ -1058,49 +1134,13 @@ async def _mail(
         if unread:
             not_searched.append(f"the files of {unread} matching messages whose list failed")
         file_rows = list({r["id"]: r for r, _ in found_files}.values())
-        verdicts = await _header_verdicts(lookup, _others(file_rows, table)[:HEADER_READS])
+        verdicts = await _verdicts(lookup, _others(file_rows, table))
         ranked = [_file_candidate(r, a, table, verdicts, words) for r, a in found_files]
         return _Found(ranked=ranked, sources=sources, notes=notes, not_searched=not_searched)
 
-    verdicts = await _header_verdicts(lookup, _others(rows, table)[:HEADER_READS])
+    verdicts = await _verdicts(lookup, _others(rows, table))
     ranked = [_mail_candidate(r, table, verdicts, words, filters.folder) for r in rows]
     return _Found(ranked=ranked, sources=sources, notes=notes, not_searched=not_searched)
-
-
-async def _named_in_attachments(
-    lookup: Lookup,
-    path: str,
-    select: str,
-    selection: MailSelection,
-    found: list[dict],
-    not_searched: list[str],
-) -> list[dict]:
-    """Messages whose attachment names hold the words, beyond those ``found`` already.
-
-    P-AT1: whether a personal mailbox takes KQL ``attachment:``. On a 400 the file
-    search is what it was without it, the words search alone; nothing is raised.
-    """
-    query = attachment_kql(selection)
-    if query is None:
-        return []
-    try:
-        body = await lookup.graph.get(
-            path, {"$search": query, "$select": select, "$top": SEARCH_TOP}
-        )
-    except GraphAPIError as error:
-        if error.status_code != 400:
-            raise
-        return []
-    if body.get("@odata.nextLink"):
-        message = f"matches after the first {SEARCH_TOP}"
-        if message not in not_searched:
-            not_searched.append(message)
-    seen = {r.get("id") for r in found}
-    return [
-        r
-        for r in body.get("value") or []
-        if r.get("id") not in seen and matches_locally(r, selection)
-    ]
 
 
 def _from_owner(row: dict, table: SentTable) -> bool:
@@ -1471,7 +1511,10 @@ def _event_candidate(
         reasons.append(why("meeting_with_them"))
 
     warnings: list[dict] = []
-    if not is_organizer and not written and response in ("none", "notResponded"):
+    # P-SI1 (b), live: a received meeting that names the owner as organizer reads
+    # isOrganizer false with response `organizer`; the owner's own event reads true.
+    # Such a received "organizer" response is a stranger's invitation too.
+    if not is_organizer and not written and response in ("none", "notResponded", "organizer"):
         warnings.append(warn("stranger_invite"))
     if show_as == "free":
         warnings.append(warn("shows_free"))

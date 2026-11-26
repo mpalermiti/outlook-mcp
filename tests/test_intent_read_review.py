@@ -813,74 +813,88 @@ async def test_c3_one_deadline_covers_brief_resolution(fake, monkeypatch):
     assert env["outcome"] == "incomplete"
 
 
-# ── Live finding (probe day 1): Graph's isOrganizer is not the owner's word ──
+# ── Live round 1, P-SI1 (b): isOrganizer is the owner's word, not an address ──
 
 
-def _owned(event_id: str, start: str, end: str, **kwargs) -> dict:
-    """The owner's own meeting as a personal mailbox returns it: organizer the owner's
-    address, isOrganizer false, and no response of its own."""
-    row = ag.ev(event_id, start, end, organizer=ME, organizer_name="Me", **kwargs)
+def _forged(event_id: str, start: str, end: str) -> dict:
+    """The recorded shape of a received meeting that names the owner as organizer:
+    isOrganizer false, response `organizer`."""
+    row = ag.ev(event_id, start, end, organizer=ME, organizer_name="Me", response="organizer")
     row["isOrganizer"] = False
-    row["responseStatus"] = {"response": "none"}
     return row
 
 
-async def test_live_agenda_knows_the_owners_meeting_by_its_organizer_address(fake):
+async def test_live_agenda_a_received_meeting_naming_the_owner_is_not_theirs(fake):
     box = Mailbox(
         calendars=[{"id": "cal-1", "name": "Calendar", "isDefaultCalendar": True}],
-        events={"cal-1": [_owned("mine", "2026-11-26T15:00:00", "2026-11-26T16:00:00")]},
+        events={"cal-1": [_forged("forged", "2026-11-26T15:00:00", "2026-11-26T16:00:00")]},
     )
-    env = await ag.run(fake, box, tools=EVERY_TOOL, include_tasks=False, signed_in=ME)
-    assert sec(env, "invites")["items"] == []
+    env = await ag.run(fake, box, tools=EVERY_TOOL, include_tasks=False)
     (shown,) = next(d for d in sec(env, "days")["items"] if d["date"] == "2026-11-26")["events"]
-    assert shown["is_organizer"] is True
-    assert {"code": "organizer_you"} in shown["why"]
-    assert [n["args"] for n in env["next"] if n["template"] == "brief_meeting"] == [
-        {"meeting": "mine"}
-    ]
-
-
-async def test_live_agenda_never_trusts_is_organizer_on_a_strangers_invitation(fake):
-    row = ag.ev(
-        "bait",
-        "2026-11-26T15:00:00",
-        "2026-11-26T16:00:00",
-        organizer=ag.STRANGER,
-        organizer_name="Stranger",
-        response="notResponded",
-    )
-    row["isOrganizer"] = True  # whatever Graph says, the organizer is a stranger
-    box = Mailbox(
-        calendars=[{"id": "cal-1", "name": "Calendar", "isDefaultCalendar": True}],
-        events={"cal-1": [row]},
-    )
-    env = await ag.run(fake, box, tools=EVERY_TOOL, include_tasks=False, signed_in=ME)
-    (invite,) = sec(env, "invites")["items"]
-    assert invite["is_organizer"] is False
+    assert shown["is_organizer"] is False
+    assert {"code": "organizer_you"} not in shown["why"]
     assert not [n for n in env["next"] if n["template"] == "brief_meeting"]
 
 
-async def test_live_catch_up_knows_the_owners_meeting_by_its_organizer_address(fake):
-    parts = cu.mailbox()
-    box, _, _ = parts
-    mine = cu.ev("e-mine", "2026-11-26T16:00:00", "2026-11-26T17:00:00", response="none")
-    mine["isOrganizer"] = False  # what a personal mailbox says of the owner's own meeting
-    box.events["cal-1"].append(mine)
-    env = await cu.run(fake, parts, tools=EVERY_TOOL)
-    assert "e-mine" not in [i["id"] for i in sec(env, "invites")["items"]]
-    shown = next(i for i in sec(env, "meetings_today")["items"] if i["id"] == "e-mine")
-    assert shown["is_organizer"] is True
-    assert {"code": "organizer_you"} in shown["why"]
-    answered = [n["args"]["event_ids"] for n in env["next"] if n["template"] == "answer"]
-    assert ["e-mine"] not in answered
+def test_live_an_organizer_response_on_a_meeting_not_the_owners_is_a_stranger_invite():
+    from outlook_mcp.intents.people import SentTable
+    from outlook_mcp.intents.reading import event_item
+
+    row = _forged("forged", "2026-11-26T15:00:00", "2026-11-26T16:00:00")
+    item = event_item(
+        row,
+        calendar=None,
+        tz=timezone.utc,
+        zone_name="UTC",
+        now=ag.NOW,
+        table=SentTable(me=frozenset({ME})),
+    )
+    assert item["is_organizer"] is False
+    assert {"code": "stranger_invite"} in item["warnings"]
+    # The recorded own-event shape: isOrganizer true, response `organizer`.
+    mine = ag.ev("mine", "2026-11-26T15:00:00", "2026-11-26T16:00:00")
+    own = event_item(
+        mine,
+        calendar=None,
+        tz=timezone.utc,
+        zone_name="UTC",
+        now=ag.NOW,
+        table=SentTable(me=frozenset({ME})),
+    )
+    assert own["is_organizer"] is True
+    assert {"code": "organizer_you"} in own["why"]
+    assert {"code": "stranger_invite"} not in own["warnings"]
 
 
-async def test_live_catch_up_never_trusts_is_organizer_on_a_strangers_invitation(fake):
+# ── Live round 1, $search ids: no regular id ever leaves a read tool ─────
+
+
+async def test_live_open_loops_hands_out_no_search_id(fake):
+    """L8 keeps only the hits' conversations; every message id it hands out comes from
+    a filter read, so none is a search's regular id (no translation is needed)."""
+    box = ol.mailbox()
+    box.received.append(
+        received(
+            "old",
+            "zed@example.com",
+            "Invoice 42",
+            conversation="conv-old",
+            when="2026-09-01T09:00:00Z",
+        )
+    )
+    env = await ol.run(fake, box, words="invoice", tools=EVERY_TOOL)
+    assert any(s.search for s in fake.operations)  # the search ran, with regular ids
+    assert "conv-old" in [i["id"] for i in sec(env, "waiting_on_me")["items"]]
+    assert "rest-" not in json.dumps(env)
+    assert not [s for s in fake.operations if s.path == "/me/translateExchangeIds"]
+
+
+async def test_live_catch_up_a_received_meeting_naming_the_owner_is_a_stranger_invite(fake):
     parts = cu.mailbox()
     box, _, _ = parts
-    e2 = next(e for e in box.events["cal-1"] if e["id"] == "e2")
-    e2["isOrganizer"] = True  # the organizer is still a stranger
+    box.events["cal-1"].append(_forged("forged", "2026-11-26T16:00:00", "2026-11-26T17:00:00"))
     env = await cu.run(fake, parts, tools=EVERY_TOOL)
-    invite = next(i for i in sec(env, "invites")["items"] if i["id"] == "e2")
-    assert invite["is_organizer"] is False
-    assert {"code": "stranger_invite"} in invite["warnings"]
+    shown = next(i for i in sec(env, "meetings_today")["items"] if i["id"] == "forged")
+    assert shown["is_organizer"] is False
+    assert {"code": "organizer_you"} not in shown["why"]
+    assert {"code": "stranger_invite"} in shown["warnings"]

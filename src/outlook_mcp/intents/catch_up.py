@@ -815,9 +815,7 @@ async def _calendar_sections(
     invites = [
         event_item(r, calendar=None, tz=tz, zone_name=zone, now=now, table=table)
         for r in events
-        # The owner's own meeting is never an invitation: by its organizer's address
-        # (reading.owner_organizes), never Graph's isOrganizer (live finding, day 1).
-        if is_open_invite(r, table.me) and (event_span(r, tz)[0] or now) > now
+        if is_open_invite(r) and (event_span(r, tz)[0] or now) > now
     ]
     today = []
     for r in events:

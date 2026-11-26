@@ -73,6 +73,11 @@ def sub_error(reply: dict) -> GraphAPIError:
     )
 
 
+def _is_search(url: str) -> bool:
+    """Whether a request URL is a `$search`, whose ids come back regular (live round 1)."""
+    return any(key == "$search" for key, _ in parse_qsl(urlsplit(url).query))
+
+
 def _header(headers: Any, name: str) -> str | None:
     """A header from an httpx reply or a ``$batch`` sub-response's plain dict."""
     if isinstance(headers, httpx.Headers):
@@ -177,10 +182,19 @@ class IntentGraph:
         self.budget.spend(1)
         self._note(url)
         response = await self._send("GET", url, units=1, prefer=prefer)
-        if ids:
+        if ids and not _is_search(url):
             # P-A2: whether a personal mailbox honours the preference at all. Not
-            # assumed either way: the reply says which family it is (ids.py).
+            # assumed either way: the reply says which family it is (ids.py). A
+            # `$search` reply never votes: live, it hands back regular ids while its
+            # Preference-Applied says immutable, so the resolver translates its ids.
             self.id_family.observe(response.headers.get("Preference-Applied"))
+        return graph_json(response)
+
+    async def post(self, path: str, body: dict) -> dict:
+        """One counted POST of a JSON body to ``path``, for the one call find makes
+        that way: ``translateExchangeIds``, which reads and changes nothing."""
+        self.budget.spend(1)
+        response = await self._send("POST", GRAPH_BASE + path, units=1, content=json.dumps(body))
         return graph_json(response)
 
     async def batch(self, urls: list[str], *, ids: bool = True) -> list[dict]:
@@ -226,7 +240,12 @@ class IntentGraph:
                     "body": {"error": {"code": "NoResponse", "message": "no sub-response"}},
                 }
                 status = reply.get("status")
-                if ids and isinstance(status, int) and 200 <= status < 300:
+                if (
+                    ids
+                    and isinstance(status, int)
+                    and 200 <= status < 300
+                    and not _is_search(chunk[n])
+                ):
                     # P-A4: whether a sub-request's own header is honoured, and its
                     # Preference-Applied returned. A sub-response without it counts
                     # as the regular family, so a mismatch shows up as "mixed".

@@ -568,3 +568,21 @@ def test_the_send_guard_wants_a_real_pair_and_a_small_budget():
     guard.reserve(1)
     with pytest.raises(SendRefused):
         guard.authorize("sendMail", [""])
+
+
+def test_the_read_only_tiers_admit_the_one_post_that_changes_nothing():
+    """`POST /me/translateExchangeIds` turns ids from one format into another and
+    changes nothing in the mailbox: `find` needs it because `$search` hands back
+    regular ids (live round 1). Only that path on Graph, only through `/me`."""
+    guard = ReadOnly(tier="live")
+    body = {"inputIds": ["AQMk"], "sourceIdType": "restId", "targetIdType": "restImmutableEntryId"}
+    guard.before("POST", f"{GRAPH}/me/translateExchangeIds", body)
+    for url in (
+        f"{GRAPH}/me/messages/m1/translateExchangeIds",
+        f"{GRAPH}/users/someone@example.com/translateExchangeIds",
+        "https://evil.example/v1.0/me/translateExchangeIds",
+    ):
+        with pytest.raises(WriteRefused, match="live is read-only"):
+            guard.before("POST", url, body)
+    with pytest.raises(WriteRefused, match="live is read-only"):
+        guard.before("PATCH", f"{GRAPH}/me/translateExchangeIds", body)

@@ -18,7 +18,7 @@ from outlook_mcp.intents import agenda, budget, ids, transport
 from outlook_mcp.intents.agenda import read_agenda
 from outlook_mcp.intents.envelope import WARNING_CODES, WHY_CODES
 from outlook_mcp.intents.ids import IdFamily
-from tests.intent_fakes import ME, FakeGraph, Mailbox, error, event, page
+from tests.intent_fakes import FakeGraph, Mailbox, error, event, page
 
 # A Thursday, noon in UTC.
 NOW = datetime(2026, 11, 26, 12, 0, tzinfo=timezone.utc)
@@ -115,7 +115,6 @@ def mailbox(m: str = "") -> Mailbox:
 
 async def run(fake, box=None, *, tools=frozenset({"outlook_brief"}), **args):
     (box or mailbox()).install(fake)
-    args.setdefault("signed_in", ME)
     return await read_agenda(
         fake.graph_client(), config_zone="UTC", loaded_tools=tools, now=NOW, **args
     )
