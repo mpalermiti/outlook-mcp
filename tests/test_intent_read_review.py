@@ -811,3 +811,76 @@ async def test_c3_one_deadline_covers_brief_resolution(fake, monkeypatch):
     env = await br.run(fake, person="sam")
     assert time.monotonic() - began < 0.9
     assert env["outcome"] == "incomplete"
+
+
+# ── Live finding (probe day 1): Graph's isOrganizer is not the owner's word ──
+
+
+def _owned(event_id: str, start: str, end: str, **kwargs) -> dict:
+    """The owner's own meeting as a personal mailbox returns it: organizer the owner's
+    address, isOrganizer false, and no response of its own."""
+    row = ag.ev(event_id, start, end, organizer=ME, organizer_name="Me", **kwargs)
+    row["isOrganizer"] = False
+    row["responseStatus"] = {"response": "none"}
+    return row
+
+
+async def test_live_agenda_knows_the_owners_meeting_by_its_organizer_address(fake):
+    box = Mailbox(
+        calendars=[{"id": "cal-1", "name": "Calendar", "isDefaultCalendar": True}],
+        events={"cal-1": [_owned("mine", "2026-11-26T15:00:00", "2026-11-26T16:00:00")]},
+    )
+    env = await ag.run(fake, box, tools=EVERY_TOOL, include_tasks=False, signed_in=ME)
+    assert sec(env, "invites")["items"] == []
+    (shown,) = next(d for d in sec(env, "days")["items"] if d["date"] == "2026-11-26")["events"]
+    assert shown["is_organizer"] is True
+    assert {"code": "organizer_you"} in shown["why"]
+    assert [n["args"] for n in env["next"] if n["template"] == "brief_meeting"] == [
+        {"meeting": "mine"}
+    ]
+
+
+async def test_live_agenda_never_trusts_is_organizer_on_a_strangers_invitation(fake):
+    row = ag.ev(
+        "bait",
+        "2026-11-26T15:00:00",
+        "2026-11-26T16:00:00",
+        organizer=ag.STRANGER,
+        organizer_name="Stranger",
+        response="notResponded",
+    )
+    row["isOrganizer"] = True  # whatever Graph says, the organizer is a stranger
+    box = Mailbox(
+        calendars=[{"id": "cal-1", "name": "Calendar", "isDefaultCalendar": True}],
+        events={"cal-1": [row]},
+    )
+    env = await ag.run(fake, box, tools=EVERY_TOOL, include_tasks=False, signed_in=ME)
+    (invite,) = sec(env, "invites")["items"]
+    assert invite["is_organizer"] is False
+    assert not [n for n in env["next"] if n["template"] == "brief_meeting"]
+
+
+async def test_live_catch_up_knows_the_owners_meeting_by_its_organizer_address(fake):
+    parts = cu.mailbox()
+    box, _, _ = parts
+    mine = cu.ev("e-mine", "2026-11-26T16:00:00", "2026-11-26T17:00:00", response="none")
+    mine["isOrganizer"] = False  # what a personal mailbox says of the owner's own meeting
+    box.events["cal-1"].append(mine)
+    env = await cu.run(fake, parts, tools=EVERY_TOOL)
+    assert "e-mine" not in [i["id"] for i in sec(env, "invites")["items"]]
+    shown = next(i for i in sec(env, "meetings_today")["items"] if i["id"] == "e-mine")
+    assert shown["is_organizer"] is True
+    assert {"code": "organizer_you"} in shown["why"]
+    answered = [n["args"]["event_ids"] for n in env["next"] if n["template"] == "answer"]
+    assert ["e-mine"] not in answered
+
+
+async def test_live_catch_up_never_trusts_is_organizer_on_a_strangers_invitation(fake):
+    parts = cu.mailbox()
+    box, _, _ = parts
+    e2 = next(e for e in box.events["cal-1"] if e["id"] == "e2")
+    e2["isOrganizer"] = True  # the organizer is still a stranger
+    env = await cu.run(fake, parts, tools=EVERY_TOOL)
+    invite = next(i for i in sec(env, "invites")["items"] if i["id"] == "e2")
+    assert invite["is_organizer"] is False
+    assert {"code": "stranger_invite"} in invite["warnings"]
