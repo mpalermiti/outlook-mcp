@@ -316,3 +316,6 @@ async def test_a_larger_complete_search_note_does_not_assert_a_275_result_limit(
     assert "has been seen" in note
     assert "older matches may be missing" in note
     assert "received<=" in note
+    # Live session 2: with only a space between them KQL ORs two received bounds, so
+    # a query that already has `received>=` needs the new bound joined with AND.
+    assert "AND received<=" in note
