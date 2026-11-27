@@ -381,6 +381,19 @@ def _a_classic_install_unless_a_test_says_otherwise(monkeypatch):
     monkeypatch.setattr(ids, "ID_FAMILY", ids.IdFamily())
 
 
+@pytest.fixture(autouse=True)
+def _the_tip_already_shown(monkeypatch):
+    """Every test starts as if this process had already shown its one tip.
+
+    Tips are on from 1.35.0, so the first mapped classic tool a test calls would
+    otherwise gain a `server_tip` key, and which test that is would depend on the
+    order tests run in. `test_intent_tip.py` resets it for the tests of the tip.
+    """
+    from outlook_mcp import server
+
+    monkeypatch.setattr(server, "_tip_shown", True)
+
+
 # ── The send tier ─────────────────────────────────────────────────────────
 
 # Every SendGuard this run made, for the summary line.

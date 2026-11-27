@@ -35,6 +35,9 @@ BOOL_FIELDS = {"read_only", "read_only_consent", "allow_unencrypted_token_cache"
 # an empty pass-through cannot silently drop a restriction; a cosmetic setting
 # has none to drop, and should not stop the server over one.
 BLANK_IS_UNSET = {"show_tips"}
+# These also take 1 and 0, the usual spelling of a switch in a client's env block.
+# Only cosmetic settings: a security setting keeps the explicit true/false rule.
+ZERO_ONE_FIELDS = {"show_tips"}
 
 
 def _refuse(variable: str, reason: str) -> EnvironmentConfigError:
@@ -44,6 +47,8 @@ def _refuse(variable: str, reason: str) -> EnvironmentConfigError:
 def _parse(variable: str, field: str, value: str) -> object:
     if field in BOOL_FIELDS:
         value = value.strip().lower()
+        if field in ZERO_ONE_FIELDS and value in ("1", "0"):
+            return value == "1"
         if value not in ("true", "false"):
             raise _refuse(variable, "use true or false explicitly.")
         return value == "true"

@@ -6,6 +6,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [1.35.0] — 2026-11-27
+
+Five intent tools arrive as an early preview, in a new `intents` group that is off by default:
+`outlook_find`, `outlook_agenda`, `outlook_open_loops`, `outlook_catch_up` and `outlook_brief`.
+Each answers a whole question in one call and only reads. Nothing changes for an install that
+doesn't turn them on. Turn them on with `outlook-mcp toolsets classic,intents`, with
+`"toolsets": "classic,intents"` in config.json, or with `OUTLOOK_MCP_TOOLSETS=classic,intents`,
+then restart the MCP client; `outlook-mcp toolsets classic` turns them off again. Until they are
+on, one result per server run carries a one-line tip saying how; `"show_tips": false` or
+`OUTLOOK_MCP_SHOW_TIPS=0` turns it off. The tool groups can now be chosen in config.json, and
+`classic` names the default set.
+
+What they change, from the project's eval of 80 requests (Sonnet, each request run once on 1.34
+and once with the intent group, writes intercepted): the 73 read questions passed 73
+of 73 with the intent tools against 71 of 73 without, with 12% fewer tool calls. "Who haven't I
+replied to?" took 2 calls and 77k tokens, against 18 calls and 479k. The cost: about 2.4 times
+the Graph requests per question, and about the same tokens overall. On a real mailbox of about
+22,000 messages, every read tool answered in under 9 seconds, typically in 1 to 4.
+
+83 tools, 71 by default.
+
 ### Added
 
 - **`outlook_find`, the first intent tool, as an opt-in early preview.** One call turns a name,
@@ -97,9 +118,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `outlook-mcp toolsets <groups>` writes that one key and keeps every other key and value,
   rewriting the file as indented JSON; on its own, it and `outlook-mcp status` show the groups
   that load, where the choice came from and the tool count. A name that is not a group still
-  loads nothing, and the server now says so at start, naming where it came from. A new
-  `show_tips` setting (`OUTLOOK_MCP_SHOW_TIPS`) is in place for a one-time tip in tool results;
-  no release shows one yet.
+  loads nothing, and the server now says so at start, naming where it came from.
+
+- **A one-time tip points a classic install to the intent tools.** While `intents` is not
+  loaded, the first result of a classic tool that an intent tool answers carries a top-level
+  `server_tip`, once per server run: `outlook_search_mail`, `outlook_search_contacts` and
+  `outlook_find_event_by_key` name `outlook_find`; `outlook_list_events` and
+  `outlook_list_events_delta` name `outlook_agenda`; `outlook_list_inbox`,
+  `outlook_list_inbox_delta` and `outlook_changes_since` name `outlook_catch_up`. The line says
+  to run `outlook-mcp toolsets classic,intents` and restart the client, and tells an agent to
+  leave the setting to the user. A new `show_tips` setting, on by default, controls it:
+  `"show_tips": false` in config.json or `OUTLOOK_MCP_SHOW_TIPS=false` turns it off, and that
+  variable also takes `1` and `0`. A process with `intents` loaded never shows it. No tool
+  schema and no instruction text changed for it.
 
 ### Changed
 
