@@ -115,9 +115,12 @@ class InboxDelta:
                 return error(400, "BadRequest", "Unsupported query option changeType")
             bound = (params.get("$filter") or " ge 0000").split(" ge ")[-1][:19]
             self.boot = [r for r in self.inbox if r["receivedDateTime"][:19] >= bound]
+            if "$top" in params:
+                # Live (step-6 eval): `$top` caps the whole round, not a page.
+                self.boot = self.boot[: int(params["$top"])]
             start = 0
-        # As Graph does (live, step-6 eval): `$top` is ignored on message delta; pages are
-        # 10 unless `Prefer: odata.maxpagesize` says otherwise.
+        # As Graph does (live, step-6 eval): pages are 10 unless `Prefer:
+        # odata.maxpagesize` says otherwise.
         sized = re.search(r"odata\.maxpagesize=(\d+)", seen.headers.get("prefer", ""))
         top = int(sized.group(1)) if sized else 10
         chunk = self.boot[start : start + top]
@@ -450,7 +453,7 @@ async def test_the_first_call_reads_the_window_and_returns_a_cursor(fake):
     assert boot.params["changeType"] == "created"
     assert boot.params["$filter"] == "receivedDateTime ge 2026-11-25T12:00:00Z"
     assert boot.params["$select"] == catch_up.MAIL_SELECT
-    assert boot.params["$top"] == "50"
+    assert "$top" not in boot.params
 
 
 async def test_each_arrival_goes_to_the_first_section_it_qualifies_for(fake):
@@ -566,6 +569,7 @@ async def test_a_stale_cursor_resyncs_from_the_last_call(fake):
     ]
     # From the last call (less the two-minute overlap), never from the default window.
     assert boots[-1].params["$filter"] == "receivedDateTime ge 2026-11-26T11:58:00Z"
+    assert "$top" not in boots[-1].params  # it caps the whole round (step-6 eval)
     assert ids_in(env, "needs_reply") == ["new"]
     assert "gap" not in env["understood"]
 
@@ -771,10 +775,11 @@ async def test_p_d3a_a_refused_flag_filter_scans_three_folders(fake):
 
 @pytest.mark.parametrize("refuse_created", [False, True], ids=["created_only", "p_dl1_fallback"])
 async def test_a_day_of_mail_reaches_its_delta_link_within_g2(fake, refuse_created):
-    """Live (step-6 eval): Graph ignores `$top` on message delta and pages by 10, so a day
-    of 50 arrivals never reached its deltaLink in G2's four reads and the answer was
-    `incomplete`. `odata.maxpagesize` sizes the pages, sent beside the id preference on
-    every read of the round (D2: one id family per process)."""
+    """Live (step-6 eval): message delta pages by 10 whatever `$top` says, so a day of 50
+    arrivals never reached its deltaLink in G2's four reads and the answer was
+    `incomplete`; and `$top` caps the whole round, so it is never sent.
+    `odata.maxpagesize` sizes the pages, sent beside the id preference on every read of
+    the round (D2: one id family per process)."""
     parts = mailbox()
     parts[1].refuse_created = refuse_created
     parts[0].received += [
@@ -791,13 +796,15 @@ async def test_a_day_of_mail_reaches_its_delta_link_within_g2(fake, refuse_creat
     first = await run(fake, install_it=False)
     assert first["understood"]["arrivals"]["has_more"] is False
     assert first["outcome"] == "answered"
+    assert first["understood"]["arrivals"]["total"] == 58  # all of them: none cut by `$top`
     assert decoded(first["cursor"])["mail"]["link"] == f"{MAIL_LINK}?$deltatoken=round1"
     await run(fake, install_it=False, now=LATER, cursor=first["cursor"])
     reads = [s for s in fake.operations if s.path.endswith("/messages/delta")]
     assert any("$deltatoken" in s.params for s in reads)  # the cursor's round too
     for seen in reads:
+        assert "$top" not in seen.params
         prefer = [p.strip() for p in seen.headers["prefer"].split(",")]
-        assert f"odata.maxpagesize={catch_up.MAIL_TOP}" in prefer
+        assert f"odata.maxpagesize={catch_up.MAIL_PAGE_SIZE}" in prefer
         assert ids.IMMUTABLE_ID_PREFERENCE in prefer
 
 
