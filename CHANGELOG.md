@@ -24,6 +24,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `outlook_search_contacts` convert their results' ids, one extra request per search. No tip
   points to it yet.
 
+- **`outlook_agenda`, an intent tool, as an opt-in early preview.** Your days in a window
+  (`today` unless you say otherwise, at most 31 days), in one call: each day's meetings, the free
+  blocks between `day_start` and `day_end` of at least `min_free` minutes, and the minutes busy;
+  meetings that overlap; invitations you haven't answered; and To Do tasks due, with overdue ones
+  when the window includes today. A meeting is busy unless it is cancelled, declined or shown as
+  free, and an all-day event blocks its day only when it shows you busy or away. It reads up to
+  five of your calendars, the default first, keeps a meeting that is on two of them once, and
+  says when it left calendars, events or task lists unread. Free blocks come from your own
+  calendars only. `zone` shows the times in another place. It only reads, and is in the opt-in
+  `intents` group with `outlook_find`; nothing changes for an install that doesn't name
+  `intents`. An answer that ran out of requests or time, or lost a section to an error, says
+  `incomplete` rather than showing empty days. A calendar is read in start order, and if it
+  holds more events than are read, nothing after the last one read is called free and the
+  answer says `incomplete`. A long window keeps every day, dropping the last days' event lists
+  first when the answer would be too long.
+
 - **The tool groups can be chosen in config.json, and `outlook-mcp toolsets` shows or sets
   them.** `"toolsets": "mail,calendar"` in config.json works like `OUTLOOK_MCP_TOOLSETS`, which
   still wins when it is set and not blank. `classic` names the default set (with `rules` when

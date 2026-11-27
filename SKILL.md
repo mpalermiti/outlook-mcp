@@ -1,6 +1,6 @@
 ---
 name: outlook-mcp
-description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 79 typed Graph tools across mail, inbox rules, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
+description: Production-grade MCP server for personal Outlook (Outlook.com / Hotmail / Live). 80 typed Graph tools across mail, inbox rules, calendar, contacts, to-do, drafts, attachments, folders, threading, batch ops, delta-sync. Granular permissions, OS-keyring auth, /$batch-optimized triage and bulk read. Built for agents that need real Outlook coverage, not a CLI wrapper. BYO Azure app; zero telemetry.
 homepage: https://github.com/mpalermiti/outlook-mcp
 metadata:
   openclaw:
@@ -76,11 +76,11 @@ Pass `concise=True` to read tools (`outlook_list_inbox`, `outlook_read_message`,
 - `triage_folder(folder="inbox", count=50)` — one scan, sorted, applied in a single batch call
 - `catch_up(since="24h")` — what changed, via the delta path
 
-## Tools (79)
+## Tools (80)
 
 71 load by default. Five groups are opt-in and load only when named in
 `OUTLOOK_MCP_TOOLSETS`: `documents` (`outlook_read_attachment`, the PDF/XLSX reader),
-`rules` (the four inbox-rule tools), `mime` (original MIME export), `contact_photos` (`outlook_set_contact_photo`), and `intents` (`outlook_find`, an early preview). The `rules` group also loads when
+`rules` (the four inbox-rule tools), `mime` (original MIME export), `contact_photos` (`outlook_set_contact_photo`), and `intents` (`outlook_find` and `outlook_agenda`, an early preview). The `rules` group also loads when
 `mailbox_settings_write: true`, because the setting is itself the request (see Notes).
 
 ### Auth
@@ -193,6 +193,7 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
 
 ### Intent tools (opt-in `intents` group, early preview)
 - `outlook_find` — One call from a name, search words, an exact id, an address or a Message-ID to ranked people, messages, threads, files, events, tasks, drafts, rules or folders, with reasons and warnings. `single` only for an exact reference or someone the user has sent mail to; otherwise `candidates` to choose from or ask about. Read-only. Text under `others_wrote` was written by someone else
+- `outlook_agenda` — Your days in a window (default `today`, at most 31 days): per day the meetings, free blocks between `day_start` and `day_end` of at least `min_free` minutes, and busy minutes; then overlapping meetings, unanswered invitations and To Do tasks due (overdue too when the window includes today). Up to five calendars, the default first; `zone` shows times elsewhere. Free blocks reflect only the user's own calendars. `outcome: incomplete` means a section didn't finish, never that the day is empty. Read-only
 
 ## Privacy
 - Zero telemetry, zero local caching
@@ -210,7 +211,7 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
 - **"Not authenticated" on a Mac after an install or upgrade since Oct 26, 2026:** an update to azure-identity, Microsoft's sign-in library, moved where the sign-in is kept in the Keychain. 1.32.0 reads the original place again. Upgrade, then run `outlook-mcp status` on the host; if it still says not authenticated, run `outlook-mcp auth` once. See README "Troubleshooting"
 - Start with `read_only: true`, flip when comfortable
 - **Granular permissions:** For finer control, set `allow_categories` in config (e.g., `["calendar_write"]` to allow only calendar writes). See README for the 8 categories and example policies.
-- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context. Unset loads every group except the opt-in ones — 71 of the 79 tools; `documents`, `rules`, `mime`, `contact_photos`, and `intents` (the `outlook_find` preview) are off until named, except that `mailbox_settings_write: true` turns `rules` on without naming it. Naming groups loads only those (plus auth/identity), so to add all opt-in groups to the default set, name the default groups and opt-ins: `mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime,contact_photos,intents`. `classic,intents` is the default set plus `outlook_find`. The same list can go in `config.json` as `toolsets` (the variable wins when set and not blank), and `classic` names the default set. `outlook-mcp toolsets` shows what loads and where the choice came from; with names it writes the key (the user's step, then a client restart). A name that is not a group loads nothing and is warned about at start. Tools carry read-only / destructive annotations so clients can auto-approve reads.
+- **Toolset selection:** Set `OUTLOOK_MCP_TOOLSETS` (e.g. `mail,calendar,digest,delta`) to load only the tool groups you use and cut per-turn context. Unset loads every group except the opt-in ones — 71 of the 80 tools; `documents`, `rules`, `mime`, `contact_photos`, and `intents` (the intent tools, an early preview) are off until named, except that `mailbox_settings_write: true` turns `rules` on without naming it. Naming groups loads only those (plus auth/identity), so to add all opt-in groups to the default set, name the default groups and opt-ins: `mail,drafts,attachments,calendar,contacts,todo,folders,digest,delta,admin,documents,rules,mime,contact_photos,intents`. `classic,intents` is the default set plus the intent tools. The same list can go in `config.json` as `toolsets` (the variable wins when set and not blank), and `classic` names the default set. `outlook-mcp toolsets` shows what loads and where the choice came from; with names it writes the key (the user's step, then a client restart). A name that is not a group loads nothing and is warned about at start. Tools carry read-only / destructive annotations so clients can auto-approve reads.
 - **Two accounts:** One server serves one mailbox. Register a second server entry with its own `OUTLOOK_MCP_CONFIG_DIR` (e.g. `~/.outlook-mcp-work`) and run `outlook-mcp auth` once with that variable set. Move only the config directory, never `HOME` — see README "Two accounts, two instances".
 - **Remote / HTTP:** stdio is the default. `OUTLOOK_MCP_TRANSPORT=streamable-http` serves `/mcp` over HTTP for a client that cannot spawn a local process. It never starts without a token (`OUTLOOK_MCP_HTTP_TOKEN`, or a file named by `OUTLOOK_MCP_HTTP_TOKEN_FILE`), loopback included, and every request sends it as `Authorization: Bearer <token>`. It binds loopback by default, and plain HTTP sends the token in the clear, so put a TLS-terminating proxy in front of any other bind — see README "Remote / HTTP transport".
 - **Environment configuration:** `OUTLOOK_MCP_CLIENT_ID`, `OUTLOOK_MCP_TENANT_ID` and

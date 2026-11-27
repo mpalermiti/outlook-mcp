@@ -189,18 +189,21 @@ def test_unknown_names_are_the_ones_that_are_neither_groups_nor_aliases():
 
 
 @pytest.mark.parametrize("settings_write", [False, True])
-def test_intents_is_an_opt_in_group_that_adds_find(settings_write):
-    """Named, it adds `outlook_find`; unnamed, nothing changes, the default included."""
+def test_intents_is_an_opt_in_group_that_adds_the_intent_tools(settings_write):
+    """Named, it adds the intent tools; unnamed, nothing changes, the default included."""
+    intent_tools = {n for n, g in toolsets.TOOL_GROUPS.items() if g == toolsets.INTENTS}
+    assert {"outlook_find", "outlook_agenda"} <= intent_tools
     assert "intents" in toolsets.known_toolset_names()
     assert toolsets.unknown_toolset_names({"intents"}) == set()
-    assert "outlook_find" not in _now(None, None, settings_write)
-    assert _now("intents", None, settings_write) == ACCOUNT_TOOLS | {"outlook_find"}
-    assert _now(None, "classic,intents", settings_write) == _on_main(None, settings_write) | {
-        "outlook_find"
-    }
-    assert _now("intents,mail", None, settings_write) == _on_main("mail", settings_write) | {
-        "outlook_find"
-    }
+    assert not intent_tools & _now(None, None, settings_write)
+    assert _now("intents", None, settings_write) == ACCOUNT_TOOLS | intent_tools
+    assert (
+        _now(None, "classic,intents", settings_write)
+        == _on_main(None, settings_write) | intent_tools
+    )
+    assert _now("intents,mail", None, settings_write) == _on_main("mail", settings_write) | (
+        intent_tools
+    )
 
 
 def test_a_group_with_tools_called_intents_must_be_off_by_default():

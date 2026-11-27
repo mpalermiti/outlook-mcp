@@ -652,6 +652,26 @@ def resolve_window(
     return start, end
 
 
+_CLOCK_RE = re.compile(r"^([0-9]{2}):([0-9]{2})$")
+
+
+def validate_clock(value: str, *, end_of_day: bool = False) -> int:
+    """A wall-clock time, ``HH:MM`` (contracts §3.1), as minutes after midnight.
+
+    ``00:00`` to ``23:59``; ``24:00`` only where ``end_of_day`` says the value ends a
+    day (agenda's ``day_end``), meaning the next midnight.
+    """
+    match = _CLOCK_RE.fullmatch(value) if isinstance(value, str) else None
+    hours, minutes = (int(match.group(1)), int(match.group(2))) if match else (-1, -1)
+    if end_of_day and (hours, minutes) == (24, 0):
+        return 1440
+    if not 0 <= hours <= 23 or not 0 <= minutes <= 59:
+        shown = sanitize_output(str(value)[:20])
+        only = " 24:00 only ends a day." if (hours, minutes) == (24, 0) else ""
+        raise ValueError(f"Invalid time {shown!r}: pass HH:MM, 00:00 to 23:59.{only}")
+    return hours * 60 + minutes
+
+
 def validate_header_zone(name: str, remedy: str | None = None) -> str:
     """Return ``name`` if it can be written inside ``Prefer: outlook.timezone="…"`` as is.
 
