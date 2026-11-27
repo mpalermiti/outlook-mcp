@@ -513,6 +513,11 @@ def test_contact_photos_surface_has_its_own_budget_and_preserves_default_schemas
 INTENT_TOOLS_CEILING = 970
 INTENTS_SELECTION_CEILING = 12_290
 
+# `intents` on its own (the contracts' template selection, §10.7): the intent tools,
+# the follow-up core of seven classic tools their suggestions point to (§10.5) and
+# the two account tools. Measured 14 / 2,162 with the core; 7 / 1,063 before it.
+INTENTS_ALONE_CEILING = 2_190
+
 
 def test_the_intent_tools_fit_their_own_ceiling_and_leave_the_default_alone():
     default = _advertised_tools(_DEFAULT_GROUPS)
@@ -531,3 +536,14 @@ def test_the_intent_tools_fit_their_own_ceiling_and_leave_the_default_alone():
     assert _proxy_tokens(enabled) <= INTENTS_SELECTION_CEILING
     # Each read tool's description is at most 450 characters (contracts §12).
     assert all(len(e["description"]) <= 450 for e in intent_tools)
+
+
+def test_intents_alone_is_the_intent_tools_their_core_and_the_account_tools():
+    alone = _advertised_tools({"intents"})
+    names = {e["name"] for e in alone}
+    intent_names = {n for n, g in toolsets.TOOL_GROUPS.items() if g == "intents"}
+    assert names == intent_names | toolsets.FOLLOW_UP_CORE | {
+        "outlook_auth_status",
+        "outlook_whoami",
+    }
+    assert _proxy_tokens(alone) <= INTENTS_ALONE_CEILING, _proxy_tokens(alone)

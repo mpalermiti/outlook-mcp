@@ -15,7 +15,12 @@ import re
 import pytest
 from mcp.client import Client
 
-from outlook_mcp.server import mcp
+from outlook_mcp import guidance
+from outlook_mcp.server import LOADED_TOOLS, mcp
+
+# Under `intents` the prompts take their intents form (contracts §10.10); CI's
+# every-group row loads it, so these read the selection instead of pinning one form.
+INTENTS = guidance.intents_loaded(LOADED_TOOLS)
 
 EXPECTED_PROMPTS = {"morning_brief", "triage_folder", "catch_up"}
 
@@ -43,9 +48,13 @@ async def test_morning_brief_names_the_tools_it_wants_used():
         result = await client.get_prompt("morning_brief", {})
     text = " ".join(m.content.text for m in result.messages)
 
-    assert "outlook_list_events" in text
-    assert "outlook_list_inbox" in text
-    assert "concise" in text
+    if INTENTS:
+        assert 'outlook_agenda(window="today")' in text
+        assert 'outlook_catch_up(window="today")' in text
+    else:
+        assert "outlook_list_events" in text
+        assert "outlook_list_inbox" in text
+        assert "concise" in text
 
 
 @pytest.mark.asyncio
@@ -73,7 +82,7 @@ async def test_catch_up_steers_to_the_delta_path():
         result = await client.get_prompt("catch_up", {"since": "24h"})
     text = " ".join(m.content.text for m in result.messages)
 
-    assert "outlook_changes_since" in text
+    assert ("outlook_catch_up" if INTENTS else "outlook_changes_since") in text
     assert "24h" in text
 
 

@@ -79,6 +79,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Deleted Items is left out, and a message it suggests opening or answering is sender-checked
   first. It only reads, and is in the opt-in `intents` group.
 
+- **Under `intents`, the agent is told only about tools that are loaded.** `intents` on its own
+  now also loads the seven classic tools the intent tools' suggestions lead to (read a message,
+  read several, list a thread, download an attachment, update or complete a task, list drafts),
+  so a suggestion never names a tool the session lacks. With `intents` loaded, the server's
+  instructions leave out working rules about tools that aren't loaded and add rules for the intent
+  tools (other people's words under `others_wrote`, the typed time forms, `candidates` (call
+  again only with a candidate offered under `next`, else ask) and `incomplete`, keeping only the
+  latest `catch_up` cursor), within 4,000 characters; `morning_brief` and `catch_up` use
+  the intent tools, and a prompt whose tools aren't loaded is not offered. A selection without
+  `intents` loads, is told and is offered exactly what it was.
+
 - **The tool groups can be chosen in config.json, and `outlook-mcp toolsets` shows or sets
   them.** `"toolsets": "mail,calendar"` in config.json works like `OUTLOOK_MCP_TOOLSETS`, which
   still wins when it is set and not blank. `classic` names the default set (with `rules` when

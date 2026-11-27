@@ -1,0 +1,39 @@
+{
+ "catch_up": {
+  "arguments": [
+   {
+    "name": "since",
+    "required": false
+   }
+  ],
+  "description": "What changed in mail, calendar and contacts since a point in time.",
+  "text": "Tell me what changed since 24h.\nUse outlook_changes_since(fallback_window_hours=...) \u2014 it composes the mail, calendar and contacts delta queries into one digest and hands back per-resource delta tokens. Keep those tokens and pass them back next time; that call then returns only what changed, which is roughly ten times cheaper than re-scanning.\nSummarise: new mail worth my attention (it flags high-importance and flagged items for you), calendar changes, and anything cancelled.",
+  "title": "Catch up since"
+ },
+ "morning_brief": {
+  "arguments": [
+   {
+    "name": "folder",
+    "required": false
+   }
+  ],
+  "description": "Today's calendar, unread mail and tasks due, in one pass.",
+  "text": "Give me a brief for today, in this order:\n1. outlook_list_events(days=1, concise=True) \u2014 what is scheduled.\n2. outlook_list_inbox(folder='inbox', unread_only=True, concise=True, count=25) \u2014 what arrived and is unread.\n3. outlook_list_tasks() \u2014 what is due.\nThen summarise in plain language: what is on, what needs a reply, what is overdue. Lead with anything time-critical. Do not open individual messages unless the preview is genuinely ambiguous \u2014 and if you need several, use outlook_read_messages once rather than outlook_read_message in a loop.",
+  "title": "Morning brief"
+ },
+ "triage_folder": {
+  "arguments": [
+   {
+    "name": "folder",
+    "required": false
+   },
+   {
+    "name": "count",
+    "required": false
+   }
+  ],
+  "description": "Scan one folder cheaply and act on it in a single batch.",
+  "text": "Triage 'inbox':\n1. outlook_list_inbox(folder='inbox', count=50, concise=True) \u2014 one scan. The folder name goes straight in; there is no need to list folders first.\n2. Sort what you find into: needs a reply, read and archive, junk, ignore.\n3. Apply the result with outlook_batch_triage in ONE call rather than a mark-read/move/delete per message.\nTell me what you did and what you left for me. Ask before deleting anything you are not confident about \u2014 deletes are recoverable from Deleted Items, but replies are not.",
+  "title": "Triage a folder"
+ }
+}

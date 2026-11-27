@@ -81,9 +81,17 @@ def _selection_lines(config: Config) -> list[str]:
     else:
         where = TOOLSETS_ENV if source == "env" else 'config.json "toolsets"'
         selection = f"{', '.join(sorted(enabled or ()))} (from {where})"
+    groups = toolsets.resolve_groups(enabled, config.mailbox_settings_write)
+    # The home groups of what loads, as named or always on: the follow-up core that
+    # `intents` brings along is not its home groups being selected.
+    shown = {
+        toolsets.TOOL_GROUPS[name]
+        for name in loaded
+        if toolsets.TOOL_GROUPS[name] in groups | toolsets.ALWAYS_ON_GROUPS
+    }
     lines = [
         f"Toolsets:  {selection}",
-        f"Groups:    {', '.join(sorted({toolsets.TOOL_GROUPS[name] for name in loaded}))}",
+        f"Groups:    {', '.join(sorted(shown))}",
         f"Tools:     {len(loaded)} of {len(toolsets.TOOL_GROUPS)}",
     ]
     unknown = toolsets.unknown_toolset_names(enabled)
