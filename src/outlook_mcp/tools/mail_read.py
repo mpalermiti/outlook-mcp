@@ -930,7 +930,8 @@ async def search_mail(
         result["incomplete"] = (
             f"This search ended at {served} results with no next page. Graph has been seen to "
             "stop a search around 275 without saying so, so older matches may be missing: "
-            "add received<= with the last message's date to the query to reach them."
+            "add AND received<= with the last message's date to the query to reach them "
+            "(with only a space between two received bounds, a search matches either)."
         )
     return result
 
