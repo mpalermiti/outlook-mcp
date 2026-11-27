@@ -26,12 +26,13 @@ import pytest
 
 from outlook_mcp.calendar_resolver import fetch_all_calendars
 from outlook_mcp.errors import GraphAPIError
-from outlook_mcp.intents import agenda, flags, open_loops
+from outlook_mcp.intents import agenda, catch_up, cursor, flags, open_loops
 from outlook_mcp.intents.budget import RequestBudget
 from outlook_mcp.intents.envelope import utc
 from outlook_mcp.intents.people import parse_time
 from outlook_mcp.intents.reading import read_view
 from outlook_mcp.intents.resolver import SENT_PATH, _conversation_filter, open_lookup
+from outlook_mcp.tools._delta import require_graph_url
 
 pytestmark = [pytest.mark.live, pytest.mark.asyncio]
 
@@ -224,3 +225,86 @@ async def test_b1_junk_and_deleted_items_ids_for_the_reply_checks(lookup):
     for reply in replies:
         assert reply["status"] == 200, reply
         assert isinstance(reply["body"].get("id"), str)
+
+
+# ── catch_up (§12.2) and its cursor (§7) ──────────────────────────────────
+
+
+async def _drain(lookup, first: str, resource: str, prefer: str | None = None, pages: int = 20):
+    """Follow a delta round to its deltaLink, checking every link Graph issues the way
+    the cursor will be checked when it comes back."""
+    items: list[dict] = []
+    url = first
+    for _ in range(pages):
+        body = await lookup.graph.follow(url, prefer=prefer)
+        items += body.get("value") or []
+        delta = body.get("@odata.deltaLink")
+        if delta:
+            return items, require_graph_url(delta, source="@odata.deltaLink", resource=resource)
+        url = require_graph_url(
+            body["@odata.nextLink"], source="@odata.nextLink", resource=resource
+        )
+    pytest.skip(f"the {resource} round did not finish within {pages} pages")
+
+
+async def test_p_dl1_a_created_only_inbox_delta_is_accepted_and_its_links_check(lookup):
+    """P-DL1, the read-only half: Graph takes catch_up's first Inbox delta request
+    (`changeType=created`, the received-time filter, the `$select`), and every link it
+    issues passes the cursor's own check. A 400 means the fallback runs; the guard says
+    so. Whether read and flag changes stay out needs writes, so it is the probe's."""
+    since = datetime.now(timezone.utc) - timedelta(days=1)
+    try:
+        items, link = await _drain(
+            lookup, catch_up._mail_bootstrap_url(since, created_only=True), "mail"
+        )
+    except GraphAPIError as error:
+        if error.status_code == 400:
+            pytest.skip("P-DL1: changeType=created is refused here; the received-time rule runs")
+        raise
+    for row in items:
+        if "@removed" not in row:
+            assert "receivedDateTime" in row and "conversationId" in row, sorted(row)
+    # The cursor accepts a mail link only for the Inbox, by name (review D3): Graph must
+    # keep the spelling it was asked in, or every later call would be refused.
+    assert cursor._link(link, "mail") == link
+    later = await lookup.graph.follow(link)
+    assert "@odata.deltaLink" in later or "@odata.nextLink" in later
+
+
+async def test_p_c2_the_calendar_delta_round_completes_and_matches_the_view(lookup):
+    """P-C2: calendarView delta over catch_up's window, followed to its deltaLink, holds
+    the events calendarView shows over the same window."""
+    now = datetime.now(timezone.utc)
+    start, end = now - catch_up.CAL_BACK, now + catch_up.CAL_AHEAD
+    prefer = f"odata.maxpagesize={catch_up.CAL_PAGE_SIZE}"
+    items, _ = await _drain(lookup, catch_up._cal_bootstrap_url(start, end), "calendar", prefer)
+    # The delta also returns each series master, which calendarView doesn't (live, step-6
+    # eval); catch_up drops them too.
+    delta_ids = {r["id"] for r in items if "@removed" not in r and r.get("type") != "seriesMaster"}
+    view, more = await read_view(lookup, "/me/calendarView", start, end, "id", pages=10)
+    if more:
+        pytest.skip("more than 1,000 events in the window")
+    assert {r["id"] for r in view} == delta_ids
+
+
+async def test_g7_the_primary_calendar_view_takes_its_select(lookup):
+    now = datetime.now(timezone.utc)
+    rows, _ = await read_view(
+        lookup, "/me/calendarView", now, now + timedelta(days=30), catch_up.VIEW_SELECT, pages=1
+    )
+    if not rows:
+        pytest.skip("no events in the next 30 days")
+    assert all("responseStatus" in r and "attendees" in r for r in rows)
+
+
+async def test_catch_up_end_to_end_and_again_with_its_cursor(real_graph_client):
+    first = await catch_up.read_catch_up(real_graph_client, zone="UTC", loaded_tools=frozenset())
+    assert first["outcome"] == "answered", first["failed_sections"]
+    assert first["graph_requests"] <= 40
+    assert first["cursor"].startswith(cursor.PREFIX)
+    again = await catch_up.read_catch_up(
+        real_graph_client, cursor=first["cursor"], zone="UTC", loaded_tools=frozenset()
+    )
+    assert again["understood"]["cursor"] == "ok"
+    assert again["outcome"] == "answered", again["failed_sections"]
+    assert again["graph_requests"] <= 40

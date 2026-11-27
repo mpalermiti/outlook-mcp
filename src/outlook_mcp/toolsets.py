@@ -95,6 +95,7 @@ TOOL_GROUPS: dict[str, str] = {
     "outlook_find": INTENTS,
     "outlook_agenda": INTENTS,
     "outlook_open_loops": INTENTS,
+    "outlook_catch_up": INTENTS,
     # mail
     "outlook_list_inbox": "mail",
     "outlook_read_message": "mail",
@@ -194,6 +195,7 @@ READ_ONLY: set[str] = {
     "outlook_find",
     "outlook_agenda",
     "outlook_open_loops",
+    "outlook_catch_up",
     "outlook_export_message",
     "outlook_auth_status",
     "outlook_whoami",

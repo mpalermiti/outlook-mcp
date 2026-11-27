@@ -8,16 +8,19 @@ for brief, and "nit" for the small ones fixed with them.
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from outlook_mcp.intents import ids, open_loops, transport
+from outlook_mcp.errors import ForeignCursorError
+from outlook_mcp.intents import cursor, ids, open_loops, transport
 from outlook_mcp.intents.ids import IdFamily
 from outlook_mcp.intents.open_loops import read_open_loops
 from tests import test_intent_agenda as ag
+from tests import test_intent_catch_up as cu
 from tests import test_intent_open_loops as ol
 from tests.intent_fakes import ME, FakeGraph, Mailbox, auth_header, error, received
 
@@ -441,6 +444,239 @@ async def test_nit_an_unread_searched_conversation_is_counted_not_named(fake):
     assert not [c for c in env["understood"]["not_covered"] if ":" in c]
 
 
+# ── #283 catch_up and its cursor ──────────────────────────────────────────
+
+
+def make_cursor(state: dict) -> str:
+    raw = json.dumps(state, sort_keys=True, separators=(",", ":")).encode()
+    return "cu1." + base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+async def test_b2_a_received_letter_starting_cancelled_is_counted_and_shown(fake):
+    parts = cu.mailbox()
+    box, delta, _ = parts
+    box.received.append(
+        received(
+            "flight",
+            "noreply@airline.example",
+            "Cancelled: your flight tomorrow",
+            conversation="conv-flight",
+            when="2026-11-26T10:30:00Z",
+            headers=auth_header("pass", "airline.example"),
+        )
+    )
+    delta.inbox[:] = box.received
+    env = await cu.run(fake, parts)
+    assert env["understood"]["arrivals"]["total"] == 9
+    assert "flight" in [i["id"] for i in sec(env, "needs_reply")["items"]]
+
+
+async def test_b1_a_strangers_message_in_junk_is_no_reply_and_clears_nothing(fake):
+    parts = cu.mailbox()
+    box, delta, _ = parts
+    box.received[:] = [r for r in box.received if r["id"] != "a9"]  # Kim never answered
+    delta.inbox[:] = box.received
+    box.received.append(
+        received(
+            "junk-kim",
+            "stranger@unknown.example",
+            "Re: Visit",
+            conversation="conv-kim",
+            when="2026-11-26T08:30:00Z",
+            folder="junk-id",
+            headers=auth_header("fail", "unknown.example"),
+        )
+    )
+    env = await cu.run(fake, parts, tools=EVERY_TOOL)
+    flag = next(i for i in sec(env, "follow_ups")["items"] if i["id"] == "f-kim")
+    assert not [r for r in flag["why"] if r["code"] == "reply_from_them"]
+    assert not [n for n in env["next"] if n["template"] == "clear_follow_up"]
+
+
+async def test_b1_a_checked_reply_from_kim_says_who_and_may_be_cleared(fake):
+    env = await cu.run(fake, tools=EVERY_TOOL)
+    flag = next(i for i in sec(env, "follow_ups")["items"] if i["id"] == "f-kim")
+    reason = next(r for r in flag["why"] if r["code"] == "reply_from_them")
+    assert reason == {
+        "code": "reply_from_them",
+        "at": "2026-11-26T08:00:00Z",
+        "address": cu.KIM,
+        "known": True,
+    }
+    clears = [n["args"] for n in env["next"] if n["template"] == "clear_follow_up"]
+    assert clears == [{"message_id": "f-kim", "clear": True}]
+
+
+async def test_b1_an_unconfirmed_reply_from_kim_clears_nothing(fake):
+    parts = cu.mailbox()
+    box, delta, _ = parts
+    a9 = next(r for r in box.received if r["id"] == "a9")
+    a9["internetMessageHeaders"] = []  # no verdict: unconfirmed
+    env = await cu.run(fake, parts, tools=EVERY_TOOL)
+    flag = next(i for i in sec(env, "follow_ups")["items"] if i["id"] == "f-kim")
+    assert not [r for r in flag["why"] if r["code"] == "reply_from_them"]
+    assert not [n for n in env["next"] if n["template"] == "clear_follow_up"]
+    assert env["understood"]["replies_unconfirmed"] == ["f-kim"]
+
+
+async def test_c1_catch_up_drafts_a_reply_only_where_the_check_ran(fake):
+    parts = cu.mailbox()
+    cu.install(fake, parts)
+    for msg in ("a10", "a2"):
+        fake.on(rf"/me/messages/{msg}", lambda s, m: error(500, "InternalServerError"))
+    env = await cu.run(fake, tools=EVERY_TOOL, install_it=False)
+    assert not [n for n in env["next"] if n["template"] == "draft_reply"]
+
+
+async def test_d1_a_calendar_change_survives_a_mail_only_call_and_a_resync(fake):
+    parts = cu.mailbox()
+    _, _, cal = parts
+    first = await cu.run(fake, parts)
+    moved = cu.ev(
+        "e1", "2026-11-27T14:00:00", "2026-11-27T15:00:00", modified="2026-11-26T12:30:00Z"
+    )
+    cal.changes = [moved]
+    cal.snapshot[:] = [moved if e["id"] == "e1" else e for e in cal.snapshot]
+    mail_only = await cu.run(
+        fake,
+        cursor=first["cursor"],
+        focus="mail",
+        now=datetime(2026, 11, 26, 13, 0, tzinfo=timezone.utc),
+        install_it=False,
+    )
+    cal.stale = True
+    third = await cu.run(fake, cursor=mail_only["cursor"], now=cu.LATER, install_it=False)
+    assert third["understood"]["calendar_resynced"] is True
+    assert "e1" in [i["id"] for i in sec(third, "calendar_changes")["items"]]
+
+
+async def test_d2_unread_arrivals_make_the_mail_sections_inexact_and_the_answer_incomplete(fake):
+    env = await cu.run(fake, cu.worst_case())
+    assert env["understood"]["arrivals"]["has_more"] is True
+    assert sec(env, "needs_reply")["total_exact"] is False
+    assert sec(env, "other_mail")["total_exact"] is False
+    assert env["outcome"] == "incomplete"
+
+
+async def test_d3_a_cursor_naming_another_folder_is_refused_before_any_request(fake):
+    forged = make_cursor(
+        {
+            "v": 1,
+            "acct": cursor.account_tag(ME),
+            "made": "2026-11-26T00:00:00Z",
+            "mail": {
+                "link": "https://graph.microsoft.com/v1.0/me/mailFolders/junkemail/messages/delta",
+                "created_only": True,
+                "bootstrap_from": None,
+            },
+            "cal": {"link": "", "start": "2026-11-25T12:00:00Z", "end": "2026-12-26T12:00:00Z"},
+        }
+    )
+    with pytest.raises(ForeignCursorError):
+        await cu.run(fake, cursor=forged)
+    assert fake.counted == 0
+
+
+@pytest.mark.parametrize("field", ["made", "bootstrap_from", "since"])
+async def test_d3_a_cursor_from_the_future_is_refused(fake, field):
+    parts = cu.mailbox()
+    first = await cu.run(fake, parts)
+    state = cu.decoded(first["cursor"])
+    if field == "made":
+        state["made"] = "2099-01-01T00:00:00Z"
+    elif field == "bootstrap_from":
+        state["mail"]["bootstrap_from"] = "2099-01-01T00:00:00Z"
+    else:
+        state["cal"]["since"] = "2099-01-01T00:00:00Z"
+    with pytest.raises(ValueError, match="Invalid catch_up cursor"):
+        await cu.run(fake, cursor=make_cursor(state), now=cu.LATER, install_it=False)
+
+
+def test_nit_a_deeply_nested_cursor_is_the_invalid_cursor_error():
+    nested = "cu1." + base64.urlsafe_b64encode(b"[" * 20_000).decode().rstrip("=")
+    with pytest.raises(ValueError, match="Invalid catch_up cursor"):
+        cursor.read(nested, username=ME)
+
+
+def test_nit_a_version_of_true_is_not_version_one():
+    state = {
+        "v": True,
+        "acct": cursor.account_tag(ME),
+        "made": "2026-11-26T00:00:00Z",
+        "mail": {"link": "", "created_only": True, "bootstrap_from": None},
+        "cal": {"link": "", "start": "2026-11-25T12:00:00Z", "end": "2026-12-26T12:00:00Z"},
+    }
+    assert cursor.read(make_cursor(state), username=ME) == (None, "reset_unrecognised")
+
+
+def test_nit_an_oversized_cursor_is_refused_unread():
+    with pytest.raises(ValueError, match="Invalid catch_up cursor"):
+        cursor.read("cu1." + "A" * (cursor.MAX_BYTES + 1), username=ME)
+
+
+async def test_a2_the_task_fallback_keeps_catch_up_within_forty(fake):
+    parts = cu.worst_case()
+    parts[0].task_filter_supported = False
+    env = await cu.run(fake, parts)
+    assert env["graph_requests"] <= 40
+    assert sec(env, "tasks_due")["status"] == "ok"
+
+
+async def test_nit_with_a_cursor_a_window_ahead_sets_the_look_ahead(fake):
+    parts = cu.mailbox()
+    first = await cu.run(fake, parts)
+    env = await cu.run(fake, cursor=first["cursor"], window="+3d", install_it=False)
+    assert env["understood"]["horizon"] == "2026-11-29T12:00:00Z"
+
+
+async def test_d4_the_flag_fallback_says_what_it_could_not_scan(fake):
+    parts = cu.mailbox()
+    box, delta, _ = parts
+    box.received += [
+        received(
+            f"n{n}", f"p{n}@example.com", "Hi", conversation=f"cn{n}", when="2026-11-24T02:00:00Z"
+        )
+        for n in range(100)
+    ]
+    cu.install(fake, parts)
+    real = box._messages
+
+    def refuse_flag_filter(seen, match):
+        if "flag/flagStatus" in (seen.filter or ""):
+            return error(400, "BadRequest", "InefficientFilter")
+        return real(seen, match)
+
+    fake.on("/me/messages", refuse_flag_filter)
+    env = await cu.run(fake, install_it=False)
+    assert "flags_older_than_scan" in env["understood"]["not_covered"]
+    assert env["partial"] is True and env["outcome"] == "incomplete"
+    assert sec(env, "follow_ups")["total_exact"] is False
+
+
+async def test_b1_a_checked_reply_from_someone_never_written_to_clears_nothing(fake):
+    """Bill wrote the flagged message and has written again, verified; the owner has
+    never written to Bill, so clearing the follow-up is not offered."""
+    parts = cu.mailbox()
+    box, delta, _ = parts
+    box.received.append(
+        received(
+            "bill-again",
+            cu.BILL,
+            "Re: Invoice",
+            conversation="conv-bill",
+            when="2026-11-26T09:30:00Z",
+            headers=auth_header("pass", "example.net"),
+        )
+    )
+    delta.inbox[:] = box.received
+    env = await cu.run(fake, parts, tools=EVERY_TOOL)
+    flag = next(i for i in sec(env, "follow_ups")["items"] if i["id"] == "f-bill")
+    reason = next(r for r in flag["why"] if r["code"] == "reply_from_them")
+    assert reason["address"] == cu.BILL and reason["known"] is False
+    clears = [n["args"]["message_id"] for n in env["next"] if n["template"] == "clear_follow_up"]
+    assert "f-bill" not in clears
+
+
 # ── Live round 1, P-SI1 (b): isOrganizer is the owner's word, not an address ──
 
 
@@ -515,3 +751,14 @@ async def test_live_open_loops_hands_out_no_search_id(fake):
     assert "conv-old" in [i["id"] for i in sec(env, "waiting_on_me")["items"]]
     assert "rest-" not in json.dumps(env)
     assert not [s for s in fake.operations if s.path == "/me/translateExchangeIds"]
+
+
+async def test_live_catch_up_a_received_meeting_naming_the_owner_is_a_stranger_invite(fake):
+    parts = cu.mailbox()
+    box, _, _ = parts
+    box.events["cal-1"].append(_forged("forged", "2026-11-26T16:00:00", "2026-11-26T17:00:00"))
+    env = await cu.run(fake, parts, tools=EVERY_TOOL)
+    shown = next(i for i in sec(env, "meetings_today")["items"] if i["id"] == "forged")
+    assert shown["is_organizer"] is False
+    assert {"code": "organizer_you"} not in shown["why"]
+    assert {"code": "stranger_invite"} in shown["warnings"]

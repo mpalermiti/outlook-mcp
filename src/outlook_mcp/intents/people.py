@@ -331,6 +331,8 @@ class SentTable:
     # The Sent Items folder's id, read off the scanned rows: a message there is one the
     # owner sent. None when Sent Items is empty, and then no message counts as theirs.
     sent_folder: str | None = None
+    # Conversation id → when the owner's letters in it were sent (catch_up's C_me).
+    letters: dict[str, list[datetime]] = field(default_factory=dict)
 
     def get(self, address: str) -> SentEntry | None:
         return self.entries.get(address.lower())
@@ -366,6 +368,12 @@ def build_sent_table(rows: Iterable[dict], *, signed_in: str | None) -> SentTabl
     )
     for row in rows:
         table.scanned += 1
+        # The owner's letters by conversation, for catch_up: a meeting message told by
+        # its type only, since these sort mail rather than rank people (review B2).
+        sent_at = parse_time(row.get("sentDateTime"))
+        conversation = row.get("conversationId")
+        if isinstance(conversation, str) and sent_at is not None and not is_meeting_type(row):
+            table.letters.setdefault(conversation, []).append(sent_at)
         if is_meeting_message(row):
             table.meeting_messages_dropped += 1
             continue

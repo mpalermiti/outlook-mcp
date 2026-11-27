@@ -52,6 +52,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   answer; a name that several people match comes back as `candidates`. The results are
   candidates to judge, not verdicts. It only reads, and is in the opt-in `intents` group.
 
+- **`outlook_catch_up`, an intent tool, as an opt-in early preview.** What arrived and what needs
+  you. The first call reads a look-back window (`24h` unless you say otherwise); each answer
+  returns a `cursor` to pass back next time, replacing the old one, so the next answer holds only
+  what arrived since. New Inbox mail goes to the first section it fits: a checked reply on a
+  flagged conversation (from someone it waits on, outside Junk and Deleted Items, with a verified
+  sender, not an automatic reply or a bounce), a reply where you had written, mail to you that you
+  haven't answered, or other mail (counted, with its top senders). Mail that was only read,
+  flagged, categorized or moved in is not new, and a meeting message is told by its type, never
+  its subject. Alongside: flags due, invitations you haven't answered, today's meetings, To Do
+  tasks due, and, with a cursor, what changed on your calendar. A cursor Graph no longer accepts
+  starts again from your last call, and says so. The cursor holds Graph links and times only;
+  a link in it that isn't Graph's own delta link for the Inbox or the calendar, or a time in the
+  future, is refused. Inbox and primary calendar only.
+  It only reads, and is in the opt-in `intents` group. `outlook_changes_since` is unchanged.
+
 - **The tool groups can be chosen in config.json, and `outlook-mcp toolsets` shows or sets
   them.** `"toolsets": "mail,calendar"` in config.json works like `OUTLOOK_MCP_TOOLSETS`, which
   still wins when it is set and not blank. `classic` names the default set (with `rules` when

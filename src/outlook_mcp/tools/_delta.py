@@ -81,7 +81,9 @@ _PATH_TRICKS = re.compile(r"(?:^|/)(?:\.|%2e){1,2}(?:/|$)|%2f|%5c|\\", re.IGNORE
 # `$select`, `$expand` — that Graph never issued and this server never asks for.
 _STATE_TOKENS = frozenset({"$deltatoken", "$skiptoken"})
 _DELTA_QUERY_OPTIONS: dict[str, frozenset[str]] = {
-    "mail": _STATE_TOKENS | {"$top", "$filter"},
+    # `changetype`: catch_up starts its Inbox round with `changeType=created` (intent
+    # contracts §7.1), in case Graph keeps it on the links it issues.
+    "mail": _STATE_TOKENS | {"$top", "$filter", "changetype"},
     "calendar": _STATE_TOKENS | {"startdatetime", "enddatetime"},
     "contacts": _STATE_TOKENS,
 }
