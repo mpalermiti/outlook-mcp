@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -115,7 +116,10 @@ class InboxDelta:
             bound = (params.get("$filter") or " ge 0000").split(" ge ")[-1][:19]
             self.boot = [r for r in self.inbox if r["receivedDateTime"][:19] >= bound]
             start = 0
-        top = int(params.get("$top") or 50)
+        # As Graph does (live, step-6 eval): `$top` is ignored on message delta; pages are
+        # 10 unless `Prefer: odata.maxpagesize` says otherwise.
+        sized = re.search(r"odata\.maxpagesize=(\d+)", seen.headers.get("prefer", ""))
+        top = int(sized.group(1)) if sized else 10
         chunk = self.boot[start : start + top]
         body = page(chunk)
         if start + top < len(self.boot):
@@ -675,6 +679,27 @@ async def test_the_calendar_rolls_when_its_look_ahead_runs_short(fake):
     assert decoded(env["cursor"])["cal"]["end"] == "2026-12-26T12:00:00Z"
 
 
+async def test_series_masters_are_not_calendar_changes(fake):
+    """P-C2, live (step-6 eval): calendarView delta returns each series master beside the
+    occurrences, dated at the series' first start. A change to a series is its
+    occurrences, so the master is not listed again."""
+    parts = install(fake, mailbox())
+    first = await run(fake, install_it=False)
+    changed = "2026-11-26T13:00:00Z"
+    master = {
+        **ev("s1", "2026-11-27T09:00:00", "2026-11-27T09:30:00", modified=changed),
+        "type": "seriesMaster",
+    }
+    occurrence = {
+        **ev("s1-o1", "2026-11-27T09:00:00", "2026-11-27T09:30:00", modified=changed),
+        "type": "occurrence",
+        "seriesMasterId": "s1",
+    }
+    parts[2].changes = [master, occurrence]
+    env = await run(fake, install_it=False, now=LATER, cursor=first["cursor"])
+    assert ids_in(env, "calendar_changes") == ["s1-o1"]
+
+
 # ── focus ─────────────────────────────────────────────────────────────────
 
 
@@ -742,6 +767,38 @@ async def test_p_d3a_a_refused_flag_filter_scans_three_folders(fake):
         "/me/mailFolders/sentitems/messages",
         "/me/mailFolders/archive/messages",
     }
+
+
+@pytest.mark.parametrize("refuse_created", [False, True], ids=["created_only", "p_dl1_fallback"])
+async def test_a_day_of_mail_reaches_its_delta_link_within_g2(fake, refuse_created):
+    """Live (step-6 eval): Graph ignores `$top` on message delta and pages by 10, so a day
+    of 50 arrivals never reached its deltaLink in G2's four reads and the answer was
+    `incomplete`. `odata.maxpagesize` sizes the pages, sent beside the id preference on
+    every read of the round (D2: one id family per process)."""
+    parts = mailbox()
+    parts[1].refuse_created = refuse_created
+    parts[0].received += [
+        received(
+            f"d{n}",
+            f"p{n}@example.com",
+            "Hi",
+            conversation=f"cd{n}",
+            when=f"2026-11-26T0{n % 10}:30:00Z",
+        )
+        for n in range(50)
+    ]
+    install(fake, parts)
+    first = await run(fake, install_it=False)
+    assert first["understood"]["arrivals"]["has_more"] is False
+    assert first["outcome"] == "answered"
+    assert decoded(first["cursor"])["mail"]["link"] == f"{MAIL_LINK}?$deltatoken=round1"
+    await run(fake, install_it=False, now=LATER, cursor=first["cursor"])
+    reads = [s for s in fake.operations if s.path.endswith("/messages/delta")]
+    assert any("$deltatoken" in s.params for s in reads)  # the cursor's round too
+    for seen in reads:
+        prefer = [p.strip() for p in seen.headers["prefer"].split(",")]
+        assert f"odata.maxpagesize={catch_up.MAIL_TOP}" in prefer
+        assert ids.IMMUTABLE_ID_PREFERENCE in prefer
 
 
 async def test_a_failed_calendar_read_leaves_the_mail(fake):
