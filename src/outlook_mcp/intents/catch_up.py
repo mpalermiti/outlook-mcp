@@ -85,10 +85,12 @@ OVERLAP = timedelta(minutes=2)  # delivery that lands just before the last call 
 RESYNC_MAX = timedelta(days=31)
 SENT_PAGES = 2  # G1
 MAIL_PAGES = 4  # G2, attempts included
-MAIL_TOP = 50
-# Graph ignores `$top` on message delta and pages by 10 (live, step-6 eval), so the page
-# size goes in `Prefer`, combined with the id preference (ids.combine_prefer).
-MAIL_PREFER = f"odata.maxpagesize={MAIL_TOP}"
+MAIL_PAGE_SIZE = 50
+# Live (step-6 eval): message delta pages by 10 whatever `$top` says, and `$top` caps the
+# whole round, past the `$filter` (50 items and a deltaLink for a window holding 46). So
+# no `$top`: the page size goes in `Prefer`, combined with the id preference
+# (ids.combine_prefer).
+MAIL_PREFER = f"odata.maxpagesize={MAIL_PAGE_SIZE}"
 HEADER_READS = 8  # G3 (10 in §12.2)
 FLAG_CHECKS = 5  # G5 (8 in §12.2): the confirmations of replies take the rest (review B1)
 CAL_PAGES = 2  # G6, attempts included
@@ -368,9 +370,7 @@ def _mail_bootstrap_url(since: datetime, *, created_only: bool) -> str:
     params: dict = {}
     if created_only:
         params["changeType"] = "created"
-    params.update(
-        {"$filter": f"receivedDateTime ge {utc(since)}", "$select": MAIL_SELECT, "$top": MAIL_TOP}
-    )
+    params.update({"$filter": f"receivedDateTime ge {utc(since)}", "$select": MAIL_SELECT})
     return GRAPH_BASE + build_url(MAIL_DELTA_PATH, params)
 
 
