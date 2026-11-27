@@ -477,7 +477,7 @@ Other kinds:
 
 | kind | Queries |
 | --- | --- |
-| message, thread | With words: `$search` on `/me/messages`, or on the folder when given. KQL = `sanitize_kql(words)` (reuse), then `from:<addr>` (filters.from resolved first; if that person is ambiguous the outcome is `candidates` for the person), `received>=YYYY-MM-DD`, `received<=…` and `hasAttachments:true`, with `$top=25`. `$select` is `SUMMARY_SELECT` plus `toRecipients,ccRecipients,parentFolderId`. With no words, `$filter` mode (§4). A thread is the latest message per `conversationId` |
+| message, thread | With words: `$search` on `/me/messages`, or on the folder when given. KQL = `sanitize_kql(words)` (reuse), then `from:<addr>` (filters.from resolved first; if that person is ambiguous the outcome is `candidates` for the person), `received>=YYYY-MM-DD`, `received<=…` (two bounds joined by `AND`: with only a space KQL ORs them, live session 2) and `hasAttachments:true`, with `$top=25`. `$select` is `SUMMARY_SELECT` plus `toRecipients,ccRecipients,parentFolderId`. With no words, `$filter` mode (§4). A thread is the latest message per `conversationId` |
 | file | the message query with `hasAttachments`, then one `$batch` of `GET /me/messages/{id}/attachments?$select=id,name,size,contentType,isInline` for the top 10 messages. Non-inline attachments are matched on `file_name`. Live (P-AT1), plain words find a file by the first word of its name, and KQL `attachment:` adds nothing (it matches only a name's start), so no second search is sent; a word inside a name is found only by the local match on the fetched names |
 | event | `calendarView` per calendar over `window` (default now − 30 d to now + 180 d). `$select=id,subject,start,end,isAllDay,isOrganizer,organizer,responseStatus,isCancelled,showAs,seriesMasterId,type,attendees`, `$top=100`, at most 3 pages × 5 calendars. Matched locally on subject, attendee names and addresses, since Graph has no `$search` on events [repo-live `list_events`] |
 | task | `GET /me/todo/lists`, skipping `wellknownListName = flaggedEmails` (those duplicate flagged mail, §8), then per list `…/tasks?$filter=status ne 'completed'&$top=100` (P-H1a; without that filter, filter locally), at most 8 lists. Matched on title |
@@ -601,7 +601,7 @@ MailSelection
 | Field | `$filter` clause | In search mode | Evidence |
 | --- | --- | --- | --- |
 | newer_than | `receivedDateTime ge <utc>` | KQL `received>=<date>` | [repo-live] |
-| older_than | `receivedDateTime lt <utc>` | KQL `received<<date>` (day granularity) | [repo-live] |
+| older_than | `receivedDateTime lt <utc>` | KQL `received<<date>` (day granularity); with newer_than, the two are joined by `AND` (live session 2: KQL ORs two restrictions on one property that only a space separates) | [repo-live] |
 | from | `from/emailAddress/address eq '<a>'`; several are OR'd inside parentheses | KQL `from:<a>`, OR'd | single [repo-live]; the OR group needs a live guard |
 | from_domain | none: scan mode, local `address.endswith("@" + d)` | KQL `from:<d>`, then a local check | — |
 | category | `categories/any(c:c eq '<name>')`, quotes doubled | filtered locally | P-F4b |
