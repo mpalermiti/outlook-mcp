@@ -104,10 +104,16 @@ def _field_parts(selection: MailSelection) -> list[str]:
         parts.append(f"from:{senders[0]}")
     elif senders:
         parts.append("(" + " OR ".join(f"from:{a}" for a in senders) + ")")
+    # Two bounds are joined with AND: live, KQL ORs two restrictions on one property
+    # that only a space separates, so `received>=X received<=Y` bounded nothing
+    # (live session 2). One bound needs no join.
+    dates = []
     if selection.newer_than is not None:
-        parts.append(f"received>={_day(selection.newer_than - timedelta(days=1))}")
+        dates.append(f"received>={_day(selection.newer_than - timedelta(days=1))}")
     if selection.older_than is not None:
-        parts.append(f"received<={_day(selection.older_than + timedelta(days=1))}")
+        dates.append(f"received<={_day(selection.older_than + timedelta(days=1))}")
+    if dates:
+        parts.append(" AND ".join(dates))
     if selection.has_attachments:
         parts.append("hasAttachments:true")
     return parts

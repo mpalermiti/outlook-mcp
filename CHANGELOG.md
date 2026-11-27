@@ -105,6 +105,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **`outlook_search_mail`'s note on a search that stopped early says to join the new bound
+  with AND.** It told you to add `received<=` and a date to reach older mail. Outlook's search
+  matches either of two bounds on the same field when only a space separates them, so a query
+  that already had `received>=` would have reached everything; the note now says
+  `AND received<=`.
+
 - **Ending a repeating event and moving it in the same call is no longer refused (#97).**
   `outlook_update_event` with `remove_recurrence=True` and a new `start` and `end` (with or
   without `timezone`) refused a series that had edited or deleted occurrences, saying they would
