@@ -36,9 +36,25 @@ def test_every_field_in_order():
         has_attachments=True,
     )
     assert search_kql(selection) == (
-        '"budget from:sam@example.com received>=2026-11-09 received<=2026-11-21 '
+        '"budget from:sam@example.com received>=2026-11-09 AND received<=2026-11-21 '
         'hasAttachments:true"'
     )
+
+
+def test_two_date_bounds_are_joined_with_and():
+    """Live session 2: KQL ORs two restrictions on one property joined by a space, so
+    `received>=X received<=Y` bounds nothing. An explicit AND makes both hold; one bound
+    needs no join."""
+    both = MailSelection(
+        words="x",
+        newer_than=datetime(2026, 11, 17, tzinfo=UTC),
+        older_than=datetime(2026, 11, 17, 12, tzinfo=UTC),
+    )
+    assert search_kql(both) == '"x received>=2026-11-16 AND received<=2026-11-18"'
+    after = MailSelection(words="x", newer_than=datetime(2026, 11, 17, tzinfo=UTC))
+    assert search_kql(after) == '"x received>=2026-11-16"'
+    before = MailSelection(words="x", older_than=datetime(2026, 11, 17, tzinfo=UTC))
+    assert search_kql(before) == '"x received<=2026-11-18"'
 
 
 def test_several_senders_are_one_or_group():
