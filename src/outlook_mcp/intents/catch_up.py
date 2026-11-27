@@ -86,6 +86,9 @@ RESYNC_MAX = timedelta(days=31)
 SENT_PAGES = 2  # G1
 MAIL_PAGES = 4  # G2, attempts included
 MAIL_TOP = 50
+# Graph ignores `$top` on message delta and pages by 10 (live, step-6 eval), so the page
+# size goes in `Prefer`, combined with the id preference (ids.combine_prefer).
+MAIL_PREFER = f"odata.maxpagesize={MAIL_TOP}"
 HEADER_READS = 8  # G3 (10 in §12.2)
 FLAG_CHECKS = 5  # G5 (8 in §12.2): the confirmations of replies take the rest (review B1)
 CAL_PAGES = 2  # G6, attempts included
@@ -379,7 +382,11 @@ async def _bootstrap_mail(
     requests it took."""
     try:
         items, link, more = await _delta_pages(
-            lookup, _mail_bootstrap_url(since, created_only=True), resource="mail", pages=pages
+            lookup,
+            _mail_bootstrap_url(since, created_only=True),
+            resource="mail",
+            pages=pages,
+            prefer=MAIL_PREFER,
         )
         return items, link, more, True, pages
     except GraphAPIError as error:
@@ -387,7 +394,11 @@ async def _bootstrap_mail(
         if error.status_code != 400 or pages < 2:
             raise
     items, link, more = await _delta_pages(
-        lookup, _mail_bootstrap_url(since, created_only=False), resource="mail", pages=pages - 1
+        lookup,
+        _mail_bootstrap_url(since, created_only=False),
+        resource="mail",
+        pages=pages - 1,
+        prefer=MAIL_PREFER,
     )
     return items, link, more, False, pages
 
@@ -411,7 +422,7 @@ async def _read_mail(
         created_only = state.mail.created_only
         try:
             items, link, more = await _delta_pages(
-                lookup, state.mail.link, resource="mail", pages=MAIL_PAGES
+                lookup, state.mail.link, resource="mail", pages=MAIL_PAGES, prefer=MAIL_PREFER
             )
         except GraphAPIError as error:
             if not is_stale_delta(error.status_code):
@@ -777,6 +788,10 @@ async def _calendar_sections(
             if "@removed" in row:
                 if isinstance(row.get("id"), str):
                     removed.append(row["id"])
+                continue
+            if row.get("type") == "seriesMaster":
+                # The delta returns each series master beside its occurrences (P-C2, live),
+                # dated at the series' first start: a series' changes are its occurrences.
                 continue
             modified = parse_time(row.get("lastModifiedDateTime"))
             if since is not None and (modified is None or modified <= since):

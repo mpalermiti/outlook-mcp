@@ -284,7 +284,9 @@ async def test_p_c2_the_calendar_delta_round_completes_and_matches_the_view(look
     start, end = now - catch_up.CAL_BACK, now + catch_up.CAL_AHEAD
     prefer = f"odata.maxpagesize={catch_up.CAL_PAGE_SIZE}"
     items, _ = await _drain(lookup, catch_up._cal_bootstrap_url(start, end), "calendar", prefer)
-    delta_ids = {r["id"] for r in items if "@removed" not in r}
+    # The delta also returns each series master, which calendarView doesn't (live, step-6
+    # eval); catch_up drops them too.
+    delta_ids = {r["id"] for r in items if "@removed" not in r and r.get("type") != "seriesMaster"}
     view, more = await read_view(lookup, "/me/calendarView", start, end, "id", pages=10)
     if more:
         pytest.skip("more than 1,000 events in the window")
