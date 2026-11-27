@@ -42,6 +42,7 @@ from outlook_mcp.graph import GraphClient
 from outlook_mcp.intents import agenda as intent_agenda
 from outlook_mcp.intents import find as intent_find
 from outlook_mcp.intents import ids as intent_ids
+from outlook_mcp.intents import open_loops as intent_open_loops
 from outlook_mcp.tools import (
     admin,
     batch,
@@ -2403,6 +2404,35 @@ async def outlook_agenda(
         min_free=min_free,
         include_tasks=include_tasks,
         config_zone=_get_config(ctx).timezone,
+        signed_in=auth.saved_username(),
+        loaded_tools=LOADED_TOOLS,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_open_loops(
+    ctx: Context,
+    direction: Literal["on_me", "on_them", "both"] = "both",
+    person: str | None = None,
+    words: str | None = None,
+    older_than: str | None = None,
+    window: str = "14d",
+) -> dict:
+    """Conversations waiting on you (the latest message is someone else's, to you) or on
+    others (the latest is your letter to them), plus flagged letters never answered.
+    Candidates to judge, not verdicts. window: look-back, default 14d, at most 90d.
+    older_than (e.g. 3d) keeps only longer waits. person (name or address) and words
+    narrow to conversations they are in.
+    """
+    return await intent_open_loops.read_open_loops(
+        _get_graph_client(ctx),
+        direction=direction,
+        person=person,
+        words=words,
+        older_than=older_than,
+        window=window,
+        zone=_get_config(ctx).timezone,
         signed_in=auth.saved_username(),
         loaded_tools=LOADED_TOOLS,
     )

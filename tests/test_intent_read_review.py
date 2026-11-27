@@ -8,14 +8,18 @@ for brief, and "nit" for the small ones fixed with them.
 
 from __future__ import annotations
 
+import json
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from outlook_mcp.intents import ids, transport
+from outlook_mcp.intents import ids, open_loops, transport
 from outlook_mcp.intents.ids import IdFamily
+from outlook_mcp.intents.open_loops import read_open_loops
 from tests import test_intent_agenda as ag
-from tests.intent_fakes import ME, FakeGraph, Mailbox
+from tests import test_intent_open_loops as ol
+from tests.intent_fakes import ME, FakeGraph, Mailbox, auth_header, error, received
 
 NOW = datetime(2026, 11, 26, 12, 0, tzinfo=timezone.utc)
 EVERY_TOOL = frozenset(
@@ -185,6 +189,258 @@ async def test_nit_an_overlap_names_at_most_five_others(fake):
         assert len([r for r in item["why"] if r["code"] == "overlaps"]) == 5
 
 
+# ── #282 open_loops, and the reply checks it shares with catch_up ────────
+
+
+def _later(
+    msg_id, sender, subject, when, *, folder="inbox-id", headers=None, conversation="conv-lee"
+):
+    return received(
+        msg_id,
+        sender,
+        subject,
+        conversation=conversation,
+        when=when,
+        folder=folder,
+        headers=headers if headers is not None else [],
+    )
+
+
+@pytest.mark.parametrize(
+    "later",
+    [
+        # A bounce, in Junk (the review's repro).
+        _later(
+            "junk-1",
+            "mailer-daemon@bounce.example",
+            "Undeliverable: Contract",
+            "2026-10-01T10:05:00Z",
+            folder="junk-id",
+        ),
+        # A bounce in the Inbox: not from anyone the letter went to.
+        _later(
+            "bounce", "postmaster@example.com", "Undeliverable: Contract", "2026-10-01T10:05:00Z"
+        ),
+        # Lee's out-of-office reply.
+        _later(
+            "oof",
+            ol.LEE,
+            "Automatic reply: Contract",
+            "2026-10-01T10:06:00Z",
+            headers=[
+                *auth_header("pass", "example.com"),
+                {"name": "Auto-Submitted", "value": "auto-replied"},
+            ],
+        ),
+        # Mail claiming Lee's address that fails Microsoft's check.
+        _later(
+            "spoof",
+            ol.LEE,
+            "Re: Contract",
+            "2026-10-02T10:00:00Z",
+            headers=auth_header("fail", "example.com"),
+        ),
+        # A checked message from someone the letter did not go to.
+        _later(
+            "third",
+            "colleague@example.net",
+            "Re: Contract",
+            "2026-10-02T09:00:00Z",
+            headers=auth_header("pass", "example.net"),
+        ),
+        # Lee's real reply, but in Deleted Items.
+        _later(
+            "deleted",
+            ol.LEE,
+            "Re: Contract",
+            "2026-10-02T10:00:00Z",
+            folder="deleted-id",
+            headers=auth_header("pass", "example.com"),
+        ),
+    ],
+    ids=[
+        "bounce_in_junk",
+        "bounce_in_inbox",
+        "out_of_office",
+        "failed_check",
+        "not_a_recipient",
+        "deleted",
+    ],
+)
+async def test_b1_only_a_checked_reply_from_whom_the_letter_went_to_ends_a_wait(fake, later):
+    box = ol.mailbox()
+    box.received.append(later)
+    env = await ol.run(fake, box)
+    assert "conv-lee" in [i["id"] for i in sec(env, "waiting_on_them")["items"]]
+
+
+async def test_b1_a_checked_reply_from_the_recipient_does_end_it(fake):
+    box = ol.mailbox()
+    box.received.append(
+        _later(
+            "real",
+            ol.LEE,
+            "Re: Contract",
+            "2026-10-02T10:00:00Z",
+            headers=auth_header("pass", "example.com"),
+        )
+    )
+    env = await ol.run(fake, box)
+    assert "conv-lee" not in [i["id"] for i in sec(env, "waiting_on_them")["items"]]
+
+
+async def test_b1_a_reply_whose_check_could_not_run_keeps_the_follow_up(fake):
+    box = ol.mailbox()
+    box.received.append(
+        _later(
+            "real",
+            ol.LEE,
+            "Re: Contract",
+            "2026-10-02T10:00:00Z",
+            headers=auth_header("pass", "example.com"),
+        )
+    )
+    box.install(fake)
+    fake.on(r"/me/messages/real", lambda s, m: error(500, "InternalServerError"))
+    env = await read_open_loops(
+        fake.graph_client(), zone="UTC", signed_in=ME, loaded_tools=frozenset(), now=NOW
+    )
+    assert "conv-lee" in [i["id"] for i in sec(env, "waiting_on_them")["items"]]
+    assert env["understood"]["replies_unconfirmed"] == ["s5"]
+
+
+async def test_b2_a_received_letter_that_starts_cancelled_is_listed(fake):
+    """The subject prefix only guards the owner's sent table; received mail is a meeting
+    message only by its type."""
+    box = ol.mailbox()
+    box.received.append(
+        received(
+            "flight",
+            "noreply@airline.example",
+            "Cancelled: your flight tomorrow",
+            conversation="conv-flight",
+            when="2026-11-25T10:30:00Z",
+            headers=auth_header("pass", "airline.example"),
+        )
+    )
+    env = await ol.run(fake, box)
+    assert "conv-flight" in [i["id"] for i in sec(env, "waiting_on_me")["items"]]
+
+
+async def test_c1_a_spoof_of_a_known_sender_is_checked_and_never_offered_a_reply(fake):
+    box = ol.mailbox()
+    box.received.append(
+        received(
+            "spoof",
+            ol.PAT,
+            "Wire instructions changed",
+            conversation="conv-spoof",
+            when="2026-11-13T09:00:00Z",
+            headers=auth_header("fail", "example.org"),
+        )
+    )
+    box.install(fake)
+    env = await read_open_loops(
+        fake.graph_client(), zone="UTC", signed_in=ME, loaded_tools=EVERY_TOOL, now=NOW
+    )
+    spoof = next(i for i in sec(env, "waiting_on_me")["items"] if i["id"] == "conv-spoof")
+    assert spoof["sender_auth"]["result"] == "failed"
+    assert {"code": "sender_failed"} in spoof["warnings"]
+    drafts = [n["args"]["message_id"] for n in env["next"] if n["template"] == "draft_reply"]
+    assert drafts and "spoof" not in drafts
+
+
+async def test_c1_draft_reply_needs_a_check_that_ran(fake):
+    box = ol.mailbox()
+    box.install(fake)
+    for msg in ("a1", "r1", "r7", "r2"):
+        fake.on(rf"/me/messages/{msg}", lambda s, m: error(500, "InternalServerError"))
+    env = await read_open_loops(
+        fake.graph_client(), zone="UTC", signed_in=ME, loaded_tools=EVERY_TOOL, now=NOW
+    )
+    assert not [n for n in env["next"] if n["template"] == "draft_reply"]
+
+
+async def test_c2_a_capped_inbox_never_reports_an_answered_letter_as_waiting(fake):
+    box = ol.mailbox()
+    box.received.append(
+        received(
+            "pat-reply", ol.PAT, "Re: Quote", conversation="conv-pat", when="2026-11-19T09:00:00Z"
+        )
+    )
+    box.received += [
+        received(f"n{n}", f"list{n}@example.net", "News", when="2026-11-25T09:00:00Z")
+        for n in range(300)
+    ]
+    env = await ol.run(fake, box)
+    assert "conv-pat" not in [i["id"] for i in sec(env, "waiting_on_them")["items"]]
+    assert env["outcome"] == "incomplete"
+    assert env["understood"]["conversations_not_judged"] >= 1
+    assert env["understood"]["judged_since"] == "2026-11-25T09:00:00Z"
+
+
+async def test_c3_one_deadline_covers_the_lookups_before_the_sections(fake, monkeypatch):
+    monkeypatch.setattr(open_loops, "INTENT_DEADLINE_S", 0.2)
+    fake.delays.append((lambda s: bool(s.search), 1.0))
+    began = time.monotonic()
+    env = await ol.run(fake, words="plan")
+    assert time.monotonic() - began < 0.9
+    assert env["outcome"] == "incomplete"
+    assert {s["status"] for s in env["sections"]} == {"skipped_time"}
+
+
+async def test_nit_a_searched_thread_ending_in_a_draft_is_judged_by_its_last_message(fake):
+    box = ol.mailbox()
+    box.received += [
+        received(
+            "old-q", ol.BOB, "Zebra budget", conversation="conv-z", when="2026-09-01T09:00:00Z"
+        ),
+        received(
+            "old-draft",
+            ME,
+            "Re: Zebra budget",
+            conversation="conv-z",
+            when="2026-09-02T09:00:00Z",
+            folder="drafts-id",
+            draft=True,
+        ),
+    ]
+    env = await ol.run(fake, box, words="zebra")
+    assert "conv-z" in [i["id"] for i in sec(env, "waiting_on_me")["items"]]
+
+
+async def test_nit_an_unread_searched_conversation_is_counted_not_named(fake):
+    box = ol.mailbox()
+    box.received.append(
+        received(
+            "old",
+            "zed@example.com",
+            "Invoice 42",
+            conversation="conv-old",
+            when="2026-09-01T09:00:00Z",
+        )
+    )
+    box.install(fake)
+    real = box._messages
+
+    def messages(seen, match):
+        if seen.in_batch and "conv-old" in (seen.filter or ""):
+            return error(500, "InternalServerError")
+        return real(seen, match)
+
+    fake.on("/me/messages", messages)
+    env = await read_open_loops(
+        fake.graph_client(),
+        zone="UTC",
+        signed_in=ME,
+        loaded_tools=frozenset(),
+        now=NOW,
+        words="invoice",
+    )
+    assert env["understood"]["searched_conversations_unread"] == 1
+    assert not [c for c in env["understood"]["not_covered"] if ":" in c]
+
+
 # ── Live round 1, P-SI1 (b): isOrganizer is the owner's word, not an address ──
 
 
@@ -236,3 +492,26 @@ def test_live_an_organizer_response_on_a_meeting_not_the_owners_is_a_stranger_in
     assert own["is_organizer"] is True
     assert {"code": "organizer_you"} in own["why"]
     assert {"code": "stranger_invite"} not in own["warnings"]
+
+
+# ── Live round 1, $search ids: no regular id ever leaves a read tool ─────
+
+
+async def test_live_open_loops_hands_out_no_search_id(fake):
+    """L8 keeps only the hits' conversations; every message id it hands out comes from
+    a filter read, so none is a search's regular id (no translation is needed)."""
+    box = ol.mailbox()
+    box.received.append(
+        received(
+            "old",
+            "zed@example.com",
+            "Invoice 42",
+            conversation="conv-old",
+            when="2026-09-01T09:00:00Z",
+        )
+    )
+    env = await ol.run(fake, box, words="invoice", tools=EVERY_TOOL)
+    assert any(s.search for s in fake.operations)  # the search ran, with regular ids
+    assert "conv-old" in [i["id"] for i in sec(env, "waiting_on_me")["items"]]
+    assert "rest-" not in json.dumps(env)
+    assert not [s for s in fake.operations if s.path == "/me/translateExchangeIds"]

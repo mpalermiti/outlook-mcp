@@ -226,6 +226,19 @@ MEETING_SUBJECT_PREFIXES = (
 )
 
 
+def is_meeting_type(row: dict) -> bool:
+    """Whether a message is a meeting request or response by its type alone: its
+    ``@odata.type`` names ``eventMessage``, or ``meetingMessageType`` came back.
+
+    The test for any mail that is counted or listed (review B2). The subject is the
+    sender's choice, so a subject prefix never hides received mail; only the owner's
+    sent table also drops on it (``is_meeting_message``), where dropping is safe.
+    """
+    if "eventmessage" in str(row.get("@odata.type") or "").lower():
+        return True
+    return row.get("meetingMessageType") is not None
+
+
 def is_meeting_message(row: dict) -> bool:
     """Whether a Sent Items row is a meeting request or response rather than a letter.
 
@@ -247,9 +260,7 @@ def is_meeting_message(row: dict) -> bool:
     the cast property before a release
     (``test_p_si1_gate_a_localized_untyped_accept_does_not_make_a_stranger_known``).
     """
-    if "eventmessage" in str(row.get("@odata.type") or "").lower():
-        return True
-    if row.get("meetingMessageType") is not None:
+    if is_meeting_type(row):
         return True
     subject = row.get("subject")
     return isinstance(subject, str) and subject.strip().casefold().startswith(

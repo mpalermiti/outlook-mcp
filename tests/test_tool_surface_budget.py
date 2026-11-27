@@ -497,8 +497,12 @@ def test_contact_photos_surface_has_its_own_budget_and_preserves_default_schemas
 # none required. Find and agenda together are 462; default + intents is 73 / 11,668;
 # `intents` alone 4 / 567; all groups 80 / 12,822. Raised from 245 and 11,550, by the
 # one tool, with ~1% headroom.
-INTENT_TOOLS_CEILING = 470
-INTENTS_SELECTION_CEILING = 11_800
+#
+# `outlook_open_loops` (§12.3) is 184: a 360-character description and five arguments,
+# `direction` an enum of three. The three are 646; default + intents is 74 / 11,852;
+# `intents` alone 5 / 751; all groups 81 / 13,006. Raised from 470 and 11,800.
+INTENT_TOOLS_CEILING = 655
+INTENTS_SELECTION_CEILING = 11_980
 
 
 def test_the_intent_tools_fit_their_own_ceiling_and_leave_the_default_alone():

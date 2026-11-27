@@ -2,7 +2,7 @@
 
 Changelog: 2026-11-26. Every change to a rule or override routes `far_reaching`, `undo` included; `undo` reads events live; the act tools check attendees and route against live state every run; the plan store claims `running` atomically and releases it in a `finally`, keeps a finished plan's receipt until expiry, and prunes on every access; "reversible" is defined; `CLAUDE.md` text is proposed (§17). Open items before later steps are tracked in §18.
 
-Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3 is built in `src/outlook_mcp/intents/`: `outlook_find` is registered in the opt-in `intents` group, off by default, as an early preview. Step 4 is under way: `outlook_agenda` is registered the same way.
+Status: design contracts for the opt-in intent tool set. Each tool lands only when its build step's gate passes. Step 3 is built in `src/outlook_mcp/intents/`: `outlook_find` is registered in the opt-in `intents` group, off by default, as an early preview. Step 4 is under way: `outlook_agenda` and `outlook_open_loops` are registered the same way.
 
 These contracts define the interfaces every intent tool builds on: the answer envelope, the resolver, typed times, mail selections, plans and acting, undo receipts, the `catch_up` cursor, the follow-up marker, the approval and permission mapping, and how the tool set ships. They are meant to be precise enough to implement and to test against. Where they depart from the intent-tool design, §15 says so.
 
@@ -1933,6 +1933,22 @@ Rank: To before Cc; then sender known (count, descending); then waiting longest 
 - `words` keeps the L8 conversations.
 
 **understood:** `window`, `direction`, the resolved `person`, and `not_covered: ["rule_filed_folders", "junk", "older_than_window_unless_flagged_or_searched"]`.
+
+**As built:**
+- The owner's mail is what is in Sent Items (find's review, B1). A message elsewhere whose `from` is one of the owner's addresses, a copy of a note to self or a forgery, is left out of who wrote last: it can neither end a wait nor start one. F2 counts a later message as `you_replied` only from Sent Items.
+- F2 counts a later message as their reply (review B1) only when it is from someone the flagged message waits on (a letter's recipients, a received message's sender), outside Junk and Deleted Items (their ids read once, in one batch), and its headers show a verified sender and no automatic or bulk mail (`Auto-Submitted`, `Precedence`, `X-Autoreply`, a `multipart/report` bounce, list headers). The first such candidate per flag is read. Anything short of that leaves the follow-up open, in `understood.replies_unconfirmed`.
+- Meeting messages are told by type only (`@odata.type`, `meetingMessageType`) everywhere mail is listed or counted; the subject-prefix backstop is for the sent table alone (review B2).
+- L6 reads the 8 top-ranked waits, known senders included (review C1), and `draft_reply` goes only to a wait whose check ran and did not fail. L9 reads 4 conversations, the newest 3 messages each, and judges a conversation by its latest message that is not a draft.
+- When a window read is cut at its cap, only conversations whose latest message is at least as new as the oldest message read from every capped folder are judged; `understood.judged_since` and `conversations_not_judged` say so, and the answer is `incomplete` (review C2).
+- One deadline from the start of the call covers the person and word lookups and the core read too (review C3).
+- Worst case 36 requests (L7 3-5, L8 1, L1 3, L2 3, L3 1, L9 4, L4 1, L5 5, the two folder ids, 5 confirmations, L6 8); 38 with both P-SI1 fallbacks.
+- A conversation whose latest message is a meeting message is skipped, not read by its message before.
+- L1 also selects `parentFolderId`, `subject`, `bodyPreview` and the eventMessage cast (P-SI1, read again without the cast on a 400). F1 also selects the recipients and the subject, so a flagged letter says whom it waits on.
+- P-D3a's fallback scans Sent Items only (open_loops reads flags only for sent letters), and the section's `total_exact` is false.
+- A failed reply check keeps the flagged letter and lists its id in `understood.reply_checks_failed`; a failed header read reads `not_checked` and the item stays.
+- An account without an Archive folder (404) adds `archive` to `not_covered`. Caps that cut a read add `sent_beyond_300`, `inbox_beyond_300`, `archive_beyond_100`, `flags_beyond_first_page`, `flagged_letters_beyond_5` or `searched_conversations_beyond_9`, and set `partial`.
+- The window must start in the past and reach now. `older_than` is an offset (units m, h, d, w), at most 365 days.
+- An ambiguous `person` answers `candidates` in a `candidates` section, with `choose` offered only for known, unblocked people.
 
 **next:**
 - `open_thread` for the top 2;
