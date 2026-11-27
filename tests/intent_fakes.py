@@ -439,11 +439,13 @@ class Mailbox:
         on(r"/me/messages/([^/]+)", self._message)
         on(r"/me/messages/([^/]+)/attachments", self._attachments)
         on("/me/contacts", self._contacts)
+        on(r"/me/contacts/([^/]+)", self._contact)
         on("/me/translateExchangeIds", self._translate, method="POST")
         on("/me/calendars", lambda seen, m: _paged(self.calendars, seen, "/me/calendars", 100))
         on(r"/me/calendars/([^/]+)/calendarView", self._calendar_view)
         on("/me/calendarView", self._primary_view)
         on(r"/me/events/([^/]+)", self._event)
+        on(r"/me/events/([^/]+)/attachments", self._attachments)
         on("/me/todo/lists", lambda seen, m: page(self.task_lists))
         on(r"/me/todo/lists/([^/]+)/tasks", self._tasks)
         on(r"/me/todo/lists/([^/]+)/tasks/([^/]+)", self._task)
@@ -464,8 +466,9 @@ class Mailbox:
         ):
             return error(400, "BadRequest", "Could not find a property named 'eventMessage'")
         if seen.search:
+            # Live round 1: a Sent Items `$search` hands back regular ids too.
             hits = [r for r in self.sent if kql_matches(seen.search, r)]
-            return page(hits[: int(seen.params.get("$top") or 25)])
+            return page([as_rest(r) for r in hits[: int(seen.params.get("$top") or 25)]])
         rows = filtered(self.sent, seen.filter)
         newest = ordered(rows, seen, "sentDateTime")
         return _paged(newest, seen, "/me/mailFolders/sentitems/messages", 100)
@@ -604,6 +607,12 @@ class Mailbox:
                 ]
             )
         return page(self.contacts)
+
+    def _contact(self, seen: Seen, match) -> Any:
+        for row in self.contacts:
+            if row["id"] == match.group(1):
+                return row
+        return error(404, "ErrorItemNotFound")
 
     # Calendar
 

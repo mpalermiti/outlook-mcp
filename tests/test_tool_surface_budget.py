@@ -505,8 +505,13 @@ def test_contact_photos_surface_has_its_own_budget_and_preserves_default_schemas
 # `outlook_catch_up` (§12.2) is 145: the contracts' own 285-character description and
 # three arguments. The four are 791; default + intents is 75 / 11,997; `intents` alone
 # 6 / 896; all groups 82 / 13,151. Raised from 655 and 11,980.
-INTENT_TOOLS_CEILING = 800
-INTENTS_SELECTION_CEILING = 12_120
+#
+# `outlook_brief` (§12.5) is 167: a 390-character description and four arguments. The
+# five read and find tools are 958, against the design's ~264 each; default + intents
+# is 76 / 12,164; `intents` alone 7 / 1,063; all groups 83 / 13,318. Raised from 800
+# and 12,120.
+INTENT_TOOLS_CEILING = 970
+INTENTS_SELECTION_CEILING = 12_290
 
 
 def test_the_intent_tools_fit_their_own_ceiling_and_leave_the_default_alone():

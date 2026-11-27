@@ -115,6 +115,7 @@ EXPECTED_TOOLS = [
     "outlook_agenda",
     "outlook_open_loops",
     "outlook_catch_up",
+    "outlook_brief",
 ]
 
 INTENT_TOOLS = {name for name, group in toolsets.TOOL_GROUPS.items() if group == toolsets.INTENTS}
@@ -165,7 +166,7 @@ def _expected_tool_names() -> set[str]:
 
 
 def test_tool_count():
-    """71 tools by default, up to 82 with all opt-in groups loaded."""
+    """71 tools by default, up to 83 with all opt-in groups loaded."""
     registered = set(mcp._tool_manager._tools.keys())
     assert len(registered) == len(_expected_tool_names())
 

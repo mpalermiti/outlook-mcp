@@ -46,6 +46,7 @@ OUTCOMES = {
     "outlook_agenda": frozenset({"answered", "incomplete"}),
     "outlook_open_loops": frozenset({"answered", "incomplete", "candidates"}),
     "outlook_catch_up": frozenset({"answered", "incomplete"}),
+    "outlook_brief": frozenset({"answered", "incomplete", "candidates"}),
 }
 
 SECTION_STATUSES = frozenset({"ok", "failed", "skipped_budget", "skipped_time"})
@@ -62,6 +63,12 @@ OTHERS_WROTE_CAPS = {
     "body_preview": 160,
     "organizer_name": 64,
     "address_text": 254,
+    # A saved contact's details (brief's `who`, §12.5: "contact details go under
+    # others_wrote"): its owner typed them, but anyone the agent saved could have.
+    "company": 80,
+    "job_title": 80,
+    "phones": 120,
+    "birthday": 10,
 }
 
 # §1.6: exhaustive. A code outside these lists is a bug, refused where it is built.

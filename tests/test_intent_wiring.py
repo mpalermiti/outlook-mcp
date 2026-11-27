@@ -4,7 +4,7 @@ What loads by default does not change: ``intents`` is off by default, so a stock
 install, and every selection that doesn't name it, registers what it did, sends
 the same requests and reads the same instructions. A selection that names it
 gets the intent tools (``outlook_find``, ``outlook_agenda``,
-``outlook_open_loops``, ``outlook_catch_up``), read-only; the
+``outlook_open_loops``, ``outlook_catch_up``, ``outlook_brief``), read-only; the
 process asks Graph for immutable ids on every request (decision D2); and the
 instructions gain one sentence about ``others_wrote``.
 """
@@ -24,6 +24,7 @@ import pytest
 from outlook_mcp import auth, server, toolsets
 from outlook_mcp.config import Config
 from outlook_mcp.intents import agenda as intent_agenda
+from outlook_mcp.intents import brief as intent_brief
 from outlook_mcp.intents import catch_up as intent_catch_up
 from outlook_mcp.intents import find as intent_find
 from outlook_mcp.intents import open_loops as intent_open_loops
@@ -71,7 +72,8 @@ def processes() -> dict[str | None, dict]:
 
 
 @pytest.mark.parametrize(
-    "tool", ["outlook_find", "outlook_agenda", "outlook_open_loops", "outlook_catch_up"]
+    "tool",
+    ["outlook_find", "outlook_agenda", "outlook_open_loops", "outlook_catch_up", "outlook_brief"],
 )
 def test_each_is_an_opt_in_read_only_intent_tool(tool):
     assert toolsets.TOOL_GROUPS[tool] == toolsets.INTENTS
@@ -322,3 +324,51 @@ def test_catch_up_passes_the_zone_the_saved_username_and_the_loaded_tools(monkey
     assert seen["signed_in"] == "me@example.com"
     assert seen["loaded_tools"] == server.LOADED_TOOLS
     assert (seen["cursor"], seen["window"], seen["focus"]) == ("cu1.x", None, "mail")
+
+
+# ── outlook_brief ─────────────────────────────────────────────────────────
+
+
+def test_the_advertised_brief(processes):
+    tool = processes["classic,intents"]["tools"]["outlook_brief"]
+    assert tool["annotations"]["readOnlyHint"] is True
+    assert set(tool["inputSchema"]["properties"]) == {"person", "meeting", "topic", "window"}
+    assert not tool["inputSchema"].get("required")
+    assert len(tool["description"]) <= 450
+
+
+def test_brief_takes_the_implementations_arguments():
+    tool = inspect.signature(server.outlook_brief).parameters
+    implementation = inspect.signature(intent_brief.read_brief).parameters
+    assert set(tool) - {"ctx"} <= set(implementation)
+    for name in set(tool) - {"ctx"}:
+        assert tool[name].default == implementation[name].default, name
+
+
+def test_brief_passes_the_zone_the_saved_username_and_the_loaded_tools(monkeypatch):
+    seen: dict = {}
+
+    async def fake_brief(graph_client, **kwargs):
+        seen.update(kwargs, graph_client=graph_client)
+        return {"tool": "outlook_brief"}
+
+    graph = object()
+    monkeypatch.setattr(intent_brief, "read_brief", fake_brief)
+    monkeypatch.setattr(server, "_get_graph_client", lambda ctx: graph)
+    monkeypatch.setattr(auth, "saved_username", lambda: "me@example.com")
+    config = Config(timezone="America/Los_Angeles")
+    ctx = SimpleNamespace(
+        request_context=SimpleNamespace(lifespan_context={"config": config, "auth": None})
+    )
+    result = asyncio.run(server.outlook_brief(ctx, meeting="standup"))
+    assert result == {"tool": "outlook_brief"}
+    assert seen["graph_client"] is graph
+    assert seen["zone"] == "America/Los_Angeles"
+    assert seen["signed_in"] == "me@example.com"
+    assert seen["loaded_tools"] == server.LOADED_TOOLS
+    assert (seen["meeting"], seen["person"], seen["topic"], seen["window"]) == (
+        "standup",
+        None,
+        None,
+        "30d",
+    )

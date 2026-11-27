@@ -559,6 +559,21 @@ def thread_item(
     return item
 
 
+async def folder_ids(lookup: Lookup, names: tuple[str, ...]) -> dict[str, str] | None:
+    """The ids of well-known folders, by name, in one batch; ``None`` when any read
+    failed, so a caller can't mistake "unknown" for "not there"."""
+    replies = await lookup.graph.batch(
+        [f"/me/mailFolders/{name}?$select=id" for name in names], ids=False
+    )
+    found: dict[str, str] = {}
+    for name, reply in zip(names, replies, strict=True):
+        folder = (reply.get("body") or {}).get("id")
+        if not 200 <= (reply.get("status") or 0) < 300 or not isinstance(folder, str):
+            return None
+        found[name] = folder
+    return found
+
+
 def message_item(
     row: dict,
     *,
@@ -590,6 +605,9 @@ def message_item(
         "conversation_id": row.get("conversationId"),
         "received": utc(received) if received else None,
         "folder": folder,
+        "folder_id": row.get("parentFolderId")
+        if isinstance(row.get("parentFolderId"), str)
+        else None,
         "from": {"address": valid, "known": known, "sender_auth": auth},
         "to_me": to_me(row, table.me),
         "has_attachments": row.get("hasAttachments") is True,

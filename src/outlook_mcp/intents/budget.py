@@ -34,6 +34,7 @@ CEILINGS = {
     "outlook_agenda": 30,
     "outlook_open_loops": 40,
     "outlook_catch_up": 40,
+    "outlook_brief": 40,
 }
 
 # Units on the limiter: one request, an unordered `$batch` (all four slots), or a

@@ -40,6 +40,7 @@ from outlook_mcp.errors import (
 )
 from outlook_mcp.graph import GraphClient
 from outlook_mcp.intents import agenda as intent_agenda
+from outlook_mcp.intents import brief as intent_brief
 from outlook_mcp.intents import catch_up as intent_catch_up
 from outlook_mcp.intents import find as intent_find
 from outlook_mcp.intents import ids as intent_ids
@@ -2457,6 +2458,33 @@ async def outlook_catch_up(
         cursor=cursor,
         window=window,
         focus=focus,
+        zone=_get_config(ctx).timezone,
+        signed_in=auth.saved_username(),
+        loaded_tools=LOADED_TOOLS,
+    )
+
+
+@mcp.tool()
+@_wrap_tool_errors
+async def outlook_brief(
+    ctx: Context,
+    person: str | None = None,
+    meeting: str | None = None,
+    topic: str | None = None,
+    window: str = "30d",
+) -> dict:
+    """What's going on with one person (name or address), meeting (event id or words) or
+    topic (search words): pass exactly one. Person: who, recent mail both ways, open
+    loops, upcoming meetings, files, tasks. Meeting: the event, who answered how, related
+    mail and files; notes or decisions show only if someone emailed them. window: mail
+    look-back, default 30d. Several matches return candidates.
+    """
+    return await intent_brief.read_brief(
+        _get_graph_client(ctx),
+        person=person,
+        meeting=meeting,
+        topic=topic,
+        window=window,
         zone=_get_config(ctx).timezone,
         signed_in=auth.saved_username(),
         loaded_tools=LOADED_TOOLS,

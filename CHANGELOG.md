@@ -67,6 +67,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   future, is refused. Inbox and primary calendar only.
   It only reads, and is in the opt-in `intents` group. `outlook_changes_since` is unchanged.
 
+- **`outlook_brief`, an intent tool, as an opt-in early preview.** What's going on with one
+  person, meeting or topic. A person (a name or an address, resolved as `outlook_find` resolves
+  one): who they are, mail both ways within the window (30 days unless you say otherwise),
+  conversations waiting on either side, meetings with them in the next 30 days, files they
+  sent, and tasks linked to that mail or naming them. A meeting (an event id, or words matched
+  against your events 30 days either side): the event, who was invited and how each answered,
+  related mail among those people, and its files. A topic: matching mail, events, files and
+  tasks. Several people or meetings matching come back as `candidates`, with nothing else read.
+  A saved contact's details are shown as someone else's words. A person's mail in Junk or
+  Deleted Items is left out, and a message it suggests opening or answering is sender-checked
+  first. It only reads, and is in the opt-in `intents` group.
+
 - **The tool groups can be chosen in config.json, and `outlook-mcp toolsets` shows or sets
   them.** `"toolsets": "mail,calendar"` in config.json works like `OUTLOOK_MCP_TOOLSETS`, which
   still wins when it is set and not blank. `classic` names the default set (with `rules` when
