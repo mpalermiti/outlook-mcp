@@ -81,7 +81,7 @@ With `intents` loaded, `morning_brief` uses `outlook_agenda` then `outlook_catch
 ## Tools (83)
 
 71 load by default. Five groups are opt-in and load only when named in
-`OUTLOOK_MCP_TOOLSETS`: `documents` (`outlook_read_attachment`, the PDF/XLSX reader),
+`OUTLOOK_MCP_TOOLSETS` or config.json's `toolsets`: `documents` (`outlook_read_attachment`, the PDF/XLSX reader),
 `rules` (the four inbox-rule tools), `mime` (original MIME export), `contact_photos` (`outlook_set_contact_photo`), and `intents` (`outlook_find`, `outlook_agenda`, `outlook_open_loops`, `outlook_catch_up` and `outlook_brief`, an early preview). The `rules` group also loads when
 `mailbox_settings_write: true`, because the setting is itself the request (see Notes).
 
@@ -225,3 +225,9 @@ The four rule tools are **opt-in**: a stock install loads none of them. Name `ru
   tighten the valid file/default settings; attempted loosening is refused at startup. Values
   remain in memory. See README "Environment configuration" for the supported variables and
   strict boolean/list syntax.
+- **The tip:** while `intents` is not loaded, the first result of a classic tool an intent tool
+  answers (search, inbox, event list, delta feed, `outlook_changes_since`) carries a top-level
+  `server_tip`, once per server run, naming that intent tool and `outlook-mcp toolsets
+  classic,intents`. It is for the user: pass it on, and leave the setting to them.
+  `show_tips: false` or `OUTLOOK_MCP_SHOW_TIPS=false`/`0` turns it off; with `intents` loaded it
+  never appears.
