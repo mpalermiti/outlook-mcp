@@ -428,7 +428,7 @@ def test_the_summary_select_is_spelled_in_exactly_one_place():
     offenders = [
         path.relative_to(src.parent.parent).as_posix()
         for path in src.rglob("*.py")
-        if needle in path.read_text() and path.name != "mail_read.py"
+        if needle in path.read_text(encoding="utf-8") and path.name != "mail_read.py"
     ]
     assert not offenders, (
         f"The message-summary field list is spelled again in {offenders}. "

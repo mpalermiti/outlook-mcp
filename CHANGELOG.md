@@ -8,6 +8,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`outlook_find`, the first intent tool, as an opt-in early preview.** One call turns a name,
+  search words, an exact id, an address or a Message-ID into ranked people, messages, threads,
+  files, events, tasks, drafts, rules or folders, with the reasons each matched and warnings for
+  lookalike names and addresses, failed sender checks and invitations from strangers. People are
+  ranked only from mail you sent and contacts you saved; a match is `single` only for an exact
+  reference or someone you have sent mail to, and otherwise comes back as `candidates`. It only
+  reads. It is in the new `intents` group, off by default: `outlook-mcp toolsets classic,intents`
+  (or `OUTLOOK_MCP_TOOLSETS=classic,intents`) adds it to the default set. Nothing changes for an
+  install that doesn't name `intents`; one that already named it, which loaded nothing before,
+  now gets `outlook_find`. With `intents` loaded, every request asks Graph for immutable ids,
+  which are meant to stay the same when a message moves; whether a personal account grants them
+  is read from each reply, and is checked against a live test mailbox before release. A search
+  answers with regular ids regardless, so `outlook_find`, `outlook_search_mail` and
+  `outlook_search_contacts` convert their results' ids, one extra request per search. No tip
+  points to it yet.
+
 - **The tool groups can be chosen in config.json, and `outlook-mcp toolsets` shows or sets
   them.** `"toolsets": "mail,calendar"` in config.json works like `OUTLOOK_MCP_TOOLSETS`, which
   still wins when it is set and not blank. `classic` names the default set (with `rules` when
@@ -33,6 +49,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   mail tools. Every other value of the variable loads what it did.
 
 ### Fixed
+
+- **`outlook_search_mail`'s note on a search that stopped early says to join the new bound
+  with AND.** It told you to add `received<=` and a date to reach older mail. Outlook's search
+  matches either of two bounds on the same field when only a space separates them, so a query
+  that already had `received>=` would have reached everything; the note now says
+  `AND received<=`.
 
 - **Ending a repeating event and moving it in the same call is no longer refused (#97).**
   `outlook_update_event` with `remove_recurrence=True` and a new `start` and `end` (with or

@@ -49,7 +49,7 @@ _REASONS = {
 def _unread_parameters(path: pathlib.Path) -> list[tuple[int, str, str]]:
     """Return (lineno, function, parameter) for parameters never read in a body."""
     found: list[tuple[int, str, str]] = []
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding="utf-8"))
 
     for fn in ast.walk(tree):
         if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):

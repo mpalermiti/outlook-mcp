@@ -219,6 +219,16 @@ def _load_auth_record() -> AuthenticationRecord | None:
         return None
 
 
+def saved_username() -> str | None:
+    """The username in the saved sign-in record, or None without one.
+
+    The intent tools count it among the owner's own addresses, so mail from it is
+    never treated as someone else's. A local file read: no token, no Keychain.
+    """
+    username = getattr(_load_auth_record(), "username", None)
+    return username if isinstance(username, str) and username else None
+
+
 class AuthManager:
     """Manages OAuth2 authentication for Microsoft Graph."""
 

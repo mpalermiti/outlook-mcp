@@ -48,7 +48,7 @@ def _all_modules() -> dict[str, pathlib.Path]:
 
 def _imports_of(path: pathlib.Path, module: str, known: set[str]) -> set[str]:
     """Package-internal modules this file imports anywhere in its body."""
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     package_of = module if path.name == "__init__.py" else module.rpartition(".")[0]
     found: set[str] = set()
 

@@ -59,9 +59,9 @@ SOURCE_NAMES = {
     "default": "the default",
 }
 
-# The home group of the request-level tools that are being built. No tool has
-# it yet, so it is not a known name: a selection that asks for it is warned
-# about and loads nothing, exactly as before it was named here.
+# The home group of the request-level intent tools (`src/outlook_mcp/intents/`).
+# Off by default and opt-in like the others below: `outlook_find` is its first
+# tool, an early preview, so nothing loads it unless a selection names `intents`.
 INTENTS = "intents"
 
 # Groups a stock install does not pay for: not loaded unless
@@ -78,7 +78,8 @@ INTENTS = "intents"
 # Original MIME export also stays off by default; it adds no write scope.
 # `contact_photos` too: accepted on #121 as an opt-in tool only, so the default
 # surface and its ceiling do not move for a tool most clients never call.
-OFF_BY_DEFAULT = {"documents", "rules", "mime", "contact_photos"}
+# `intents`, the request-level tools, while they are a preview.
+OFF_BY_DEFAULT = {"documents", "rules", "mime", "contact_photos", INTENTS}
 
 # What `mailbox_settings_write: true` adds when nothing was named. Not every
 # off-by-default group: that key asks for rule writes, not for the document
@@ -90,6 +91,8 @@ TOOL_GROUPS: dict[str, str] = {
     # account (always on)
     "outlook_auth_status": "account",
     "outlook_whoami": "account",
+    # intents (opt-in, preview)
+    "outlook_find": INTENTS,
     # mail
     "outlook_list_inbox": "mail",
     "outlook_read_message": "mail",
@@ -186,6 +189,7 @@ TOOL_GROUPS: dict[str, str] = {
 # Tools that only read — no mailbox/calendar mutation. (download_attachment is
 # deliberately excluded: it writes a local file, so it isn't read-only.)
 READ_ONLY: set[str] = {
+    "outlook_find",
     "outlook_export_message",
     "outlook_auth_status",
     "outlook_whoami",
@@ -382,9 +386,14 @@ def loaded_tools(groups: set[str]) -> frozenset[str]:
 # neither create nor imitate that key. A tool whose result is not a dict
 # (`outlook_export_message`) has no entry.
 #
-# `tip_for` names a tool only if this release has it, so no result carries a
-# tip until the first of them lands. Addressed to the person: switching changes
-# the server's settings, which an agent leaves to the user.
+# `tip_for` names a tool only if this release has it. Addressed to the person:
+# switching changes the server's settings, which an agent leaves to the user.
+#
+# Tips are off (`TIPS_LIVE`) even though `outlook_find` exists: a classic install
+# never sees one until the owner decides the intent tools are ready to recommend
+# (the step-6 go decision). Turning them on is one deliberate change: set
+# `TIPS_LIVE`, and replace `test_tips_stay_off_until_the_go_decision`.
+TIPS_LIVE = False
 TIP_MAP: dict[str, str] = {
     "outlook_list_inbox": "outlook_catch_up",
     "outlook_list_inbox_delta": "outlook_catch_up",
@@ -421,11 +430,14 @@ TIP_TEXT = (
 def tip_for(tool: str, loaded: Collection[str]) -> str | None:
     """The tip ``tool``'s result may carry in a process that loaded ``loaded``, or None.
 
-    None unless ``tool`` is in `TIP_MAP`, the tool it names exists in this
-    release, and the process loaded no tool of that group: someone already
-    using the newer tools has nothing to switch to. Whether the tip was
-    already shown, and ``show_tips``, are the server's to check.
+    None while `TIPS_LIVE` is off, which it is in this release. Otherwise None
+    unless ``tool`` is in `TIP_MAP`, the tool it names exists in this release,
+    and the process loaded no tool of that group: someone already using the
+    newer tools has nothing to switch to. Whether the tip was already shown,
+    and ``show_tips``, are the server's to check.
     """
+    if not TIPS_LIVE:
+        return None
     newer = TIP_MAP.get(tool)
     if newer is None or TOOL_GROUPS.get(newer) != INTENTS:
         return None

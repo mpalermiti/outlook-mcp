@@ -17,6 +17,11 @@ each config shape an existing install can have.
 The one deliberate difference is ``classic`` itself: it was not a group name
 before, so ``OUTLOOK_MCP_TOOLSETS=classic`` loaded only the two account tools.
 It now loads the default set, which is what the name says.
+
+``intents`` became a group when ``outlook_find`` landed. It is off by default, so
+the frozen copy below lists it with the other opt-in groups, and a selection that
+doesn't name it loads what it did. One that names it now gets ``outlook_find``:
+it was a name that matched nothing before, warned about at every start.
 """
 
 from __future__ import annotations
@@ -57,6 +62,7 @@ def _on_main(env_value: str | None, mailbox_settings_write: bool) -> set[str]:
             "rules",
             "mime",
             "contact_photos",
+            "intents",
         }
         if mailbox_settings_write:
             groups |= {"rules"}
@@ -174,7 +180,7 @@ def test_classic_is_known_and_is_not_a_group():
     assert toolsets.unknown_toolset_names({"classic", "mail"}) == set()
 
 
-# ── Unknown names, and `intents` while it has no tools ──────────────────
+# ── Unknown names, and the `intents` group ──────────────────────────────
 
 
 def test_unknown_names_are_the_ones_that_are_neither_groups_nor_aliases():
@@ -182,24 +188,25 @@ def test_unknown_names_are_the_ones_that_are_neither_groups_nor_aliases():
     assert toolsets.unknown_toolset_names({"mail", "foo", "Bar"}) == {"foo", "Bar"}
 
 
-def test_intents_is_not_selectable_while_it_has_no_tools():
-    """Treated as any unknown name: warned about, and it loads nothing.
-
-    `classic,intents` is therefore the default set, and `intents` alone the two
-    account tools, exactly as before this change. When the first intent tool
-    lands, `intents` becomes a group like any other, and this test goes.
-    """
-    assert not [name for name, group in toolsets.TOOL_GROUPS.items() if group == "intents"]
-    assert "intents" not in toolsets.known_toolset_names()
-    assert toolsets.unknown_toolset_names({"intents"}) == {"intents"}
-    assert _now("intents", None, False) == ACCOUNT_TOOLS
-    assert _now(None, "classic,intents", False) == _on_main(None, False)
+@pytest.mark.parametrize("settings_write", [False, True])
+def test_intents_is_an_opt_in_group_that_adds_find(settings_write):
+    """Named, it adds `outlook_find`; unnamed, nothing changes, the default included."""
+    assert "intents" in toolsets.known_toolset_names()
+    assert toolsets.unknown_toolset_names({"intents"}) == set()
+    assert "outlook_find" not in _now(None, None, settings_write)
+    assert _now("intents", None, settings_write) == ACCOUNT_TOOLS | {"outlook_find"}
+    assert _now(None, "classic,intents", settings_write) == _on_main(None, settings_write) | {
+        "outlook_find"
+    }
+    assert _now("intents,mail", None, settings_write) == _on_main("mail", settings_write) | {
+        "outlook_find"
+    }
 
 
 def test_a_group_with_tools_called_intents_must_be_off_by_default():
-    """Vacuous today; it holds the first intent tool to the opt-in rule."""
-    if "intents" in set(toolsets.TOOL_GROUPS.values()):
-        assert "intents" in toolsets.OFF_BY_DEFAULT
+    """The intent tools are opt-in while they are a preview."""
+    assert "intents" in set(toolsets.TOOL_GROUPS.values())
+    assert "intents" in toolsets.OFF_BY_DEFAULT
 
 
 def test_loaded_tools_is_what_configure_keeps():
@@ -239,11 +246,11 @@ def test_an_unknown_name_is_warned_about_with_its_source(source, where, caplog):
 
 def test_a_selection_that_loads_only_the_account_tools_says_so(caplog):
     with caplog.at_level(logging.WARNING):
-        server._report_the_selection({"intents"}, "env", frozenset(ACCOUNT_TOOLS))
+        server._report_the_selection({"nothing_here"}, "env", frozenset(ACCOUNT_TOOLS))
 
     messages = [r.getMessage() for r in caplog.records]
     assert len(messages) == 2, messages
-    assert "'intents'" in messages[0]
+    assert "'nothing_here'" in messages[0]
     assert "account" in messages[1] and "OUTLOOK_MCP_TOOLSETS" in messages[1]
 
 
@@ -553,13 +560,13 @@ def test_classic_in_the_file_is_the_default_with_and_without_rule_writes(
 
 
 def test_an_unknown_name_in_the_file_warns_once_and_names_the_file(tmp_path):
-    settings = _settings_for(tmp_path, "unknown", {"toolsets": "intents"})
+    settings = _settings_for(tmp_path, "unknown", {"toolsets": "nothing_here"})
     measured = _probe(settings, None)
 
     assert set(measured["tools"]) == ACCOUNT_TOOLS
     warnings = measured["warnings"]
     assert len(warnings) == 3, warnings
-    assert warnings[0].startswith("Tool groups from config.json toolsets: intents")
-    assert "'intents'" in warnings[1] and "config.json toolsets" in warnings[1]
+    assert warnings[0].startswith("Tool groups from config.json toolsets: nothing_here")
+    assert "'nothing_here'" in warnings[1] and "config.json toolsets" in warnings[1]
     assert "account" in warnings[2] and "config.json toolsets" in warnings[2]
     assert not [w for w in warnings if "OUTLOOK_MCP_TOOLSETS" in w], warnings

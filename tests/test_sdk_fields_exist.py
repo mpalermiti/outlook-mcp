@@ -24,6 +24,8 @@ import importlib
 import pathlib
 
 SRC_TOOLS = pathlib.Path(__file__).resolve().parent.parent / "src" / "outlook_mcp" / "tools"
+# The intent tools build no SDK models today; scanned so the first one that does is held.
+SRC_INTENTS = SRC_TOOLS.parent / "intents"
 
 # Attributes that are legitimately not dataclass fields.
 NOT_FIELDS = {"additional_data", "backing_store", "odata_type"}
@@ -74,8 +76,8 @@ def test_every_assigned_sdk_attribute_is_a_declared_field():
     offenders: list[str] = []
     checked = 0
 
-    for path in sorted(SRC_TOOLS.glob("*.py")):
-        tree = ast.parse(path.read_text())
+    for path in sorted([*SRC_TOOLS.glob("*.py"), *SRC_INTENTS.glob("*.py")]):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         module_bindings = _sdk_class_bindings(tree)
         for fn in ast.walk(tree):
             if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
@@ -111,7 +113,7 @@ def test_walker_catches_a_planted_phantom_field(tmp_path):
         "    return msg\n"
     )
     try:
-        tree = ast.parse(phantom.read_text())
+        tree = ast.parse(phantom.read_text(encoding="utf-8"))
         fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
         bindings = _sdk_class_bindings(fn)
         bad = [

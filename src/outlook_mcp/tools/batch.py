@@ -15,6 +15,7 @@ from msgraph.generated.models.o_data_errors.o_data_error import ODataError
 from outlook_mcp.config import Config
 from outlook_mcp.errors import wrap_graph_error
 from outlook_mcp.folder_resolver import resolve_folder_id
+from outlook_mcp.intents import ids
 from outlook_mcp.permissions import CATEGORY_MAIL_TRIAGE, check_permission
 from outlook_mcp.throttle import retry_throttled_subrequests
 from outlook_mcp.validation import validate_graph_id
@@ -62,6 +63,15 @@ def _parse_mark_read(value: Any) -> bool:
     return is_read
 
 
+_GRAPH = "https://graph.microsoft.com/v1.0"
+
+
+def _sub_headers() -> dict:
+    """A write sub-request's headers. In a process that loads an intent tool, each also
+    asks for immutable ids, so the ids it hands back are the process's one family (D2)."""
+    return ids.with_preference({"Content-Type": "application/json"})
+
+
 def _build_subrequest(index: int, message_id: str, action: str, value: Any) -> dict:
     """Map a (message_id, action, value) tuple to a Graph batch sub-request.
 
@@ -76,7 +86,7 @@ def _build_subrequest(index: int, message_id: str, action: str, value: Any) -> d
             "method": "POST",
             "url": f"/me/messages/{quote(message_id, safe='')}/move",
             "body": {"destinationId": value},
-            "headers": {"Content-Type": "application/json"},
+            "headers": _sub_headers(),
         }
     if action == "flag":
         return {
@@ -84,7 +94,7 @@ def _build_subrequest(index: int, message_id: str, action: str, value: Any) -> d
             "method": "PATCH",
             "url": f"/me/messages/{quote(message_id, safe='')}",
             "body": {"flag": {"flagStatus": value}},
-            "headers": {"Content-Type": "application/json"},
+            "headers": _sub_headers(),
         }
     if action == "categorize":
         categories = [c.strip() for c in value.split(",")] if isinstance(value, str) else value
@@ -93,7 +103,7 @@ def _build_subrequest(index: int, message_id: str, action: str, value: Any) -> d
             "method": "PATCH",
             "url": f"/me/messages/{quote(message_id, safe='')}",
             "body": {"categories": categories},
-            "headers": {"Content-Type": "application/json"},
+            "headers": _sub_headers(),
         }
     if action == "mark_read":
         is_read = _parse_mark_read(value)
@@ -102,7 +112,7 @@ def _build_subrequest(index: int, message_id: str, action: str, value: Any) -> d
             "method": "PATCH",
             "url": f"/me/messages/{quote(message_id, safe='')}",
             "body": {"isRead": is_read},
-            "headers": {"Content-Type": "application/json"},
+            "headers": _sub_headers(),
         }
     raise ValueError(f"action must be one of {_VALID_ACTIONS}; got {action!r}")
 
@@ -187,6 +197,11 @@ async def batch_triage(
         if mid is None:
             continue
         status = sub.get("status", 0)
+        # Which id family the reply came back in (decision D2); a no-op unless the
+        # process loads an intent tool.
+        request = subrequests[int(sub_id)] if sub_id.isdigit() else None
+        if request is not None:
+            ids.hear_reply(_GRAPH + request["url"], status, sub.get("headers"))
         if 200 <= status < 300:
             results_by_id[mid] = {"id": mid, "status": "success"}
         else:

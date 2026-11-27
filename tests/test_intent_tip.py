@@ -4,10 +4,13 @@ The tip tells the user that a newer tool does a classic tool's job in fewer
 calls. It is added by the server's wrapper as a top-level ``server_tip`` key,
 at most once per process, only in a process that loaded none of the newer
 tools, only while ``show_tips`` is on, and only for a classic tool whose newer
-tool this release actually has. No release has one yet, so no result carries a
-tip today: the tests below prove the plumbing with a stand-in tool, and
-``test_no_tip_can_be_shown_in_this_release`` fails the day the first one lands,
-so that the change that adds it decides on purpose when tips start.
+tool this release actually has.
+
+``outlook_find`` exists now, but tips stay off (``toolsets.TIPS_LIVE``) until the
+owner decides the intent tools are ready to recommend: a classic install must
+never see one before that. ``test_tips_stay_off_until_the_go_decision`` is the
+tripwire that makes turning them on a deliberate change. The tests below prove
+the plumbing with tips switched on for the test.
 """
 
 from __future__ import annotations
@@ -46,22 +49,34 @@ def _call(name: str, result: object, config: Config | None = None) -> object:
 
 @pytest.fixture
 def stand_in(monkeypatch):
-    """This release with one intent tool, loaded by nobody, and no tip shown yet."""
+    """Tips switched on, one intent tool loaded by nobody, and no tip shown yet.
+
+    "Loaded by nobody" holds in CI's every-group run too, where this process has
+    `intents` loaded: the classic surface is what the tip is for.
+    """
+    monkeypatch.setattr(toolsets, "TIPS_LIVE", True)
     monkeypatch.setitem(toolsets.TOOL_GROUPS, STAND_IN, toolsets.INTENTS)
     monkeypatch.setattr(server, "_tip_shown", False)
+    monkeypatch.setattr(
+        server,
+        "LOADED_TOOLS",
+        frozenset(t for t in server.LOADED_TOOLS if toolsets.TOOL_GROUPS.get(t) != "intents"),
+    )
 
 
 # ── Today ───────────────────────────────────────────────────────────────
 
 
-def test_no_tip_can_be_shown_in_this_release():
-    """Fails when the first intent tool is classified: decide then whether tips go live.
+def test_tips_stay_off_until_the_go_decision():
+    """The tripwire: no tip in this release, though an intent tool exists.
 
-    Until the README template and `outlook-mcp toolsets intents` are ready for
-    people, a tip would send them to a group that does not do the job yet. When
-    one lands, replace this with the tests the change that adds it needs.
+    A tip would send people to a group that is a one-tool preview. Turning tips on
+    waits for the owner's go decision on the intent tools (contracts §10.4, step 6).
+    When it comes, set `toolsets.TIPS_LIVE` and replace this test with the ones that
+    change needs (the conftest fixture that pre-marks the tip as shown among them).
     """
-    assert not [n for n, g in toolsets.TOOL_GROUPS.items() if g == toolsets.INTENTS]
+    assert toolsets.TIPS_LIVE is False
+    assert toolsets.TOOL_GROUPS["outlook_find"] == toolsets.INTENTS
     every_selection = [
         frozenset(),
         server.LOADED_TOOLS,
