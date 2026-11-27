@@ -1,16 +1,15 @@
-"""The one-time tip a classic tool's result may carry, and why none is shown yet.
+"""The one-time tip a classic tool's result carries, on from 1.35.0.
 
 The tip tells the user that a newer tool does a classic tool's job in fewer
 calls. It is added by the server's wrapper as a top-level ``server_tip`` key,
 at most once per process, only in a process that loaded none of the newer
-tools, only while ``show_tips`` is on, and only for a classic tool whose newer
-tool this release actually has.
+tools, only while ``show_tips`` is on (the default), and only for a classic
+tool whose newer tool this release actually has.
 
-``outlook_find`` exists now, but tips stay off (``toolsets.TIPS_LIVE``) until the
-owner decides the intent tools are ready to recommend: a classic install must
-never see one before that. ``test_tips_stay_off_until_the_go_decision`` is the
-tripwire that makes turning them on a deliberate change. The tests below prove
-the plumbing with tips switched on for the test.
+Tips went live with the owner's go decision on the intent tools (step 6), so a
+classic install sees one: ``test_tips_are_on_for_a_classic_install`` holds that.
+The plumbing tests below use a stand-in intent tool so they hold whatever the
+map names.
 """
 
 from __future__ import annotations
@@ -64,35 +63,87 @@ def stand_in(monkeypatch):
     )
 
 
-# ── Today ───────────────────────────────────────────────────────────────
+# ── Today: on for a classic install ──────────────────────────────────────
 
 
-def test_tips_stay_off_until_the_go_decision():
-    """The tripwire: no tip in this release, though an intent tool exists.
-
-    A tip would send people to a group that is a one-tool preview. Turning tips on
-    waits for the owner's go decision on the intent tools (contracts §10.4, step 6).
-    When it comes, set `toolsets.TIPS_LIVE` and replace this test with the ones that
-    change needs (the conftest fixture that pre-marks the tip as shown among them).
-    """
-    assert toolsets.TIPS_LIVE is False
-    assert toolsets.TOOL_GROUPS["outlook_find"] == toolsets.INTENTS
-    every_selection = [
-        frozenset(),
-        server.LOADED_TOOLS,
-        toolsets.loaded_tools(toolsets.resolve_groups(None, True)),
-        frozenset(toolsets.TOOL_GROUPS),
-    ]
-    for tool in toolsets.TIP_MAP:
-        for loaded in every_selection:
-            assert toolsets.tip_for(tool, loaded) is None, tool
+def _classic_loaded() -> frozenset[str]:
+    return toolsets.loaded_tools(toolsets.resolve_groups(None, False))
 
 
-def test_no_result_carries_a_tip_today(monkeypatch):
+def _intents_loaded(selection: str) -> frozenset[str]:
+    return toolsets.loaded_tools(toolsets.resolve_groups(toolsets.parse_toolsets(selection), False))
+
+
+LIVE = {
+    classic: newer
+    for classic, newer in toolsets.TIP_MAP.items()
+    if toolsets.TOOL_GROUPS.get(newer) == toolsets.INTENTS
+}
+
+
+@pytest.fixture
+def classic_process(monkeypatch):
+    """A process that loaded the default set, with no tip shown yet."""
     monkeypatch.setattr(server, "_tip_shown", False)
-    for tool in toolsets.TIP_MAP:
-        result = {"messages": [{"subject": "server_tip"}]}
-        assert _call(tool, result) is result
+    monkeypatch.setattr(server, "LOADED_TOOLS", _classic_loaded())
+
+
+def test_tips_are_on_for_a_classic_install():
+    """The go decision: a default install's mapped tools name a real intent tool."""
+    assert toolsets.TIPS_LIVE is True
+    assert set(LIVE.values()) == {"outlook_find", "outlook_agenda", "outlook_catch_up"}
+    for tool, newer in LIVE.items():
+        assert tool in _classic_loaded(), tool
+        assert toolsets.tip_for(tool, _classic_loaded()) == toolsets.TIP_TEXT.format(
+            intent_tool=newer
+        )
+    for tool in set(toolsets.TIP_MAP) - set(LIVE):
+        assert toolsets.tip_for(tool, _classic_loaded()) is None, tool
+
+
+def test_on_by_default_and_once_per_process(classic_process):
+    first = _call("outlook_list_inbox", {"messages": []})
+    assert first == {
+        "messages": [],
+        "server_tip": toolsets.TIP_TEXT.format(intent_tool="outlook_catch_up"),
+    }
+    assert server._tip_shown is True
+    for tool in LIVE:
+        assert "server_tip" not in _call(tool, {"messages": []}), tool
+
+
+def test_the_tip_names_how_to_turn_intents_on():
+    text = toolsets.TIP_TEXT.format(intent_tool="outlook_find")
+    assert "outlook-mcp toolsets classic,intents" in text
+    assert "\n" not in text
+
+
+@pytest.mark.parametrize("selection", ["classic,intents", "intents", "mail,intents"])
+def test_never_shown_when_intents_is_loaded(classic_process, monkeypatch, selection):
+    loaded = _intents_loaded(selection)
+    monkeypatch.setattr(server, "LOADED_TOOLS", loaded)
+    for tool in LIVE:
+        assert toolsets.tip_for(tool, loaded) is None, (selection, tool)
+        assert "server_tip" not in _call(tool, {"messages": []}), (selection, tool)
+    assert server._tip_shown is False
+
+
+def test_off_with_show_tips_false_in_config_json(classic_process, tmp_path, monkeypatch):
+    monkeypatch.delenv("OUTLOOK_MCP_SHOW_TIPS", raising=False)
+    _settings(str(tmp_path), show_tips=False)
+    config = load_config(str(tmp_path))
+    for tool in LIVE:
+        assert "server_tip" not in _call(tool, {"messages": []}, config), tool
+    assert server._tip_shown is False
+
+
+@pytest.mark.parametrize("env_value", ["0", "false", " FALSE "])
+def test_off_with_the_environment_variable(classic_process, tmp_path, monkeypatch, env_value):
+    monkeypatch.setenv("OUTLOOK_MCP_SHOW_TIPS", env_value)
+    config = load_config(str(tmp_path))
+    assert config.show_tips is False
+    for tool in LIVE:
+        assert "server_tip" not in _call(tool, {"messages": []}, config), tool
     assert server._tip_shown is False
 
 
@@ -108,7 +159,7 @@ def test_the_text_is_short_and_leaves_the_setting_to_the_user(newer):
     text = toolsets.TIP_TEXT.format(intent_tool=newer)
     assert len(text) < 300
     assert LEAVE_IT in text
-    assert newer in text and "outlook-mcp toolsets intents" in text
+    assert newer in text and "outlook-mcp toolsets classic,intents" in text
 
 
 # ── The plumbing, with a stand-in intent tool ─────────────────────────────
@@ -212,7 +263,14 @@ def test_a_blank_show_tips_variable_counts_as_unset(tmp_path, monkeypatch, file_
     assert load_config(str(tmp_path)).show_tips is file_value
 
 
-@pytest.mark.parametrize("env_value", ["yes", "0", "on"])
+@pytest.mark.parametrize(("env_value", "expected"), [("1", True), (" 0 ", False)])
+def test_show_tips_also_takes_one_and_zero(tmp_path, monkeypatch, env_value, expected):
+    _settings(str(tmp_path), show_tips=not expected)
+    monkeypatch.setenv("OUTLOOK_MCP_SHOW_TIPS", env_value)
+    assert load_config(str(tmp_path)).show_tips is expected
+
+
+@pytest.mark.parametrize("env_value", ["yes", "on", "2"])
 def test_an_unclear_show_tips_value_is_refused_without_echoing_it(tmp_path, monkeypatch, env_value):
     monkeypatch.setenv("OUTLOOK_MCP_SHOW_TIPS", env_value)
     with pytest.raises(EnvironmentConfigError) as exc:

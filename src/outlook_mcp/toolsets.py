@@ -432,11 +432,12 @@ def loaded_tools(groups: set[str]) -> frozenset[str]:
 # `tip_for` names a tool only if this release has it. Addressed to the person:
 # switching changes the server's settings, which an agent leaves to the user.
 #
-# Tips are off (`TIPS_LIVE`) even though `outlook_find` exists: a classic install
-# never sees one until the owner decides the intent tools are ready to recommend
-# (the step-6 go decision). Turning them on is one deliberate change: set
-# `TIPS_LIVE`, and replace `test_tips_stay_off_until_the_go_decision`.
-TIPS_LIVE = False
+# Tips are on (`TIPS_LIVE`) from 1.35.0, the owner's go decision on the intent
+# tools (step 6). Only a classic tool whose newer tool exists in this release
+# carries one: today `outlook_find`, `outlook_agenda` and `outlook_catch_up`.
+# `show_tips: false` (or `OUTLOOK_MCP_SHOW_TIPS=false`) turns them off; a process
+# with `intents` loaded never shows one. `test_intent_tip.py` holds all of this.
+TIPS_LIVE = True
 TIP_MAP: dict[str, str] = {
     "outlook_list_inbox": "outlook_catch_up",
     "outlook_list_inbox_delta": "outlook_catch_up",
@@ -464,16 +465,16 @@ TIP_MAP: dict[str, str] = {
 }
 
 TIP_TEXT = (
-    "Tip for the user: outlook-mcp's intent tools do this in fewer calls ({intent_tool} "
-    "here). To switch, the user runs `outlook-mcp toolsets intents` and restarts the "
-    "client. " + LEAVE_SETTINGS_TO_THE_USER
+    "Tip for the user: outlook-mcp's opt-in intent tools can do this in fewer calls "
+    "({intent_tool}). To turn them on, the user runs `outlook-mcp toolsets classic,intents` "
+    "and restarts the client. " + LEAVE_SETTINGS_TO_THE_USER
 )
 
 
 def tip_for(tool: str, loaded: Collection[str]) -> str | None:
     """The tip ``tool``'s result may carry in a process that loaded ``loaded``, or None.
 
-    None while `TIPS_LIVE` is off, which it is in this release. Otherwise None
+    None while `TIPS_LIVE` is off (it is on from 1.35.0). Otherwise None
     unless ``tool`` is in `TIP_MAP`, the tool it names exists in this release,
     and the process loaded no tool of that group: someone already using the
     newer tools has nothing to switch to. Whether the tip was already shown,
