@@ -456,7 +456,7 @@ async def test_after_and_before_narrow_by_the_exact_instant(fake):
         before="2026-11-22T09:00:00Z",
     )
     assert ids_of(env) == ["m1"]
-    assert fake.searches() == ['"budget received>=2026-11-20 received<=2026-11-23"']
+    assert fake.searches() == ['"budget received>=2026-11-20 AND received<=2026-11-23"']
 
 
 # ── Other people's text ───────────────────────────────────────────────────

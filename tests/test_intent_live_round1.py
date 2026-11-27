@@ -15,6 +15,9 @@ The fake answers as Graph did on 2026-11-26 (live-day1 report, probes p20-p28):
   local filter stays (pinned in test_intent_find.py).
 - **P-SI1 (b).** `isOrganizer` is true on an event the owner organizes and false on a
   received meeting that names the owner as organizer, so it stays the test.
+- **Live session 2, dates.** KQL ORs two restrictions on one property when only a
+  space separates them: `received>=X received<=Y` bounds nothing. An explicit `AND`
+  (or a range `received:X..Y`) makes both hold, so find joins its two bounds with AND.
 """
 
 from datetime import datetime, timezone
@@ -235,3 +238,40 @@ async def test_p_si1_b_a_received_meeting_naming_the_owner_is_not_theirs(fake):
     assert candidate.known is False
     assert "stranger_invite" in [w["code"] for w in candidate.item["warnings"]]
     assert resolution.outcome == "candidates"
+
+
+# ── Live session 2: two bounds on one property ────────────────────────────
+
+
+def test_the_fake_ors_two_bounds_joined_by_a_space_as_graph_does():
+    from tests.intent_fakes import kql_matches
+
+    late = received("late", "bank@example.com", "Northwind", when="2026-11-26T09:00:00Z")
+    spaced = '"Northwind received>=2026-11-16 received<=2026-11-18"'
+    joined = '"Northwind received>=2026-11-16 AND received<=2026-11-18"'
+    assert kql_matches(spaced, late)  # either bound holds: no bound at all
+    assert not kql_matches(joined, late)
+    on_the_day = received("day", "bank@example.com", "Northwind", when="2026-11-17T09:00:00Z")
+    assert kql_matches(joined, on_the_day)
+
+
+async def test_find_bounds_a_search_by_both_dates(fake):
+    """The search itself is bounded (not only the local re-check): mail outside the
+    window never takes one of its 25 places."""
+    mailbox = box()
+    mailbox.received += [
+        received(f"n{k}", "bank@example.com", "Northwind", when="2026-11-26T09:00:00Z")
+        for k in range(30)
+    ]
+    mailbox.received.append(
+        received("target", "bank@example.com", "Northwind", when="2026-11-17T09:00:00Z")
+    )
+    env = await run(
+        fake,
+        mailbox,
+        kind="message",
+        words="Northwind",
+        after="2026-11-17T00:00:00Z",
+        before="2026-11-18T00:00:00Z",
+    )
+    assert "target" in item_ids(env)

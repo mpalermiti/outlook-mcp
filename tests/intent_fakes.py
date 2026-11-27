@@ -260,11 +260,33 @@ _FILTER_MESSAGE_ID = re.compile(r"^internetMessageId eq '(.*)'$")
 _FILTER_CONTACT = re.compile(r"emailAddresses/any\(a:a/address eq '([^']*)'\)")
 
 
+def _property(term: str) -> str | None:
+    """The property a KQL restriction names (`received`, `from`, ...), or None for a word."""
+    match = re.match(r"^([A-Za-z]+)(?::|>=|<=|>|<|=)", term)
+    return match.group(1).lower() if match else None
+
+
 def kql_clauses(value: str) -> list[list[str]]:
-    """A `$search` value as AND'd clauses, each a list of OR'd terms."""
+    """A `$search` value as AND'd clauses, each a list of OR'd terms.
+
+    As Graph does (live session 2): two restrictions on one property with only a space
+    between them are OR'd, so `received>=X received<=Y` bounds nothing; an explicit AND
+    between them makes both hold.
+    """
     text = value[1:-1] if value.startswith('"') and value.endswith('"') else value
     clauses = [[t for t in g.split() if t != "OR"] for g in re.findall(r"\(([^)]*)\)", text)]
-    clauses += [[t] for t in re.sub(r"\([^)]*\)", " ", text).split()]
+    joined = False  # the previous term and this one have an AND between them
+    for term in re.sub(r"\([^)]*\)", " ", text).split():
+        if term == "AND":
+            joined = True
+            continue
+        prop = _property(term)
+        before = clauses[-1] if clauses else []
+        if prop and not joined and len(before) >= 1 and _property(before[-1]) == prop:
+            before.append(term)
+        else:
+            clauses.append([term])
+        joined = False
     return clauses
 
 
